@@ -217,13 +217,13 @@ Resolve `href` against `index.json` (it's a topic `id`) and navigate in-app. It 
 
 ## 6. The `level` field (the skip/filter feature)
 
-`level` ∈ `beginner | intermediate | expert` appears on **topics, blocks, and MCQs**. Use it to let users skip material:
+`level` ∈ `beginner | intermediate | advanced | expert` appears on **topics, blocks, and MCQs**. Use it to let users skip material:
 
 - **Topic level** — the topic's overall tier (for track filtering).
 - **Block level** — lets a user inside a topic skip cards above/below their level.
 - **MCQ level** — filter quiz difficulty by learner level.
 
-Suggested UX: a level selector; show only content whose `level` is at or below the chosen tier (treat `beginner ⊂ intermediate ⊂ expert`), or exactly-matching — your choice.
+Suggested UX: a level selector; show only content whose `level` is at or below the chosen tier (treat `beginner ⊂ intermediate ⊂ advanced ⊂ expert`), or exactly-matching — your choice.
 
 > **Important:** `level` is **optional and may be `null`/absent** on older migrated topics (only the newer Databases topics are fully level-tagged so far). Treat missing `level` as "always show" — never hide unleveled content.
 
