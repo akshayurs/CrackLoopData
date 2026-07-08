@@ -1,0 +1,7 @@
+- **Store the index, not just the value**, when the answer needs positions (Two Sum returns indices). A value → index map does both jobs at once.
+- **Check before you insert** in one-pass problems, so you never match an element with itself.
+- **Anagram key trick:** use the *sorted string* — or a 26-length count tuple — as the map key to group anagrams. The count tuple is O(n) vs O(n log n) for sorting.
+- **Prefix-sum + map** counts subarrays with a target sum in one pass: map each running sum to how often it has occurred.
+- **Average vs worst case:** hash operations are O(1) *average*; adversarial keys can degrade to O(n). Fine for interviews — worth one sentence of nuance.
+- **Pitfall — unhashable keys:** lists cannot be dict keys in Python; convert to a `tuple`. In Java, custom key objects need correct `equals`/`hashCode`.
+- **Space is not free:** if the array is sorted, or O(1) extra space is required, two pointers may beat hashing — name the trade-off.

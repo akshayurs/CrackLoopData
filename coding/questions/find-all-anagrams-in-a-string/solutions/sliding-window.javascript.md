@@ -1,0 +1,38 @@
+Consecutive windows overlap almost entirely: sliding one step right drops a single character on the left and adds one on the right. So instead of rebuilding the count each time, keep a running 26-slot frequency array for the current window and patch it in O(1) per move. Track how many of the 26 letters currently match the target count exactly; when all 26 agree, the window is an anagram.
+
+Maintaining a single `matches` counter avoids re-scanning all 26 buckets on every step, keeping each slide constant work.
+
+```javascript
+function findAnagrams(s, p) {
+  const m = p.length, n = s.length;
+  if (m > n) return [];
+  const need = new Array(26).fill(0);
+  const win = new Array(26).fill(0);
+  for (const ch of p) need[ch.charCodeAt(0) - 97]++;
+  let matches = need.filter((v) => v === 0).length;
+  const result = [];
+  for (let i = 0; i < n; i++) {
+    const r = s.charCodeAt(i) - 97;
+    win[r]++;
+    if (win[r] === need[r]) matches++;
+    else if (win[r] === need[r] + 1) matches--;
+    if (i >= m) {
+      const l = s.charCodeAt(i - m) - 97;
+      win[l]--;
+      if (win[l] === need[l]) matches++;
+      else if (win[l] === need[l] - 1) matches--;
+    }
+    if (matches === 26) result.push(i - m + 1);
+  }
+  return result;
+}
+```
+
+## Why it works
+
+`matches` counts how many of the 26 letters have `win[c] === need[c]`. Adding the incoming character and removing the outgoing one each touch a single bucket, so `matches` only changes when that bucket crosses into or out of equality. Once the window is full width and all 26 buckets agree, its letters are exactly those of `p`, making `i - m + 1` a valid start. The left-to-right scan yields ascending indices.
+
+## Complexity
+
+- Time: O(n) — one pass; every character enters and leaves the window once with O(1) bookkeeping.
+- Space: O(1) — two fixed arrays of 26 counts.

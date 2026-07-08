@@ -1,0 +1,9 @@
+- **Use a dummy head** (`dummy.next = head`) whenever the real head might get removed or reordered — it turns edge cases into the same code path as everything else, then return `dummy.next`.
+- **Save `next` before you overwrite it.** The classic reversal bug is setting `curr.next = prev` before reading the original `curr.next`, which severs your only path forward.
+- **Fast/slow pointer starting positions matter.** For cycle detection, both can start at `head`. For "middle of the list", starting both at `head` gives the second middle on even-length lists — starting slow at `head` and fast at `head.next` gives the first; know which your problem wants.
+- **Cycle start, not just cycle existence:** after fast and slow meet inside a cycle, reset one pointer to `head` and advance both one step at a time — they meet again exactly at the cycle's start. Worth memorizing, not re-deriving under pressure.
+- **Draw it.** Pointer-heavy problems (k-group reversal, reorder, merge) are easy to get backwards mentally — sketch 4-5 boxes with arrows before coding the rewiring.
+- **Off-by-one on "nth from the end":** advance the lead pointer n steps first, *then* move both together; check whether n counts from 1 or 0 against the problem's examples.
+- **Pitfall — losing the list:** always keep a reference to the node you need next before mutating `next`/`prev`; a single misplaced assignment can drop the rest of the list silently (no crash, just wrong output).
+- **Space trade-off:** copying a list with random pointers can be done with an O(n) hash map (old → new) or an O(1)-extra-space interleaving trick — name both if asked to optimize space.
+- **Recursion depth:** a recursive reversal or traversal is elegant but costs O(n) stack space and can overflow on very long lists — mention the iterative alternative for that trade-off.

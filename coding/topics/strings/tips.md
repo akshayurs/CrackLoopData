@@ -1,0 +1,9 @@
+- **Build the failure function on the pattern only**, not the text — it is O(m) preprocessing that pays off across the whole O(n) scan.
+- **Off-by-one on the failure function** is the #1 KMP bug: `failure[i]` is the longest proper prefix-suffix of `pattern[0..i]` *inclusive*. Trace a 3-4 character example by hand before coding the rest.
+- **Rolling hash pitfalls:** pick a large prime modulus and a base coprime with it to limit collisions; always verify a hash match with a real character comparison before trusting it (hash collisions do happen).
+- **Immutable strings are expensive to mutate:** in Python/Java, repeated `s += char` in a loop is O(n²) total — build a list/`StringBuilder`/`StringBuffer` and join once at the end.
+- **In-place manipulation still needs O(1) extra space discipline:** reversing words in place typically means reverse the whole string, then reverse each word — two passes, no extra buffer.
+- **Palindrome-adjacent tricks:** `s + '#' + reverse(s)` (with a separator not in the alphabet) turns "longest palindromic prefix/suffix" into a plain failure-function lookup.
+- **Canonicalize before grouping:** for shifted/rotated/anagram groups, the canonical key (sorted string, char-diff tuple, rotation-normalized string) must be O(n) to compute per string, or the "smart" solution degrades back to brute force.
+- **Watch the edge cases interviewers love:** empty string, single character, pattern longer than text, all-identical characters (worst case for naive search, good stress test for KMP), leading/trailing/multiple spaces when splitting on whitespace.
+- **Big-integer-as-string problems** (Compare Version Numbers, Integer to English Words) — strip leading zeros per segment before comparing, and be explicit about how you handle segment count mismatches.

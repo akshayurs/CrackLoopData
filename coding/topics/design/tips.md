@@ -1,0 +1,9 @@
+- **Write the complexity table first.** Before coding, list every method and its required time/space complexity — it dictates the structure choice (e.g. "delete in O(1)" rules out a plain array unless you swap-and-pop).
+- **Swap-and-pop for O(1) array removal:** to delete an element from an unordered array in O(1), swap it with the last element, then pop — used in Insert-Delete-GetRandom O(1).
+- **Sentinel head/tail nodes** in a doubly linked list remove all the null-checking edge cases for LRU-style eviction — always link/unlink between two dummy nodes.
+- **LFU needs two layers:** a `key -> node` map for O(1) lookup, plus a `frequency -> doubly linked list of keys` map, and a `minFreq` pointer you update on every access — losing track of `minFreq` is the most common bug.
+- **Buffer one element ahead** for iterator problems (Peeking Iterator): call the underlying `next()` once eagerly and cache it, so `peek()` is just reading the cache.
+- **Binary search on a per-key list** solves Time-Based Store: store `(timestamp, value)` pairs per key in insertion order (already sorted by time) and binary search for the largest timestamp ≤ query.
+- **Pitfall — forgetting to evict on `put`, not just `get`:** LRU/LFU capacity checks belong in `put`; a cache that only trims on `get` can silently exceed capacity.
+- **Pitfall — updating an existing key must still refresh its "recency"/"frequency"** — an update is not a no-op; it counts as a use just like `get`.
+- **State it plainly:** the interviewer is grading whether you can pick and combine the *right* off-the-shelf structures under a complexity budget, not whether you invent a new algorithm — narrate the trade-off out loud as you choose each piece.

@@ -1,0 +1,24 @@
+Since the answer is a contiguous window of length `k`, the whole problem reduces to finding its left index `lo`, which ranges over `0 .. n - k`. Binary-search that range directly instead of shrinking one element at a time.
+
+For a candidate start `mid`, compare the element just left of the window (`arr[mid]`) against the element just past it (`arr[mid + k]`). If `arr[mid]` is farther from `x` than `arr[mid + k]`, the window should slide right, so search the upper half; otherwise the left edge is at `mid` or earlier.
+
+```python
+def find_closest_elements(arr, k, x):
+    lo, hi = 0, len(arr) - k
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if x - arr[mid] > arr[mid + k] - x:
+            lo = mid + 1
+        else:
+            hi = mid
+    return arr[lo:lo + k]
+```
+
+## Why it works
+
+`arr[mid]` and `arr[mid + k]` are the two elements that would enter or leave as the window starts at `mid` versus `mid + 1`. If dropping `arr[mid]` (the left edge) to gain `arr[mid + k]` reduces total distance, the answer lies further right, so `lo = mid + 1`. Otherwise `mid` is still a valid left edge and we keep it via `hi = mid`. The strict `>` breaks ties toward keeping the smaller-valued left element. The loop converges to the unique optimal start, and the returned slice is already ascending.
+
+## Complexity
+
+- Time: O(log(n - k) + k) — binary search for the start, then copying k elements.
+- Space: O(1) — constant extra state, ignoring the output slice.
