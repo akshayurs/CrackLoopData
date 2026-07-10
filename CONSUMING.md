@@ -3,6 +3,8 @@
 How an app (or any client) loads and renders the content in this repo. This is the **data contract** — the source of truth for building a content loader.
 
 > **Schema v2.** Content lives in a named-folder tree under `data/content/`, indexed by `data/index.json`. This replaced the old flat `data/topics/<id>.json` + `data/manifest.json` scheme. If you are migrating an old loader, see [Migrating a v1 loader](#migrating-a-v1-loader) at the end.
+>
+> There are **two datasets** in this repo: the **learning content** (§1–§7, indexed by `index.json`) and a separate **coding-question catalog** (§8, indexed by `coding/prep_manifest.json`). They have independent schemas.
 
 ---
 
@@ -10,8 +12,8 @@ How an app (or any client) loads and renders the content in this repo. This is t
 
 ```
 data/
-  index.json          ← entry point: the registry of groups + topics
-  bundle.json.gz      ← the whole tree, gzipped, for one-request sync
+  index.json          ← entry point: the registry of groups + topics (learning content)
+  bundle.json.gz      ← the whole data/ tree, gzipped, for one-request sync
   roadmap.json        ← suggested learning order (phases of topic slugs)
   glossary.json       ← term definitions
   config.json         ← app feature flags (ads, etc.)
@@ -21,9 +23,17 @@ data/
         topic.json      the learning content (cards/blocks)
         mcq.json        the quiz bank for this topic
         assets/         SVG diagrams for this topic (if any)
+  coding/             ← separate coding-question catalog — see §8
+    prep_manifest.json
+    topics/<topic-slug>/
+    questions/<question-slug>/
 ```
 
-Identifiers are **slugs**, not codes. A topic's `id` **equals** its folder name and its `slug` (e.g. `intro-to-dbms`). Groups are slugs too (`databases`). There is no `a01`/`b03` scheme.
+Identifiers are **slugs**, not codes. A topic's `id` **equals** its folder name and its `slug` (e.g. `intro-to-dbms`). Groups are slugs too (`databases`).
+
+> Two places still carry legacy short codes (`a01`, `c05`, …) for backward-compat and should be resolved defensively: `roadmap.json`'s `learningOrder` array (§7) and some `relatedTopicIds` in `glossary.json` (§7). The topic/group **ids in `index.json` and `content/` are always slugs**.
+
+There are currently **9 groups / 197 topics / 3164 blocks / 1808 MCQs** (authoritative counts live in `index.json`; the numbers here are indicative and will drift).
 
 ---
 
@@ -43,7 +53,7 @@ Steps:
 2. Gunzip → parse JSON.
 3. `files["index.json"]`, `files["content/databases/intro-to-dbms/topic.json"]`, etc. are the raw file texts (JSON strings, or SVG text for assets). Parse the JSON ones on demand.
 
-Keys are POSIX-style relative paths matching `topicFile`/`mcqFile`/`dir` in the index. SVG assets appear as their own entries (text).
+Keys are POSIX-style relative paths matching `topicFile`/`mcqFile`/`dir` in the index. SVG assets appear as their own entries (text). The bundle also contains the `coding/` files.
 
 ### B. Per-file (no bundle)
 Fetch `index.json`, then fetch each topic's `topicFile` / `mcqFile` on demand from the raw repo URL. Fine for a web viewer; heavier (one request per file).
@@ -58,9 +68,9 @@ Re-sync when the bundle changes. Options: compare a stored hash of `bundle.json.
 ```json
 {
   "schemaVersion": 2,
-  "topicCount": 75,
-  "blockCount": 955,
-  "mcqCount": 680,
+  "topicCount": 197,
+  "blockCount": 3164,
+  "mcqCount": 1808,
   "groups": [
     {
       "slug": "databases",
@@ -95,10 +105,12 @@ Re-sync when the bundle changes. Options: compare a stored hash of `bundle.json.
 Build your navigation from this alone:
 - Sort `groups` by `order`; within each, sort `topics` by `order`.
 - Show `group.name` as the section header, `topic.title` in the list.
-- **`group.color`** (hex, e.g. `#00CEC9`) and **`group.icon`** (an icon name your app maps to a glyph) are the group's display accent. Both are optional — fall back to a neutral accent/icon when absent. They live in the data so branding can change without an app release.
+- **`group.color`** (hex) and **`group.icon`** (an icon name your app maps to a glyph) are the group's display accent. Both optional — fall back to a neutral accent/icon when absent. They live in the data so branding can change without an app release.
 - Load `topicFile` / `mcqFile` lazily when a topic is opened.
 - `level`, `blockCount`, `mcqCount`, `estReadMinutes` are for list badges / filters without opening the file.
-- `mcqFile` may be `null` (topic has no quiz).
+- `mcqFile` may be `null` (topic has no quiz). `level` may be `null` (see §6).
+
+The 9 groups: `data-structures-algorithms`, `system-design`, `cs-foundations`, `engineering-craft`, `modern-specialized`, `databases`, `computer-networks`, `computer-architecture`, `object-oriented-design`.
 
 ---
 
@@ -120,7 +132,7 @@ Build your navigation from this alone:
 }
 ```
 
-A topic is an **ordered list of blocks (cards)**. Render blocks in `order`. Group consecutive blocks by `sectionNumber` / `sectionTitle` to draw section headings; `subTitle` (nullable) is the card's own sub-heading.
+A topic is an **ordered list of blocks (cards)**. Render blocks in `order`. Group consecutive blocks by `sectionNumber` / `sectionTitle` to draw section headings; `subTitle` (nullable) is the card's own sub-heading. `level` is optional at the topic level and may be absent entirely (see §6).
 
 ### Block shape
 ```json
@@ -146,20 +158,21 @@ A topic is an **ordered list of blocks (cards)**. Render blocks in `order`. Grou
 - **`hasCode` / `hasTable`** — hints so you can lazy-load a code highlighter or table styler. They always match the markdown.
 - **`mcqIds`** — the quiz questions tied to this card (look them up in `mcq.json` by `id`). Empty means no quiz for this card.
 - **`estReadSeconds`** — for progress/TTS pacing.
+- **`level`** — optional per-block tier (see §6).
 
 ### Block `type` → how to render
-| `type` | Render intent |
-|---|---|
-| `overview` | Snapshot / summary card |
-| `concept` | Standard explanation |
-| `code` | Contains a fenced code block (`hasCode` = true) |
-| `diagram` | Has (or should have) a diagram — see image placeholders |
-| `compare` | Trade-off / comparison (often a table) |
-| `pitfall` | Common mistakes / gotchas |
-| `interview` | **Q&A card** — see below |
+| `type` | Render intent | Count |
+|---|---|---|
+| `overview` | Snapshot / summary card | 332 |
+| `concept` | Standard explanation | 1258 |
+| `code` | Contains a fenced code block (`hasCode` = true) | 255 |
+| `diagram` | Has (or should have) a diagram — see image handling | 237 |
+| `compare` | Trade-off / comparison (often a table) | 288 |
+| `pitfall` | Common mistakes / gotchas | 207 |
+| `interview` | **Q&A card** — see below | 587 |
 
 ### `interview` blocks
-Dedicated interview-prep cards. The markdown is one real interview question + a model answer:
+Dedicated interview-prep cards (heavily used — 587). The markdown is one real interview question + a model answer:
 
 ```
 ⭐ **Q: SQL vs NoSQL — when would you choose each?**
@@ -172,12 +185,14 @@ Dedicated interview-prep cards. The markdown is one real interview question + a 
 - These are **separate** from the MCQ quiz bank — open-ended, not multiple-choice.
 
 ### Images / diagrams — two cases
-1. **Real SVG assets** (most migrated topics): markdown contains `![alt](assets/foo.svg)` and the block's `assets[]` lists `{alt, path}`. `path` is relative to the topic folder (`assets/foo.svg` → `content/<group>/<topic>/assets/foo.svg`, also a bundle key). Load and render the SVG.
-2. **Placeholders** (newer topics, no image yet): markdown contains a literal token:
+1. **Real SVG assets** (~54 topics): markdown contains `![alt](assets/foo.svg)` and the block's `assets[]` lists `{alt, path}`. `path` is relative to the topic folder (`assets/foo.svg` → `content/<group>/<topic>/assets/foo.svg`, also a bundle key). Load and render the SVG.
+2. **Placeholders** (topics without a generated image, ~89 files): markdown contains a literal token:
    ```
    <<< Image: a detailed prompt describing the diagram to generate >>>
    ```
-   These are **intentional placeholders** (images not generated yet). Render them as a styled "diagram coming soon" slot, or hide them — do **not** show the raw token to users. The text after `Image:` is an AI-generation prompt, not user-facing copy.
+   These are **intentional placeholders**. Render as a styled "diagram coming soon" slot, or hide them — do **not** show the raw token to users. The text after `Image:` is an AI-generation prompt, not user-facing copy.
+
+There is **no** `imageUrl`/`image` field on blocks — images are always one of the two mechanisms above.
 
 ### Cross-topic links
 Markdown links use the **target topic's slug** as the href:
@@ -211,7 +226,7 @@ Resolve `href` against `index.json` (it's a topic `id`) and navigate in-app. It 
 - Exactly **4 `options`**; `correctIndex` is 0–3.
 - Show `explanation` after the user answers.
 - `blockId` ties a question to a card — use it for a per-card quiz, or pool all `blockMcqs` for a topic-level quiz.
-- `difficulty` (`easy|medium|hard`) and `level` are for filtering/scoring.
+- `difficulty` (`easy|medium|hard`) and `level` (optional) are for filtering/scoring.
 
 ---
 
@@ -225,19 +240,70 @@ Resolve `href` against `index.json` (it's a topic `id`) and navigate in-app. It 
 
 Suggested UX: a level selector; show only content whose `level` is at or below the chosen tier (treat `beginner ⊂ intermediate ⊂ advanced ⊂ expert`), or exactly-matching — your choice.
 
-> **Important:** `level` is **optional and may be `null`/absent** on older migrated topics (only the newer Databases topics are fully level-tagged so far). Treat missing `level` as "always show" — never hide unleveled content.
+> **Important:** `level` is **optional**. Coverage is now broad across all groups but still partial (~72 topics, ~916 blocks, ~656 MCQs have no level). Two representations exist and a client must tolerate both: `index.json` emits `"level": null` for unleveled topics, while the topic.json file may **omit** the key entirely. Treat missing/null `level` as "always show" — never hide unleveled content.
 
 ---
 
 ## 7. Other files
 
-- **`roadmap.json`** — `{ phases: [ { title, topicIds: [<slug>, …] } ] }`. A suggested cross-group learning order. `topicIds` are topic slugs (resolve via the index).
-- **`glossary.json`** — term → definition, some with links to topic slugs. *(Note: a few glossary links may still use the old `<code>-<slug>` form pending a fix — resolve defensively.)*
-- **`config.json`** — app feature flags (e.g. `adsEnabled`). Read as-is.
+- **`roadmap.json`** — two keys:
+  - `phases`: `[ { title, topicIds: [<slug>, …] } ]` — a suggested cross-group learning order (currently 7 phases). `topicIds` are topic slugs (resolve via the index). **Prefer this.**
+  - `learningOrder`: a flat array of **legacy short codes** (`"a01","c01",…`) from the old scheme. Deprecated — ignore unless you maintain a code→slug map.
+- **`glossary.json`** — `{ "entries": [ { "term", "slug", "definition", "relatedTopicIds": [...] } ] }` (a list, **not** a plain term→definition map). Some `relatedTopicIds` may still be legacy short codes (`"c05"`) — resolve defensively.
+- **`config.json`** — app feature flags, read as-is:
+  ```json
+  { "adsEnabled": true, "interstitialEveryNChapters": 2, "bannerOnLists": true, "minSupportedSchema": 1 }
+  ```
 
 ---
 
-## 8. Minimal loader (pseudocode)
+## 8. The coding-question catalog (`data/coding/`)
+
+A **separate dataset** with its own manifest and schema (independent of `index.json`). Powers a LeetCode-style practice section. `schemaVersion: 1`.
+
+```
+data/coding/
+  prep_manifest.json          registry: { schemaVersion, topics[], questions[] }
+  topics/<topic-slug>/        24 dirs: primer.json + *.md prose files
+  questions/<question-slug>/  question.md + solutions/
+```
+
+### `prep_manifest.json`
+```json
+{
+  "schemaVersion": 1,
+  "topics": [
+    { "id": "hashing", "name": "Hashing", "icon": "…", "color": "#…", "order": 1,
+      "blurb": "…", "primerFile": "coding/topics/hashing/primer.json" }
+  ],
+  "questions": [
+    {
+      "id": "3sum", "title": "3Sum", "topic": "two-pointers",
+      "difficulty": "easy|medium|hard", "mostAsked": true,
+      "companies": ["…"], "tags": ["…"], "estMinutes": 25,
+      "questionFile": "coding/questions/3sum/question.md",
+      "runnable": true,
+      "starterCode": { "python": "…", "javascript": "…" },
+      "runHarness":  { "python": "…", "javascript": "…" },
+      "solutions": [
+        { "approach": "two-pointers", "time": "O(n^2)", "space": "O(1)",
+          "files": { "python": "coding/questions/3sum/solutions/two-pointers.python.md" } }
+      ]
+    }
+  ]
+}
+```
+
+- **Topics** (24): `primerFile` → `{ "sections": [ { title, icon, md } ] }` where `md` points at a prose markdown file (e.g. `what-is-hashing.md`, `spotting-it.md`, `tips.md`) in the same topic dir. Render as a "primer" for the topic.
+- **Questions**: the manifest currently curates **~80** questions (there are more question dirs on disk than are listed — treat the manifest as the source of truth for what to show). `difficulty`, `mostAsked`, `companies`, `tags`, `estMinutes` drive list badges/filters.
+- **`questionFile`** → `question.md`: problem statement in markdown (Examples / Constraints / Follow-up sections).
+- **`starterCode` / `runHarness`** — per-language string maps (e.g. `python`, `javascript`) for the in-app code playground. `runnable` gates the run button.
+- **`solutions[]`** — each `{ approach, time, space, files }`; `files` maps a language to a markdown solution file (`solutions/<approach>.<lang>.md`) containing a prose walkthrough + fenced code + "Why it works" + "Complexity". Languages seen: python, javascript, java, cpp, sql.
+- There are **no structured test-case arrays** — "tests" are the print/console.log snippets in `runHarness` plus the example blocks inside `question.md`.
+
+---
+
+## 9. Minimal loader (pseudocode)
 
 ```text
 bundle = gunzipAndParse(fetch("data/bundle.json.gz")).files
@@ -260,14 +326,12 @@ onOpen(topicMeta):
 
 ## Migrating a v1 loader
 
-If your loader was built for the old flat scheme, the changes are:
-
 | v1 | v2 |
 |---|---|
 | `manifest.json` at root | **`index.json`** (nested `groups → topics`) |
 | `topics/<id>.json`, `mcq/<id>.json` | **`content/<group>/<topic>/topic.json` + `mcq.json`** (paths given in the index) |
 | topic id like `a01`, group letter `a` | **slug id** (`intro-to-dbms`), **slug group** (`databases`) |
 | cross-links `[a08-trees-bst](a08-trees-bst.md)` | **`[trees-bst](trees-bst)`** (bare slug) |
-| — | new **`level`** fields; new **`interview`** block type; **image placeholders** |
+| — | new **`level`** fields; new **`interview`** block type; **image placeholders**; the **`coding/` catalog** |
 
-Concretely (Flutter app in `StudyAppTemplate`): the touch points are the sync layer that looks for `manifest.json` (`content_sync_service.dart`) and the repository that lists topics from its flat paths (`content_repository.dart`). Point both at `index.json` and the nested `topicFile`/`mcqFile`. The block/topic model classes already parse `group`/`id` as strings, so slugs need no model change.
+Concretely (Flutter app in `StudyAppTemplate`): the touch points are the sync layer (`content_sync_service.dart`) and the content repository. Both now target `index.json` and the nested `topicFile`/`mcqFile`; the block/topic model classes parse `group`/`id` as strings, so slugs need no model change.
