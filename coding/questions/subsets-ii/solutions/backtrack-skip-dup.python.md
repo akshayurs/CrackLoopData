@@ -1,0 +1,30 @@
+Sort `nums` first so every duplicate value lands next to its twin. Then build subsets with standard backtracking: at each recursive call, record the current `path` as one valid subset, and try extending it with every index from `start` onward.
+
+The dedup trick is a single rule at each level of the recursion: skip an index if it holds the same value as the index right before it *and* that earlier sibling was already considered at this level. That rule prunes the branch that would recreate a subset already produced by an earlier, equal-valued index — without ever building a subset just to throw it away.
+
+```python
+def subsets_with_dup(nums):
+    nums = sorted(nums)
+    result = []
+
+    def backtrack(start, path):
+        result.append(list(path))
+        for i in range(start, len(nums)):
+            if i > start and nums[i] == nums[i - 1]:
+                continue
+            path.append(nums[i])
+            backtrack(i + 1, path)
+            path.pop()
+
+    backtrack(0, [])
+    return result
+```
+
+## Why it works
+
+Sorting groups equal values together, so at any recursion level the sibling calls try each *distinct* value exactly once — `i > start and nums[i] == nums[i - 1]` catches a second sibling with the same value and skips it, since its subtree would only reproduce subsets the first sibling's subtree already generated. Recording `path` on every entry (not just at the leaves) captures subsets of every length, including the empty one. Because indices are always visited in increasing sorted order, the subsets are emitted in ascending, lexicographic order with no extra sorting step needed.
+
+## Complexity
+
+- Time: O(n · 2^n) — up to 2^n subsets are emitted, each copied in O(n).
+- Space: O(n · 2^n) — output storage; the recursion stack itself is only O(n).

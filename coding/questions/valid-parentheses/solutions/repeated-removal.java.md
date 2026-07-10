@@ -1,0 +1,31 @@
+The most literal reading of "balanced": keep deleting any adjacent matched pair — `()`, `[]`, or `{}` — from the string. If the string collapses down to empty, every bracket found a partner right next to it eventually; if something is left over, it never matched.
+
+This is wasteful (each deletion rescans the string) but it mirrors how you'd explain the rule out loud before reaching for a stack.
+
+```java
+class Solution {
+    public boolean isValid(String s) {
+        String[] pairs = {"()", "[]", "{}"};
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (String pair : pairs) {
+                if (s.contains(pair)) {
+                    s = s.replaceFirst(java.util.regex.Pattern.quote(pair), "");
+                    changed = true;
+                }
+            }
+        }
+        return s.isEmpty();
+    }
+}
+```
+
+## Why it works
+
+Any balanced string can be fully reduced to empty by repeatedly deleting an innermost matched pair — that pair is exactly an adjacent `()`, `[]`, or `{}` somewhere in the string. Each successful deletion shrinks `s`, so the loop terminates; if no adjacent pair remains but `s` is non-empty, the brackets could never have been balanced.
+
+## Complexity
+
+- Time: O(n²) — up to n/2 deletions, each an O(n) scan-and-replace.
+- Space: O(n) — each `replaceFirst` builds a new string.

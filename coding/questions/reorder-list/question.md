@@ -1,22 +1,22 @@
-You are given the head of a singly linked list `L0 → L1 → … → Ln-1 → Ln`. Reorder the nodes into the pattern `L0 → Ln → L1 → Ln-1 → L2 → Ln-2 → …`, interleaving nodes from the front and the back of the list.
+You are given the `head` of a singly linked list containing `n` nodes, numbered `L0, L1, …, Ln-1` in list order. Rearrange the nodes in place so they follow the zig-zag pattern `L0, Ln-1, L1, Ln-2, L2, Ln-3, …`, alternating between the front and back of the original list.
 
-You must rewire the existing nodes — do not create new nodes or change any node's value, only relink them. Return the head of the reordered list.
+You must reorder by relinking the existing nodes — do not clone nodes or copy values into new ones. Return the head of the reordered list.
 
 ## Examples
 
 ```text
-Input:  head = [1, 2, 3, 4]
-Output: [1, 4, 2, 3]
+Input:  head = [2, 4, 6, 8]
+Output: [2, 8, 4, 6]
 ```
 
 ```text
-Input:  head = [1, 2, 3, 4, 5]
-Output: [1, 5, 2, 4, 3]
+Input:  head = [1, 3, 5, 7, 9]
+Output: [1, 9, 3, 7, 5]
 ```
 
 ```text
-Input:  head = [1]
-Output: [1]
+Input:  head = [10]
+Output: [10]
 ```
 
 ## Constraints
@@ -26,4 +26,4 @@ Output: [1]
 
 ## Follow-up
 
-Can you do it in O(1) extra space, without copying the nodes into an auxiliary array?
+Can you do it using only O(1) extra space, without copying node references into an auxiliary array?

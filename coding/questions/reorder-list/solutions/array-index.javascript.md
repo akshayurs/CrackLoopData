@@ -1,31 +1,33 @@
-The reordering weaves nodes from the two ends toward the middle, but a singly linked list only lets you walk forward — you can't step backward to reach `Ln`. The simplest fix is to give up random access to the nodes by first dumping them into an array.
+A singly linked list can only be walked forward, but the target pattern keeps needing the *last* remaining node — something you can't reach without either reversing part of the list or giving yourself random access. The easiest way to get random access is to record every node in a plain array first.
 
-Once every node sits in an indexable array, keep a `left` pointer at the front and a `right` pointer at the back. Alternately append `nodes[left]` then `nodes[right]`, moving the pointers inward until they meet, and relink each node's `next` as you go.
+Once the nodes sit in an indexable array, run two indices toward each other from both ends, splicing `next` pointers to alternate front, back, front, back, until they meet in the middle.
 
 ```javascript
 function reorderList(head) {
-  if (!head) return head;
+  if (head === null) return head;
   const nodes = [];
-  for (let cur = head; cur; cur = cur.next) nodes.push(cur);
-  let left = 0;
-  let right = nodes.length - 1;
-  while (left < right) {
-    nodes[left].next = nodes[right];
-    left += 1;
-    if (left === right) break;
-    nodes[right].next = nodes[left];
-    right -= 1;
+  for (let node = head; node !== null; node = node.next) {
+    nodes.push(node);
   }
-  nodes[left].next = null;
+  let lo = 0;
+  let hi = nodes.length - 1;
+  while (lo < hi) {
+    nodes[lo].next = nodes[hi];
+    lo += 1;
+    if (lo === hi) break;
+    nodes[hi].next = nodes[lo];
+    hi -= 1;
+  }
+  nodes[lo].next = null;
   return head;
 }
 ```
 
 ## Why it works
 
-The target order `L0, Ln, L1, Ln-1, …` is exactly "front, back, next-front, next-back, …". Storing nodes in an array gives O(1) access to both ends, so the two-pointer sweep emits them in that order. The final node written gets its `next` set to `null` to terminate the list and avoid a cycle.
+The desired order `L0, Ln-1, L1, Ln-2, …` is just "take from the front, then from the back, repeat" — exactly what a converging pair of indices over an array produces. Writing `nodes[lo].next = nodes[hi]` then `nodes[hi].next = nodes[lo]` stitches each pair together before the indices step inward. The loop stops the instant the two indices meet or cross, and the last node visited has its `next` forced to `null` so the list doesn't loop back on itself.
 
 ## Complexity
 
-- Time: O(n) — one pass to collect, one pass to rewire.
-- Space: O(n) — the array holds a reference to every node.
+- Time: O(n) — one pass to collect nodes, one pass to relink them.
+- Space: O(n) — the array stores a reference to every node.

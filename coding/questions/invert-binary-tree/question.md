@@ -1,6 +1,6 @@
-Given the `root` of a binary tree, invert it so that the whole tree is mirrored left-to-right, then return the new root.
+Given the `root` of a binary tree, flip it into its mirror image: at every node, its left and right children swap places, and this swap happens all the way down to the leaves. Return the root of the transformed tree.
 
-Inverting means swapping the left and right child of **every** node in the tree. Trees are given and returned in level-order array form, where `null` marks a missing child and trailing nulls are dropped.
+Nodes keep their values — only the left/right wiring changes, so the tree ends up as a horizontal reflection of the original. Trees are given and returned in level-order array form, where `null` marks a missing child and trailing nulls are dropped.
 
 ## Examples
 
@@ -26,4 +26,4 @@ Output: []
 
 ## Follow-up
 
-Can you do it both recursively and iteratively?
+Can you invert the tree without recursion, using only O(w) extra space where w is the widest level of the tree?

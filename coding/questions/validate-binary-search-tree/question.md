@@ -1,28 +1,28 @@
-Given the `root` of a binary tree, determine whether it is a valid **binary search tree (BST)**.
+You're handed the `root` of a binary tree and asked to decide whether it forms a legal **binary search tree (BST)**.
 
-A binary tree is a valid BST when every node satisfies all three rules:
+A tree earns that label only when, at every single node:
 
-- Every value in a node's **left** subtree is strictly **less** than the node's value.
-- Every value in a node's **right** subtree is strictly **greater** than the node's value.
-- Both subtrees are themselves valid BSTs.
+- All values in that node's **left** subtree are strictly **smaller** than the node's own value.
+- All values in that node's **right** subtree are strictly **larger** than the node's own value.
+- Both children are themselves the roots of valid BSTs.
 
-The constraint is on the whole subtree, not just the immediate children — a node deep on the left must still be smaller than every ancestor it sits under on the right.
+Notice the rule reaches past direct children — a node buried deep in a left subtree still has to stay below every value it's nested under, not just its immediate parent.
 
 ## Examples
 
 ```text
-Input:  root = [2, 1, 3]
-Output: true         # 1 < 2 < 3
+Input:  root = [4, 2, 6]
+Output: true         # 2 < 4 < 6
 ```
 
 ```text
 Input:  root = [5, 1, 4, null, null, 3, 6]
-Output: false        # 3 sits in 5's right subtree but 3 < 5
+Output: false        # 3 sits inside 5's right subtree yet 3 < 5, violating the BST rule
 ```
 
 ```text
-Input:  root = [2, 2, 2]
-Output: false         # duplicates break the strict ordering
+Input:  root = [3, 3, 3]
+Output: false        # equal values are not strictly less/greater, so duplicates break a BST
 ```
 
 ## Constraints
@@ -32,4 +32,4 @@ Output: false         # duplicates break the strict ordering
 
 ## Follow-up
 
-The immediate-children check (`left < node < right`) is not enough — can you enforce the ordering across the entire subtree in a single pass?
+Comparing a node only against its two children isn't sufficient — every ancestor's constraint has to carry forward. Can you do that in a single top-down pass instead of re-scanning subtrees?

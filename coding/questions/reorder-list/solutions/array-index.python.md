@@ -1,33 +1,33 @@
-The reordering weaves nodes from the two ends toward the middle, but a singly linked list only lets you walk forward — you can't step backward to reach `Ln`. The simplest fix is to give up random access to the nodes by first dumping them into an array.
+A singly linked list can only be walked forward, but the target pattern keeps needing the *last* remaining node — something you can't reach without either reversing part of the list or giving yourself random access. The easiest way to get random access is to record every node in a plain list first.
 
-Once every node sits in an indexable list, keep a `left` pointer at the front and a `right` pointer at the back. Alternately append `nodes[left]` then `nodes[right]`, moving the pointers inward until they meet, and relink each node's `next` as you go.
+Once the nodes sit in an indexable array, run two indices toward each other from both ends, splicing `next` pointers to alternate front, back, front, back, until they meet in the middle.
 
 ```python
 def reorder_list(head):
-    if not head:
+    if head is None:
         return head
     nodes = []
-    cur = head
-    while cur:
-        nodes.append(cur)
-        cur = cur.next
-    left, right = 0, len(nodes) - 1
-    while left < right:
-        nodes[left].next = nodes[right]
-        left += 1
-        if left == right:
+    node = head
+    while node is not None:
+        nodes.append(node)
+        node = node.next
+    lo, hi = 0, len(nodes) - 1
+    while lo < hi:
+        nodes[lo].next = nodes[hi]
+        lo += 1
+        if lo == hi:
             break
-        nodes[right].next = nodes[left]
-        right -= 1
-    nodes[left].next = None
+        nodes[hi].next = nodes[lo]
+        hi -= 1
+    nodes[lo].next = None
     return head
 ```
 
 ## Why it works
 
-The target order `L0, Ln, L1, Ln-1, …` is exactly "front, back, next-front, next-back, …". Storing nodes in an array gives O(1) access to both ends, so the two-pointer sweep emits them in that order. The final node written gets its `next` set to `None` to terminate the list and avoid a cycle.
+The desired order `L0, Ln-1, L1, Ln-2, …` is just "take from the front, then from the back, repeat" — exactly what a converging pair of indices over an array produces. Writing `nodes[lo].next = nodes[hi]` then `nodes[hi].next = nodes[lo]` stitches each pair together before the indices step inward. The loop stops the instant the two indices meet or cross, and the last node visited has its `next` forced to `None` so the list doesn't loop back on itself.
 
 ## Complexity
 
-- Time: O(n) — one pass to collect, one pass to rewire.
-- Space: O(n) — the array holds a reference to every node.
+- Time: O(n) — one pass to collect nodes, one pass to relink them.
+- Space: O(n) — the array stores a reference to every node.

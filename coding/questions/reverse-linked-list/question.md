@@ -1,6 +1,4 @@
-You are given the `head` of a singly linked list. Reverse the list so that the last node becomes the new head, and return the head of the reversed list.
-
-The reversal must relink the existing nodes — you rearrange the `next` pointers rather than rebuilding the list from copied values.
+You're given the head of a singly linked list. Flip the direction every `next` pointer travels so the list reads back to front, then return the node that is now first — the one that used to be last.
 
 ## Examples
 
@@ -26,4 +24,4 @@ Output: []
 
 ## Follow-up
 
-Can you reverse the list both iteratively (O(1) extra space) and recursively?
+Can you do it with only O(1) extra space, without allocating any new nodes?
