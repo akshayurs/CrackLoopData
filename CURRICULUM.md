@@ -1,6 +1,6 @@
 # CURRICULUM — planning Study Areas and their Briefs
 
-The **map-maker**, one layer above [AUTHORING.md](AUTHORING.md). It decides *what* content exists — the Study Areas and, inside each, the Topics — and produces a **Study Area Brief** per area. That Brief is the handoff artifact fed to an authoring agent, which then builds the whole area (Topics → Subtopics → Cards + MCQs + Interview Questions).
+The **map-maker**, one layer above [AUTHORING.md](AUTHORING.md) (repo overview: [CLAUDE.md](CLAUDE.md)). It decides *what* content exists — the Study Areas and, inside each, the Topics — and produces a **Study Area Brief** per area. That Brief is the handoff artifact fed to an authoring agent, which then builds the whole area (Topics → Subtopics → Cards + MCQs + Interview Questions).
 
 Vocabulary is fixed in [AUTHORING.md §0](AUTHORING.md): **Study Area → Topic → Subtopic → Card**.
 

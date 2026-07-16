@@ -2,6 +2,8 @@
 
 How an app (or any client) loads and renders the content in this repo. This is the **data contract** — the source of truth for building a content loader.
 
+> **New here?** Start with [CLAUDE.md](CLAUDE.md) for the repo overview. For the *write* side (how content is authored) see [AUTHORING.md](AUTHORING.md) and [CURRICULUM.md](CURRICULUM.md). This doc uses the raw JSON keys (`group` / `topic` / `block`); the product terms for those are **Study Area / Topic / Subtopic / Card**.
+
 > **Schema v2.** Content lives in a named-folder tree under `data/content/`, indexed by `data/index.json`. This replaced the old flat `data/topics/<id>.json` + `data/manifest.json` scheme. If you are migrating an old loader, see [Migrating a v1 loader](#migrating-a-v1-loader) at the end.
 >
 > There are **two datasets** in this repo: the **learning content** (§1–§7, indexed by `index.json`) and a separate **coding-question catalog** (§8, indexed by `coding/prep_manifest.json`). They have independent schemas.
@@ -273,8 +275,8 @@ data/coding/
 {
   "schemaVersion": 1,
   "topics": [
-    { "id": "hashing", "name": "Hashing", "icon": "…", "color": "#…", "order": 1,
-      "blurb": "…", "primerFile": "coding/topics/hashing/primer.json" }
+    { "id": "arrays-hashing", "name": "Arrays & Hashing", "icon": "…", "color": "#…", "order": 1,
+      "blurb": "…", "primerFile": "coding/topics/arrays-hashing/primer.json" }
   ],
   "questions": [
     {
