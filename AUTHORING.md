@@ -1,6 +1,6 @@
 # AUTHORING — building one Study Area's content
 
-The **builder** spec. Given a **Study Area Brief** (produced by [CURRICULUM.md](CURRICULUM.md)), this tells an agent how to generate that Study Area's entire content to the CrackLoop quality bar. [CONSUMING.md](CONSUMING.md) is the read-side contract; this is the write-side.
+The **builder** spec. Given a **Study Area Brief** (produced by [CURRICULUM.md](CURRICULUM.md)), this tells an agent how to generate that Study Area's entire content to the CrackLoop quality bar. [CONSUMING.md](CONSUMING.md) is the read-side contract; this is the write-side. Repo overview: [CLAUDE.md](CLAUDE.md).
 
 Reference implementation: **[intro-to-dbms](data/content/databases/intro-to-dbms/topic.json)**. When unsure, open it and match it.
 

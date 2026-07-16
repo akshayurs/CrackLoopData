@@ -8,7 +8,7 @@ Three dependency-free Python scripts (stdlib only — no `pip install`, no build
 | [`validate_content.py`](validate_content.py) | Contract + quality-bar checker (the gate for generated content) | `python3 tools/validate_content.py --all` |
 | [`regen_index_bundle.py`](regen_index_bundle.py) | Rebuild `index.json` counts/checksums + `bundle.json.gz` | `python3 tools/regen_index_bundle.py` |
 
-The quality bar these enforce is defined in [`../AUTHORING.md`](../AUTHORING.md).
+Repo overview: [`../CLAUDE.md`](../CLAUDE.md). The quality bar these enforce is defined in [`../AUTHORING.md`](../AUTHORING.md).
 
 ---
 
@@ -57,9 +57,9 @@ python3 tools/validate_content.py --all                     # every topic
 ```
 
 - **ERRORS** (process exits non-zero) are contract violations that would make a client mis-render or crash: invalid JSON, wrong `blockCount`, non-contiguous block order, a 4-option rule broken, a dangling MCQ reference, a broken image path, a malformed interview card, a bad cross-link. **Gate generated content on zero errors.**
-- **WARNINGS** (exit stays zero) are quality-bar misses: average block too thin, too few blocks, too few interview cards, low MCQ coverage, no level layering. Treat these as a review queue, not a hard fail.
+- **WARNINGS** (exit stays zero) are quality-bar misses: a Card outside its **prose char band** (too long → split into more Cards; too short → likely filler), a Topic with very few Cards, no interview Cards, or no MCQs. Counts are topic-driven, so there is no max-count rule — the bands keep each Card one-screen. Treat warnings as a review queue, not a hard fail.
 
-Thresholds live at the top of the script (`MIN_AVG_BLOCK_CHARS`, `MIN_BLOCKS`, …) — tune them there.
+The char bands (`CHAR_BANDS`) and the prose measurement (code fences + table rows + image placeholders excluded) live at the top of the script — tune them there. See [../AUTHORING.md §2](../AUTHORING.md).
 
 ---
 
