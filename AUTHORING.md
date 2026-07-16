@@ -1,276 +1,236 @@
-# Authoring CrackLoop learning content — the quality bar
+# AUTHORING — building one Study Area's content
 
-This is the **write-side contract**. [CONSUMING.md](CONSUMING.md) tells a client how to *read* the data; this tells an author (human or LLM) how to *produce* it so users actually **learn**, not just skim flashcards.
+The **builder** spec. Given a **Study Area Brief** (produced by [CURRICULUM.md](CURRICULUM.md)), this tells an agent how to generate that Study Area's entire content to the CrackLoop quality bar. [CONSUMING.md](CONSUMING.md) is the read-side contract; this is the write-side.
 
-The reference implementation is **[intro-to-dbms](data/content/databases/intro-to-dbms/topic.json)** — the first topic rebuilt to this bar. When in doubt, open it and match it.
+Reference implementation: **[intro-to-dbms](data/content/databases/intro-to-dbms/topic.json)**. When unsure, open it and match it.
 
-> **The problem we're fixing.** The v1 corpus is flashcard-shallow: ~360 characters per block, bullet lists with no worked examples, no "why", no depth for anyone past day one. Users bounce because there's nothing to sink into. Every topic gets rebuilt to the bar below.
-
----
-
-## 0. TL;DR for a generator
-
-Produce, per topic, **two files** — `topic.json` and `mcq.json` — into `data/content/<group>/<topic-slug>/`. Then a human/script runs `tools/validate_content.py` (hard gate) and `tools/regen_index_bundle.py` (counts, checksums, bundle). You **only** author the two content files + any SVG assets; everything in `index.json` and `bundle.json.gz` is generated.
-
-The bar, in one line: **20–28 blocks, layered beginner→advanced, every claim earns its place with a why + a concrete example, ≥1 worked example, ≥1 comparison table, ≥2 pitfalls, 6–9 interview cards, and ~one MCQ per teaching block.**
+> **Product note.** The **app (Play Store) is the product**; the local preview server (`tools/serve.py`) is a dev tool. JSON field names below are unchanged for app compatibility — the new vocabulary is our shared *language*, not a schema change.
 
 ---
 
-## 1. What "deep enough" means (the depth bar)
+## 0. Vocabulary (use these words exactly)
 
-The single biggest change from v1. Each block must **teach**, not just **name**.
+| Level | Term | JSON key | Example |
+|---|---|---|---|
+| 1 | **Study Area** | `group` | Databases |
+| 2 | **Topic** | `topic` (its own file) | Introduction to DBMS |
+| 3 | **Subtopic** | `sectionTitle` | "Why databases exist" |
+| 4 | **Card** | `block` | one one-screen unit |
+| — | **MCQ** | `blockMcqs[]` | a multiple-choice question on a Card |
+| — | **Interview Question** | Card of `type:"interview"` | a real, asked question + model answer |
 
-| Dimension | v1 (too thin) | The bar |
-|---|---|---|
-| Chars per block (avg) | ~360 | **600–900** (overview/interview can be shorter; concept/compare longer) |
-| Blocks per topic | ~12–17 | **20–28** |
-| Structure of a concept block | 3–5 bare bullets | **Claim → why it's true → concrete example/number → takeaway** |
-| Worked examples | none | **≥1** block that walks a concrete scenario step by step |
-| Reading time | ~6 min | **12–22 min** |
-| MCQs | ~8, sparse | **~1 per non-interview teaching block**; 4 sharp options + teaching explanation |
-
-**Every block answers "so what?"** A bullet like "MVCC handles concurrency" is v1. The bar is: *what* MVCC does, *why* it beats locking here, and a one-line example of two transactions not blocking. Prefer concrete nouns and numbers ("a million rows → a handful of page reads") over adjectives ("very fast").
-
-Depth ≠ padding. If a sentence doesn't add a why, an example, or a distinction, cut it. Dense-and-short beats long-and-vague.
+Hierarchy: **Study Area → Topic → Subtopic → Card**, with MCQs and Interview Questions as content on Cards. (Coding practice is a separate track: **Coding Topic → Coding Question**.)
 
 ---
 
-## 2. Topic anatomy (the section arc)
+## 1. The four rules that override everything
 
-A topic is an **ordered list of blocks** grouped into sections. Follow this arc — it's the shape of intro-to-dbms and generalizes to every group:
-
-1. **Snapshot** (`sectionNumber: 0`) — 1–2 `overview` blocks: the one-paragraph mental model + a "X vs Y vs Z" disambiguation. Hook with a concrete analogy.
-2. **Why it exists / the problem** — 2–3 blocks: the pain this concept solves, a `compare` against the naive alternative, and a **worked example** that makes the pain concrete.
-3. **The core mechanics** — 2–4 `concept` blocks: how it actually works. This is where intermediate/advanced depth lives.
-4. **Variants / kinds / trade-offs** — `concept` + `compare` blocks with real tables and decision guidance.
-5. **A peek inside / architecture** — a `diagram` block (real SVG, see §5) + a walkthrough `concept` block ("the life of a …").
-6. **In practice** — real tools/names + a `code` block where the topic is code-relevant.
-7. **When NOT to / limits** — a `compare` block; every technology has a wrong use.
-8. **Pitfalls** — ≥2 `pitfall` blocks (one beginner-misconception, one subtler intermediate trap).
-9. **Interview Q&A** — 6–9 `interview` blocks (see §4).
-
-Not every topic needs all nine, but a topic with no worked example, no pitfalls, or no interview section is **below bar**.
-
-### Block-type mix (target, for a ~24-block topic)
-`overview` 2 · `concept` 8–10 · `compare` 2–3 · `diagram` 1 (if it aids) · `code` 0–2 (code topics only) · `pitfall` 2 · `interview` 6–9.
-
-### Level layering (the skip/filter feature)
-Layer with the `level` field so a returning user can go deeper and a beginner isn't drowned. Rough split: **~50% beginner, ~35% intermediate, ~15% advanced**. Put the essential mental model at `beginner`; put internals, edge cases, and formal theory at `intermediate`/`advanced`. Gold standard: 13 / 9 / 4.
+1. **Value filter (top rule).** Nothing exists unless the learner gains **real, non-obvious understanding** from it. If a Card, MCQ, Interview Question, or whole Topic is filler, obvious, boring, or padding — **it does not ship.** Never add something to hit a number.
+2. **Counts are topic-driven, never hardcoded.** As many Cards / MCQs / Interview Questions / Topics as the material genuinely needs — no quotas, no caps. A thin topic might be 8 Cards; a rich one 40.
+3. **Each Card is concise — one mobile screen.** Depth comes from **more Cards, not longer Cards.** Char bands (below) are enforced.
+4. **Interview-forward.** This is an interview-prep product. Interview Questions must be **real and commonly-asked**, not invented trivia. Frame everything toward "will this help me in the room?"
 
 ---
 
-## 3. Block-type playbook
+## 2. Card length — the char bands (concise, one screen)
+
+Measured on the `markdown` field. Code fences and tables don't count toward the cap, but the whole Card must still fit one mobile screen.
+
+| Card `type` | Min | Max | Target |
+|---|---|---|---|
+| overview / concept / compare / pitfall | 120 | **600** | 250–450 |
+| interview | 150 | **700** | 350–550 |
+| code / diagram (surrounding prose) | 80 | **450** | 150–350 |
+
+*[tunable — thresholds live in `tools/validate_content.py`]*
+
+- **Too long → split into multiple Cards**, don't cram. A worked example becomes 2–3 small Cards (setup → the problem → the fix).
+- **Too short → it's probably filler** — either enrich it with a why/example, or cut it.
+- Under the cap, still write tight: **claim → why → one concrete example → takeaway.** No fluff, no "as we saw above", no restating the title.
+
+---
+
+## 3. Card types & how to write each
 
 | type | When | Must contain |
 |---|---|---|
-| `overview` | Snapshot cards | The mental model in ≤4 sentences + an analogy or a disambiguation table |
-| `concept` | Standard teaching | Claim → why → concrete example → takeaway. The workhorse. |
-| `compare` | Trade-offs, X vs Y, "when not to" | A real markdown table **plus** prose that says *how to decide*, not just the table |
-| `diagram` | A structure/flow that's clearer visually | A real SVG (§5) + prose explaining each part; never rely on the image alone |
-| `code` | Code-relevant topics | A fenced block that's **correct and runnable-looking**, comments explaining intent, and the expected output |
-| `pitfall` | Misconceptions & traps | The wrong belief, *why* it's wrong, and the correct model. Beginner card = misconceptions; intermediate card = subtle traps. |
-| `interview` | Q&A prep | See §4 |
+| `overview` | Snapshot at the top of a Topic | The mental model in ≤3 sentences + an analogy or a short disambiguation |
+| `concept` | Standard teaching (the workhorse) | claim → why → concrete example → takeaway |
+| `compare` | Trade-offs / X vs Y / when-not-to | a real table **plus** one line of *how to decide* |
+| `diagram` | A structure/flow clearer shown | an adaptive SVG (§6) + a short prose explanation |
+| `code` | Code-relevant topics | a correct, runnable-looking fenced block + expected output |
+| `pitfall` | Misconceptions & traps | the wrong belief → why it's wrong → the correct model |
+| `interview` | Interview prep (§5) | a real question + model answer (strict format) |
 
-### `interview` blocks — the format is strict
-Markdown starts with the question line, then the model answer:
+Write in **GitHub-flavored markdown**. Never put `#`/`##` headings in `markdown` — the Subtopic (`sectionTitle`) and Card sub-heading (`subTitle`) are separate fields. Bold key terms on first use; `` `code` `` for identifiers; tables for comparisons.
 
-```
-⭐ **Q: Explain ACID with an example.**
-
-<model answer in plain markdown — 3–6 sentences, structured, shows reasoning>
-```
-
-- Lead with `⭐` **only** for genuinely most-asked questions (surfaced/badged by the app). ~half a topic's interview cards.
-- The answer must **demonstrate how to answer**, not just state facts: give structure ("I'd start from the data and the guarantees…"), a concrete example, and a crisp close. This is the difference between passing and failing a real interview.
-- `subTitle` = a short label for the question (e.g. "Explain ACID").
-- Interview cards are **separate** from MCQs — open-ended, no options.
+**Voice:** concrete over abstract (numbers, named tools, tiny scenarios). Active, second person. Analogy for the hook, then precision. Explain jargon the first time. No emoji except the `⭐` interview marker.
 
 ---
 
-## 4. MCQ playbook (`mcq.json`)
+## 4. MCQs — options are real content
 
-- **Coverage:** roughly **one MCQ per non-interview teaching block** (concept/compare/diagram/code). Skip pure overview recaps and interview cards.
-- **Exactly 4 options**, `correctIndex` 0–3. Put the answer in a **random-ish position** across the bank — don't always make it B.
-- **Distractors must be plausible** — common misconceptions or adjacent-but-wrong ideas, not obvious throwaways ("a spreadsheet application"). A good distractor is something a half-learner would actually pick.
-- **`explanation` teaches** — say *why the right answer is right* (and ideally why the tempting wrong one is wrong), in one or two sentences. It's shown after answering; it's a teaching moment.
-- **`difficulty`** ∈ `easy | medium | hard`; spread them. **`level`** mirrors the block's level.
-- **IDs:** `<topic-slug>-b<NN>-q<M>` (e.g. `intro-to-dbms-b07-q1`). `blockId` must be a real block; the block's `mcqIds` must list back every MCQ that targets it (two-way consistency — the validator enforces it).
+- **Coverage is value-driven**, not per-Card. Add an MCQ only where checking understanding genuinely helps. Skip pure recall.
+- **Exactly 4 options.** Vary the correct position across the bank (don't default to B).
+- **Every option is substantive** — a real concept or a genuine misconception a half-learner would actually pick. **No throwaway/joke options** (banned: "a spreadsheet application").
+- **`explanation` teaches** — why the right answer is right *and* why the most tempting wrong one is wrong. It's shown after answering.
+- **`difficulty`** ∈ `easy|medium|hard`, spread. **`level`** mirrors the Card's level.
+- Interviewer's-eye: prefer questions probing a real misconception or trade-off over textbook definitions.
+- IDs: `<topic-slug>-b<NN>-q<M>`; `blockId` is a real Card; the Card's `mcqIds` lists back every MCQ (two-way).
 
 ---
 
-## 5. Images & diagrams — read this, it's currently the #1 bug
+## 5. Interview Questions — real & popular only
 
-Two mechanisms, nothing else (no `imageUrl` field exists):
+The headline feature. Each `interview` Card:
 
-### A. Real SVG asset (preferred where a diagram genuinely helps)
-1. Author a self-contained SVG into `data/content/<group>/<topic>/assets/<name>.svg`.
-2. Reference it in markdown **relative to the topic folder — flat, no topic-slug segment**:
-   ```
-   ![clear descriptive alt text](assets/<name>.svg)
-   ```
-   ✅ `assets/dbms-architecture.svg`   ❌ `assets/intro-to-dbms/dbms-architecture.svg`
-3. List it in the block's `assets[]`: `[{ "alt": "…", "path": "assets/<name>.svg" }]` — `path` **must byte-match** the markdown src.
-
-> ⚠️ **Known corpus bug (54 topics, 144 refs):** existing markdown uses the nested form `assets/<topic-slug>/x.svg` while the file sits flat at `assets/x.svg`, so every real diagram renders **broken** in-app. New content must use the flat form. The fix for old content is mechanical (strip the `<topic-slug>/` segment).
-
-**SVG house style** (match existing assets): `viewBox`, `font-family="-apple-system, Segoe UI, Roboto, sans-serif"`, arrow markers in `<defs>`, fixed **light-theme Material palette** — text `#202124`, primary `#4285F4` on `#E8F0FE`, neutral `#5F6368`/`#9AA0A6` on `#F1F3F4`. No `currentColor`, no CSS vars: assets render on a light card. 2–3-word labels only. See [dbms-architecture.svg](data/content/databases/intro-to-dbms/assets/dbms-architecture.svg).
-
-### B. Placeholder (when no SVG is generated yet)
-A literal token in the markdown — the app renders a "diagram coming soon" slot, never the raw text:
 ```
-<<< Image: a detailed generation prompt describing the diagram >>>
+⭐ **Q: <the real question, as asked>?**
+
+<model answer — structured, shows HOW to answer, with a concrete example>
+
+**Testing:** <one line — what the interviewer is really probing>
 ```
-The text after `Image:` is an **AI prompt**, not user copy. Use this only when a diagram would help but doesn't exist yet; don't emit placeholders just to hit a diagram count.
 
-**Cross-links** use the bare target slug as href — `[normalization](normalization)` — never a URL, `.md`, or leading slash. Only link to slugs that exist in `index.json`.
-
----
-
-## 6. Voice & style
-
-- **Concrete over abstract.** Numbers, named tools, tiny scenarios. "≈O(log n), a handful of page reads" beats "efficient".
-- **Active, direct, second person.** "You declare a constraint; the engine enforces it."
-- **One idea per bullet**, but each bullet is a full thought with a because, not a fragment.
-- **Analogies for the hook**, then drop them for precision.
-- **No fluff, no meta** ("In this section we will…", "It is important to note"). No emoji except the `⭐` interview marker.
-- **GitHub-flavored markdown**: `**bold**` for key terms on first use, `` `code` `` for identifiers/keywords, tables for comparisons, fenced blocks for code. Do **not** put `#` headings inside `markdown` — section/sub headings come from the `sectionTitle`/`subTitle` fields.
-- Keep the reading level accessible; explain jargon the first time it appears.
+- **Only questions actually asked** for this topic. If you can't imagine it in a real interview, cut it.
+- **`⭐` marks most-asked** — use it only for genuinely high-frequency questions (the app badges/sorts these first). Order Cards so the most-asked come first.
+- The answer **demonstrates how to answer**: a structure ("I'd start from…"), a concrete example, a crisp close — not a wall of facts.
+- The `**Testing:**` line names the underlying skill (e.g. "whether you understand isolation vs consistency"). This is what makes it interview-prep, not a quiz.
+- `subTitle` = a short label for the question.
 
 ---
 
-## 7. The schema you author (vs what's generated)
+## 6. Diagrams — one adaptive SVG, theme-follows-the-page
 
-**You write** these fields. **Generated** fields (marked ⚙) are recomputed by the tools — you may omit or approximate them; the pipeline overwrites them.
+Diagrams are optimized for the **preview website** (the app is separate). One SVG that adapts to light/dark via CSS variables — no two-file, no white-plate.
 
-`topic.json`:
+**Standard:** every fill/stroke uses a `--dg-*` variable with a **light-value fallback**:
+
+```
+--dg-ink       text            (light #202124 / dark #E6EDEC)
+--dg-muted     secondary text  (#5F6368 / #9AA0A6)
+--dg-line      arrows/neutral  (#5F6368 / #8FA09E)
+--dg-fill      neutral box     (#F1F3F4 / #1C2827)
+--dg-stroke    neutral border  (#9AA0A6 / #3A4A47)
+--dg-accent    primary stroke  (#0C8F88 / #2FD6CC)
+--dg-accent-bg primary fill    (#E3F3F1 / #123330)
+```
+
+Usage: `fill="var(--dg-fill, #F1F3F4)"`, `stroke="var(--dg-accent, #0C8F88)"`, marker paths `fill="var(--dg-line, #5F6368)"`. The preview **inlines** the SVG so it inherits the page's `--dg-*` and follows the toggle; opened standalone it falls back to the light values. See [dbms-architecture.svg](data/content/databases/intro-to-dbms/assets/dbms-architecture.svg).
+
+Rules: `viewBox` + `font-family="-apple-system, …"`; arrow markers in `<defs>`; 2–3-word labels; escape `>`/`&` in text (`-&gt;`, `&#183;`). Reference **flat**: `![alt](assets/name.svg)` (never `assets/<slug>/name.svg`) and list it in the Card's `assets[]` with the byte-identical path. Add a diagram only when it *materially* helps (value filter). If none exists yet, use a placeholder token `<<< Image: prompt >>>` — never raw-shown.
+
+**Cross-links:** `[target-title](target-slug)` — bare Topic slug only, and only to slugs that exist.
+
+---
+
+## 7. Two-phase generation (mandatory)
+
+**Phase 1 — Outline.** Emit only the *plan*, no bodies:
+- the Topic list for the Study Area (from the Brief), and for each Topic:
+  - its Subtopics (section titles),
+  - each Card's heading + type + level (one line each),
+  - each MCQ's question stem,
+  - each Interview Question stem (⭐ if most-asked).
+
+**→ Approval gate.** A human reviews and trims. Nothing below is written until the outline is approved.
+
+**Phase 2 — Write.** Flesh out only the approved items into full `topic.json` + `mcq.json`, obeying §§1–6.
+
+---
+
+## 8. Correctness — how we guarantee it
+
+Four layers; a Topic isn't done until all pass.
+
+1. **Self-applied acceptance criteria** (the generator checks its own output):
+   - Every stated fact is well-established and accurate.
+   - Every MCQ `correctIndex` is verifiably correct; all 4 options are plausible.
+   - Every Interview answer is accurate and actually answers the question.
+   - Every item passes the **value filter** (§1.1).
+   - Every Card is within its char band; no `#` headings; links/images resolve.
+2. **Verification pass — a separate reviewer agent** re-checks the above independently (writer agent → reviewer agent per Topic) and cuts anything filler or wrong. Findings that survive are kept.
+3. **The Phase-1 outline gate** catches weak/duplicate/boring items before any writing.
+4. **`tools/validate_content.py`** enforces structural correctness (4 options, refs resolve, char bands, honest `hasCode`/`hasTable`, interview format, flat image paths).
+
+---
+
+## 9. The schema you author
+
+You write `topic.json` + `mcq.json` (+ any `assets/*.svg`). Fields marked ⚙ are recomputed by `tools/regen_index_bundle.py` — approximate or omit them.
+
 ```jsonc
+// topic.json
 {
-  "id": "<slug>",            // == folder name == slug
-  "title": "Human Title",
-  "group": "<group-slug>",
-  "order": 1,                 // position within the group
-  "slug": "<slug>",
+  "id": "<slug>", "title": "…", "group": "<study-area-slug>",
+  "order": 1, "slug": "<slug>",
   "summary": "1–2 sentence hook — what the learner walks away able to do.",
-  "contentType": "learningTopic",
-  "level": "beginner",        // topic's overall tier (or omit)
-  "blockCount": 24,           // ⚙ regen fixes
-  "estReadMinutes": 20,       // ⚙ regen fixes (sum of block estReadSeconds)
-  "blocks": [ /* see below */ ]
+  "contentType": "learningTopic", "level": "beginner",   // or omit
+  "blockCount": 0,        // ⚙
+  "estReadMinutes": 0,    // ⚙
+  "blocks": [ {
+    "id": "<slug>-b03", "topicId": "<slug>", "order": 3,   // contiguous 1..n
+    "sectionNumber": 1, "sectionTitle": "<Subtopic>", "subTitle": "…|null",
+    "type": "concept",                                     // §3 types
+    "level": "beginner",                                   // beginner|intermediate|advanced|expert, or omit
+    "markdown": "…within the char band…",
+    "assets": [],           // {alt,path} only if the markdown embeds an image
+    "hasCode": false,       // ⚙   = ("```" in markdown)
+    "hasTable": false,      // ⚙   = markdown has a table
+    "estReadSeconds": 0,    // ⚙
+    "mcqIds": []            // MCQs targeting this Card
+  } ]
 }
 ```
-
-each block:
 ```jsonc
-{
-  "id": "<slug>-b03",         // b + zero-padded order
-  "topicId": "<slug>",
-  "order": 3,                  // contiguous 1..n
-  "sectionNumber": 1,          // consecutive blocks with same number/title = one section
-  "sectionTitle": "Why it exists",
-  "subTitle": "The pain before databases",   // or null
-  "type": "concept",           // overview|concept|code|diagram|compare|pitfall|interview
-  "level": "beginner",         // beginner|intermediate|advanced|expert, or omit
-  "markdown": "…GFM…",
-  "assets": [],                // {alt,path} only if markdown embeds an image
-  "hasCode": false,            // ⚙ = ("```" in markdown)
-  "hasTable": false,           // ⚙ = markdown has a table
-  "estReadSeconds": 30,        // ⚙ = ~len/16 (+ code/table bump)
-  "mcqIds": ["<slug>-b03-q1"]  // MCQs targeting this block ([] if none)
-}
+// mcq.json
+{ "topicId": "<slug>", "blockMcqs": [ {
+    "id": "<slug>-b03-q1", "blockId": "<slug>-b03",
+    "question": "…", "options": ["…","…","…","…"], "correctIndex": 2,
+    "explanation": "why right + why the tempting wrong one is wrong",
+    "difficulty": "medium", "level": "beginner" } ] }
 ```
 
-`mcq.json`:
-```jsonc
-{
-  "topicId": "<slug>",
-  "blockMcqs": [
-    { "id": "<slug>-b03-q1", "blockId": "<slug>-b03",
-      "question": "…", "options": ["…","…","…","…"], "correctIndex": 2,
-      "explanation": "why right (and why the tempting wrong one is wrong)",
-      "difficulty": "medium", "level": "beginner" }
-  ]
-}
-```
-
-**ID conventions are load-bearing** — the app and the validator match on them exactly: block `= <slug>-b<NN>`, MCQ `= <blockId>-q<M>`.
+Levels: layer with `level` so a returning learner can go deeper and a beginner isn't drowned — but let the material decide the mix; don't force a ratio. IDs are load-bearing: Card `= <slug>-b<NN>`, MCQ `= <blockId>-q<M>`.
 
 ---
 
-## 8. The pipeline (author → gate → generate)
+## 10. Remediating existing Topics (fixing the old content)
+
+The old corpus is flashcard-shallow, unlayered, and has broken image paths. Same rules apply — this is a rewrite, not a patch.
+
+Per Topic:
+1. Read the current `topic.json` + `mcq.json`; keep any genuinely good bones.
+2. **Re-cut to the char bands:** split over-long Cards into several one-screen Cards; enrich or delete thin ones (value filter).
+3. **Add what's missing** *only if it adds value:* level layering, real+popular Interview Questions with `**Testing:**` lines, MCQs with substantive options, a diagram where it helps.
+4. **Fix images:** flat `assets/x.svg` path + convert the SVG to the adaptive `--dg-*` standard (§6).
+5. **Cut** anything filler/boring/duplicated.
+6. Run the pipeline (§11). Same two-phase + verification gates as new content.
+
+---
+
+## 11. Pipeline
 
 ```bash
-# 1. Author (human or LLM): write topic.json + mcq.json + any assets/*.svg only.
+# Phase 1: emit the outline → get human approval (§7)
+# Phase 2: write data/content/<study-area>/<topic-slug>/{topic.json,mcq.json} (+ assets/*.svg)
 
-# 2. Hard gate — must be 0 ERRORS before the content is accepted:
-python3 tools/validate_content.py <group>/<slug>
-
-# 3. Regenerate index counts/checksums + the bundle from the content files:
-python3 tools/regen_index_bundle.py
-
-# 4. Confirm nothing drifted:
-python3 tools/regen_index_bundle.py --check     # exits non-zero on drift
-
-# 5. Eyeball it (optional but recommended for the first topics of each group):
-#    render topic.json to HTML and screenshot — see scratchpad/preview.py in the
-#    session that built intro-to-dbms, or wire a proper renderer.
+python3 tools/validate_content.py <study-area>/<topic-slug>   # 0 errors (hard gate)
+python3 tools/serve.py                                        # read it, judge depth
+python3 tools/regen_index_bundle.py                           # rebuild index + bundle
+python3 tools/regen_index_bundle.py --check                   # confirm no drift
 ```
 
-- **`tools/validate_content.py`** — ERRORS = contract violations (bad JSON, wrong counts, broken image path, dangling MCQ ref, non-4-option MCQ, malformed interview card). WARNINGS = quality-bar misses (avg block too thin, <14 blocks, <3 interview cards, low MCQ coverage, no level layering). **Gate generated content on 0 errors; triage warnings.**
-- **`tools/regen_index_bundle.py`** — the *only* thing that should touch `index.json` and `bundle.json.gz`. Never hand-edit those. Checksum = `sha256:` of file bytes; bundle = gzip of `{version:1, files:{relpath:text}}` over all of `data/` except the bundle itself.
+One agent owns a Topic (parallelize across Topics/agents); regenerate the index/bundle **once** at the end to avoid collisions. See [tools/README.md](tools/README.md).
 
 ---
 
-## 9. Acceptance checklist ("perfect" = all yes)
-
-Contract (validator ERRORS = 0):
-- [ ] `topic.json` + `mcq.json` valid JSON; `id`==`slug`==folder.
-- [ ] Block `order` contiguous 1..n; every block has all required fields; `topicId` matches.
-- [ ] `hasCode`/`hasTable` honest; `estReadSeconds` present.
-- [ ] Every embedded image is in `assets[]` **and** the file exists at the **flat** `assets/x.svg` path.
-- [ ] Cross-links are bare slugs that resolve in `index.json`.
-- [ ] Every MCQ: 4 options, valid `correctIndex`, non-empty teaching `explanation`, real `blockId`; block↔MCQ refs consistent both ways.
-- [ ] Interview blocks start with `**Q:`.
-
-Quality bar (validator WARNINGS + human review):
-- [ ] 20–28 blocks; avg block ≥ ~600 chars; ~12–22 min read.
-- [ ] Layered: ~50/35/15 beginner/intermediate/advanced; ≥1 advanced block.
-- [ ] ≥1 worked example; ≥1 real comparison table; ≥2 pitfalls; 6–9 interview cards (≥half ⭐).
-- [ ] ~1 MCQ per non-interview teaching block; distractors are plausible; difficulty spread.
-- [ ] A diagram where it materially helps (real SVG, flat path, house palette).
-- [ ] Voice: concrete, active, no fluff, no in-markdown headings.
-- [ ] Cross-links to the natural neighbor topics.
-
----
-
-## 10. LLM prompt template (paste-ready for a low-cost model)
-
-> You are authoring one topic for **CrackLoop**, a mobile interview-prep app. Produce two JSON files, `topic.json` and `mcq.json`, for the topic **"{{TITLE}}"** (slug `{{SLUG}}`, group `{{GROUP}}`).
->
-> Study this gold-standard example first and match its depth, structure, and voice exactly: `{{PASTE intro-to-dbms/topic.json + mcq.json}}`.
->
-> Requirements (hard):
-> - 20–28 ordered blocks grouped into sections following the arc: Snapshot → Why it exists (incl. a worked example) → core mechanics → kinds/trade-offs → a diagram + walkthrough → in practice (code if code-relevant) → when not to → ≥2 pitfalls → 6–9 interview Q&A.
-> - Each teaching block: **claim → why → concrete example/number → takeaway**, 600–900 chars. No bare bullet lists. No fluff, no in-markdown `#` headings.
-> - Layer with `level`: ~50% beginner, ~35% intermediate, ~15% advanced.
-> - Block ids `{{SLUG}}-bNN` (contiguous). Set `sectionNumber`/`sectionTitle`/`subTitle`. Leave `hasCode`/`hasTable`/`estReadSeconds` approximate — they're recomputed.
-> - `interview` blocks: markdown begins `⭐ **Q: …?**` (⭐ only for most-asked), then a model answer that shows *how* to answer.
-> - Diagrams: only if one genuinely helps. Reference flat as `![alt](assets/name.svg)`, list in `assets[]`, and output the SVG separately (light Material palette). Otherwise use a `<<< Image: prompt >>>` placeholder.
-> - Cross-links: `[target-title](target-slug)` bare slug only.
-> - `mcq.json`: ~1 MCQ per non-interview block; ids `{{SLUG}}-bNN-qM`, `blockId` set, and mirror them in each block's `mcqIds`. Exactly 4 plausible options; `explanation` teaches why. Vary the correct position and difficulty.
->
-> Output valid JSON only. It will be gated by `validate_content.py` — 0 errors required.
-
-After generation: run the §8 pipeline. Reject and regenerate on any validator ERROR; review WARNINGS.
-
----
-
-## 11. Anti-patterns (auto-reject)
-
-- Bullet-list-only blocks with no explanatory prose ("flashcard mode").
-- Padding to hit length — repetition, restating the title, "as we saw above".
-- Distractors that are obviously wrong; explanations that just restate the answer.
-- `#`/`##` headings inside `markdown` (use `sectionTitle`/`subTitle`).
-- Nested image paths `assets/<slug>/x.svg` (the current corpus bug) — always flat.
-- Cross-links as URLs, `.md`, or to non-existent slugs.
-- Hand-editing `index.json` or `bundle.json.gz` — always regenerate.
-- Every topic identical in shape — the arc is a guide; fit it to the material.
+## 12. Acceptance checklist ("done" = all yes)
+- [ ] Every item passes the value filter — nothing filler/obvious/boring.
+- [ ] Every Card within its char band; concise; one screen; no `#` headings.
+- [ ] Counts driven by the material, not a quota.
+- [ ] MCQs: 4 substantive options, correct answer verified, teaching explanation.
+- [ ] Interview Questions: real + popular, ⭐ on most-asked, `**Testing:**` line, model answer shows *how*.
+- [ ] Diagrams: adaptive `--dg-*` SVG, flat path, added only where they help.
+- [ ] Cross-links resolve; images resolve; layered by level where the material warrants.
+- [ ] `validate_content.py` = 0 errors; reviewer-agent verification pass done; index/bundle regenerated.
