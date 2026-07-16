@@ -29,7 +29,8 @@ It prints the URL and a content count, then serves until you press **Ctrl-C**. O
 ### Use it
 
 - **Left sidebar** — all 9 groups and their topics (from `index.json`), then the coding-practice questions grouped by topic. The colored dot shows `level` (green = beginner, amber = intermediate, violet = advanced) for topics, or `difficulty` for questions; the number is the block count / difficulty initial.
-- **Filter box** (top of sidebar) — type to filter the list live.
+- **Collapsible groups** — each group is an accordion (click the header to expand/collapse); the number on the header is its topic count. Groups start collapsed and the group of the currently-open topic auto-expands, so you never scroll past hundreds of items to find one.
+- **Filter box** (top of sidebar) — type to filter topics live; matching groups auto-expand, and clearing the box restores the collapsed state.
 - **Click a topic** — renders its blocks in order: section eyebrows, per-card type + level chips, the sub-title, markdown (tables, code, blockquotes), embedded SVG diagrams, and the inline MCQs with the correct option marked and the explanation shown.
 - **Cross-links** inside content (bare topic slugs) are clickable and navigate in-app; unresolved links render as dotted, non-clickable text so you can spot them.
 - **Coding question** — the problem statement plus each solution approach with its time/space complexity and a **language tab switcher** (python / javascript / java / cpp / sql).
