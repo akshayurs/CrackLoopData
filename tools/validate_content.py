@@ -17,11 +17,21 @@ CONTENT = os.path.join(DATA, "content")
 TYPES = {"overview", "concept", "code", "diagram", "compare", "pitfall", "interview"}
 LEVELS = {"beginner", "intermediate", "advanced", "expert"}
 
-# quality-bar thresholds (see AUTHORING.md)
-MIN_AVG_BLOCK_CHARS = 550
-MIN_BLOCKS = 14
-MIN_MCQ_COVERAGE = 0.45      # fraction of non-interview blocks with >=1 MCQ
-MIN_INTERVIEW = 3
+# quality-bar thresholds (see AUTHORING.md §2). Counts are topic-driven — no
+# max-count rule. What's enforced is the per-card char band (prose only) so
+# every Card stays one-screen, and a couple of gentle floors.
+CHAR_BANDS = {           # (min, max) prose chars per Card type
+    "overview": (120, 600), "concept": (120, 600), "compare": (120, 600),
+    "pitfall": (120, 600), "interview": (150, 700), "code": (80, 450),
+    "diagram": (80, 450),
+}
+FENCE_RE = re.compile(r"```.*?```", re.S)
+PLACEHOLDER_RE = re.compile(r"<<<.*?>>>", re.S)
+
+def prose_len(md):       # length excluding code fences, table rows, image placeholders
+    md = FENCE_RE.sub("", md)
+    md = "\n".join(l for l in md.split("\n") if not l.strip().startswith("|"))
+    return len(PLACEHOLDER_RE.sub("", md).strip())
 
 def known_topic_ids():
     idx = json.load(open(os.path.join(DATA, "index.json")))
@@ -85,6 +95,10 @@ def validate(topic_rel, ids):
         total_chars += len(md)
         if b.get("hasCode") != ("```" in md): err(f"{bid}: hasCode wrong")
         if b.get("hasTable") != bool(TABLE_RE.search(md)): err(f"{bid}: hasTable wrong")
+        lo, hi = CHAR_BANDS.get(b.get("type"), (120, 600))   # one-screen char band (prose only)
+        pl = prose_len(md)
+        if pl > hi: warn(f"{bid}: {pl} prose chars > {hi} ({b.get('type')} band) — split into more Cards")
+        elif pl < lo: warn(f"{bid}: {pl} prose chars < {lo} — likely too thin (enrich or cut)")
         if b.get("type") == "interview":
             interview_n += 1
             if "**Q:" not in md: err(f"{bid}: interview block has no '**Q:' line")
@@ -118,17 +132,10 @@ def validate(topic_rel, ids):
     if referenced - mcq_ids: err(f"blocks reference missing mcq ids: {sorted(referenced - mcq_ids)}")
     if mcq_ids - referenced: err(f"orphan mcqs (no block references them): {sorted(mcq_ids - referenced)}")
 
-    # ---- quality bar (warnings) ----
-    if blocks:
-        avg = total_chars // len(blocks)
-        if avg < MIN_AVG_BLOCK_CHARS: warn(f"avg block {avg} chars < {MIN_AVG_BLOCK_CHARS} (too thin)")
-    if len(blocks) < MIN_BLOCKS: warn(f"only {len(blocks)} blocks (< {MIN_BLOCKS})")
-    if interview_n < MIN_INTERVIEW: warn(f"only {interview_n} interview blocks (< {MIN_INTERVIEW})")
-    if non_interview:
-        cov = covered / non_interview
-        if cov < MIN_MCQ_COVERAGE: warn(f"MCQ coverage {cov:.0%} of concept blocks (< {MIN_MCQ_COVERAGE:.0%})")
-    if not any(b.get("level") in ("intermediate", "advanced", "expert") for b in blocks):
-        warn("no intermediate+ blocks — not layered by level")
+    # ---- quality bar (warnings) — counts are topic-driven; only gentle floors ----
+    if len(blocks) < 5: warn(f"only {len(blocks)} Cards — likely too thin for a Topic")
+    if interview_n == 0: warn("no interview Cards — this is an interview-prep product")
+    if mcqs == [] and blocks: warn("no MCQs at all")
     return [f"{topic_rel}: {m}" for m in E], [f"{topic_rel}: {m}" for m in W]
 
 def main():
