@@ -212,29 +212,44 @@ def render_question(qid):
     return page("Coding", ("q", qid), "\n".join(body))
 
 # ------------------------------------------------------------------ shell / nav
+def _grp_block(title, color, count, is_open, items_html):
+    op = " open" if is_open else ""
+    return (f'<div class="grp-block{op}" style="--gc:{color}">'
+            f'<button class="grp" type="button">{html.escape(title)}'
+            f'<em>{count}</em><i class="caret"></i></button>'
+            f'<div class="grp-items">{items_html}</div></div>')
+
 def sidebar(active):
     kind = active[0] if active else ""
-    out = ['<nav class="side"><input id="filter" placeholder="Filter…" autocomplete=off>']
+    out = ['<nav class="side"><input id="filter" placeholder="Filter topics…" autocomplete=off>']
     out.append('<div class="side-scroll">')
     out.append('<div class="sec-h">Learning content</div>')
     for g in GROUPS:
-        out.append(f'<div class="grp" style="--gc:{g.get("color","#888")}">{html.escape(g["name"])}</div>')
+        active_here = kind == "t" and active[1] == g["slug"]
+        items = []
         for t in g["topics"]:
-            on = "on" if (kind == "t" and active[1] == g["slug"] and active[2] == t["id"]) else ""
+            on = "on" if (active_here and active[2] == t["id"]) else ""
             lvl = f'<i class="dot lvl-{t["level"]}"></i>' if t.get("level") else '<i class="dot"></i>'
-            out.append(f'<a class="item {on}" href="/t/{g["slug"]}/{t["id"]}">{lvl}'
-                       f'<span>{html.escape(t["title"])}</span><em>{t.get("blockCount","")}</em></a>')
+            items.append(f'<a class="item {on}" href="/t/{g["slug"]}/{t["id"]}">{lvl}'
+                         f'<span>{html.escape(t["title"])}</span><em>{t.get("blockCount","")}</em></a>')
+        out.append(_grp_block(g["name"], g.get("color", "#888"), len(g["topics"]),
+                              active_here, "".join(items)))
     if CODING["questions"]:
+        active_ctopic = CODING["byid"].get(active[1], {}).get("topic") if kind == "q" else None
         out.append('<div class="sec-h">Coding practice</div>')
         by_topic = {}
         for q in CODING["questions"]:
             by_topic.setdefault(q.get("topic", "misc"), []).append(q)
         for tp in sorted(by_topic):
-            out.append(f'<div class="grp" style="--gc:#6C7A89">{html.escape(tp)}</div>')
+            items = []
             for q in by_topic[tp]:
                 on = "on" if (kind == "q" and active[1] == q["id"]) else ""
-                out.append(f'<a class="item {on}" href="/q/{q["id"]}"><i class="dot diff-{q.get("difficulty","")}"></i>'
-                           f'<span>{html.escape(q["title"])}</span><em>{q.get("difficulty","")[:1].upper()}</em></a>')
+                items.append(f'<a class="item {on}" href="/q/{q["id"]}">'
+                             f'<i class="dot diff-{q.get("difficulty","")}"></i>'
+                             f'<span>{html.escape(q["title"])}</span>'
+                             f'<em>{q.get("difficulty","")[:1].upper()}</em></a>')
+            out.append(_grp_block(tp, "#6C7A89", len(by_topic[tp]),
+                                  tp == active_ctopic, "".join(items)))
     out.append("</div></nav>")
     return "".join(out)
 
@@ -279,17 +294,26 @@ document.getElementById('theme').addEventListener('click',function(){
 document.getElementById('menu').addEventListener('click',function(){
   document.querySelector('.side').classList.toggle('open');
 });
+document.querySelectorAll('.side .grp').forEach(function(b){
+  b.addEventListener('click',function(){ b.parentElement.classList.toggle('open'); });
+});
 var f=document.getElementById('filter');
 if(f)f.addEventListener('input',function(){
-  var q=this.value.toLowerCase();
-  document.querySelectorAll('.side .item').forEach(function(a){
-    var hit=a.textContent.toLowerCase().indexOf(q)>=0; a.style.display=hit?'':'none';
+  var q=this.value.toLowerCase().trim();
+  document.querySelectorAll('.side .grp-block').forEach(function(blk){
+    var any=false;
+    blk.querySelectorAll('.item').forEach(function(a){
+      var hit=!q||a.textContent.toLowerCase().indexOf(q)>=0;
+      a.style.display=hit?'':'none'; if(hit&&q)any=true;
+    });
+    if(q){ blk.style.display=any?'':'none'; blk.classList.toggle('open',any); }
+    else { blk.style.display=''; }
   });
-  document.querySelectorAll('.side .grp').forEach(function(g){
-    var n=g.nextElementSibling, any=false;
-    while(n&&n.classList.contains('item')){ if(n.style.display!=='none')any=true; n=n.nextElementSibling; }
-    g.style.display=any?'':'none';
-  });
+  if(!q){ // restore: collapse all, reopen the active group
+    document.querySelectorAll('.side .grp-block').forEach(b=>b.classList.remove('open'));
+    var on=document.querySelector('.side .item.on');
+    if(on)on.closest('.grp-block').classList.add('open');
+  }
 });
 document.querySelectorAll('.tab').forEach(function(b){
   b.addEventListener('click',function(){
@@ -336,7 +360,14 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--fb);fo
 #filter{margin:12px;padding:8px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--ground);color:var(--ink);font-size:13px;font-family:var(--fu)}
 .side-scroll{overflow-y:auto;padding:0 8px 24px}
 .sec-h{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);padding:14px 8px 6px}
-.grp{font-size:12.5px;font-weight:700;color:var(--ink);padding:10px 8px 4px;border-left:3px solid var(--gc,transparent);margin-top:4px}
+.grp-block{margin-top:2px}
+.grp{display:flex;align-items:center;gap:7px;width:100%;text-align:left;cursor:pointer;font-family:var(--fu);font-size:12.5px;font-weight:700;color:var(--ink);padding:8px;background:none;border:0;border-left:3px solid var(--gc,transparent);border-radius:0 6px 6px 0}
+.grp:hover{background:var(--ground)}
+.grp em{font-style:normal;font-size:11px;font-weight:600;color:var(--faint);margin-left:auto}
+.caret{width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;opacity:.5;transition:transform .15s;flex:none}
+.grp-block.open .caret{transform:rotate(90deg)}
+.grp-items{display:none;padding-bottom:4px}
+.grp-block.open .grp-items{display:block}
 .item{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--muted);font-size:13.5px;padding:6px 8px;border-radius:8px}
 .item:hover{background:var(--ground);color:var(--ink)}
 .item.on{background:var(--soft);color:var(--accent);font-weight:600}
