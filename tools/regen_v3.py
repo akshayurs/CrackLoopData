@@ -32,9 +32,68 @@ ACRONYMS = {"nlp": "NLP", "llms": "LLMs", "iac": "IaC", "isa": "ISA", "ilp": "IL
             "cnn": "CNN", "rnn": "RNN", "gmm": "GMM", "pca": "PCA", "svm": "SVM",
             "knn": "kNN", "dbms": "DBMS", "vpn": "VPN", "bgp": "BGP", "svd": "SVD"}
 
-AREA_COLORS = {"ai-ml": "#0C8F88", "cloud-devops-sre": "#7A3AAE",
-               "computer-architecture": "#C2571A", "computer-networks": "#0E6FB8",
-               "cs-theory-math": "#0E8A55"}
+# Per-area accent: (AppIcons name, hex colour). Icon names must exist in the
+# app's AppIcons registry.
+AREA_META = {
+    "ai-ml": ("sparkle", "#7A3AAE"),
+    "cloud-devops-sre": ("cloud", "#0E6FB8"),
+    "computer-architecture": ("chip", "#C2571A"),
+    "computer-networks": ("network", "#0E8A55"),
+    "cs-theory-math": ("function", "#B8305A"),
+}
+
+# Distinct group colours, cycled by global group index so groups within an area
+# are visually distinguishable (harmonious across light/dark).
+GROUP_PALETTE = [
+    "#0C8F88", "#7A3AAE", "#C2571A", "#0E6FB8", "#0E8A55", "#B8305A",
+    "#5A6BD8", "#B8860B", "#2A9D8F", "#9B2226", "#4C6EF5", "#D6336C",
+    "#1098AD", "#7048E8",
+]
+
+# First matching keyword picks the group icon (AppIcons name); else the area icon.
+GROUP_ICON_RULES = [
+    (("security", "tls", "crypto", "auth", "attack", "vpn", "zero-trust", "mtls"), "security"),
+    (("routing", "ip-", "-ip", "addressing", "dns", "transport", "link-", "wireless",
+      "cdn", "load", "mesh", "gateway", "protocol", "network"), "network"),
+    (("database", "sql", "-db", "storage-hardware"), "database"),
+    (("cache", "virtual-memory"), "memory"),
+    (("cpu", "pipeline", "datapath", "isa", "instruction", "register", "alu",
+      "multicore", "ilp", "superscalar", "microarch"), "chip"),
+    (("gpu", "accelerator", "simd", "vector", "perf", "power"), "speed"),
+    (("serverless", "edge", "cloud"), "cloud"),
+    (("container", "docker", "kubernetes", "k8s"), "layers"),
+    (("cicd", "ci-cd", "iac", "infra"), "terminal"),
+    (("observability", "monitoring", "logging", "tracing", "sre", "reliability",
+      "incident", "alert", "chaos", "toil"), "analytics"),
+    (("cost", "capacity"), "speed"),
+    (("api",), "api"),
+    (("nlp", "language", "text", "embedding", "bert", "transformer"), "model"),
+    (("vision", "image", "cnn", "segmentation", "detection"), "devices"),
+    (("llm", "generative", "diffusion", "prompt", "rag", "fine-tun", "rlhf",
+      "applied-ai", "agent"), "sparkle"),
+    (("reinforcement", "policy", "value-based"), "model"),
+    (("recommender", "ranking", "collaborative"), "analytics"),
+    (("mlops", "serving", "drift", "feature-store", "versioning"), "tools"),
+    (("supervised", "unsupervised", "clustering", "regression", "classification",
+      "ensemble", "boosting", "svm", "knn", "bias-variance", "deep-learning",
+      "neural", "optimizer", "regulariz", "ml-"), "sparkle"),
+    (("algebra", "linear", "probability", "statistic", "combinator", "graph",
+      "number-theory", "recurrence", "calculus", "math"), "function"),
+    (("automata", "turing", "complexity", "computation", "information", "theory"), "science"),
+    (("logic", "proof", "set", "proposition", "discrete"), "function"),
+]
+
+
+def area_meta(area_slug):
+    return AREA_META.get(area_slug, ("book", "#5F6368"))
+
+
+def group_icon(area_slug, group_slug):
+    s = group_slug.lower()
+    for kws, icon in GROUP_ICON_RULES:
+        if any(k in s for k in kws):
+            return icon
+    return area_meta(area_slug)[0]
 
 
 def pretty(slug):
@@ -62,6 +121,7 @@ def git_sha():
 def build():
     groups = {}            # slug -> group dict
     files = {}             # bundle: content-rel path -> text
+    gcount = 0             # global group index (for palette cycling)
     tot_topics = tot_slides = tot_mcqs = tot_iq = 0
     area_order = {a: i for i, a in enumerate(sorted(os.listdir(CONTENT)))
                   if os.path.isdir(os.path.join(CONTENT, a))}
@@ -143,6 +203,7 @@ def build():
             if not topics:
                 continue
             topics.sort(key=lambda t: (t["order"], t["title"]))
+            aicon, acolor = area_meta(area_slug)
             groups[gslug] = {
                 "slug": gslug,
                 "name": pretty(group_slug),
@@ -150,9 +211,13 @@ def build():
                 "areaName": pretty(area_slug),
                 "order": area_order.get(area_slug, 0) * 1000
                          + sorted(os.listdir(area_dir)).index(group_slug),
-                "color": AREA_COLORS.get(area_slug),
+                "color": GROUP_PALETTE[gcount % len(GROUP_PALETTE)],
+                "icon": group_icon(area_slug, group_slug),
+                "areaColor": acolor,
+                "areaIcon": aicon,
                 "topics": topics,
             }
+            gcount += 1
 
     index = {
         "schemaVersion": 3,
