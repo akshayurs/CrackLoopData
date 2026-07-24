@@ -232,9 +232,48 @@ def build():
     return index, files
 
 
+def add_aux(index, files):
+    """Fold the migrated auxiliary datasets (glossary, remote config, coding
+    catalog) into the manifest + bundle so the app reaches them under content/."""
+    for aux, key in (("glossary.json", "glossaryFile"), ("config.json", "configFile")):
+        p = os.path.join(CONTENT, aux)
+        if os.path.exists(p):
+            files[aux] = open(p, encoding="utf-8").read()
+            index[key] = aux
+
+    prep = os.path.join(CONTENT, "coding", "prep_manifest.json")
+    if not os.path.exists(prep):
+        return
+    ptext = open(prep, encoding="utf-8").read()
+    files["coding/prep_manifest.json"] = ptext
+    pm = json.loads(ptext)
+    refs = set()
+    for t in pm.get("topics", []):
+        if t.get("primerFile"):
+            refs.add(t["primerFile"])
+    for q in pm.get("questions", []):
+        if q.get("questionFile"):
+            refs.add(q["questionFile"])
+        for s in q.get("solutions", []):
+            if s.get("file"):
+                refs.add(s["file"])
+    missing = 0
+    for rel_ in sorted(refs):
+        fp = os.path.join(CONTENT, rel_)
+        if os.path.exists(fp):
+            files[rel_] = open(fp, encoding="utf-8").read()
+        else:
+            missing += 1
+    index["codingManifest"] = "coding/prep_manifest.json"
+    index["codingCount"] = len(pm.get("questions", []))
+    if missing:
+        print(f"  warning: {missing} coding files referenced but not found on disk")
+
+
 def main():
     check = "--check" in sys.argv
     index, files = build()
+    add_aux(index, files)
     index_text = json.dumps(index, ensure_ascii=False, indent=2)
     files["index.json"] = index_text
     bundle_obj = {"version": 1, "files": files}

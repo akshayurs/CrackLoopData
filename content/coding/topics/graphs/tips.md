@@ -1,0 +1,9 @@
+- **Mark visited when you enqueue, not when you dequeue**, for BFS — otherwise the same node can be added to the queue multiple times before it is processed, wasting time and occasionally causing wrong answers.
+- **BFS gives shortest path on unweighted graphs; DFS does not.** DFS can find *a* path but not necessarily the shortest one — do not reach for DFS when the question asks for "minimum" or "fewest".
+- **Grid traversal boilerplate:** always bounds-check (`0 <= r < rows`, `0 <= c < cols`) before checking `visited` or the cell value — checking `visited` on an out-of-bounds index crashes or silently reads garbage.
+- **Multi-source BFS:** push every source node into the queue *before* the first level runs, not one at a time in separate BFS calls — that is what makes Rotting Oranges / Walls and Gates run in one pass instead of O(sources × cells).
+- **Cycle detection needs 3 states, not 2**, for directed graphs: unvisited / in-progress (on current DFS stack) / done. A "visited" node still on the stack means a cycle; a "visited" node already fully processed does not.
+- **In-place visited marking** (e.g., flip a grid cell to a sentinel value) saves the extra visited set but mutates input — call it out, and only do it if the problem allows mutating the grid.
+- **Recursion depth:** deep DFS on a large grid/graph can blow the call stack — mention converting to an explicit-stack iterative DFS as a fallback for very large inputs.
+- **Clone Graph pitfall:** build the visited-node → clone-node map *before* recursing into neighbors, so cycles in the original graph do not cause infinite recursion.
+- **Union-Find vs DFS for connectivity:** if edges arrive one at a time or you need repeated "are these connected?" queries, union-find beats re-running DFS each time — worth naming as a follow-up.

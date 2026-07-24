@@ -1,0 +1,9 @@
+- **`n & (n - 1)` clears the lowest set bit** — the single most reused trick. Loop it to count set bits, or use it to check "is this a power of two" (`n > 0 and n & (n - 1) == 0`).
+- **`n & (-n)` isolates the lowest set bit** — handy for Fenwick trees and for splitting "two unique numbers" problems (Single Number III): XOR everything to get `a ^ b`, then use the lowest set bit of that result to partition the array into two groups.
+- **Counting-Bits DP:** `bits[i] = bits[i >> 1] + (i & 1)` builds the whole table in O(n) instead of counting each number from scratch.
+- **Watch sign bits:** right shift on signed integers can be arithmetic (sign-extending) or logical depending on the language — Java's `>>` vs `>>>`, Python has no fixed-width negative shift at all. Confirm which one you need before shifting negative numbers.
+- **Two's complement:** `-n == ~n + 1`. This is why `n & (-n)` works to isolate the lowest bit, and it matters for problems like Reverse Bits or Sum of Two Integers that must work on negative inputs.
+- **Overflow at 32/64 bits:** languages with unbounded integers (Python) need an explicit mask (`& 0xFFFFFFFF`) plus sign-correction to simulate fixed-width arithmetic — easy to forget and get a wrong sign.
+- **Say the trick out loud:** in an interview, naming the identity you're using ("XOR is its own inverse, so duplicates cancel") reassures the interviewer you understand *why* it works, not just that you memorized it.
+- **Pitfall — operator precedence:** `&` and `|` bind looser than `==` in C-family languages; `if (n & 1 == 0)` is a classic bug — always parenthesize: `if ((n & 1) == 0)`.
+- **When not to bit-hack:** if the interviewer wants readable, obviously-correct code and performance isn't the ask, a hash set for "find the duplicate" is fine — offer the bit trick as a follow-up optimization rather than the first draft.

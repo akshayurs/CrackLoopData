@@ -1,0 +1,9 @@
+- **Prune before you recurse, not after.** Check the constraint (sum too large, letter doesn't match, queen attacks another) before making the call, so invalid subtrees are never even entered.
+- **Undo the exact mutation you made.** If you `path.append(x)`, the matching `path.pop()` must run after the recursive call returns — even on early returns, so use it right after the call, not guarded behind a condition.
+- **Sort first to handle duplicates.** For Subsets II / Permutations II / Combination Sum II, sort the input, then at each level skip a candidate if it equals the previous sibling *at the same recursion depth* — this is the standard `if i > start and nums[i] == nums[i-1]: continue` guard.
+- **In-place beats copying.** Mutate a shared `path` list and swap/mark visited in place rather than passing new lists down each call — copying at every node turns O(2ⁿ) work into something much worse.
+- **Record a copy, not the reference.** When a path is complete, append `list(path)` (or equivalent) to the results — appending `path` itself stores a reference that later mutates to empty.
+- **Combinations vs permutations changes the loop start.** Combinations/subsets loop from a `start` index forward (order doesn't matter, no revisits); permutations loop over all unused elements each time (order matters) — mixing these up is the most common bug.
+- **Grid problems need a visited marker.** Word Search: mark the cell used (e.g. overwrite with `#`) before recursing into neighbors, restore it after — a separate visited set works too but costs extra space.
+- **Pitfall — off-by-one on `start`:** using `start` instead of `start + 1` when an element can be reused (Combination Sum) vs. cannot (Combination Sum II) is the difference between allowing repeats and not.
+- **Complexity is exponential by nature** — O(2ⁿ) for subsets, O(n!) for permutations. Say this out loud in the interview; the goal is correct pruning, not beating the asymptotic bound.

@@ -1,0 +1,8 @@
+- **Array vs map for children:** fixed `children[26]` (lowercase-only) is faster and simpler than a hash map, but wastes space for sparse alphabets (Unicode, mixed case) — use a map there.
+- **Mark word ends explicitly.** A node reachable while walking is only a *prefix*; without an `isEnd` flag, `search("app")` would wrongly return true just because `"apple"` was inserted.
+- **Prune during backtracking.** In board/grid search (Word Search II), delete a trie branch once its word is found, and bail out of the DFS the moment `node.children` has no entry for the next board letter — this is what keeps the search from degenerating into brute force.
+- **Store the word (or an index) at the end node**, not just a boolean, when you need to know *which* word matched during a DFS — recovering it from the path is extra work you can skip.
+- **Wildcard search is DFS, not a simple walk:** at a `.`, try every child recursively; this only becomes expensive if wildcards are dense, so mention the O(26^k) worst case for k wildcards.
+- **Binary trie for XOR problems:** insert each number's bits (MSB to LSB, fixed width e.g. 32), then for max-XOR greedily walk toward the *opposite* bit at each level — O(32) per query beats the O(n²) brute-force pair comparison.
+- **Space adds up.** Every node carries an array/map even for single-character branches; for very large dictionaries, compressed tries (radix trees) collapse chains of single-child nodes — worth a sentence if asked about scaling.
+- **Pitfall — case/character-set assumptions:** hardcoding `children[26]` breaks silently on uppercase, digits, or punctuation; confirm the alphabet before choosing the array size.

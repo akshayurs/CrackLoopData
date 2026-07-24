@@ -1,0 +1,8 @@
+- **Sort first if the array isn't sorted.** For 3Sum/4Sum-style problems, sorting costs O(n log n) up front but unlocks the O(n) converging-pointer inner loop — still a net win over brute force.
+- **Skip duplicates explicitly.** In 3Sum/4Sum, after fixing an outer value or moving `left`/`right`, skip over repeated values (`while a[i] == a[i-1]: i += 1`) to avoid duplicate triplets in the answer.
+- **Move the pointer at the "worse" side.** In Container With Most Water, the shorter line is always the bottleneck — move that pointer, never the taller one, or you can only ever get a worse or equal area.
+- **Fast/slow for in-place writes:** keep a `write` pointer that only advances when you keep an element (Remove Duplicates, Move Zeroes); the `read` pointer scans everything unconditionally.
+- **Palindrome edge cases:** skip non-alphanumeric characters on both sides before comparing, and normalize case. For "Valid Palindrome II", the pitfall is remembering you get *one* allowed deletion — try skipping left or right on the first mismatch and check both resulting substrings.
+- **Termination condition matters:** converging loops use `while left < right`, not `<=` — using `<=` can compare an element against itself or double-count the middle element.
+- **Pitfall — unsorted assumption:** applying two pointers to unsorted data without sorting first silently gives wrong answers, since the "move toward target" logic relies on monotonicity.
+- **Space vs sort trade-off:** if you cannot sort (order must be preserved) or the array truly is unsorted with no room to sort, hashing is usually the right fallback instead of two pointers.

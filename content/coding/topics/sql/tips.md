@@ -1,0 +1,9 @@
+- **`WHERE` filters rows before grouping; `HAVING` filters groups after aggregation.** "Employees with salary > 50000" is `WHERE`; "departments with more than 5 employees" is `HAVING COUNT(*) > 5`.
+- **`GROUP BY` collapses rows; window functions (`OVER`) do not.** Use a window function whenever the result needs to keep every original row alongside a per-group computed value (rank, running total, previous value).
+- **`RANK()` vs `DENSE_RANK()` vs `ROW_NUMBER()`:** `RANK` leaves gaps after ties (1,1,3), `DENSE_RANK` does not (1,1,2), `ROW_NUMBER` never ties (always unique). "Second highest salary" with possible duplicate salaries wants `DENSE_RANK`, not `ROW_NUMBER`.
+- **`LEFT JOIN` + `IS NULL` finds "missing" rows** — customers with no orders, employees with no manager. A plain `INNER JOIN` silently drops exactly the rows the question is asking about.
+- **Handle "no result" explicitly.** "Second highest salary" must return `NULL`/empty rather than crash when fewer than two distinct salaries exist — wrap in a subquery so a missing offset degrades gracefully.
+- **`COUNT(*)` vs `COUNT(column)`:** `COUNT(*)` counts rows; `COUNT(column)` skips `NULL`s. Getting this backwards silently under-counts.
+- **Self-joins need aliases** (`e1`, `e2`) to disambiguate which "copy" of the table a column comes from — a common source of ambiguous-column errors.
+- **Pitfall — duplicate rows from a fan-out join:** joining a "one" table to a "many" table before aggregating can inflate counts/sums. Aggregate first (in a subquery/CTE) if you need the pre-join granularity for the count.
+- **Pitfall — `NULL` breaks `=` and `IN`:** `column = NULL` is never true; use `IS NULL`, and beware `NOT IN` silently returning nothing if the subquery contains a `NULL`.

@@ -1,0 +1,9 @@
+- **In-place matrix rotation:** transpose (swap `matrix[i][j]` with `matrix[j][i]`) then reverse each row for a 90° clockwise rotate — two O(1)-space passes instead of a new matrix.
+- **Spiral traversal:** maintain four shrinking boundaries (`top`, `bottom`, `left`, `right`) and re-check `top <= bottom` / `left <= right` before each of the four legs, or you'll double-count a row/column on the last ring.
+- **Set Matrix Zeroes trick:** use the first row and first column of the matrix itself as marker flags instead of a separate visited set — saves O(m+n) space, but save the *original* state of `matrix[0][0]` first since it's shared by both markers.
+- **Fast exponentiation:** `pow(x, n)` in O(log n) by halving the exponent — `x^n = (x^(n/2))^2`, with an extra `* x` when `n` is odd. Handle negative `n` by inverting `x` and negating `n` (watch integer overflow / `n == INT_MIN`).
+- **Digit extraction:** `n % 10` gets the last digit, `n //= 10` (or `n / 10` with integer division) drops it — the backbone of reverse-integer, digit-sum, and happy-number problems.
+- **Happy Number / cycle detection:** repeatedly summing squared digits either reaches 1 or loops forever — detect the loop with a hash set of seen values, or Floyd's slow/fast pointer for O(1) space.
+- **Pitfall — overflow:** reversing integers or computing large powers can overflow 32-bit ints; check bounds *before* the operation that would overflow, not after.
+- **Pitfall — off-by-one on boundaries:** matrix layer/ring problems are notorious for `<=` vs `<` bugs on the boundary indices — trace a small (2x2 or 3x3) example by hand before coding.
+- **Simulation state conflicts:** when a rule (like Game of Life) must apply to every cell "at once," encode the next state without overwriting cells you still need to read — e.g. use extra bit flags or a temporary copy.

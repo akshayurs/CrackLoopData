@@ -1,0 +1,36 @@
+The only days worth testing are the days on which some flower blooms — between two such days nothing changes. So collect the distinct bloom days, sort them, and try each in increasing order, returning the first day on which `m` bouquets are possible.
+
+Checking a single day is a linear scan: count runs of already-bloomed adjacent flowers, and every full run of length `k` yields one bouquet. If `m * k` exceeds the number of flowers, no day can ever work, so bail out with `-1`.
+
+```python
+def min_days(bloom_day, m, k):
+    n = len(bloom_day)
+    if m * k > n:
+        return -1
+
+    def can(day):
+        bouquets = run = 0
+        for b in bloom_day:
+            if b <= day:
+                run += 1
+                if run == k:
+                    bouquets += 1
+                    run = 0
+            else:
+                run = 0
+        return bouquets >= m
+
+    for day in sorted(set(bloom_day)):
+        if can(day):
+            return day
+    return -1
+```
+
+## Why it works
+
+`can(day)` walks left to right, growing a run of consecutive bloomed flowers and cutting one bouquet each time the run hits `k` (resetting so flowers are not reused). Since feasibility only ever changes on a day that some flower blooms, testing the sorted distinct bloom days in order finds the smallest feasible one. The `m * k > n` guard catches the impossible case up front.
+
+## Complexity
+
+- Time: O(n^2) — up to n distinct days, each checked in O(n).
+- Space: O(n) — the set of distinct bloom days.

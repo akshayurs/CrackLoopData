@@ -1,0 +1,8 @@
+- **Lock vs semaphore, pick by job:** a lock enforces "only one thread here" (mutual exclusion); a semaphore enforces "wait until this specific thing happened" (signaling). Ordering problems (Print In Order) usually need semaphores, not locks.
+- **Initialize semaphores by who goes first.** A semaphore that should let the first caller through starts at permit count 1; one that should block until another thread signals starts at 0.
+- **One semaphore per hand-off**, not one shared semaphore for everything — Print FooBar Alternately needs two semaphores (foo's turn, bar's turn) so each side only ever wakes the other.
+- **Bounded queue = two counting semaphores + a lock:** `emptySlots` (starts at capacity), `filledSlots` (starts at 0), and a mutex around the actual enqueue/dequeue so the buffer itself isn't corrupted by concurrent access.
+- **Pitfall — deadlock from lock ordering:** Dining Philosophers deadlocks if every philosopher grabs their left fork first. Break the symmetry (e.g., last philosopher picks up right fork first, or impose a global fork-acquisition order) to guarantee progress.
+- **Pitfall — busy-waiting:** a `while (!ready) {}` spin loop burns CPU and can starve other threads; prefer blocking primitives (`acquire()`, `wait()`) that suspend until signaled.
+- **State the interleaving, don't fake execution:** since these questions are `runnable:false`, the expected output is *one valid interleaving* documented as static text — call out explicitly that other interleavings are equally correct as long as the ordering constraint holds.
+- **Name the correctness property you're preserving** — mutual exclusion, ordering, or bounded resource use — that's usually worth more in the interview than the exact API syntax.

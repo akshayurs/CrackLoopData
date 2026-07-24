@@ -1,0 +1,9 @@
+- **Cyclic sort placement rule:** while `arr[i]` doesn't belong at index `i`, swap it to its home index; only advance `i` once it's correct or a duplicate. Getting the `while` vs `if` wrong here is the most common bug — a single `if` can leave an element unplaced after a swap.
+- **Missing/duplicate via cyclic sort:** after the placement pass, scan once more; `arr[i] != i + 1` tells you both — the value `i + 1` is missing and `arr[i]` is a duplicate, in O(1) extra space.
+- **Quickselect partition:** partition like quicksort, but recurse into only the side that contains the k-th index — expected O(n), worst-case O(n²) on adversarial pivots (mention this trade-off out loud).
+- **Merge sort for counting:** to count inversions/reverse pairs, count cross-pairs *during* the merge step (both halves are already sorted, so a two-pointer scan counts them in O(n) per merge level) rather than comparing every pair.
+- **Stability matters** when equal keys must keep their relative order (e.g., sorting by one field after another). Merge sort is stable; quicksort and heapsort typically are not — say this if the problem implies multi-key sorting.
+- **Counting sort needs a bounded range.** It's O(n + k) where k is the value range — great for sorting colors (0/1/2) or characters, bad if the range is huge relative to n.
+- **In-place merges (e.g., Merge Sorted Array):** fill from the back when one array has trailing free space, so you never overwrite values you still need to read.
+- **Pitfall — off-by-one on partition boundaries:** quicksort/quickselect bugs are almost always in the partition's `<=`/`<` or final swap position; trace a 3-element example before coding.
+- **Sorting first often simplifies a problem** even when it isn't the final answer — many two-pointer and greedy problems become tractable only after an O(n log n) sort, so don't dismiss "just sort it" as too simple.

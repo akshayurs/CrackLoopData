@@ -1,0 +1,8 @@
+- **Decide what the stack stores up front:** raw values, indices, or `(value, count)` pairs. Next-greater problems need indices (to compute distance/fill an answer array); stock span needs `(price, span)` pairs to skip over collapsed ranges.
+- **The `while` loop is where the work happens:** pop while the invariant is violated (`stack top < current` for an increasing stack), then push the current element. Every element is pushed once and popped once — that is the whole O(n) argument.
+- **Push a sentinel to flush the stack:** for histogram/rectangle problems, appending a `0`-height bar at the end forces every remaining bar to be popped and resolved, avoiding a separate cleanup loop.
+- **Min Stack trick:** to get O(1) `getMin`, push `(value, minSoFar)` pairs, or keep a second stack that mirrors the running minimum. Do not recompute the min by scanning.
+- **Matching-bracket pitfall:** push opening brackets, and on a closing bracket check the stack is non-empty *and* the top matches before popping — an empty-stack pop on a stray closing bracket is a common crash.
+- **Expression evaluation:** for RPN, pop two operands per operator and push the result back; for calculators with parentheses, a stack of pending signs/results handles nesting without recursion.
+- **Pitfall — direction matters:** "next greater to the right" scans left→right with indices pushed in increasing order; "next greater to the left" (or scanning right→left) flips the loop direction. Re-derive from the definition rather than guessing.
+- **Don't reach for a stack if you never need "the most recent unresolved item"** — if order doesn't matter, a hash set or plain counting is simpler and avoids off-by-one pop/push bugs.

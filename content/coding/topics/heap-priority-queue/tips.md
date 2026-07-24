@@ -1,0 +1,8 @@
+- **Min-heap for "k largest," max-heap for "k smallest"** — counterintuitive at first: to keep the k largest you evict the *smallest* of your candidates, so the candidate pool itself is a min-heap capped at size k.
+- **Most languages only give you a min-heap.** For a max-heap, negate the key on push/pop (Python's `heapq`), or supply a reverse comparator (Java's `PriorityQueue`, C++'s `priority_queue` with `greater<>`).
+- **Two-heaps-for-median invariant:** keep the max-heap (lower half) and min-heap (upper half) sizes equal or off by one; after every insert, rebalance by moving the top element across if one heap grows too large.
+- **Tie-breaking with tuples:** when pushing `(priority, item)`, unhashable/uncomparable items (like objects or ties) can crash the comparison — push `(priority, tie_breaker, item)` with a unique counter to guarantee a total order.
+- **Heapify beats n inserts:** building a heap from an existing array is O(n) via `heapify`, not O(n log n) from pushing one at a time — use it when you start with a full list.
+- **Lazy deletion:** heaps don't support efficient arbitrary removal. If you need to "remove" a stale entry (e.g., in Dijkstra with decrease-key), push a fresh entry and skip stale pops when popped later, checking against a seen/visited set.
+- **Space vs sort trade-off:** if you need every element ranked, not just the top K, a full sort is simpler and no worse asymptotically — don't reach for a heap just out of habit.
+- **Pitfall — heap order is not sorted order:** iterating the underlying array of a heap gives no useful ordering beyond the root; always pop to read elements out in priority order.
