@@ -1,0 +1,110 @@
+{
+  "id": "synchronization-primitives-hw",
+  "title": "Synchronization Primitives in Hardware",
+  "area": "computer-architecture",
+  "group": "multicore",
+  "order": 3,
+  "slug": "synchronization-primitives-hw",
+  "summary": "The atomic instructions — test-and-set, compare-and-swap, LL/SC — that every lock and lock-free data structure is ultimately built from.",
+  "level": "advanced",
+  "slideCount": 7,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "synchronization-primitives-hw-s01",
+      "order": 1,
+      "sectionTitle": "Why ordinary loads/stores can't build a lock",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A lock needs to **check whether it's free and grab it** as one indivisible step. If \"check\" and \"grab\" are two separate ordinary instructions, two cores can both check, both see it free, and both grab it — a **race** that defeats the entire purpose of a lock.\n\n```\nif (lock == FREE) {   // both cores see FREE\n  lock = TAKEN;       // both cores set it — both think they won\n}\n```\n\nThis is exactly why hardware provides **atomic read-modify-write** instructions — the check-and-grab has to happen as one uninterruptible operation, or the race is unavoidable.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": ["synchronization-primitives-hw-s01-q1"]
+    },
+    {
+      "id": "synchronization-primitives-hw-s02",
+      "order": 2,
+      "sectionTitle": "Test-and-set",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Test-and-set** is the earliest atomic primitive: it reads a memory location's old value and unconditionally writes a new value (typically 1/\"locked\"), returning the old value — all as one atomic step. A core acquires the lock by test-and-setting until it reads back a 0 (was free).\n\nIts weakness is **busy-waiting cost**: every failed attempt still hammers the same memory location with a write, generating heavy coherence traffic ([cache-coherence-protocols](cache-coherence-protocols)) as every spinning core invalidates every other spinning core's cached copy, over and over.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-primitives-hw-s03",
+      "order": 3,
+      "sectionTitle": "Compare-and-swap (CAS)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Compare-and-swap (CAS)** is the workhorse behind most modern lock-free code: atomically compare a memory location's current value against an *expected* value, and only if they match, swap in a *new* value — reporting success or failure. Unlike test-and-set, CAS lets a thread build \"update this value, but only if nobody else changed it since I last read it\" — the basis for optimistic, retry-based lock-free algorithms.\n\nA typical CAS loop reads the current value, computes a new one, then CAS-swaps; on failure (someone else won the race), it just re-reads and retries rather than blocking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 33,
+      "mcqIds": ["synchronization-primitives-hw-s03-q1"]
+    },
+    {
+      "id": "synchronization-primitives-hw-s04",
+      "order": 4,
+      "sectionTitle": "Load-linked/store-conditional",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Load-linked/store-conditional (LL/SC)** is the alternative many RISC-style ISAs (RISC-V, older MIPS, ARM's LDXR/STXR) use instead of a single CAS instruction: `LL` reads a value and marks the address as watched; `SC` writes a new value **only if no other core has written to that address since the LL** — otherwise it fails and software retries.\n\nLL/SC splits CAS's single atomic instruction into a pair, easier to implement correctly in hardware, at the cost of needing careful handling around interrupts and context switches.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 33,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-primitives-hw-s05",
+      "order": 5,
+      "sectionTitle": "A CAS-based spinlock",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A CAS-based spinlock's acquire and release sequence across two contending threads](assets/cas-spinlock.svg)\n\nAcquiring: loop calling CAS(lock, expected=0, new=1) until it succeeds — the thread that flips the lock from 0 to 1 wins; every failing thread just retries. Releasing: a plain store of 0 — no atomicity needed, since only the current holder ever writes it, and everyone spinning is only reading.",
+      "assets": [
+        {
+          "alt": "A CAS-based spinlock's acquire and release sequence across two contending threads",
+          "path": "assets/cas-spinlock.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-primitives-hw-s06",
+      "order": 6,
+      "sectionTitle": "Implementing a spinlock",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal CAS-based spinlock:\n\n```c\nvoid acquire(atomic_int *lock) {\n    int expected = 0;\n    while (!atomic_compare_exchange_weak(lock, &expected, 1)) {\n        expected = 0;  // reset for retry after a failed attempt\n    }\n}\n\nvoid release(atomic_int *lock) {\n    atomic_store(lock, 0);\n}\n```\n\nEvery failed `compare_exchange` means another thread currently holds the lock; the loop just keeps retrying (spinning) rather than yielding the CPU — appropriate only when the expected wait is very short, since spinning burns CPU cycles the whole time.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": ["synchronization-primitives-hw-s06-q1"]
+    },
+    {
+      "id": "synchronization-primitives-hw-s07",
+      "order": 7,
+      "sectionTitle": "CAS vs LL/SC and the ABA problem",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | CAS | LL/SC |\n|---|---|---|\n| Instruction shape | One atomic instruction | A load/store pair |\n| ABA problem | **Vulnerable** — value A→B→A looks unchanged to a plain value compare | **Naturally immune** — SC fails if *any* write touched the address, even one that restored the same value |\n| Hardware complexity | Higher (one instruction does compare+swap atomically) | Lower per-instruction, but needs careful monitor/reservation hardware |\n\n**How to decide:** CAS alone can be fooled by the **ABA problem** — a value changes from A to B and back to A, and a plain CAS sees no difference even though something happened in between (a classic issue for lock-free stacks); LL/SC sidesteps this because SC tracks *any write to the address*, not just the final value, though real ISAs still often add a version/tag to CAS-based code to get the same protection.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 32,
+      "mcqIds": ["synchronization-primitives-hw-s07-q1"]
+    }
+  ]
+}

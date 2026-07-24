@@ -1,0 +1,107 @@
+{
+  "id": "calling-conventions-stack-frames",
+  "title": "Calling Conventions & Stack Frames",
+  "area": "computer-architecture",
+  "group": "isa",
+  "order": 8,
+  "slug": "calling-conventions-stack-frames",
+  "summary": "The agreed contract that lets separately-compiled functions call each other correctly, and how a stack frame is laid out.",
+  "level": "advanced",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "calling-conventions-stack-frames-s01",
+      "order": 1,
+      "sectionTitle": "Why a convention exists",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **calling convention** is an agreed contract — where arguments go, where the return value goes, who cleans up the stack — that lets code compiled **independently, even by different compilers**, call into each other correctly.\n\nWithout it, a library compiled with one compiler couldn't safely be called from code compiled by another: each side needs to make the *exact same* assumptions about where to find arguments and how to hand back a result. This is why calling conventions are part of an ABI (application binary interface) — the binary-level counterpart to an API.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": ["calling-conventions-stack-frames-s01-q1"]
+    },
+    {
+      "id": "calling-conventions-stack-frames-s02",
+      "order": 2,
+      "sectionTitle": "The stack frame",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Each function call gets its own **stack frame** — a region of the call stack holding everything that call needs:\n\n![Stack frame layout showing return address, saved registers, local variables, and arguments, growing downward](assets/stack-frame-layout.svg)\n\nFrames stack on top of each other as calls nest, and each one is torn down the moment its function returns — which is exactly why a local variable's address becomes invalid the instant its function exits.",
+      "assets": [
+        { "alt": "Stack frame layout showing return address, saved registers, local variables, and arguments, growing downward", "path": "assets/stack-frame-layout.svg" }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": ["calling-conventions-stack-frames-s02-q1"]
+    },
+    {
+      "id": "calling-conventions-stack-frames-s03",
+      "order": 3,
+      "sectionTitle": "Argument passing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Modern calling conventions pass the **first several arguments in registers** (fast, no memory access) and **spill the rest onto the stack** once registers run out — x86-64's System V ABI, for instance, uses six integer registers before falling back to the stack.\n\nThis is a deliberate speed optimization over older conventions that pushed *everything* onto the stack: most functions take few enough arguments that they never touch memory at all for argument passing, which matters because function calls are extremely frequent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "calling-conventions-stack-frames-s04",
+      "order": 4,
+      "sectionTitle": "Caller-saved vs callee-saved",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Not every register survives a function call automatically — the convention splits registers into two groups:\n\n- **Caller-saved (volatile)** — the *caller* must save these before the call if it needs their values afterward; the callee is free to overwrite them.\n- **Callee-saved (non-volatile)** — the *callee* must restore these to their original values before returning, even if it uses them internally.\n\nThis split avoids wasted work: registers used purely as scratch by short-lived calls don't need saving by anyone, while long-lived values across a call are protected without every single register needing a save on every call.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": ["calling-conventions-stack-frames-s04-q1"]
+    },
+    {
+      "id": "calling-conventions-stack-frames-s05",
+      "order": 5,
+      "sectionTitle": "Prologue and epilogue",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every function begins with a **prologue** — saving the caller's frame pointer, allocating space for locals, saving any callee-saved registers it will use — and ends with an **epilogue** that reverses exactly that, then returns.\n\n```asm\npush  rbp          ; prologue: save caller's frame pointer\nmov   rbp, rsp     ; prologue: establish new frame pointer\nsub   rsp, 16      ; prologue: reserve space for locals\n...\nmov   rsp, rbp      ; epilogue: deallocate locals\npop   rbp           ; epilogue: restore caller's frame pointer\nret                 ; return to caller\n```\n\nThis symmetric setup/teardown is what makes stack frames composable no matter how deeply calls nest.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": ["calling-conventions-stack-frames-s05-q1"]
+    },
+    {
+      "id": "calling-conventions-stack-frames-s06",
+      "order": 6,
+      "sectionTitle": "Tracing a recursive call",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Each recursive call to `factorial(n)` gets its **own, independent frame** — this is precisely why recursion doesn't corrupt earlier calls' local variables:\n\n```\nfactorial(3) frame: n=3, return addr = caller\n  -> factorial(2) frame: n=2, return addr = factorial(3)'s call site\n    -> factorial(1) frame: n=1, return addr = factorial(2)'s call site\n      -> base case returns 1\n    <- factorial(2) computes 2*1=2, returns, frame destroyed\n  <- factorial(3) computes 3*2=6, returns, frame destroyed\n```\n\nThe stack literally grows one frame per recursive call — which is exactly why unbounded recursion causes a **stack overflow**: each frame consumes real memory until the stack region runs out.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": ["calling-conventions-stack-frames-s06-q1"]
+    },
+    {
+      "id": "calling-conventions-stack-frames-s07",
+      "order": 7,
+      "sectionTitle": "Pitfalls",
+      "subTitle": "Stack-based buffer overflow",
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A local array overflowing just corrupts other local variables — annoying, but harmless.\"\n\n**Why it's wrong:** locals typically sit *below* the saved return address on the stack. An unchecked write past the end of a local buffer (e.g., `strcpy` into a fixed-size array) can overwrite the **saved return address itself** — letting an attacker redirect execution to arbitrary code the moment the function returns.\n\n**Correct model:** this is the classic stack-based buffer overflow, one of the oldest and most consequential memory-safety bugs — the reason stack canaries, ASLR, and non-executable stacks all exist. (Cross-link: Security → application security.)",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": ["calling-conventions-stack-frames-s07-q1"]
+    }
+  ]
+}
