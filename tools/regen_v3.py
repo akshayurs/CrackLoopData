@@ -17,7 +17,7 @@ carried as metadata so the app can still section/colour by area.
   python3 tools/regen_v3.py            # regenerate both
   python3 tools/regen_v3.py --check     # verify only, non-zero exit on drift
 """
-import json, gzip, hashlib, os, sys, subprocess
+import json, gzip, hashlib, os, re, sys, subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTENT = os.path.join(ROOT, "content")
@@ -118,18 +118,48 @@ def git_sha():
         return ""
 
 
+def area_ranks():
+    """Relevance order of areas, from `## Area N — … `<slug>`` in the map."""
+    p = os.path.join(ROOT, "briefs", "area-group-map.md")
+    ranks, rank = {}, 0
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8"):
+            m = re.match(r"^##\s+Area\s+\d+.*`([a-z0-9-]+)`", line)
+            if m:
+                ranks[m.group(1)] = rank
+                rank += 1
+    return ranks
+
+
+def group_ranks(area_slug):
+    """Relevance order of an area's groups, from the `## Group: … (slug)`
+    sequence in its expanded brief."""
+    p = os.path.join(ROOT, "briefs", "expanded", f"{area_slug}.md")
+    ranks, rank = {}, 0
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8"):
+            m = re.match(r"^##\s+Group:.*\(([a-z0-9-]+)\)", line)
+            if m:
+                ranks[m.group(1)] = rank
+                rank += 1
+    return ranks
+
+
 def build():
     groups = {}            # slug -> group dict
     files = {}             # bundle: content-rel path -> text
     gcount = 0             # global group index (for palette cycling)
     tot_topics = tot_slides = tot_mcqs = tot_iq = 0
-    area_order = {a: i for i, a in enumerate(sorted(os.listdir(CONTENT)))
-                  if os.path.isdir(os.path.join(CONTENT, a))}
+    # Relevance ordering from the briefs; alphabetical only as a last resort.
+    arank = area_ranks()
+    alpha_areas = {a: i for i, a in enumerate(
+        d for d in sorted(os.listdir(CONTENT)) if os.path.isdir(os.path.join(CONTENT, d)))}
 
     for area_slug in sorted(os.listdir(CONTENT)):
         area_dir = os.path.join(CONTENT, area_slug)
         if not os.path.isdir(area_dir):
             continue
+        grank = group_ranks(area_slug)
         for group_slug in sorted(os.listdir(area_dir)):
             group_dir = os.path.join(area_dir, group_slug)
             if not os.path.isdir(group_dir):
@@ -209,8 +239,9 @@ def build():
                 "name": pretty(group_slug),
                 "area": area_slug,
                 "areaName": pretty(area_slug),
-                "order": area_order.get(area_slug, 0) * 1000
-                         + sorted(os.listdir(area_dir)).index(group_slug),
+                "order": arank.get(area_slug, 900 + alpha_areas.get(area_slug, 0)) * 1000
+                         + grank.get(group_slug,
+                                     900 + sorted(os.listdir(area_dir)).index(group_slug)),
                 "color": GROUP_PALETTE[gcount % len(GROUP_PALETTE)],
                 "icon": group_icon(area_slug, group_slug),
                 "areaColor": acolor,
