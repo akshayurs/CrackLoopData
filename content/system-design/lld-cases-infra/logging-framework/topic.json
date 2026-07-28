@@ -1,0 +1,206 @@
+{
+  "id": "logging-framework",
+  "title": "Logging Framework",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 2,
+  "slug": "logging-framework",
+  "summary": "A deceptively deep 'simple' prompt: levels, sinks, and formatting look trivial until the interviewer asks what happens when a sink is slow — then it's an async-delivery design problem.",
+  "level": "intermediate",
+  "slideCount": 14,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "logging-framework-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a logging framework\" reads like a warm-up question, and answering \"just call `print()` with a timestamp\" fails it immediately — real logging frameworks need levels, multiple destinations, formatting, and, once probed, a way to avoid blocking the application when a destination is slow.\n\nThe interview arc mirrors most real systems: it starts simple (levels and sinks), then the interviewer pulls one thread — \"what if writing to disk takes 50ms and you log 10,000 times a second?\" — and the whole design has to grow an async delivery pipeline without changing the caller's experience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: levels, destinations, formatting, low overhead",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core contract: support **log levels** (DEBUG through ERROR, at minimum), write to **multiple destinations** at once (console, file, a cloud log service), apply consistent **formatting**, and impose **minimal performance overhead** on the code that calls `logger.info(...)` — a hot request path shouldn't stall on logging.\n\n**Non-goals** worth stating up front: this is a client-side logging library, not a full log-aggregation backend — no search, no indexing, no cross-service correlation. Naming that boundary early keeps the design focused on the actual LLD, not a distributed-systems tangent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Logger, LogLevel, LogRecord, Appender, Formatter",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Five classes carry the whole design. A **`Logger`** is the entry point callers use (`logger.info(\"msg\")`). **`LogLevel`** is an ordered enum (DEBUG < INFO < WARN < ERROR) used to filter what actually gets emitted. A **`LogRecord`** is the immutable data produced by one log call — message, level, timestamp, caller context. An **`Appender`** (also called a sink) is a destination — console, file, network — that knows how to write a record out. A **`Formatter`** turns a `LogRecord` into the string or structure an `Appender` actually writes.\n\nKeeping these separate is what makes the rest of the design extensible: a `Logger` never talks to a file or a socket directly, it only ever talks to `Appender` and `Formatter` interfaces.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a log call flowing through filter, format, and fan-out",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a horizontal pipeline — a \"logger.info() call\" box, arrow into a \"level check\" diamond, arrow (if passed) into a \"Formatter\" box, then fanning out with three arrows into three \"Appender\" boxes labelled Console, File, Cloud; a fourth arrow from the level-check diamond looping back labelled \"dropped\" for records that fail the filter >>>\n\nOne log call becomes: a level check that can drop the record entirely before any work happens, then one formatting pass, then a fan-out to every registered appender. Formatting happens once and is reused by all appenders — it isn't repeated per destination.\n\nThis is the shape every later addition builds on: a new destination is a new box on the fan-out side, never a change to the pipeline itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s05",
+      "order": 5,
+      "sectionTitle": "Chain of Responsibility for level filtering",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A clean way to implement the level check is the **Chain of Responsibility** pattern: a chain of handlers — DEBUG, INFO, WARN, ERROR — where each handler decides whether to pass a record along based on the configured minimum level, rather than one big if/elif ladder inside `Logger`.\n\nConcretely, each handler wraps the next one; if the logger's configured level is INFO, the DEBUG handler is skipped (or the chain simply starts at INFO). The benefit isn't performance — a single comparison would be just as fast — it's that adding a new level, or per-handler side effects (like counting how many WARN-and-above records fired), doesn't require touching `Logger` at all, only the chain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "logging-framework-s05-q1"
+      ]
+    },
+    {
+      "id": "logging-framework-s06",
+      "order": 6,
+      "sectionTitle": "Code: adding a new appender without touching Logger",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "This is the payoff of keeping `Appender` an interface: a brand-new destination is a brand-new class, registered at startup, with zero edits to `Logger`.\n\n```python\nclass Appender(ABC):\n    @abstractmethod\n    def write(self, formatted: str) -> None: ...\n\nclass CloudAppender(Appender):\n    def __init__(self, client):\n        self.client = client\n\n    def write(self, formatted: str) -> None:\n        self.client.send_log(formatted)\n\nlogger.add_appender(CloudAppender(cloud_client))  # wiring only, no Logger edit\n```\n\n`Logger.log()` only ever calls `appender.write(formatted)` in a loop over whatever's registered — it has no idea `CloudAppender` exists. This is the open/closed principle in practice: open for a new appender, closed to modifying `Logger`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s07",
+      "order": 7,
+      "sectionTitle": "Should Logger be a Singleton? The usual instinct vs the real trade-off",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The instinctive answer is yes — there should be \"one logger\" the whole app shares, so a Singleton feels natural. But a single global `Logger` makes two things harder: **per-module level overrides** (you often want DEBUG logs from one noisy module without turning them on everywhere), and **testing** (a Singleton's global state leaks between test cases unless carefully reset).\n\nMost real frameworks — Log4j, Python's `logging`, SLF4J — instead use a **registry of loggers keyed by name**, typically the class or module name (`getLogger(\"payments.service\")`). Each named logger can have its own level and appenders, while still sharing the underlying appender/formatter machinery. It looks like a Singleton from the call site (`getLogger(name)` always returns the same instance for that name) but isn't a single global object.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "logging-framework-s07-q1"
+      ]
+    },
+    {
+      "id": "logging-framework-s08",
+      "order": 8,
+      "sectionTitle": "The hard part: synchronous logging blocks the caller",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every appender call in the pipeline so far runs **on the caller's thread**. A console write is fast, but a file write can hit disk latency, and a cloud appender makes a network call — both can take milliseconds to seconds under load, and that cost lands directly on whatever code called `logger.info()`, even a hot request path.\n\n**Async logging** fixes throughput by having the caller hand off the `LogRecord` and return immediately, with a separate thread doing the actual, slower write. But this trades one problem for another: what happens when producers (callers logging) create records faster than the writer thread can drain them? That queue-growth problem is the real design question async logging introduces, and it's what the next few slides solve.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s09",
+      "order": 9,
+      "sectionTitle": "Code: an async Logger backed by a bounded queue and writer thread",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The caller-facing API doesn't change — it's the internals that grow a queue and a dedicated consumer.\n\n```python\nclass AsyncLogger:\n    def __init__(self, appenders, queue_size=10_000):\n        self.queue = queue.Queue(maxsize=queue_size)\n        self.appenders = appenders\n        threading.Thread(target=self._drain, daemon=True).start()\n\n    def log(self, record: LogRecord) -> None:\n        self.queue.put_nowait(record)   # returns immediately\n\n    def _drain(self) -> None:\n        while True:\n            record = self.queue.get()   # blocks only the writer thread\n            formatted = self.formatter.format(record)\n            for appender in self.appenders:\n                appender.write(formatted)\n```\n\n`log()` is now O(1) enqueue work on the caller's thread; all the slow I/O happens on `_drain`'s own thread, decoupled from request latency.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: producer threads, a bounded queue, one writer thread",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: multiple \"producer thread\" boxes on the left each with an arrow labelled \"enqueue LogRecord\" into a single \"bounded queue\" box in the middle, annotated with a callout \"full policy: block / drop / discard-oldest\"; one arrow from the queue into a single \"writer thread\" box on the right, which fans out into the appenders >>>\n\nMany producers, one consumer, and a queue in between that has to have an explicit **full policy** — what happens when producers outrun the writer and the bounded queue fills up. Leaving this undefined is the single most common gap in an async-logging design.\n\nThe three standard choices: **block** the producer until space frees up (safest, but reintroduces the latency async was meant to remove), **drop** the new record (loses data, protects latency), or **discard-oldest** (evicts the oldest queued record to make room for the newest, favoring recency).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "logging-framework-s10-q1"
+      ]
+    },
+    {
+      "id": "logging-framework-s11",
+      "order": 11,
+      "sectionTitle": "Compare: synchronous vs asynchronous logging",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Neither mode is strictly better — they trade latency for durability guarantees.\n\n| | Synchronous | Asynchronous |\n|---|---|---|\n| Caller latency | Coupled to I/O (disk/network) per call | Decoupled — enqueue is O(1) |\n| Ordering | Guaranteed per-thread | Guaranteed within the queue, but a burst can reorder relative to real time under a full-policy drop |\n| Durability on crash | Every logged record is written before the call returns | Queued-but-undrained records can be lost unless flushed on shutdown |\n| Throughput ceiling | Limited by the slowest appender | Limited by the writer thread and queue capacity, not caller speed |\n\n**How to decide:** default to async for anything on a request's hot path; keep synchronous logging only where a record must be durable the instant the call returns — e.g. an audit log for a financial transaction, where losing the tail on crash is unacceptable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s12",
+      "order": 12,
+      "sectionTitle": "Backpressure under high volume, deep-dive: sampling and level elevation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A bounded queue's full-policy is a blunt, last-resort mitigation. Two proactive strategies reduce how often you hit it. **Sampling** logs only 1-in-N DEBUG (or even INFO) records during normal operation — you keep a statistically useful sample without paying for every single one. **Level elevation under load** temporarily raises the effective minimum level (suppressing DEBUG/INFO) when the queue depth crosses a threshold, automatically shedding low-value volume exactly when the system is under the most pressure.\n\nBoth trade completeness for sustainability: you accept losing some low-priority records on purpose, in exchange for never losing high-priority ones (WARN/ERROR) to a full queue.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-framework-s13",
+      "order": 13,
+      "sectionTitle": "Pitfall: a logging call that throws and crashes the caller",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Logging is a side effect, so if the formatter or an appender has a bug, it's fine for the exception to propagate — it'll show up in the logs.\"\n\n**Why it's wrong:** an exception from *inside* the logging call — a formatter bug on unexpected input, a full disk on a file appender — propagates up into the caller's business logic. A payment-processing function that logs a transaction and then crashes because the logger itself threw has turned an observability feature into an outage cause.\n\n**Correct model:** every appender and formatter call must be wrapped so its own failures are caught and reported (e.g. to a fallback stderr write or a metric), never re-thrown into the caller. Logging must be allowed to fail silently from the caller's point of view — it can never be more fragile than the code it's observing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "logging-framework-s13-q1"
+      ]
+    },
+    {
+      "id": "logging-framework-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: making every appender synchronous by default",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll make the whole `Logger` async, but each individual appender can just write synchronously when the writer thread calls it — that's simpler.\"\n\n**Why it's wrong:** the writer thread in an async design is a single shared resource. If it calls appenders one after another and one of them — say, a cloud appender hitting a slow network — blocks for seconds, every other appender, and every other log record waiting behind it in the queue, stalls too. One slow sink now throttles logging for the entire application.\n\n**Correct model:** either give each appender (or at least each slow, I/O-bound one) its own dedicated writer thread and queue, or make appenders themselves non-blocking (fire-and-forget with their own internal buffering). A single shared writer thread should never be allowed to wait indefinitely on one destination.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "logging-framework-s14-q1"
+      ]
+    }
+  ]
+}

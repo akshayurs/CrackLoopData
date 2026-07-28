@@ -1,0 +1,113 @@
+{
+  "id": "sticky-sessions-and-statelessness",
+  "title": "Sticky Sessions & Statelessness",
+  "area": "system-design",
+  "group": "load-balancing",
+  "order": 6,
+  "slug": "sticky-sessions-and-statelessness",
+  "summary": "Why session affinity is tempting, what it actually costs in load, failover, and scaling, and when it's genuinely the right call anyway.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "sticky-sessions-and-statelessness-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Sticky sessions** pin a given client to the same backend server for the length of their session, instead of letting the load balancer route each request independently. It looks like an easy shortcut around statelessness — but it quietly reintroduces the exact fragility statelessness exists to avoid.\n\nThis topic covers why stickiness is tempting, its real costs, the alternatives that avoid it, and the rare cases where it's genuinely the right trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "sticky-sessions-and-statelessness-s02",
+      "order": 2,
+      "sectionTitle": "What session affinity is and why it's tempting",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Session affinity** (sticky sessions) makes a load balancer route every request from a given client to the same backend server, usually by reading a cookie it sets on the first request. Once server 2 has answered client X once, every later request from client X goes back to server 2.\n\nIt's tempting because it's the path of least resistance: if a server holds a user's shopping cart or login session in local memory, stickiness makes the app *work* without touching a line of application code. No external session store to stand up, no code changes — just a load balancer setting.\n\nThat convenience is exactly the trap: it papers over a stateful design instead of fixing it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "sticky-sessions-and-statelessness-s02-q1"
+      ]
+    },
+    {
+      "id": "sticky-sessions-and-statelessness-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: sticky session pinning a client to one node",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a client icon sending three separate requests over time, each one shown routed by the load balancer to the exact same backend node (node 2) via a cookie labelled \"session=abc123\", while two other backend nodes sit idle with no arrows pointing to them from this client >>>\n\nEvery request in the sequence carries the same session cookie, and the load balancer reads it and forwards to node 2 every time, bypassing whatever algorithm (round robin, least connections) it would otherwise use. The other two nodes are fully available but structurally cannot serve this client as long as the cookie points at node 2.\n\nThat's the mechanism in one picture: the load balancer's normal decision-making is overridden for any client carrying a sticky cookie.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "sticky-sessions-and-statelessness-s04",
+      "order": 4,
+      "sectionTitle": "The cost: uneven load, failover pain, scaling friction",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pinning clients to servers breaks three things a load balancer normally guarantees. **Uneven load**: if a handful of pinned clients happen to be unusually active, their server gets overloaded while others sit idle — the load balancer can no longer freely redistribute to fix it. **Failover pain**: if that pinned server dies, every client stuck to it loses their session data at once, not just whichever requests happened to be in flight. **Scaling friction**: adding a new server doesn't help existing pinned clients at all — they're already committed to their original node, so the new capacity only helps brand-new sessions.\n\nEach of these is a direct consequence of the same root cause: some clients can only be served by one specific server.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "sticky-sessions-and-statelessness-s04-q1"
+      ]
+    },
+    {
+      "id": "sticky-sessions-and-statelessness-s05",
+      "order": 5,
+      "sectionTitle": "Compare: external session store vs JWT-based state",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | External session store (Redis) | JWT-based state |\n|---|---|---|\n| Where state lives | A shared store every server can read | Inside the token itself, sent by the client every request |\n| Any server can serve any request | Yes — server fetches session by ID | Yes — server decodes the token, no lookup needed |\n| Revoking a session early | Simple — delete the key in the store | Hard — token is valid until it expires unless you add a blocklist |\n| Extra infrastructure | Yes — you now operate Redis/Memcached | No — no extra store to run |\n\n**How to decide:** reach for an external store when sessions need to be revocable or hold data too large or sensitive for a token; reach for JWTs when you want zero extra infrastructure and can tolerate tokens staying valid until they naturally expire.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "sticky-sessions-and-statelessness-s05-q1"
+      ]
+    },
+    {
+      "id": "sticky-sessions-and-statelessness-s06",
+      "order": 6,
+      "sectionTitle": "When stickiness is actually the right call",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Stickiness isn't always wrong — it's wrong as a substitute for fixing statelessness. It's a legitimate choice when the state genuinely can't move cheaply: a large in-memory cache warmed up per user (a game server holding live match state, a WebSocket connection that's inherently pinned to one server process anyway), or when you're deliberately trading some availability for a large performance win, like avoiding a network round trip to a session store on every request.\n\nThe honest framing: use stickiness when the *data itself* has to live on one machine for a real technical reason, not as a shortcut to avoid building an external session store.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "sticky-sessions-and-statelessness-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: sticky sessions silently breaking during a deploy or failover",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We use sticky sessions, so as long as the app works in normal operation, we're fine.\"\n\n**Why it's wrong:** stickiness works fine right up until the exact moments you need reliability most — a rolling deploy that cycles every server, or a node failing outright. In both cases, every client pinned to the affected server loses their session state simultaneously, producing a visible spike in logged-out or broken-cart users precisely during a deploy or incident, not spread randomly across time.\n\n**Correct model:** if you must use stickiness, still move the actual session data to an external store the new server can read — stickiness then only optimizes for cache locality, and losing the pinned server degrades performance, not correctness. Relying on stickiness *as* your session storage is the actual pitfall.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "sticky-sessions-and-statelessness-s07-q1"
+      ]
+    }
+  ]
+}

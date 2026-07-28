@@ -1,0 +1,139 @@
+{
+  "id": "designing-errors",
+  "title": "Designing Errors: Exceptions, Result Types, and Error Boundaries",
+  "area": "system-design",
+  "group": "lld-in-practice",
+  "order": 2,
+  "slug": "designing-errors",
+  "summary": "Choosing how a component reports failure so the caller can actually recover, not just log and re-throw.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "designing-errors-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every function that can fail has to decide how to tell its caller — and that decision is a design choice, not an afterthought. Get it wrong and callers either can't recover (the failure is invisible) or are forced into boilerplate they didn't ask for.\n\nThink of an error type as a contract: it tells the caller exactly what went wrong and what they can do about it, the same way a return type tells them what success looks like.\n\nThis topic covers exceptions vs result types, when a new exception type is worth adding, and the error boundary that keeps a module's internal failures from leaking into someone else's code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-errors-s02",
+      "order": 2,
+      "sectionTitle": "What an error type is really for",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An error isn't just \"something went wrong\" — it's information the caller needs to act on. A network client's `TimeoutError` tells the caller \"retry might work\"; a `ValidationError` tells them \"don't retry, fix the input first.\" If every failure surfaces as a generic `Error(\"something failed\")`, the caller can't tell these apart and ends up either retrying everything, or nothing.\n\nDesigning error reporting well means asking, for every failure path: what does the caller need to know to decide what to do next? That answer shapes whether you need one error type or several, and what data each one carries.\n\nThe message is for humans reading logs; the error's **type and fields** are for the code that has to react to it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-errors-s03",
+      "order": 3,
+      "sectionTitle": "Exceptions vs result/either types",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Both report failure, but they put the cost in different places. **Exceptions** unwind the call stack automatically — a caller who forgets to handle one still gets defined behavior (it propagates up), but the failure path is invisible in the function's signature. **Result/Either types** — `Result<T, Error>` — make failure part of the return type, so the caller is forced to look at it, at the cost of every intermediate layer now handling a wrapped value instead of `T` directly.\n\n| | Exceptions | Result/Either types |\n|---|---|---|\n| Visible in signature? | No — any call can throw | Yes — the return type says so |\n| Forgetting to handle | Silently propagates up | Usually flagged by the type system |\n| Control-flow cost | Cheap to write, stack unwinds | Explicit unwrapping at every layer |\n| Common in | Java, Python, C#, JS | Rust, Go, functional-leaning code |\n\n**How to decide:** pick result types when failure is an expected, frequent outcome the caller must branch on (parsing user input); keep exceptions for genuinely exceptional, rare failures (a database connection dying) where forcing every caller to handle it would be noise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "designing-errors-s03-q1"
+      ]
+    },
+    {
+      "id": "designing-errors-s04",
+      "order": 4,
+      "sectionTitle": "Checked vs unchecked exceptions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Checked exceptions** (Java's `IOException`) are part of a method's signature — the compiler forces every caller to either catch them or declare that they also throw. **Unchecked exceptions** (`RuntimeException`, and exceptions in most other languages) propagate silently; nothing forces the caller to acknowledge them.\n\nChecked exceptions guarantee callers can't ignore a failure by accident — but in practice they push developers toward catching and swallowing just to satisfy the compiler, or wrapping everything in a generic `RuntimeException` to escape the requirement, which defeats the purpose.\n\nMost languages designed after Java skipped checked exceptions entirely. The trade-off interviewers want to hear: forced handling vs boilerplate that trains developers to swallow errors — not just the syntax difference.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-errors-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: an error boundary at a module edge translating internal failures into a stable contract",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a module boundary drawn as a wall; inside it three different internal exceptions — SqlTimeoutException, ConnectionResetError, DiskFullError — all funnel through a single translation point at the wall into one stable PaymentServiceError crossing to the caller >>>\n\nAn **error boundary** sits at a module's public edge and translates whatever can go wrong internally into a small, stable set of errors the caller actually needs to handle.\n\nInside the module, a payment service might hit a SQL timeout, a connection reset, or a full disk — three unrelated internal exceptions. At the boundary, all three get caught and re-thrown as one `PaymentServiceError` with a reason code. The caller now handles one contract instead of tracking every library the module happens to use underneath.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-errors-s06",
+      "order": 6,
+      "sectionTitle": "Code: a Result<T, Error> type replacing a thrown exception in a parsing function",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Before — a parser throws, so every caller needs a try/catch to avoid crashing on bad input:\n\n```typescript\nfunction parseAge(input: string): number {\n  const n = Number(input);\n  if (Number.isNaN(n) || n < 0) {\n    throw new Error(`invalid age: ${input}`);\n  }\n  return n;\n}\n```\n\nAfter — failure is part of the return type, so the caller can't ignore it without the type system noticing:\n\n```typescript\ntype Result<T, E> = { ok: true; value: T } | { ok: false; error: E };\n\nfunction parseAge(input: string): Result<number, string> {\n  const n = Number(input);\n  if (Number.isNaN(n) || n < 0) {\n    return { ok: false, error: `invalid age: ${input}` };\n  }\n  return { ok: true, value: n };\n}\n\nconst result = parseAge(formInput);\nif (!result.ok) {\n  showFieldError(result.error);\n} else {\n  saveAge(result.value);\n}\n```\n\nParsing user input fails *often* and predictably — exactly the case where forcing every caller to branch on failure pays off.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "designing-errors-s06-q1"
+      ]
+    },
+    {
+      "id": "designing-errors-s07",
+      "order": 7,
+      "sectionTitle": "Designing exception hierarchies: when a new exception type earns its place",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A new exception type earns its place only if some caller needs to handle it *differently* from its siblings. `InsufficientFundsException` deserves to exist separately from a generic `PaymentException` if a caller reasonably wants to show \"add funds\" for one and \"try again later\" for the other.\n\nIf every catch block for a hierarchy of five exception types does the same thing — log and return a generic failure — the hierarchy isn't buying you anything; a single type with a reason field would be simpler to maintain and just as useful.\n\nRule of thumb: before adding a subtype, name the caller and the different action they'll take. If you can't, extend an existing type's data instead of the hierarchy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-errors-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: catching Exception/Throwable broadly and swallowing the signal",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll catch the broad `Exception` type at the top so nothing crashes the app.\"\n\n**Why it's wrong:** a broad catch swallows every failure indiscriminately — a genuine bug (a null-reference error from broken logic) gets treated exactly like an expected, recoverable failure (a network timeout). The app keeps running in a state nobody designed for, and the real defect gets buried in a log line nobody reads until it causes data corruption downstream.\n\n**Correct model:** catch specific exception types you know how to handle, at the layer that actually knows what to do about them. Let unexpected exceptions propagate to a top-level handler whose only job is to log loudly and fail safely — not to pretend everything is fine.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "designing-errors-s08-q1"
+      ]
+    },
+    {
+      "id": "designing-errors-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: leaking an implementation-specific error across a module boundary",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The database threw the exception, so it's fine to let it bubble straight up to the caller.\"\n\n**Why it's wrong:** a raw `SQLException` or `PostgresConnectionError` crossing a module boundary ties every caller to your current database choice. Switch from Postgres to a different store later, and every caller catching that specific exception type breaks — the module's internal implementation detail became part of its public contract by accident.\n\n**Correct model:** catch implementation-specific errors at the module's edge and translate them into the module's own error type before they cross the boundary. Callers should only ever see errors defined by the abstraction they're using, never by what's underneath it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "designing-errors-s09-q1"
+      ]
+    }
+  ]
+}

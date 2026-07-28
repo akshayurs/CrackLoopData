@@ -1,0 +1,165 @@
+{
+  "id": "hotel-booking-system",
+  "title": "Hotel Booking System — LLD",
+  "area": "system-design",
+  "group": "lld-cases-booking",
+  "order": 4,
+  "slug": "hotel-booking-system",
+  "summary": "Class design for date-ranged room inventory and rate plans — a genuinely different concurrency problem from a movie's fixed-showtime seat hold, since a hotel booking spans a range of nights, not one instant.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "hotel-booking-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This LLD question sets aside cross-property date search (the HLD concern of \"find hotels with availability near me for these dates\") and asks you to model one hotel: room types, per-date inventory, bookings, and rate plans.\n\nThe defining wrinkle versus a movie seat is the **date range** — a booking claims inventory across multiple consecutive nights, not one instant in time, so \"is this available\" is a range query, not a point lookup. That single difference reshapes the whole inventory model.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what's in scope, what isn't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** a hotel offers multiple room types (Standard, Deluxe, Suite), each with a count of physical rooms; a customer books a room type for a date range under a chosen rate plan; cancellation is supported and must be auditable.\n\n**Explicitly out of scope:** the HLD-level cross-property search and ranking, and dynamic price-shopping across competitor sites — assume a customer has already picked this hotel.\n\nCalling out the date-range nature of availability up front (versus a single-instant check) is the detail that separates a strong answer from a generic \"CRUD with a booking table.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Hotel, RoomType, RoomInventory, Booking, RatePlan",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Hotel` owns multiple `RoomType`s (Standard, Deluxe, Suite), each with a total room count. `RoomInventory` is the entity that actually tracks availability — one row per (room type, date) with a remaining-count, not one row per physical room.\n\n`Booking` references a room type, a date range, a guest, and a `RatePlan` (the pricing terms — refundable, non-refundable, seasonal). Crucially, `Booking` does **not** reference a specific room number at creation — that late-binding choice is explored in the compare slide.\n\nThis (room type, date) granularity for `RoomInventory`, rather than tracking every physical room's calendar, is what makes availability queries fast.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class model for hotels, room types, and date-ranged inventory",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML class diagram — Hotel 1--* RoomType, RoomType 1--* RoomInventory (one entry per date, with a remainingCount field), RoomType 1--* Booking, Booking has dateRange (checkIn, checkOut) and 1--1 RatePlan. Annotate RoomInventory to show it is keyed by (roomTypeId, date), not by physical room. >>>\n\nThe absence of a `Room` entity with its own calendar is deliberate here — physical room assignment is a separate, later-binding concern from the inventory count itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s05",
+      "order": 5,
+      "sectionTitle": "Code: checking availability for a date range",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Availability for a range means every night in that range must have remaining inventory — one night fully booked fails the whole range:\n\n```java\nboolean checkAvailability(String roomTypeId, LocalDate checkIn, LocalDate checkOut) {\n    for (LocalDate date = checkIn; date.isBefore(checkOut); date = date.plusDays(1)) {\n        RoomInventory inv = inventoryRepo.get(roomTypeId, date);\n        if (inv.getRemainingCount() <= 0) {\n            return false;\n        }\n    }\n    return true;\n}\n```\n\nThis reads one row per night rather than scanning every existing `Booking` and computing overlaps on the fly — the pre-aggregated `RoomInventory` table is what keeps this a handful of indexed reads instead of an O(bookings) scan.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: representing inventory so a range query is fast",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The naive approach — store bookings as (room type, checkIn, checkOut) rows and compute availability by scanning for date-range overlaps — gets slower as bookings accumulate, and overlap queries (`checkIn < ? AND checkOut > ?`) are harder to index well than equality lookups.\n\nThe fix flips the model: pre-materialize one `RoomInventory` row per (room type, date) with a remaining count, decremented on booking and restored on cancellation. Availability becomes a handful of equality lookups — one per night in the range — against an indexed table, not a scan over historical bookings.\n\nThe trade-off is write amplification: a 5-night booking touches 5 inventory rows instead of writing 1 booking row. That's the right trade here, since availability checks vastly outnumber bookings in a real system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "hotel-booking-system-s06-q1"
+      ]
+    },
+    {
+      "id": "hotel-booking-system-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: an inventory calendar",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a calendar grid diagram — rows are room types (Standard, Deluxe, Suite), columns are consecutive dates, each cell shows a remaining-count number. Highlight one booking's effect: a 3-night stay decrements the count by 1 in three consecutive Deluxe-row cells; a dashed arrow shows a cancellation restoring the count in those same three cells. >>>\n\nSeeing it as a grid makes the write-amplification trade-off concrete: one booking touches one cell per night, and one cancellation must reverse exactly those same cells — not just delete a booking row and hope inventory catches up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s08",
+      "order": 8,
+      "sectionTitle": "Rate plans as a pluggable pricing strategy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The same room type can be sold under different terms on the same night — a cheaper non-refundable rate, a pricier fully-refundable one, a seasonal promotional rate — each with its own price and cancellation policy.\n\nModeling this as a `RatePlan` interface (or a small hierarchy: `RefundableRatePlan`, `NonRefundableRatePlan`, `SeasonalRatePlan`) that `Booking` holds a reference to keeps pricing and cancellation-policy rules out of `Booking` itself. Adding a new promotional rate plan next quarter becomes a new class, not a new branch in `Booking`'s logic — the same Strategy shape used for movie seat pricing and ride-hailing surge.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "hotel-booking-system-s09",
+      "order": 9,
+      "sectionTitle": "Compare: booking a specific room number vs a room-type pool with late assignment",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Should a `Booking` claim Room 412 specifically, or just \"a Deluxe room,\" with the physical room decided later?\n\n| | Specific room number | Room-type pool, late assignment |\n|---|---|---|\n| Flexibility for the hotel | Low — swapping rooms means re-issuing the booking | High — any equivalent room satisfies the booking |\n| Handles maintenance/upgrades | Awkward — a broken AC unit blocks that exact booking | Easy — swap the assignment, guest is unaffected |\n| Complexity | Simpler inventory model | Needs a separate room-assignment step, usually at check-in |\n| Best fit | Boutique hotels, room-specific requests (connecting rooms) | Standard hotel operations at any scale |\n\n**How to decide:** default to the pool model — it's what lets a hotel handle maintenance and upgrades without touching bookings — and assign the physical room only at check-in, when it actually needs to exist.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "hotel-booking-system-s09-q1"
+      ]
+    },
+    {
+      "id": "hotel-booking-system-s10",
+      "order": 10,
+      "sectionTitle": "Concurrency: two bookings racing for the last room of a type",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two customers both try to book the last remaining Deluxe room for the same night at nearly the same time. A read-then-decrement (\"check remainingCount > 0, then decrement\") has the same race as seat booking's check-then-act — both reads can see 1 before either write happens.\n\nThe fix is the same shape again: an atomic conditional update per affected date row, `UPDATE room_inventory SET remaining_count = remaining_count - 1 WHERE room_type_id=? AND date=? AND remaining_count > 0`, applied across every night in the range within one transaction. If any night's update affects zero rows, the whole booking transaction rolls back — a partial booking across some nights but not others is not a valid state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "hotel-booking-system-s10-q1"
+      ]
+    },
+    {
+      "id": "hotel-booking-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: modeling cancellation as a delete",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Cancelling a booking means removing its row — it's not a real booking anymore, so why keep it around?\"\n\n**Why it's wrong:** deleting loses the audit trail entirely — no record of who booked what, when it was cancelled, or under which rate plan's cancellation policy, which matters for refund disputes, revenue reporting, and fraud detection. It also makes the inventory-restore step fragile, since there's no longer a row recording exactly which nights need their counts bumped back up.\n\n**Correct model:** cancellation is a state transition (`CONFIRMED` → `CANCELLED`), not a deletion. The `Booking` row stays, its status changes, and the same date-range logic that decremented inventory on creation restores it on cancellation — symmetric, auditable, and reversible in the sense that the history is never lost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "hotel-booking-system-s11-q1"
+      ]
+    }
+  ]
+}

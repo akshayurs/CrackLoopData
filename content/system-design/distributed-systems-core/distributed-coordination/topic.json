@@ -1,0 +1,141 @@
+{
+  "id": "distributed-coordination",
+  "title": "Distributed Coordination: Locks, Leases & Fencing",
+  "area": "system-design",
+  "group": "distributed-systems-core",
+  "order": 5,
+  "slug": "distributed-coordination",
+  "summary": "Using an external coordination service for mutual exclusion and leadership, and why a naive distributed lock is unsafe under a process pause without a fencing token.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "distributed-coordination-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A single-process mutex is trivial because the OS guarantees only one thread holds it at a time. Across machines, that guarantee doesn't exist for free — you need an external service both sides trust, and you need to handle the case where a lock holder *thinks* it still holds the lock but the rest of the system has already moved on.\n\nThis topic covers **distributed coordination**: using services like ZooKeeper or etcd for mutual exclusion and leader election, and the specific failure — a paused process outliving its own lock — that makes naive locking unsafe without an extra safeguard called a fencing token.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-coordination-s02",
+      "order": 2,
+      "sectionTitle": "Why you need coordination: mutual exclusion and leadership across independent processes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two problems keep showing up once a system spans multiple processes: **mutual exclusion** — making sure only one worker is doing a specific piece of work at a time (running a scheduled job, writing to a shared file) — and **leadership** — designating exactly one node to make decisions for the group (which replica accepts writes, which instance runs the cron job).\n\nBoth need the same underlying primitive: a way for independent processes, none of which fully trusts the others' local state, to agree on a single answer to \"who's allowed to act right now.\" A local mutex can't help, because it only coordinates threads that share memory — these processes usually don't even share a machine.\n\nThis is why coordination is typically outsourced to a dedicated **coordination service** rather than built ad hoc per application — getting it right involves the same hard consensus problem every time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-coordination-s03",
+      "order": 3,
+      "sectionTitle": "The naive distributed lock: acquire, do work, release — and how a pause breaks it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The obvious design: a worker asks a shared store to acquire a lock (e.g. `SET lock_key my_id NX`), does its work, then releases the lock when done. It looks exactly like a local mutex, which is precisely the trap — it silently assumes the lock holder's notion of \"I still hold it\" always matches reality.\n\nIt doesn't. If the holder pauses — a long garbage-collection stop, a swapped-out process, a slow disk I/O — for longer than the lock's own timeout, the lock store will release it and hand it to another worker. The paused process, unaware time has passed, resumes and keeps acting as if it's still the exclusive holder, because from its own perspective nothing happened.\n\nNow two workers believe they hold the same lock simultaneously — exactly the outcome the lock existed to prevent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "distributed-coordination-s03-q1"
+      ]
+    },
+    {
+      "id": "distributed-coordination-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a paused lock-holder still \"holding\" the lock while a second worker acquires it",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: timeline with Worker 1 acquiring a lock, then entering a labelled \"GC pause\" box spanning past the lock's expiry line; at the expiry line the lock store releases the lock and Worker 2 acquires it and begins writing; after the pause, Worker 1 resumes and also begins writing, shown overlapping with Worker 2's writes, both unaware of each other >>>\n\nWorker 1's pause is invisible to Worker 1 itself — it has no way to know real time kept moving while it was frozen. The lock store, watching a real clock, correctly expires the lock; Worker 2 correctly acquires it.\n\nThe unsafe moment is when Worker 1 resumes: it has no signal telling it the lock is gone, so it keeps acting on the assumption that made sense before the pause — and now two workers are both \"holding\" the same lock at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-coordination-s05",
+      "order": 5,
+      "sectionTitle": "Leases: a lock with a built-in expiry instead of a promise to release",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **lease** is a lock that expires automatically after a fixed duration, rather than relying on the holder to release it. This shifts the failure mode: instead of \"a crashed holder never releases, so the lock is held forever,\" you get \"the lock is always eventually available again, even if the holder vanished without a trace.\"\n\nThe holder is expected to periodically **renew** the lease before it expires if it wants to keep working — a heartbeat-like mechanism. If it stops renewing (because it crashed, or because it's genuinely paused), the lease simply lapses on schedule and another worker can take over.\n\nLeases don't, by themselves, solve the paused-holder problem from the previous slides — a holder can still resume after its lease expired and act as if it's still valid. They just guarantee the lock doesn't get stuck forever; a fencing token (next slide) is what makes the resumed holder's actions harmless.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "distributed-coordination-s05-q1"
+      ]
+    },
+    {
+      "id": "distributed-coordination-s06",
+      "order": 6,
+      "sectionTitle": "Fencing tokens: making a stale lock-holder's writes harmless instead of just arriving late",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **fencing token** is a monotonically increasing number issued by the lock service every time the lock is granted — token 33, then 34, then 35, never reused or decreasing. The lock holder must include this token with every write it makes to the protected resource.\n\nThe protected resource (say, a storage service) then enforces one simple rule: reject any write carrying a token lower than the highest one it has already seen. So when the paused Worker 1 from the earlier example resumes and tries to write with its old token 33, the storage service — which has already seen token 34 from Worker 2 — rejects it outright.\n\nThis is the piece that actually closes the gap: leases guarantee the lock doesn't get stuck; fencing tokens guarantee that even a confused, stale holder's actions can't corrupt shared state. Neither alone is sufficient — you need both.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "distributed-coordination-s06-q1"
+      ]
+    },
+    {
+      "id": "distributed-coordination-s07",
+      "order": 7,
+      "sectionTitle": "Coordination services in practice: what ZooKeeper and etcd actually give you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**ZooKeeper** and **etcd** are the two coordination services you'll actually encounter in practice. Both run consensus (ZAB for ZooKeeper, Raft for etcd) internally across an odd-sized cluster of their own nodes, so *their* answer to \"who holds the lock\" is itself fault-tolerant even if some of their nodes fail.\n\nBoth expose primitives built for exactly this problem: ephemeral nodes or leases tied to a client session (so a lock is automatically released if the holding client's session dies), watches or notifications for \"the lock just became available,\" and monotonic sequence numbers usable directly as fencing tokens.\n\nThe practical takeaway: you're very rarely better off hand-rolling a lock on top of a plain key-value store like Redis for anything correctness-critical — these services exist specifically because getting the consensus and session-liveness parts right is the hard 90% of the problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-coordination-s08",
+      "order": 8,
+      "sectionTitle": "Compare: DIY heartbeat-based leader election vs. a coordination-service election",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | DIY heartbeat-based election | Coordination-service election (ZooKeeper/etcd) |\n|---|---|---|\n| Split-brain risk | Real — two nodes can each believe they're leader during a partition unless you carefully implement quorum yourself | Low — the service's own consensus (ZAB/Raft) guarantees a single, agreed leader |\n| Implementation effort | High — you're re-deriving consensus edge cases from scratch | Low — leader election is a documented primitive (ephemeral znode, etcd lease) |\n| Failure handling | You own detecting and reacting to every partial-failure case | The service's session/lease mechanism handles holder death automatically |\n| When it's still reasonable | Extremely simple, low-stakes coordination where a brief double-leader is tolerable | Anything where two simultaneous leaders would cause real damage |\n\n**How to decide:** unless the coordination need is trivial and low-stakes, use an existing coordination service. Rolling your own heartbeat-based election means re-solving a problem — consensus under partition — that ZooKeeper and etcd have already solved and hardened over years of production use.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-coordination-s08-q1"
+      ]
+    },
+    {
+      "id": "distributed-coordination-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: assuming \"my lock hasn't expired\" means \"I'm still safe to act\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I checked my local timer and my lock's TTL hasn't run out yet, so it's safe to write to the shared resource.\"\n\n**Why it's wrong:** your local timer only tells you how much time *you* think has passed — it says nothing about whether the lock service's clock agrees, or whether you were paused long enough (GC, swap, scheduling delay) that the lock has already expired and been handed to someone else from the lock service's point of view. Checking your own belief about the lock is not the same as checking the lock's actual current state.\n\n**Correct model:** never trust local reasoning about lock validity for a correctness-critical action. Attach a fencing token to every write and let the protected resource itself reject stale ones — that way, even a holder that's dead wrong about still owning the lock can't cause damage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-coordination-s09-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "id": "cab-booking-system",
+  "title": "Cab Booking System — LLD",
+  "area": "system-design",
+  "group": "lld-cases-booking",
+  "order": 2,
+  "slug": "cab-booking-system",
+  "summary": "Class design for riders, drivers, and trips, with the real interview payoff: matching a rider to a driver whose location keeps changing, without scanning every driver.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "cab-booking-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The LLD version of \"design Uber\" drops the proximity-service, geo-partitioning, and map-routing internals that dominate the HLD answer, and asks you to get one thing right: the classes for `Rider`, `Driver`, and `Trip`, and the logic that matches a rider to a nearby available driver correctly under constant movement.\n\nTreat map routing and ETA computation as an external black-box service you call, not something you design here. The interview payoff is entirely in the matching and trip-lifecycle logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what's in scope, what isn't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** riders request a trip from a pickup to a drop location; the system matches them to an available nearby driver; a trip moves through a lifecycle from request to completion; a fare is calculated at the end.\n\n**Explicitly out of scope:** the internals of map routing and turn-by-turn navigation, and the distributed proximity-index architecture (that's the HLD question's territory). Here, assume a `LocationService.nearbyDrivers(point, radius)` call exists and focus on what happens with its results.\n\nNaming this boundary early keeps you from re-deriving a geospatial index from scratch when the interviewer wants to see matching and trip-state logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Rider, Driver, Trip, Location, FareCalculator",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Rider` and `Driver` are both users with a role; `Driver` additionally carries an availability flag and a current `Location` that updates on every location ping. `Trip` is the central entity — it references a rider, a driver (once matched), pickup/drop locations, a status, and timestamps for each state transition.\n\n`FareCalculator` is deliberately separate from `Trip`: fare depends on distance, time, and pricing rules that change independently of trip logic, so `Trip` asks `FareCalculator.calculate(trip)` rather than computing fare inline.\n\nKeeping `Location` as its own value object (not just lat/lng fields scattered across classes) makes it easy to swap in a real geospatial index later without touching `Rider` or `Driver`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class model for riders, drivers, and trips",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML class diagram — Rider 1--* Trip, Driver 0..1--* Trip (a driver has many trips over time, one active at most), Trip has pickupLocation and dropLocation (both Location value objects), Trip 1--1 FareCalculator dependency (association, not ownership), Driver 1--1 Location (current position, mutable). >>>\n\nThe association from `Trip` to `FareCalculator` is drawn as a dependency, not ownership — `Trip` calls it, it doesn't contain it, which is what makes fare rules swappable later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a trip's lifecycle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state diagram for Trip — REQUESTED -> MATCHED (driver assigned) -> IN_PROGRESS (driver arrived, ride started) -> COMPLETED (drop reached, fare calculated). Two dashed side branches: REQUESTED -> CANCELLED (no driver found, or rider cancels before match) and MATCHED -> CANCELLED (driver or rider cancels after match, before pickup). >>>\n\nCancellation isn't one edge — it's reachable from two different states with different consequences (no driver committed yet, vs. a driver already en route), and a real implementation should record which branch fired for later fare/penalty logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: finding the nearest available driver",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`MatchingService` queries a location index rather than iterating every driver — the index is what makes this scale, and the service just consumes it:\n\n```java\nOptional<Driver> findNearestDriver(Location pickup) {\n    List<Driver> candidates = locationIndex.nearby(pickup, SEARCH_RADIUS_KM);\n    return candidates.stream()\n        .filter(Driver::isAvailable)\n        .min(Comparator.comparingDouble(d -> distance(d.getLocation(), pickup)));\n}\n```\n\nThe filtering happens after the index narrows candidates down from \"every driver\" to \"drivers within a few km\" — reversing that order (filter first, then compute distance to all of them) is the mistake the next slides dig into.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s07",
+      "order": 7,
+      "sectionTitle": "The hard part: matching under constant driver-location churn",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every available driver sends a location ping every few seconds. With 10,000 drivers in a city, that's a high write rate against whatever structure tracks positions — and a naive design that scans every driver's row to compute distance on each match request turns an O(1)-feeling lookup into an O(n) scan repeated for every rider request.\n\nThe fix is a spatial index — a grid (geohash buckets) or a quadtree — that drivers update on each ping (cheap, localized write) and that `nearby(point, radius)` queries in roughly O(log n) or better by only touching nearby cells, not the whole driver set.\n\nThe interview signal here isn't \"use a geospatial index\" as a buzzword — it's explaining why a write-heavy, read-heavy workload on the same data needs an index structure that keeps both cheap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "cab-booking-system-s07-q1"
+      ]
+    },
+    {
+      "id": "cab-booking-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: greedy nearest-driver matching vs batched assignment",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Greedy matching assigns the nearest available driver to each request the instant it arrives. Batched matching collects requests and drivers over a short window (a few seconds) and solves the assignment jointly.\n\n| | Greedy (immediate) | Batched assignment |\n|---|---|---|\n| Rider wait to get matched | Near-zero | Up to the batch window |\n| Total pickup distance across all trips | Can be far from optimal | Lower — solved jointly |\n| Complexity | Simple, one comparison per request | Needs a matching/optimization step |\n| Best fit | Low-density areas, sparse drivers | Dense areas at peak (many requests, many drivers) |\n\n**How to decide:** greedy is the right default — it's simpler and rider-latency-sensitive. Reach for batching only where request density is high enough that joint optimization measurably cuts total pickup distance, like a downtown core at rush hour.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "cab-booking-system-s08-q1"
+      ]
+    },
+    {
+      "id": "cab-booking-system-s09",
+      "order": 9,
+      "sectionTitle": "Surge pricing as a strategy consulted at request time",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Surge pricing depends on live supply and demand in an area — a ratio of open requests to available drivers — and that ratio changes by the minute. Hardcoding a multiplier into `FareCalculator` means every pricing experiment is a code change to core fare logic.\n\nInstead, `FareCalculator` consults a `PricingStrategy` at request time — a `SurgePricingStrategy` computes a multiplier from current supply/demand, while a `FlatPricingStrategy` returns 1.0. This is the same Strategy shape used for seat pricing in the movie-booking case: an interface the calculator calls, swappable without touching the calculator itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "cab-booking-system-s10",
+      "order": 10,
+      "sectionTitle": "Concurrency: two riders' requests matching to the same driver",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two riders near the same driver both call `findNearestDriver` within the same tens of milliseconds; both get the same driver back, since neither request has claimed anything yet — `findNearestDriver` only reads.\n\nThe fix is the same shape as seat holding: claiming a driver must be an atomic conditional write, not a separate step after the read — `UPDATE drivers SET status='MATCHED', trip_id=? WHERE driver_id=? AND status='AVAILABLE'`. Whichever request's update actually changes a row wins; the loser's matching service immediately re-queries for the next-nearest available driver instead of failing the rider outright.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "cab-booking-system-s10-q1"
+      ]
+    },
+    {
+      "id": "cab-booking-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: recomputing a full driver search on every location ping",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Keep it simple — on every driver location ping, just re-scan all drivers to keep an in-memory list sorted by area.\"\n\n**Why it's wrong:** location pings arrive continuously from every driver, far more often than match requests happen. Doing an O(n) re-sort or re-scan on every single ping means the system's cost scales with driver count times ping frequency — it gets slower exactly as the fleet you're trying to serve grows.\n\n**Correct model:** pings should be cheap, localized index updates (move this one driver's entry in a grid/quadtree cell), and the expensive nearby-search work should happen only when a match request actually needs it — read and write paths should have very different costs on the same structure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cab-booking-system-s11-q1"
+      ]
+    }
+  ]
+}

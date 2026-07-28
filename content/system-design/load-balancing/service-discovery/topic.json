@@ -1,0 +1,141 @@
+{
+  "id": "service-discovery",
+  "title": "Service Discovery",
+  "area": "system-design",
+  "group": "load-balancing",
+  "order": 7,
+  "slug": "service-discovery",
+  "summary": "How a caller finds a live, correctly addressed instance of a service when instances scale up, scale down, and move — the piece sitting upstream of every load-balancing algorithm.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "service-discovery-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every load-balancing algorithm assumes the load balancer already has a list of live backend addresses. **Service discovery** is the piece that keeps that list accurate as instances scale up, scale down, crash, and get rescheduled to new machines with new IPs.\n\nThis topic covers client-side vs server-side discovery, the registries that make it work (Consul, etcd, Eureka, DNS), and the stale-entry failure mode that catches teams off guard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "service-discovery-s02",
+      "order": 2,
+      "sectionTitle": "The problem: instances scale up, scale down, and move",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Hardcoding a service's address (`http://10.0.1.5:8080`) works fine until that instance is replaced — which, in any modern deployment, happens constantly. Autoscaling adds and removes instances by the hour; container orchestrators reschedule pods to different machines with different IPs after every deploy or crash; cloud instances get replaced outright rather than repaired.\n\nA caller that hardcodes an address will eventually call an address nothing is listening on anymore. The address list has to be discovered dynamically, at call time or close to it, from something that tracks which instances currently exist and are healthy.\n\nThat \"something\" is what the rest of this topic is about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "service-discovery-s02-q1"
+      ]
+    },
+    {
+      "id": "service-discovery-s03",
+      "order": 3,
+      "sectionTitle": "Client-side discovery: the caller queries a registry and picks an instance itself",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In **client-side discovery**, the calling service itself queries a service registry (\"give me all healthy instances of `payments-service`\"), gets back a list of addresses, and picks one — often applying its own load-balancing logic client-side (round robin, least connections) rather than relying on a separate load balancer at all.\n\nNetflix's early Eureka + Ribbon stack is the textbook example: each service instance registers itself with Eureka, and every caller embeds a client library that polls Eureka and load-balances locally in-process.\n\nThe upside is no extra network hop through a middle-tier load balancer; the downside is every calling service needs registry-aware client logic, in every language it's written in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "service-discovery-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: client-side discovery vs server-side discovery",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two side-by-side panels; left panel labelled \"client-side discovery\" shows a caller querying a registry box, getting back a list of addresses, then arrows going directly from the caller to one of three service instances; right panel labelled \"server-side discovery\" shows the caller sending its request straight to a load balancer box, and the load balancer (not the caller) querying the registry and forwarding to one of three service instances >>>\n\nThe difference is who talks to the registry. In client-side discovery, the caller queries the registry directly and then calls an instance itself. In server-side discovery, the caller never sees the registry at all — it just calls a load balancer, which does the registry lookup on the caller's behalf and forwards the request.\n\nEvery caller in client-side discovery needs registry-aware logic; in server-side discovery, only the load balancer does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "service-discovery-s04-q1"
+      ]
+    },
+    {
+      "id": "service-discovery-s05",
+      "order": 5,
+      "sectionTitle": "Server-side discovery: a load balancer does the lookup on the caller's behalf",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In **server-side discovery**, the caller just sends its request to a fixed address — a load balancer or gateway — and that load balancer is the one that queries the registry and picks a live instance. The calling service never needs to know a registry exists at all; it makes a plain HTTP call the same way it would to any other service.\n\nThis is how Kubernetes Services work by default: a Service gets a stable virtual IP, and `kube-proxy` (or the cluster's networking layer) maintains the mapping to whichever pod IPs are currently healthy, updating it as pods come and go.\n\nThe trade-off is an extra network hop through the load balancer on every call, in exchange for callers staying completely unaware of discovery.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "service-discovery-s05-q1"
+      ]
+    },
+    {
+      "id": "service-discovery-s06",
+      "order": 6,
+      "sectionTitle": "Service registries in practice: Consul, etcd, Eureka, and DNS-based discovery",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **service registry** is the source of truth for \"what's alive right now.\" **Consul** and **Eureka** are purpose-built registries with health checking and a query API baked in. **etcd** is a general-purpose distributed key-value store that Kubernetes itself uses internally to track cluster state, including service endpoints.\n\nThe simplest form of all is **DNS-based discovery**: a DNS name that resolves to the current set of healthy instances, updated as they change — this is exactly what [DNS-based and global load balancing](dns-based-and-global-load-balancing) covers at the regional level, and the same idea works within a single cluster too (Kubernetes' internal DNS resolves a Service name to its current pod IPs).\n\nThe common thread: every registry answers the same question — \"who's alive right now\" — with different trade-offs in consistency, latency, and operational complexity.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "service-discovery-s07",
+      "order": 7,
+      "sectionTitle": "Registration: self-registration vs a third-party registrar",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Something has to tell the registry an instance exists. **Self-registration**: the instance itself calls the registry on startup (\"I'm `payments-service` at `10.0.2.9:8080`, here's my health check\") and periodically sends a heartbeat to prove it's still alive. **Third-party registration**: a separate watcher process observes the orchestrator directly — Kubernetes' control plane, for instance — and updates the registry whenever it sees pods appear or disappear, with no code inside the service itself.\n\n| | Self-registration | Third-party registrar |\n|---|---|---|\n| Extra code in the service | Yes — registration + heartbeat logic | No — orchestrator is the source of truth |\n| Failure mode | A crashed instance may not deregister cleanly | Watcher itself becoming a new dependency to keep healthy |\n\n**How to decide:** on Kubernetes, let the platform's built-in watcher (kube-proxy, an ingress controller) do it — writing self-registration logic duplicates what the orchestrator already tracks natively.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "service-discovery-s08",
+      "order": 8,
+      "sectionTitle": "Compare: client-side vs server-side discovery on latency, coupling, and complexity",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Client-side discovery | Server-side discovery |\n|---|---|---|\n| Network hops | One — caller talks directly to the instance | Two — caller to load balancer, load balancer to instance |\n| Coupling | Every caller needs registry-aware client logic, per language | Only the load balancer needs to know about the registry |\n| Operational complexity | Lower infra footprint, higher per-service code footprint | Extra load balancer tier to run and keep available |\n| Cross-language fleets | Painful — needs a client library per language | Simple — any HTTP client works, no special library |\n\n**How to decide:** server-side discovery is the default for polyglot microservice fleets (it's what Kubernetes Services and most service meshes use); client-side discovery pays off mainly when the extra network hop's latency genuinely matters and every caller is already in one ecosystem with a shared client library.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "service-discovery-s08-q1"
+      ]
+    },
+    {
+      "id": "service-discovery-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a stale registry entry routing traffic to a dead instance",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The registry always reflects reality, so if an instance is in the registry, it's safe to route to it.\"\n\n**Why it's wrong:** registries update on a delay, not instantly. An instance can crash and stop responding several seconds before a heartbeat timeout expires and the registry marks it gone — during that window, the registry confidently hands out an address nothing is listening on, and callers get connection failures or timeouts routing to a \"registered\" instance that's already dead.\n\n**Correct model:** treat the registry as eventually consistent, not a live truth source, and pair it with retries and health checks at the caller or load balancer level — the registry narrows the candidate list, but a failed connection to a \"healthy\" registered instance should still trigger an immediate retry against a different one, not a hard failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "service-discovery-s09-q1"
+      ]
+    }
+  ]
+}

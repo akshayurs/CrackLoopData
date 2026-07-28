@@ -1,0 +1,21 @@
+{
+  "topicId": "online-auction-system",
+  "interviewQuestions": [
+    {
+      "id": "online-auction-system-iq1",
+      "question": "How would you ensure two near-simultaneous bids don't both win, or corrupt the auction's state?",
+      "answerMarkdown": "I'd name the resource under contention precisely: it's not a fixed pool like seats or rooms, it's a single mutable value — the current high bid — that every incoming bid both reads and updates. A check-then-write on that value has the classic race: two bids can both read the same stale high bid and both look valid.\n\nMy fix is to serialize the check-and-write into one atomic step: either lock the auction row for the duration of the check (`SELECT ... FOR UPDATE`) or use an atomic compare-and-swap with a version number, so only one of the two competing writes actually succeeds. The loser gets an immediate, explicit rejection naming the new current high bid, rather than being silently dropped or queued.\n\nI'd close by noting this same serialized path has to handle proxy-bid-generated counter-bids too — they're not a special case, they go through placeBid exactly like a manual bid.\n\n**Testing:** whether you can identify that the contested resource is a value, not a slot, and still apply the same atomic-write discipline.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Serializing concurrent bids"
+    },
+    {
+      "id": "online-auction-system-iq2",
+      "question": "How would reserve prices or a Buy It Now option change the bidding state machine?",
+      "answerMarkdown": "For a reserve price, I'd add a hidden threshold on the `Auction` that `currentHighBid` is compared against at close: if the highest bid never reached the reserve, the auction closes as UNSOLD rather than transitioning to a winner state, even though bids were placed. I'd keep the reserve amount invisible to bidders throughout, surfacing only whether it's been met so far, not the number itself.\n\nFor Buy It Now, I'd treat it as a separate fast-path transition available only before the first competitive bid lands — a `buyNow()` call moves the auction straight from OPEN to CLOSED with that bidder as winner, bypassing the closing/anti-snipe window entirely, since there's nothing left to bid on.\n\nI'd flag the ordering dependency explicitly: Buy It Now has to disable itself the moment any real bid is placed, or you'd have two conflicting paths to a winner.\n\n**Testing:** whether you can extend a state machine for new business rules without breaking the invariants the core design already relies on.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Reserve price and Buy It Now"
+    }
+  ]
+}

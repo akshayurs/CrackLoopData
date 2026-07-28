@@ -1,0 +1,167 @@
+{
+  "id": "in-memory-key-value-store",
+  "title": "In-Memory Key-Value Store",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 5,
+  "slug": "in-memory-key-value-store",
+  "summary": "A mini-Redis prompt: generic storage, TTL expiry, and pluggable persistence — broader than a cache's eviction-only focus, since nothing here is required to ever be evicted.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "in-memory-key-value-store-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design an in-memory key-value store\" is a mini-Redis prompt, and it's easy to confuse with \"design a cache\" — but a cache's entire job is deciding what to evict under a capacity limit, while a key-value store's job is general-purpose storage that *may* also expire or persist data. Eviction is optional here; expiry and durability are the core concerns.\n\nGet this distinction right early: if you jump straight to an LRU eviction policy, you've answered a narrower question than the one being asked.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "in-memory-key-value-store-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: get/set/delete, TTL expiry, pluggable persistence",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The contract: **`get`/`set`/`delete`** on arbitrary keys, an optional **TTL** per key that expires it automatically, and **pluggable persistence** so data can survive a restart without that being baked into the core storage logic.\n\n**Non-goals** to state up front: distribution and replication across machines are explicitly out of scope for this class-level design — a single process, single-machine store. That's a deliberate scoping choice, not an oversight; it's what keeps this a data-structures-and-concurrency problem rather than a distributed-systems one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "in-memory-key-value-store-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Store, Entry, ExpiryPolicy, PersistenceStrategy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Four classes. **`Store`** is the public API — `get`/`set`/`delete` — backed internally by a hashmap. **`Entry`** wraps a stored value together with its optional expiry timestamp, so expiry data travels with the value rather than living in a separate parallel structure. **`ExpiryPolicy`** decides *when* and *how* expired entries get removed (lazy on access, active sweep, or both). **`PersistenceStrategy`** decides how the in-memory state is written to durable storage, independent of the storage logic itself.\n\nThe pattern across all four: `Store` depends on `ExpiryPolicy` and `PersistenceStrategy` as interfaces, not concrete implementations — swapping either doesn't touch `Store`'s core get/set/delete code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "in-memory-key-value-store-s03-q1"
+      ]
+    },
+    {
+      "id": "in-memory-key-value-store-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the store, its entries, and pluggable expiry/persistence",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a class diagram — a central \"Store\" box with a composition arrow to a hashmap of \"Entry\" objects (each Entry box showing \"value\" and \"expiresAt\" fields), and two dependency arrows from Store to interface boxes \"ExpiryPolicy\" and \"PersistenceStrategy\"; below each interface, two concrete boxes branching off — \"LazyExpiry\"/\"ActiveSweepExpiry\" under ExpiryPolicy, and \"SnapshotPersistence\"/\"AppendOnlyLogPersistence\" under PersistenceStrategy >>>\n\n`Store` owns the map of `Entry` objects directly, but only *depends on* the `ExpiryPolicy` and `PersistenceStrategy` interfaces — it never depends on a specific implementation of either. That's what makes both swappable independently: changing how expiry works doesn't touch how persistence works, and vice versa.\n\nThis is the same shape as the eviction-policy Strategy from the LRU cache topic, applied to two different concerns at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "in-memory-key-value-store-s05",
+      "order": 5,
+      "sectionTitle": "Code: set() with TTL, and lazy expiry check on get()",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Setting a TTL just means computing and storing an absolute expiry time; checking it lazily on read costs one comparison per `get`.\n\n```python\nclass Store:\n    def __init__(self):\n        self.data = {}   # key -> Entry(value, expires_at)\n\n    def set(self, key, value, ttl=None):\n        expires_at = time.time() + ttl if ttl else None\n        self.data[key] = Entry(value, expires_at)\n\n    def get(self, key):\n        entry = self.data.get(key)\n        if entry is None:\n            return None\n        if entry.expires_at is not None and time.time() >= entry.expires_at:\n            del self.data[key]      # lazy expiry: clean up on the way out\n            return None\n        return entry.value\n```\n\n`ttl=None` means \"never expires,\" so the same `Entry` shape serves both TTL and permanent keys without a separate code path.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "in-memory-key-value-store-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: expiring millions of keys without scanning on every access",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Lazy expiry alone has a gap: a key that expires and is **never accessed again** stays in memory forever, since nothing ever triggers its removal. At millions of keys with TTLs, that's a real, unbounded memory leak, not a theoretical one.\n\nScanning the entire map on every `get` to check for other expired keys would fix the leak but destroys the O(1) guarantee `get` is supposed to have. The design has to separate two concerns: making a single `get` fast (lazy check, O(1), only touches the key being read) from making the *whole store* eventually reclaim expired memory (a background process, decoupled from any individual request's latency).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "in-memory-key-value-store-s06-q1"
+      ]
+    },
+    {
+      "id": "in-memory-key-value-store-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: lazy expiry on access plus active sweep on a timer",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two parallel paths converging on the same \"remove from map\" action — top path: \"get(key) call\" -> \"expiresAt check\" -> \"remove if expired\"; bottom path: \"background timer, every N seconds\" -> \"sample a batch of keys\" -> \"remove any expired\" -> loop back to timer >>>\n\nLazy expiry catches keys the instant someone tries to use them again — zero extra background cost, but blind to keys nobody touches. Active sweep catches exactly those forgotten keys, by periodically sampling a batch (not the whole map at once, to bound the pause) and removing anything expired.\n\nRunning both together closes the gap either leaves alone: lazy handles the hot path cheaply, active sweep bounds the worst-case memory of cold, forgotten, expired keys.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "in-memory-key-value-store-s08",
+      "order": 8,
+      "sectionTitle": "Compare: lazy expiry vs active-sweep vs a min-heap of expiry times",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A third option — a min-heap ordered by expiry time — trades implementation complexity for precision.\n\n| | Lazy expiry | Active sweep (sampling) | Min-heap of expiry times |\n|---|---|---|---|\n| Catches forgotten keys | No — only triggers on access | Eventually — bounded by sweep interval | Immediately — always know the next key to expire |\n| Cost per get() | O(1), one timestamp check | None (runs on a separate timer) | None (heap only touched on expiry, not on every get) |\n| Cost to reclaim memory | Never, for untouched keys | Amortized across sweep batches | O(log n) per removal, precisely timed |\n| Implementation complexity | Trivial | Simple (sample + check) | Higher — a second data structure to keep in sync with the map |\n\n**How to decide:** lazy alone is never sufficient on its own — pair it with active sweep by default, since it's simple and bounds memory well enough for most workloads. Reach for a min-heap only when you need precise, immediate expiry (e.g. a session store where a stale session must vanish exactly on time) and can justify the extra bookkeeping.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "in-memory-key-value-store-s08-q1"
+      ]
+    },
+    {
+      "id": "in-memory-key-value-store-s09",
+      "order": 9,
+      "sectionTitle": "Concurrency: readers and a background expiry sweep on the same map",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The active sweep runs on its own thread, but it's mutating the same map that `get`/`set` calls from other threads are reading and writing concurrently — deleting a key while another thread is mid-lookup on it is a data race if the underlying map isn't safe for concurrent mutation during iteration.\n\nThe standard fix mirrors the LRU cache's thread-safety story: guard mutations with a lock fine-grained enough not to serialize every read behind the sweep (e.g. a per-shard lock, so the sweep only blocks the shard it's currently cleaning), or use a concurrent map implementation that tolerates safe iteration-while-mutating. The key discipline is the same as ever: the sweep's removal must be atomic with respect to any concurrent get on that same key, not a separate check-then-delete that a lookup can interleave with.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "in-memory-key-value-store-s09-q1"
+      ]
+    },
+    {
+      "id": "in-memory-key-value-store-s10",
+      "order": 10,
+      "sectionTitle": "Extending to additional data types without an if/else per type",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Real key-value stores (Redis included) support more than strings — lists, sets, hashes — and the naive extension is an `if value_type == \"list\": ... elif value_type == \"set\": ...` scattered through `Store`. That doesn't scale past two or three types and puts every type's logic in one class.\n\nThe cleaner extension keeps `Entry.value` as a generic slot that can hold any supported type, and pushes type-specific operations (`lpush`, `sadd`, `hset`) into separate methods or wrapper classes that operate on that value — `Store` itself stays generic over \"a key maps to some value with an optional expiry,\" and doesn't need to know or care what operations a list value supports versus a set value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "in-memory-key-value-store-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: letting persistence writes block the main read/write path",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Every `set()` call should immediately write through to disk so we never lose data — durability first, always.\"\n\n**Why it's wrong:** synchronous disk writes on every `set` couple the store's in-memory speed (its entire reason for existing) to disk I/O latency, which can be orders of magnitude slower. A key-value store meant to serve sub-millisecond reads now pays disk-write latency on every mutation, defeating its own purpose.\n\n**Correct model:** run persistence off to the side — a periodic snapshot of the full dataset, or an append-only log written asynchronously — so the in-memory path stays fast and durability is a background concern with a bounded, known window of potential data loss (e.g. \"at most the last second of writes\"), not a per-call cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "in-memory-key-value-store-s11-q1"
+      ]
+    }
+  ]
+}

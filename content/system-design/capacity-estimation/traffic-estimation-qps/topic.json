@@ -1,0 +1,126 @@
+{
+  "id": "traffic-estimation-qps",
+  "title": "Traffic Estimation & QPS",
+  "area": "system-design",
+  "group": "capacity-estimation",
+  "order": 2,
+  "slug": "traffic-estimation-qps",
+  "summary": "Turning DAU/MAU into queries-per-second, and why the read/write ratio, the peak multiplier, and fan-out all change what number you actually design for.",
+  "level": "beginner",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "traffic-estimation-qps-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every capacity conversation starts from **queries per second** — how many requests a second the system must serve. You never get QPS directly; you derive it from a user count and a per-user action rate, then correct for two things people forget: traffic isn't flat over a day, and one user action can trigger many backend requests.\n\nThis topic builds that derivation step by step: DAU to requests, requests to average QPS, average to peak QPS, and peak to the *effective* QPS after fan-out.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-estimation-qps-s02",
+      "order": 2,
+      "sectionTitle": "From DAU/MAU to requests per second",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**DAU** (daily active users) is your starting point; if you're only given **MAU** (monthly active users), apply a stickiness ratio — a daily-habit app might see 20% of MAU active on a given day, so 250 million MAU implies roughly 50 million DAU (250,000,000 × 0.20).\n\nFrom there: multiply DAU by requests-per-user-per-day, then divide by seconds-in-a-day. 50 million DAU × 20 requests/user/day = 1 billion requests/day. Divide by ~86,400 seconds (or the rounded 10^5 shortcut) and you land around 10,000-12,000 requests per second, on average.\n\nThat average is a starting point, not the number you design for — the next slides correct it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "traffic-estimation-qps-s02-q1"
+      ]
+    },
+    {
+      "id": "traffic-estimation-qps-s03",
+      "order": 3,
+      "sectionTitle": "Read-heavy vs write-heavy: why the ratio changes your design",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two systems with identical total QPS can need completely different architectures, because *what kind* of traffic dominates changes the bottleneck. A consumer feed is typically **read-heavy** — users scroll far more than they post, and ratios of 100 reads to 1 write are common. A logging or metrics pipeline is the opposite: **write-heavy**, close to all ingest, almost no reads until someone runs a query.\n\nRead-heavy systems lean on caching and read replicas, since the same data gets fetched over and over. Write-heavy systems lean on append-friendly storage (write-optimized log-structured stores) and batching, since the write path is what saturates first.\n\nName the dominant direction before you design — it decides where you spend your engineering effort.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-estimation-qps-s04",
+      "order": 4,
+      "sectionTitle": "Average QPS vs peak QPS: the multiplier you must not skip",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Average QPS describes a full day smoothed flat — it is never the number that takes a system down. Outages happen at **peak**: the evening rush, lunchtime, a viral post. A typical consumer app sees a peak-to-average ratio of roughly **2-3x** on an ordinary day, and 10x or more during a spike like a flash sale or breaking news.\n\nIf your average is 10,000 QPS and you provision for exactly 10,000, the system is overloaded for every hour above average — which, on a normal diurnal curve, is about half the day.\n\nAlways multiply: provision for peak QPS (average × peak-to-average ratio), then add headroom on top of that for growth and safety margin.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "traffic-estimation-qps-s04-q1"
+      ]
+    },
+    {
+      "id": "traffic-estimation-qps-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: traffic curve over a day and the peak-to-average ratio",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a 24-hour traffic curve, x-axis hours 0-24, y-axis QPS, showing a trough around 3-5am, a rise through the morning, a broad peak in the evening roughly 2.5-3x the flat average line drawn across the chart, with the gap between the peak and the average line labelled 'peak-to-average ratio' >>>\n\nReal traffic isn't flat — it tracks when people are awake, with a trough overnight and a peak in the evening. The average line on this chart is the number your back-of-envelope math produces; the peak is the number that actually determines whether the system falls over.\n\nThe gap between those two lines is exactly the multiplier from the previous slide — read it off a real traffic graph when you have one, and assume 2-3x when you don't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-estimation-qps-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: estimating QPS for a social feed, step by step",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Assumptions: 10 million DAU, each opens the feed 8 times/day (1 read request per open), and 1 in 10 users posts once a day.\n\n```\nReads/day  = 10,000,000 users x 8 opens        = 80,000,000\nWrites/day = 10,000,000 users x 0.1 posts      =  1,000,000\n\nAvg read QPS  = 80,000,000 / 86,400 s  ≈  926 QPS\nAvg write QPS =  1,000,000 / 86,400 s  ≈   12 QPS\n\nRead:write ratio ≈ 926 : 12 ≈ 80:1   (confirms read-heavy)\n\nApply a 3x peak multiplier:\nPeak read QPS  ≈ 926 x 3  ≈ 2,780 QPS\nPeak write QPS ≈  12 x 3  ≈    35 QPS\n```\n\nNotice the ratio (80:1) falls out of the per-user action rates, not an assumption you had to guess — that's the check that your inputs were reasonable.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "traffic-estimation-qps-s06-q1"
+      ]
+    },
+    {
+      "id": "traffic-estimation-qps-s07",
+      "order": 7,
+      "sectionTitle": "Compare: estimating QPS for a read-heavy feed vs a write-heavy logging system",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "The estimation steps are the same; the numbers that matter flip.\n\n| | Read-heavy feed | Write-heavy logging |\n|---|---|---|\n| Typical read:write | ~100:1 or higher | close to all writes, reads are rare/batch |\n| Dominant bottleneck | cache hit rate, read replica capacity | write throughput, ingest buffering |\n| What to size for | peak read QPS + cache miss rate | peak write QPS + burst tolerance |\n| Common fix | caching layer, read replicas | log-structured storage, batching writes |\n\n**How to decide:** ask what the user's most frequent action is — viewing (read-heavy) or generating events (write-heavy) — and size the tier that action hits hardest, not both tiers equally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-estimation-qps-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: forgetting fan-out multiplies effective QPS",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I calculated 12 write QPS for new posts, so the system needs to handle 12 writes a second.\"\n\n**Why it's wrong:** if each post fans out to update, say, 500 followers' timelines (a push model), every logical write becomes 500 physical writes downstream. The timeline-write path actually sees roughly 12 × 500 ≈ 6,000 writes a second — nearly 500x the naive figure.\n\n**Correct model:** identify every fan-out point in the request path — one write triggering many writes, or one read triggering many backend calls — and multiply before sizing that tier. The QPS you calculated from user actions is only the starting point of the chain, not the end of it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "traffic-estimation-qps-s08-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "id": "food-delivery-system",
+  "title": "Food Delivery System — LLD",
+  "area": "system-design",
+  "group": "lld-cases-booking",
+  "order": 3,
+  "slug": "food-delivery-system",
+  "summary": "Class design across three actors — restaurant, delivery partner, customer — anchored by an order state machine, with the hard part being partner assignment when readiness and availability both keep moving.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "food-delivery-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design Swiggy/DoorDash\" as an LLD question is a three-sided marketplace problem: a restaurant preparing food, a delivery partner moving it, and a customer waiting on both. The scope here is the ordering and assignment core — modeling `Order`, `MenuItem`, `DeliveryPartner`, and the state machine that spans all three actors.\n\nRecommendation ranking (which restaurants to show first) and payment-gateway internals are out of scope — the interview payoff is entirely in getting the order lifecycle and delivery-partner assignment right when both sides of that assignment are moving targets.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "food-delivery-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what's in scope, what isn't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** restaurants list menus with item availability; customers place orders against a restaurant's menu; a delivery partner is assigned to carry the order from restaurant to customer; the order progresses through a defined lifecycle with cancellation possible at several points.\n\n**Explicitly out of scope:** restaurant/dish recommendation ranking, search relevance, and the payment gateway's internals — treat payment as a black-box service that returns success/failure.\n\nThe three-sided nature (restaurant, partner, customer) is what makes this harder than a two-sided marketplace like ride-hailing — say that out loud early, since it's what the rest of the design has to account for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "food-delivery-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Restaurant, MenuItem, Order, DeliveryPartner, Assignment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Restaurant` owns a menu of `MenuItem`s, each with an availability flag that can flip mid-day (an item runs out). An `Order` references a restaurant, a list of ordered items with quantities, a customer, and a status.\n\n`DeliveryPartner` is a separate actor from `Order` — the link between them is an `Assignment` entity, not a direct field on `Order`. That indirection matters: an assignment can fail and be retried with a different partner without the `Order` itself changing identity or losing its history.\n\nKeeping `MenuItem` availability on the item, not computed from inventory counts elsewhere, keeps the crucial check — \"can this order even be placed\" — a single, fast lookup.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "food-delivery-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class model spanning the three actors",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML class diagram with three columns — Customer, Restaurant (owning MenuItem list), DeliveryPartner — all connecting into a central Order entity. Order has a list of OrderLine (menuItem + quantity), a status field, and a 1--1 relationship to Assignment, which links Order to DeliveryPartner. >>>\n\nDrawing `Order` at the center with three actors around it (rather than nesting one actor inside another) is what makes the three-sided nature visible in the diagram itself, not just in prose.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "food-delivery-system-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the order's state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state diagram for Order — PLACED -> ACCEPTED (restaurant confirms) -> PREPARING -> PICKED_UP (delivery partner collects) -> DELIVERED. Dashed cancel branches from PLACED, ACCEPTED, and PREPARING all leading to CANCELLED, each labeled with who can trigger it (customer, restaurant, or system on timeout) — no cancel branch exists after PICKED_UP. >>>\n\nNotice cancellation options shrink as the order moves forward — that asymmetry (cancellable early, not cancellable once picked up) is a detail interviewers specifically probe for, since a naive design allows cancellation everywhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "food-delivery-system-s05-q1"
+      ]
+    },
+    {
+      "id": "food-delivery-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: placing an order",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`placeOrder` validates every line against current menu availability and the restaurant's accept-orders capacity before committing anything:\n\n```java\nOrder placeOrder(String restaurantId, List<OrderLine> lines) {\n    Restaurant restaurant = restaurantRepo.get(restaurantId);\n    if (!restaurant.isAcceptingOrders()) {\n        throw new RestaurantUnavailableException();\n    }\n    for (OrderLine line : lines) {\n        if (!restaurant.getMenuItem(line.getItemId()).isAvailable()) {\n            throw new ItemUnavailableException(line.getItemId());\n        }\n    }\n    Order order = new Order(restaurantId, lines, Status.PLACED);\n    orderRepo.save(order);\n    return order;\n}\n```\n\nValidating every line before saving anything avoids the awkward case of a half-valid order sitting in PLACED with one item that can never actually be prepared.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "food-delivery-system-s07",
+      "order": 7,
+      "sectionTitle": "The hard part: assigning a partner when readiness and availability both move",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A delivery partner assigned the instant an order is placed might sit idle at the restaurant for 20 minutes if the kitchen is backed up — wasted partner time, and a worse experience for other customers whose orders that partner could have carried instead.\n\nBut waiting until food is fully ready to even start looking for a partner adds the entire search-and-travel-to-restaurant time on top of prep time, making delivery slower than it needs to be.\n\nThe real design predicts restaurant-ready-time (from historical prep times per restaurant, or the restaurant's own \"ready in N minutes\" signal) and starts partner search early enough that the partner's arrival roughly lines up with food being ready — neither idle at the counter nor causing the food to go cold waiting.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "food-delivery-system-s07-q1"
+      ]
+    },
+    {
+      "id": "food-delivery-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: assigning at order-time vs at pickup-ready-time",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "These are the two extremes; real systems land somewhere in between using a predicted-ready-time signal.\n\n| | Assign at order-time | Assign at pickup-ready-time |\n|---|---|---|\n| Partner idle time | High — partner often waits at restaurant | Low — partner arrives when food's ready |\n| Delivery latency | Lower — partner already en route to restaurant | Higher — search starts only after prep finishes |\n| Risk if prep time is unpredictable | Partner wait grows unbounded | Customer wait grows unbounded |\n| Best fit | Simple restaurants with stable, short prep times | Highly variable prep times (made-to-order, complex dishes) |\n\n**How to decide:** the deciding factor is how predictable a restaurant's prep time is — predictable kitchens can assign early safely, volatile ones need to assign closer to actual readiness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "food-delivery-system-s08-q1"
+      ]
+    },
+    {
+      "id": "food-delivery-system-s09",
+      "order": 9,
+      "sectionTitle": "Modeling partial fulfillment as a first-class order event",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An item can go out of stock after an order is placed but before the kitchen starts it — the availability check at placement time isn't a permanent guarantee. Treating this as an exception to catch and awkwardly patch around leads to inconsistent behavior across the codebase.\n\nInstead, model it as a real event: `OrderLineUnavailable`, raised by the restaurant side, which the order can react to explicitly — auto-substitute if a substitution policy exists, partially refund that line while keeping the rest of the order intact, or (rarely) cancel the whole order if the missing item was the point of it.\n\nMaking this a named event rather than a special case keeps the order state machine honest about a real-world failure mode instead of pretending menus are static once an order is placed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "food-delivery-system-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: one Order class carrying every actor's logic",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"`Order` is the central entity, so it should have `acceptByRestaurant()`, `assignPartner()`, `processPayment()`, and `markDelivered()` all as methods on it — everything lives in one place.\"\n\n**Why it's wrong:** this makes `Order` a god object that changes for reasons owned by three different teams — a restaurant-side policy change, a payment-provider swap, and a delivery-assignment tweak all touch the same class, and each change risks breaking the others.\n\n**Correct model:** `Order` holds state and a small set of valid transitions; `RestaurantService`, `AssignmentService`, and `PaymentService` each own their slice of logic and call into `Order` to record a transition once their own work succeeds — one responsibility per class, per actor.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "food-delivery-system-s10-q1"
+      ]
+    },
+    {
+      "id": "food-delivery-system-s11",
+      "order": 11,
+      "sectionTitle": "Extending to multi-restaurant single-order fulfillment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A \"mall\" order — one checkout spanning multiple restaurants in the same food court — breaks the assumption that one `Order` maps to one restaurant's prep timeline and one pickup point.\n\nThe cleanest extension keeps `Order` as the customer-facing whole but splits it into per-restaurant `SubOrder`s, each with its own status and its own readiness prediction; delivery-partner assignment and the pickup route then span multiple `SubOrder` pickup points before a single drop.\n\nThe entities from earlier barely change — `SubOrder` reuses the same status/transition shape as `Order` — the real new work is in `Assignment`, which now needs a multi-stop route instead of a single restaurant-to-customer leg.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

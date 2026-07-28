@@ -1,0 +1,29 @@
+{
+  "topicId": "idempotency-and-exactly-once",
+  "interviewQuestions": [
+    {
+      "id": "idempotency-and-exactly-once-iq1",
+      "question": "A client retries a payment request after a timeout — how do you guarantee it's charged exactly once?",
+      "answerMarkdown": "I'd open by correcting the framing slightly: I can't guarantee true exactly-once *delivery* — the network can't promise that — but I can guarantee exactly-once *effect*, which is what actually matters here.\n\nMy design: the client generates one idempotency key per checkout attempt (a UUID) and sends the same key on the original request and every retry. On the server, before doing any work, I check a dedup store for that key; if it exists, I return the stored result instead of charging again. The critical detail is atomicity — the charge and the recording of its result have to happen in the same transaction, otherwise a crash between the two reopens the exact race I'm trying to close.\n\nI'd also flag the retention window: I keep that dedup record for days, not minutes, because the retries that matter most follow real incidents — a client crash or a long partition — which can easily outlast a short window.\n\n**Testing:** whether you reach for idempotency instead of chasing an impossible delivery guarantee, and whether you know the record-then-act ordering has to be atomic.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Guaranteeing a payment is charged exactly once"
+    },
+    {
+      "id": "idempotency-and-exactly-once-iq2",
+      "question": "What's the difference between at-most-once and at-least-once delivery, and why do most systems choose at-least-once?",
+      "answerMarkdown": "At-most-once means send once and never retry — a message can be lost but never duplicated. At-least-once means retry until acknowledged — a message will eventually arrive, but might arrive more than once. Since true exactly-once delivery doesn't exist over an unreliable network, every system has to pick one of these two honest trade-offs.\n\nI'd argue most systems pick at-least-once because silent data loss is almost always the worse failure mode — a dropped order confirmation or a lost payment event is a correctness bug users notice immediately, while a duplicate is a solvable, contained problem *if* the consumer is built to handle it.\n\nThat \"if\" is the whole reason idempotency matters: choosing at-least-once is only safe once the receiving side can treat a duplicate as a no-op. I'd close by noting at-most-once still has real uses — best-effort metrics or logs, where losing an occasional data point is cheaper than the cost of handling duplicates.\n\n**Testing:** whether you understand this as a deliberate trade-off, not a default, and can justify why at-least-once plus idempotency usually beats at-most-once for anything with real consequences.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "At-most-once vs at-least-once, and why at-least-once wins"
+    },
+    {
+      "id": "idempotency-and-exactly-once-iq3",
+      "question": "You've added an idempotency key to your charge endpoint, but customers still occasionally get two confirmation emails for one purchase. What's going wrong?",
+      "answerMarkdown": "I'd start by pointing out the scope mismatch: an idempotency key only protects whatever's checked and recorded inside the same guarded boundary as the key lookup. If the confirmation email is fired from a separate step — a queue message published after the charge transaction commits, or a call made by a different service listening for \"charge succeeded\" events — a retry that correctly skips re-charging the card can still legitimately re-trigger that downstream listener, because nothing deduplicates it.\n\nI'd fix it one of two ways: either make the email send itself idempotent, keyed on the same identifier (many email providers support a dedup or idempotency key on their send API too), or move the trigger inside the same transactional boundary so a skipped retry genuinely skips the whole chain, not just the primary write.\n\nI'd generalize the lesson: idempotency has to be traced through every observable side effect of an operation, not assumed to propagate automatically just because the primary action is protected.\n\n**Testing:** whether you can debug past \"I added a key, so it's idempotent\" to find where the guarantee actually stops.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Idempotency key not covering a downstream side effect"
+    }
+  ]
+}

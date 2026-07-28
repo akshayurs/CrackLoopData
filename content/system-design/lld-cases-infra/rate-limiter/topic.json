@@ -1,0 +1,206 @@
+{
+  "id": "rate-limiter",
+  "title": "Rate Limiter",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 3,
+  "slug": "rate-limiter",
+  "summary": "An algorithm-heavy LLD prompt comparing limiter strategies under concurrent access — the class-level design of the four standard algorithms, not the HLD of a distributed gateway.",
+  "level": "advanced",
+  "slideCount": 14,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "rate-limiter-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a rate limiter\" is really \"pick the right algorithm and prove it's correct under concurrency\" — interviewers expect you to know the algorithm menu (fixed window, sliding window, token bucket, leaky bucket) before you write a line of code, then defend one choice against the others' trade-offs.\n\nThe class-level version lives on one machine and enforces a quota per user or API key. The hard parts are making the check-and-decrement atomic under concurrent requests, and — as a deep-dive — recognizing that a single-process limiter breaks the moment there's more than one server.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: per-key limits, configurable window, defined breach behavior",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The contract: enforce a limit **per user or per API key** (e.g. 100 requests per minute), over a **configurable window and quota**, with clearly defined behavior when a request breaches the limit — reject it outright, or queue it for later.\n\n**Non-goals** to state up front: billing integration, per-endpoint pricing tiers, and multi-region coordination are out of scope for the core design — they're natural follow-ups, not the starting requirement. Fixing the window/quota shape early (is it 100/minute or 100/second sustained with bursts allowed?) prevents designing the wrong algorithm for the wrong traffic pattern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s03",
+      "order": 3,
+      "sectionTitle": "The algorithm menu: fixed window, sliding window, token bucket, leaky bucket",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Four algorithms cover essentially every rate-limiting interview. **Fixed window** counts requests in a discrete time bucket (e.g. per calendar minute) and resets to zero at the boundary — simplest, cheapest, but bursty at boundaries. **Sliding window** — either a **log** of individual timestamps or a **counter** approximation — smooths that boundary problem by considering a rolling interval instead of a hard reset. **Token bucket** fills at a constant rate up to a cap and drains one token per request, naturally allowing controlled bursts up to the bucket size. **Leaky bucket** is the inverse: requests queue up and drain (\"leak\") at a constant rate, smoothing output regardless of input burstiness.\n\nNaming all four before picking one is itself a signal — it shows you know this is a menu, not a single \"correct\" algorithm.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a token bucket filling and draining",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a bucket icon filling with tokens dripping in at a constant rate from a tap labelled \"refill rate, e.g. 10/sec\", with a \"capacity\" line marking the max fill level; requests arrive from the left, each removing one token if available (arrow into the bucket labelled \"-1 token\"), or being rejected with an X if the bucket is empty >>>\n\nTokens accumulate at a fixed rate up to the bucket's capacity, and every request costs one token. As long as tokens are available, a burst of requests can be served instantly — up to the bucket size — which is exactly what makes token bucket the algorithm of choice when short bursts are legitimate but sustained abuse isn't.\n\nAn empty bucket means the request is rejected (or, in a leaky-bucket variant, queued) until the next refill tick adds a token back.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: fixed window's boundary-burst problem",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a timeline split into two adjacent 1-second fixed windows, each showing a bar chart of request counts; a cluster of requests straddling the boundary between the two windows, each half landing just under the per-window limit so the combined 1-second span centered on the boundary shows roughly double the intended limit; a second timeline below showing a sliding window smoothing the same request pattern into a flat, limit-respecting line >>>\n\nFixed window resets its counter to zero at each boundary, so a client can send the full quota right before a boundary and the full quota again right after — up to 2x the intended limit lands in the one-second span straddling the two windows, even though each window individually reports \"under limit.\"\n\nSliding window avoids this because it never has a hard reset point; the window continuously moves with the current time, so a rolling count always reflects the true rate over the last full interval.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "rate-limiter-s05-q1"
+      ]
+    },
+    {
+      "id": "rate-limiter-s06",
+      "order": 6,
+      "sectionTitle": "Code: a pluggable token bucket strategy",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Implementing the algorithm behind a `RateLimitStrategy` interface keeps the limiter class itself agnostic to which algorithm is active.\n\n```python\nclass RateLimitStrategy(ABC):\n    @abstractmethod\n    def allow_request(self, key: str) -> bool: ...\n\nclass TokenBucketStrategy(RateLimitStrategy):\n    def __init__(self, capacity, refill_rate):\n        self.capacity = capacity\n        self.refill_rate = refill_rate       # tokens per second\n        self.buckets = {}                    # key -> (tokens, last_refill_ts)\n\n    def allow_request(self, key: str) -> bool:\n        tokens, last = self.buckets.get(key, (self.capacity, time.time()))\n        now = time.time()\n        tokens = min(self.capacity, tokens + (now - last) * self.refill_rate)\n        if tokens < 1:\n            self.buckets[key] = (tokens, now)\n            return False\n        self.buckets[key] = (tokens - 1, now)\n        return True\n```\n\nRefill is computed lazily from elapsed time on each call, not by a background timer — no ticking thread needed per key.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s07",
+      "order": 7,
+      "sectionTitle": "Code: sliding-window-counter approximating the sliding log in O(1) memory",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A true sliding log stores every request timestamp — accurate, but O(n) memory per key. The **sliding-window-counter** approximates it in O(1) memory by weighting the previous fixed window's count.\n\n```python\ndef allow_request(key, limit, window_seconds):\n    now = time.time()\n    curr_window = int(now // window_seconds)\n    curr_count = counters[key].get(curr_window, 0)\n    prev_count = counters[key].get(curr_window - 1, 0)\n\n    elapsed_in_curr = now % window_seconds\n    weight = 1 - (elapsed_in_curr / window_seconds)\n    estimated = prev_count * weight + curr_count\n\n    if estimated >= limit:\n        return False\n    counters[key][curr_window] = curr_count + 1\n    return True\n```\n\nThe weight decays the previous window's contribution linearly as the current window progresses, giving a smooth approximation of a true rolling count with just two integers per key instead of a full timestamp log.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s08",
+      "order": 8,
+      "sectionTitle": "The hard part: check-then-act isn't atomic",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The naive implementation reads the current token count, checks if it's positive, then decrements — three separate steps. Under concurrency, two threads can both read \"1 token left\" before either decrements, and both proceed, letting **two requests through on a single remaining token**.\n\nThis is the classic **check-then-act race**: correctness requires that read-check-decrement happen as one indivisible unit, not three. It's the same class of bug as two threads both reading a bank balance of $100 and both approving a $100 withdrawal — the check was correct at the moment it ran, but the world changed before the act completed. A rate limiter that looks correct in a single-threaded test can silently let bursts through under real concurrent load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "rate-limiter-s08-q1"
+      ]
+    },
+    {
+      "id": "rate-limiter-s09",
+      "order": 9,
+      "sectionTitle": "Code: making check-and-decrement one atomic operation",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Two standard fixes: a lock around the whole check-and-decrement, or a compare-and-swap (CAS) retry loop that avoids blocking.\n\n```python\ndef allow_request(key):        # lock-based: simple, correct, serializes per key\n    with locks[key]:\n        if buckets[key] > 0:\n            buckets[key] -= 1\n            return True\n        return False\n\ndef allow_request_cas(key):    # CAS-based: no blocking, retries on contention\n    while True:\n        current = buckets[key].get()\n        if current <= 0:\n            return False\n        if buckets[key].compare_and_set(current, current - 1):\n            return True\n        time.sleep(0)           # another thread won the race — retry with fresh value\n```\n\nThe lock version is easier to reason about; the CAS version scales better under high contention because it never puts a thread to sleep, only makes it retry.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s10",
+      "order": 10,
+      "sectionTitle": "Compare: the four algorithms on memory, burst tolerance, boundary accuracy",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "This table is the answer to \"why not just always use X\" for any of the four.\n\n| | Memory per key | Burst tolerance | Boundary accuracy |\n|---|---|---|---|\n| Fixed window | O(1) — one counter | Poor — allows the 2x boundary burst | Poor |\n| Sliding log | O(n) — every timestamp | Precise, none allowed beyond the true limit | Exact |\n| Sliding window counter | O(1) — two counters | Good approximation of sliding log | Approximate, very close |\n| Token bucket | O(1) — one count + timestamp | Controlled bursts up to bucket size, by design | N/A — no fixed windows |\n\n**How to decide:** token bucket is the default when bursts are a legitimate part of the traffic pattern (e.g. a user opening an app and firing several requests at once). Sliding window counter is the default when you need smooth, predictable enforcement without sliding log's memory cost. Reach for fixed window only when simplicity matters more than the boundary-burst risk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "rate-limiter-s10-q1"
+      ]
+    },
+    {
+      "id": "rate-limiter-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: a check-then-act limiter that isn't atomic",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"My limiter checks `if tokens > 0` before decrementing, so it's correct — the logic is right there in the code.\"\n\n**Why it's wrong:** the logic being *sequentially* correct says nothing about what happens when two threads execute it *concurrently*. Between the check and the decrement, another thread can run the same check against the same still-unchanged count, and both threads proceed believing they're the only one spending that last token — exactly at the moment of highest load, when concurrent requests are most likely to interleave this way.\n\n**Correct model:** treat check-and-decrement as a single atomic unit — via a lock, a CAS loop, or an atomic data-store operation — never as two separate statements, however close together they appear in the code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiter-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: resetting counters on a wall-clock boundary ignoring clock skew",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Each server resets its fixed-window counter when its own clock crosses the minute boundary — that's simple and each server is internally consistent.\"\n\n**Why it's wrong:** in a multi-instance deployment, servers rarely have perfectly synchronized clocks. Even a few hundred milliseconds of skew means different instances reset at slightly different real moments, so a client hitting different servers can see an inconsistent, effectively wider window than intended — and if the limiter later moves to a shared counter, skewed local clocks computing \"which window are we in\" can double-count or drop a window entirely at the transition.\n\n**Correct model:** derive window boundaries from a single, trusted time source (e.g. the shared store's own clock, as with Redis's `TIME` command) rather than each server's local clock, especially once the limiter is centralized.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "rate-limiter-s12-q1"
+      ]
+    },
+    {
+      "id": "rate-limiter-s13",
+      "order": 13,
+      "sectionTitle": "Distributed rate limiting, deep-dive: the counter can't live in-process anymore",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single-process in-memory limiter is only correct as long as one process sees every request. The moment there's more than one API server behind a load balancer, each instance has its own local count, and the *effective* limit becomes (per-instance limit) × (number of instances) — silently multiplying the quota you thought you'd set.\n\nThe fix is moving the counter into a **shared store** — typically Redis — with the check-and-decrement still done atomically, but now server-side inside the store rather than read-modify-write from the app. A Lua script (atomic within Redis) or the `INCR` + `EXPIRE` combination are the two standard implementations: `INCR` atomically bumps the counter and returns the new value in one round trip, and `EXPIRE` (set once, on first increment) makes the key disappear at the window boundary without a separate reset step.\n\nThe key discipline: never read the count, decide in the app, then write back — that reintroduces the exact check-then-act race from the single-process case, just across a network instead of across threads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "rate-limiter-s13-q1"
+      ]
+    },
+    {
+      "id": "rate-limiter-s14",
+      "order": 14,
+      "sectionTitle": "Extending to per-tenant tiered limits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Real products rarely have one global quota — free-tier users might get 100 requests/minute, paid users 10,000. The clean extension is a `LimitPolicy` resolved per tenant (looked up by account ID or API key) before the algorithm runs, rather than hardcoding a single limit constant.\n\nThe algorithm underneath — token bucket, sliding window counter, whichever was chosen — doesn't change at all; only its parameters (capacity, refill rate, window size) become per-tenant configuration instead of global constants. This is the same shape as the earlier Strategy-style split between \"which algorithm\" and \"what quota\": the policy resolution is a separate concern layered on top of a fixed algorithmic core.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

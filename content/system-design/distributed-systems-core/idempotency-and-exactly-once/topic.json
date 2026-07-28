@@ -1,0 +1,141 @@
+{
+  "id": "idempotency-and-exactly-once",
+  "title": "Idempotency & the Exactly-Once Illusion",
+  "area": "system-design",
+  "group": "distributed-systems-core",
+  "order": 4,
+  "slug": "idempotency-and-exactly-once",
+  "summary": "Why exactly-once delivery doesn't exist at the network layer, and how idempotency keys and dedup windows fake \"effectively once\" well enough to matter.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "idempotency-and-exactly-once-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just make it exactly-once\" is one of the most common asks in a distributed system, and it's asking for something the network can't actually guarantee. Because of [partial failure](partial-failure-and-failure-models), a client can never be sure whether a request it retried was delivered zero, one, or two times.\n\nWhat production systems actually build is **idempotency**: designing operations so that applying them twice has the same effect as applying them once, which makes at-least-once delivery *behave* like exactly-once without requiring the impossible. Think of it like a light switch versus a toggle: flipping a light switch \"on\" twice still leaves it on; toggling it twice leaves it back where it started. Idempotent operations are built to act like the switch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-exactly-once-s02",
+      "order": 2,
+      "sectionTitle": "Exactly-once delivery: why it's unachievable once a network can drop or duplicate packets",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Exactly-once delivery** would mean: a message sent is received by the recipient precisely once, no more, no less, with certainty on the sender's side. Over a real network — one that can drop, delay, reorder, or duplicate packets — this is provably not achievable, because the sender can never distinguish \"my message was lost\" from \"my message arrived but the acknowledgment was lost.\"\n\nBoth scenarios look identical to the sender: silence. Resend, and you risk duplicating a message that already arrived; don't resend, and you risk permanently losing one that never did. There's no third option that resolves the ambiguity from the sender's side alone.\n\nThis is the same fundamental problem as [partial failure](partial-failure-and-failure-models), applied specifically to message delivery — it's why every messaging system actually ships one of two honest guarantees instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "idempotency-and-exactly-once-s02-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-exactly-once-s03",
+      "order": 3,
+      "sectionTitle": "At-most-once vs. at-least-once: the two honest options, and why most systems pick the second",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Given that exactly-once delivery is unavailable, real systems pick one of two honest guarantees. **At-most-once**: send once, never retry — a message might be lost, but it will never be duplicated. **At-least-once**: retry until acknowledged — a message will eventually arrive, but might arrive more than once.\n\nMost production systems choose at-least-once, because losing data silently is almost always worse than the cost of handling a duplicate. A payment queue that silently drops a charge is a correctness bug users notice immediately (money missing); a payment queue that occasionally delivers a charge event twice is a solvable problem *if* the consumer is built to handle it.\n\nThat \"if\" is exactly what idempotency delivers — it makes choosing at-least-once safe.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-exactly-once-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a client's retry racing an in-flight duplicate at the receiver",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a client sending a \"charge card\" request to a server; the first request is shown in flight with a dashed line indicating a slow/lost acknowledgment; a second, retried request from the same client arrives at the server while the first is still being processed; a callout shows the server's dedup store checking the shared request ID and rejecting the second as a duplicate >>>\n\nThe client sent one logical request but, from a lost acknowledgment, ends up sending the network two physical requests. Without any coordination, the server would process both — charging the card twice for one purchase.\n\nWhat prevents that isn't the network (it can't); it's the server recognizing, via a shared identifier, that the second request is a retry of the first rather than a new charge.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-exactly-once-s05",
+      "order": 5,
+      "sectionTitle": "Idempotency keys: turning \"at-least-once delivery\" into \"exactly-once effect\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **idempotency key** is a unique identifier the *client* generates once per logical operation and attaches to every attempt — including retries. The server stores which keys it has already processed and, on seeing a repeat key, returns the original result instead of redoing the operation.\n\nThe key detail: the client, not the server, must generate it, and must reuse the *same* key across retries of the *same* logical request. If the client generated a new key on each retry, the server would have no way to recognize the duplicate — the mechanism only works because the client is the one entity that actually knows \"this is the same request I already tried.\"\n\nStripe's and most major payment APIs' `Idempotency-Key` header is exactly this pattern: generate one UUID per checkout attempt, send it on every retry, and the API guarantees the charge happens at most once no matter how many times you retry.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "idempotency-and-exactly-once-s05-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-exactly-once-s06",
+      "order": 6,
+      "sectionTitle": "Dedup windows: how long you remember a key, and what happens once you forget it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Storing every idempotency key forever isn't practical, so servers keep a **dedup window** — a bounded time period during which a repeated key is recognized and rejected. Outside that window, the record is purged, and a repeat of an old key is treated as a brand-new request.\n\nThe window's length is a real design decision, not an implementation detail: too short, and a client that retries after a long outage (network partition, client crash and restart) can duplicate an operation the server has already forgotten about. Too long, and you're paying storage cost for records that will basically never be looked up again.\n\nMost payment and order-processing APIs use windows measured in days, not minutes — because the retries that matter most are exactly the ones following a real incident, which can easily outlast a short window.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-exactly-once-s07",
+      "order": 7,
+      "sectionTitle": "Code: an idempotent payment handler keyed on a client-generated request ID",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The core pattern: check the key before doing the work, and record the result atomically with the work itself — otherwise a crash between the two steps reopens the same race.\n\n```python\ndef charge(idempotency_key, amount, card_token):\n    existing = db.get_result(idempotency_key)\n    if existing is not None:\n        return existing  # already processed — return the original result\n\n    with db.transaction():\n        result = payment_gateway.charge(amount, card_token)\n        db.save_result(idempotency_key, result)  # same transaction as the charge\n    return result\n```\n\nExpected behavior: calling `charge(\"req-123\", 5000, tok)` twice — whether from a real client retry or a genuine duplicate delivery — charges the card once and returns the same `result` both times. The critical detail is that `save_result` happens in the *same* transaction as the charge; saving it separately would leave a window where a crash after charging but before saving lets a retry charge again.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "idempotency-and-exactly-once-s07-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-exactly-once-s08",
+      "order": 8,
+      "sectionTitle": "Compare: operations idempotent by construction (e.g. SET) vs. idempotency bolted on with a key",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Idempotent by construction | Idempotent via a key |\n|---|---|---|\n| Example | `SET x = 5`, `DELETE user 42` | `POST /charge`, `POST /send-email` |\n| Why repeating is safe | The operation states an end result, not a delta — applying it twice yields the same state | The operation is inherently a one-time event; safety comes entirely from the dedup mechanism |\n| Extra infrastructure needed | None | A dedup store (key -> result) with a defined retention window |\n| Fails if... | Never — safe by definition | The client doesn't reuse the same key, or the dedup window has expired |\n\n**How to decide:** prefer designing operations to be naturally idempotent wherever the domain allows it — `SET` instead of `INCREMENT`, absolute instead of relative updates. Reach for idempotency keys only for operations that are inherently one-time events (charge a card, send a notification) where the action itself can't be rephrased as a safe-to-repeat state change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "idempotency-and-exactly-once-s08-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-exactly-once-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: an idempotency key that covers the write but not the side effect it triggers",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We added an idempotency key to the charge endpoint, so retries are now safe.\"\n\n**Why it's wrong:** the key only protects whatever is recorded *inside* the same transaction as the check. If charging the card triggers a confirmation email as a separate step — a queue message published after the charge commits, or a call made outside the transaction — a retry that correctly skips re-charging the card can still re-trigger that downstream side effect, because nothing deduplicates *it*.\n\n**Correct model:** idempotency has to cover every observable side effect of the operation, not just its primary write. Either make the downstream action idempotent too (dedup the email send on the same key), or publish it from inside the same transactional boundary so a skipped retry genuinely skips everything it caused the first time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "idempotency-and-exactly-once-s09-q1"
+      ]
+    }
+  ]
+}

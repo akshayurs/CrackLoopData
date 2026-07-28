@@ -1,0 +1,141 @@
+{
+  "id": "connection-pooling",
+  "title": "Connection Pooling",
+  "area": "system-design",
+  "group": "load-balancing",
+  "order": 8,
+  "slug": "connection-pooling",
+  "summary": "Reusing expensive-to-open connections instead of paying a new handshake per call, and the pool-sizing mistakes that quietly cap your throughput.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "connection-pooling-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Opening a TCP connection, then TLS, then authenticating is expensive — often tens of milliseconds — so doing it fresh for every single request would waste most of your latency budget on setup instead of actual work. A **connection pool** keeps a set of already-open connections ready to reuse.\n\nThis topic covers how pools actually work, how to size one without starving callers or overwhelming the downstream server, and the classic mistake of sizing a pool per instance and forgetting to multiply by the fleet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "connection-pooling-s02",
+      "order": 2,
+      "sectionTitle": "Why opening a connection is too expensive to do per request",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Opening a fresh connection isn't free: a TCP handshake is one round trip, TLS negotiation is one to two more, and many protocols (a database connection, for instance) then run an authentication exchange on top of that. Add it up and establishing a new connection can easily cost 20-50ms before a single byte of real work happens — often more than the actual request itself takes to process.\n\nAt 1,000 requests/sec, paying that setup cost on every single request would mean spending most of your server's time on handshakes, not answers. Reusing a small set of already-open connections instead turns that repeated 20-50ms cost into a one-time cost paid rarely, not per request.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "connection-pooling-s02-q1"
+      ]
+    },
+    {
+      "id": "connection-pooling-s03",
+      "order": 3,
+      "sectionTitle": "Connection pool mechanics: a bounded set of warm connections, checked out and returned",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A connection pool maintains a fixed-size (or min/max-bounded) set of already-open connections to a specific destination. When code needs to talk to that destination, it **checks out** a free connection from the pool, uses it, and **returns** it when done — the connection itself stays open the whole time, it just changes hands.\n\nIf every connection is currently checked out when a new request arrives, the caller either waits (blocks) until one frees up, or the pool opens a new one if it hasn't hit its max size yet. This checkout/return cycle is exactly why pools are so much cheaper than open-per-request: most of the time, the connection you get was already warm and ready.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "connection-pooling-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: requests borrowing and returning connections from a bounded pool",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a pool box containing 4 connection icons, two shown greyed out/checked-out with arrows to two active requests currently using them, and two shown available/idle; a new incoming request arrow points at the pool with a label \"checkout\"; a completed request arrow points back into the pool labelled \"return\" >>>\n\nThe pool holds a fixed set of connections; at any moment, some are checked out to in-flight requests and some sit idle waiting for the next request. A returned connection goes straight back into the idle set instead of being closed — it's ready for immediate reuse.\n\nThe pool's size is the hard ceiling on how many requests to that destination can be in flight simultaneously — a fifth request arriving while all four connections are checked out has to wait, not create a fifth connection, once the pool is at its configured maximum.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "connection-pooling-s04-q1"
+      ]
+    },
+    {
+      "id": "connection-pooling-s05",
+      "order": 5,
+      "sectionTitle": "Sizing a pool: too small starves callers, too big overwhelms the downstream server",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A pool that's **too small** caps your throughput below what the downstream server could actually handle — callers queue up waiting for a free connection even though the database or service behind it has spare capacity. A pool that's **too big** does the opposite: it lets your service send more concurrent work at the downstream server than it can actually process, causing it to fall over under its own connection overhead (each open connection costs the server memory and often a dedicated worker thread or process).\n\nThe right size is roughly \"how much concurrency can the downstream server actually sustain,\" not \"as many as my service could theoretically use\" — a pool sized from the caller's ambition instead of the callee's capacity is sized wrong by construction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "connection-pooling-s05-q1"
+      ]
+    },
+    {
+      "id": "connection-pooling-s06",
+      "order": 6,
+      "sectionTitle": "Pool exhaustion: what happens to the next caller when every connection is checked out",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Pool exhaustion** is what happens when every connection is checked out and a new request needs one. Depending on configuration, the new request either blocks and waits (up to some timeout), or fails immediately with an error like \"connection pool exhausted.\"\n\nThis becomes dangerous under a downstream slowdown: if the database starts responding slowly, requests hold their checked-out connections longer, the pool fills up with slow-but-not-dead connections, and every *new* request queues up behind them — even ones that would have completed fast against a healthy database. One slow dependency can cascade into every caller stalling, which is the same shape of problem the bulkhead pattern addresses — isolating a separate pool per dependency so one slow downstream can't exhaust the shared pool everything else needs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "connection-pooling-s07",
+      "order": 7,
+      "sectionTitle": "Code: acquiring a connection with a timeout instead of blocking forever",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A pool checkout should always have a timeout, so a stuck pool degrades into fast, visible errors instead of every caller hanging indefinitely:\n\n```python\ntry:\n    conn = pool.get_connection(timeout=2.0)\nexcept PoolTimeoutError:\n    # fail fast instead of queueing forever behind a stuck pool\n    raise ServiceUnavailable(\"database pool exhausted\")\n\ntry:\n    conn.execute(query)\nfinally:\n    pool.release(conn)\n```\n\nThe `finally` block matters as much as the timeout: a connection that's checked out but never returned — because an exception skipped the release — permanently shrinks the pool by one, and enough of those leaks over time silently drains it to zero.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "connection-pooling-s07-q1"
+      ]
+    },
+    {
+      "id": "connection-pooling-s08",
+      "order": 8,
+      "sectionTitle": "Compare: per-request connections vs a shared pool vs a connection per thread",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Per-request connection | Shared pool | Connection per thread |\n|---|---|---|\n| Setup cost paid | Every request | Rarely — only when growing the pool | Once per thread's lifetime |\n| Max concurrent connections | Unbounded — scales with request rate | Bounded by pool size | Bounded by thread count |\n| Risk | Overwhelms downstream under load | Exhaustion if sized wrong or downstream is slow | Wastes connections if threads are mostly idle |\n\n**How to decide:** a shared pool is the default for almost everything — bounded, reusable, efficient. Connection-per-thread only makes sense in a thread-per-request model where thread count is already capped low; per-request connections are rarely correct outside of very low-traffic, latency-insensitive scripts.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "connection-pooling-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a pool sized for one service instance, multiplied by 50 instances against one database",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Each of our service instances has a pool of 20 database connections — that's a reasonable, modest number.\"\n\n**Why it's wrong:** 20 connections is reasonable *per instance*, but the database sees the sum across every instance, not one instance's view. Scale that service from 5 instances to 50 during a traffic spike, and the database suddenly faces 1,000 connections instead of 100 — often blowing straight past its configured connection limit and causing \"too many connections\" errors across the entire fleet at the worst possible moment.\n\n**Correct model:** size per-instance pools with the fleet's maximum expected instance count in mind, not just what looks reasonable for one instance in isolation — the real constraint is `pool_size × max_instances ≤ database's connection limit`, and it has to hold at your peak autoscaled size, not your steady-state size.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "connection-pooling-s09-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "id": "lock-free-and-atomic-object-design",
+  "title": "Lock-Free and Atomic Object Design",
+  "area": "system-design",
+  "group": "oo-concurrency",
+  "order": 5,
+  "slug": "lock-free-and-atomic-object-design",
+  "summary": "Designing an object's mutation path with atomic operations instead of locks -- what compare-and-swap buys you, and what it trades away, including the ABA problem.",
+  "level": "expert",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "lock-free-and-atomic-object-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Lock-free** design replaces \"block and wait for a lock\" with \"retry until an atomic operation succeeds\" -- no thread ever blocks another, so there's no queuing and no deadlock, at the cost of code that's genuinely harder to reason about.\n\nThis is expert-tier because the primitive -- compare-and-swap -- looks simple and hides real traps, like the ABA problem, that don't show up in casual testing. Treat this topic as \"know when lock-free is worth it,\" not \"always prefer it\": most code should stay lock-based, and this is the tool for the specific cases where contention is high and the state being updated is simple.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s02",
+      "order": 2,
+      "sectionTitle": "Why go lock-free: what it buys you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Lock-based synchronization has three costs baked in, even when it's implemented correctly: a blocked thread does zero useful work while it waits; two locks acquired in inconsistent order can deadlock; and a low-priority thread holding a lock a high-priority thread needs causes **priority inversion** -- the high-priority thread waits on the low-priority one, inverting the intended scheduling.\n\n**Lock-free** algorithms remove all three: no thread ever blocks waiting for another (it retries an atomic operation instead), there's nothing to acquire in an order, so no deadlock is possible, and no thread can be stalled by another thread holding something it needs.\n\nThe cost is real, which is why this is a deliberate trade, not a strict upgrade: lock-free algorithms are substantially harder to design correctly, harder to test (failures are often extremely rare interleavings), and only apply cleanly to state simple enough to update in one atomic step.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s03",
+      "order": 3,
+      "sectionTitle": "Compare-and-swap: the core primitive",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Compare-and-swap (CAS)** is a hardware-level instruction with three inputs -- a memory location, an expected current value, and a new value -- that atomically checks \"does this location still hold the expected value?\" and, only if so, swaps in the new value, all as one indivisible step. It reports whether the swap happened.\n\nThe usage pattern is always the same loop: **read** the current value, **compute** the new value from it, **attempt the swap** with the value you read as \"expected,\" and if the swap fails (because someone else changed it first), **retry** from the read step with the now-current value.\n\nThis is fundamentally different from a lock: nothing is ever \"held.\" A thread that loses a race just tries again immediately, rather than queuing to wait for a lock to be released -- which is exactly what removes blocking from the picture.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "lock-free-and-atomic-object-design-s03-q1"
+      ]
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a CAS retry loop",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a loop diagram showing a thread reading a counter value (5), computing new value (6), attempting CAS(expected=5, new=6); a second thread's update is shown landing first changing the value to 6, causing the first thread's CAS to fail, looping back to re-read the now-current value (6) and retry CAS(expected=6, new=7) which succeeds >>>\n\nThread A reads the counter as `5` and computes `6`. Before it can swap, Thread B updates the counter to `6` first. Thread A's CAS -- \"swap to 6, but only if it's still 5\" -- fails, because the value is no longer 5.\n\nThread A doesn't error or block on this failure -- it simply re-reads the now-current value (`6`), recomputes (`7`), and retries the swap, which now succeeds. Under contention this can retry several times, but each attempt is fast and no thread ever sits idle waiting.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s05",
+      "order": 5,
+      "sectionTitle": "Code: a lock-free counter",
+      "subTitle": "Java example",
+      "type": "code",
+      "markdown": "```java\nclass LockFreeCounter {\n    private final AtomicInteger value = new AtomicInteger(0);\n\n    void increment() {\n        int current, next;\n        do {\n            current = value.get();\n            next = current + 1;\n        } while (!value.compareAndSet(current, next));\n    }\n\n    int get() { return value.get(); }\n}\n```\n\nThis is Java's `AtomicInteger.compareAndSet`, but the loop shape is universal to CAS-based design: read, compute, attempt swap, and if the swap reports failure, loop back and try again with fresh data -- no lock is acquired or released anywhere in this method.\n\nUnder low contention this loop typically succeeds on the first try; under heavy contention it may retry several times, but it never blocks -- every retry is still making forward progress toward eventually succeeding, unlike a thread queued on a lock.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "lock-free-and-atomic-object-design-s05-q1"
+      ]
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: the ABA problem",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"CAS checks the value hasn't changed before swapping, so if my CAS succeeds, I know nothing else touched this location in between.\"\n\n**Why it's wrong:** CAS only checks that the value is *currently* what you expect -- it can't tell you the value stayed unchanged the whole time. The **ABA problem**: Thread A reads a value `A`, gets paused; Thread B changes it to `B` and then back to `A`; Thread A resumes, sees `A` (matching what it expected), and its CAS succeeds -- even though the location was mutated twice in between, possibly invalidating an assumption Thread A depended on (for example, if `A` was a pointer to a node that got freed and a *different* node happened to get allocated at the same address).\n\n**Correct model:** for cases where \"the value looks the same\" isn't actually the same as \"nothing happened,\" pair the value with a version counter (a tagged pointer or a monotonically increasing stamp) and CAS on the pair together -- so a round-trip back to the same value is detectable because the version moved.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "lock-free-and-atomic-object-design-s06-q1"
+      ]
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s07",
+      "order": 7,
+      "sectionTitle": "Compare: lock-free vs lock-based design",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Lock-based | Lock-free (CAS-based) |\n|---|---|---|\n| Blocking | Threads block waiting for the lock | No thread ever blocks -- it retries instead |\n| Deadlock risk | Real, if multiple locks are acquired inconsistently | None -- nothing is ever held |\n| Throughput under low contention | Fine -- lock acquisition is cheap when uncontended | Fine -- first CAS attempt usually succeeds |\n| Throughput under high contention | Degrades -- threads queue | Can degrade too -- repeated CAS failures burn CPU on retries |\n| Correctness difficulty | Moderate -- reason about critical sections and lock order | High -- subtle bugs like ABA, harder to test |\n\n**How to decide:** reach for lock-free only for simple state (a counter, a single reference) under genuinely high contention where profiling shows lock queuing is the bottleneck -- for anything with multi-field invariants, a well-scoped lock is usually the more maintainable and equally fast choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "lock-free-and-atomic-object-design-s07-q1"
+      ]
+    },
+    {
+      "id": "lock-free-and-atomic-object-design-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: lock-free isn't the 'simpler' option",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Lock-free code has no locks, so it must be simpler than lock-based code -- fewer moving parts.\"\n\n**Why it's wrong:** removing locks doesn't remove complexity, it relocates it. A lock-based design concentrates all the hard reasoning into \"what's inside the critical section\" -- everything else is trivially safe. A lock-free design pushes that reasoning into every single operation: you must prove each read-compute-swap sequence is correct under *any* number of concurrent retries, handle the ABA problem where it matters, and reason about memory reclamation (can you safely free a node another thread might still be reading?) without a lock to serialize access.\n\n**Correct model:** lock-free removes blocking and deadlock, but it does not remove -- and often increases -- the cognitive load of proving correctness. Default to well-scoped locks; reserve lock-free design for the specific, profiled cases where its throughput and non-blocking guarantees are worth that added difficulty.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

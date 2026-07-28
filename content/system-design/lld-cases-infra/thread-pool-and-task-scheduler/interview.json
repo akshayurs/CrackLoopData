@@ -1,0 +1,29 @@
+{
+  "topicId": "thread-pool-and-task-scheduler",
+  "interviewQuestions": [
+    {
+      "id": "thread-pool-and-task-scheduler-iq1",
+      "question": "How would you design a thread pool / task executor from scratch?",
+      "answerMarkdown": "I'd lay out the core shape first: a bounded set of worker threads, started once, each looping forever — pull a task from a shared queue, execute it, catch and report any failure, pull the next one. `submit()` is thin; it just enqueues, it never executes anything on the caller's thread in the default case.\n\nI'd immediately flag the actual design problem as backpressure, not the happy path: what happens when the queue is full and a new task arrives. I'd name the three honest options — reject, block the caller, or run it on the caller's own thread — and say there's no universally correct one, it depends on whether losing work, stalling a caller, or borrowing a caller's thread is least bad for this workload.\n\nI'd close by naming graceful shutdown as the other hard part: stop accepting new work first, then drain what's already committed with a bounded timeout, rather than an unsafe immediate kill or an unbounded wait.\n\n**Testing:** whether you go straight to the two hard problems (backpressure, shutdown) instead of just describing the happy-path loop.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Designing a thread pool from scratch"
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-iq2",
+      "question": "How does Java's ThreadPoolExecutor (or Python's ThreadPoolExecutor) map onto this design?",
+      "answerMarkdown": "I'd walk through the direct correspondences: Java's `ThreadPoolExecutor` takes a core pool size, a max pool size, and a `BlockingQueue` — that's the dynamically-growing pool with a bounded backlog from this topic, where core size is the steady-state worker count and max size is the burst ceiling. Its `RejectedExecutionHandler` is exactly the `RejectionPolicy` interface, and Java ships the same three real options — `AbortPolicy`, `CallerRunsPolicy`, `DiscardOldestPolicy` — under those names.\n\nFor Python, `concurrent.futures.ThreadPoolExecutor` is simpler by design — a fixed worker count with an effectively unbounded internal queue, and `submit()` returns a `Future` rather than exposing a pluggable rejection policy, since it doesn't bound the queue the same way.\n\nI'd use this to make a broader point: naming these libraries isn't trivia, it shows the from-scratch design isn't academic — it's the same shape production executors actually use.\n\n**Testing:** whether you can connect the abstract design to a concrete library API you'd actually use.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Mapping the design onto real executor libraries"
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-iq3",
+      "question": "How would you safely shut down a thread pool without dropping in-flight tasks or hanging forever?",
+      "answerMarkdown": "I'd describe it as two phases that have to happen in order. First, stop accepting new submissions — any further `submit()` calls fail fast or are routed to a rejection path — which is what bounds the size of the remaining backlog. Second, wait for everything already in-flight or already queued to finish, typically with a timeout.\n\nI'd be specific about the timeout: without one, a task that hangs forever means shutdown never completes, so I'd interrupt remaining workers after the timeout elapses and report which tasks didn't finish, rather than blocking the whole process indefinitely.\n\nI'd contrast this with the two wrong extremes: killing worker threads immediately (drops whatever they're mid-execution on) and waiting for the queue to fully drain with no timeout (can hang forever if submissions don't actually stop). I'd note this is the same two-phase shape as the async logger's shutdown hook — stop new work, then drain what's committed, on a bounded clock.\n\n**Testing:** whether you can name the failure modes of both naive extremes, not just describe the correct middle path.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Graceful shutdown without losing work"
+    }
+  ]
+}

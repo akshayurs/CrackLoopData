@@ -1,0 +1,29 @@
+{
+  "topicId": "distributed-coordination",
+  "interviewQuestions": [
+    {
+      "id": "distributed-coordination-iq1",
+      "question": "How do you guarantee only one instance of a scheduled job runs across your fleet?",
+      "answerMarkdown": "I'd start from the naive version and explain why it's not enough: each instance tries to acquire a lock before running, and only the winner proceeds. That's fine until a holder pauses — a GC stop or scheduling delay longer than the lock's timeout — because the lock store will correctly reassign the lock to another instance while the paused one, unaware time passed, keeps running as if it still owns it.\n\nSo I'd use a **lease** rather than a plain lock — one that expires on a schedule and must be renewed — combined with a **fencing token**: a monotonically increasing number issued each time the lease is granted. Whatever the job actually touches (a database write, a file, an API call) has to check that token and reject anything below the highest one it's already seen. That way, even if two instances briefly both believe they're the holder, only the one with the current token can actually cause an effect.\n\nIn practice I'd reach for an existing coordination service — ZooKeeper's ephemeral sequential nodes or an etcd lease — rather than hand-rolling this on Redis, since session liveness and the fencing sequence numbers come built in.\n\n**Testing:** whether you know a lock alone isn't sufficient and can name the specific mechanism (fencing) that closes the gap.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Running exactly one instance of a scheduled job"
+    },
+    {
+      "id": "distributed-coordination-iq2",
+      "question": "Why isn't a simple `SET lock_key my_id NX` on Redis, with a TTL, sufficient for a correctness-critical distributed lock?",
+      "answerMarkdown": "I'd point out that the TTL solves availability — the lock won't be held forever if the process dies — but it doesn't solve the actual danger case: a process that's alive but paused for longer than the TTL. When it resumes, it has no way to know the lock expired and was handed to someone else; it keeps acting on stale beliefs.\n\nI'd walk through the fix: the protected resource itself needs to reject stale writes, which means the lock needs to hand out a monotonically increasing fencing token on each acquisition, and every write must carry that token so the resource can refuse anything older than the highest it's seen. A plain `SET`/TTL lock has no built-in concept of a token at all — you'd have to bolt that on yourself, and get the atomicity right (token issuance and resource enforcement both need to be correct together).\n\nI'd close with when I'd actually accept the simple version: low-stakes coordination where a brief double-holder causes no real damage — a cache-warming job, not a payment or an inventory decrement.\n\n**Testing:** whether you know TTL-based locking is a partial solution and can articulate exactly which failure mode it leaves open.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why a Redis TTL lock alone isn't enough"
+    },
+    {
+      "id": "distributed-coordination-iq3",
+      "question": "What does a fencing token actually protect against, and where does the check need to live?",
+      "answerMarkdown": "I'd describe the specific scenario it defends against: a lock holder that's paused long enough for its lock to expire and be reassigned, then resumes and tries to act as if nothing happened. Without fencing, that stale holder's write can land after — and silently overwrite or corrupt — a legitimate write from the new, correct holder.\n\nThe key design point I'd emphasize is where the check has to live: not in the lock service, and not in the holder itself (a confused holder can't be trusted to self-police), but in the resource actually being protected — the storage layer, the API, whatever the write ultimately hits. That resource tracks the highest fencing token it's seen and rejects anything lower, regardless of who sends it or when.\n\nI'd finish by naming the common mistake: teams sometimes add fencing tokens to their lock but forget to enforce them at the resource, which makes the whole mechanism decorative — the token has to actually gate the write, not just get logged alongside it.\n\n**Testing:** whether you understand fencing as an enforcement point on the resource, not a property of the lock itself.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "What fencing tokens protect, and where enforcement belongs"
+    }
+  ]
+}

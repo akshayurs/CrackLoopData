@@ -1,0 +1,139 @@
+{
+  "id": "immutability-as-a-design-tool",
+  "title": "Immutability as a Design Tool",
+  "area": "system-design",
+  "group": "oo-concurrency",
+  "order": 2,
+  "slug": "immutability-as-a-design-tool",
+  "summary": "Why an object that can't change is automatically safe to share across threads, how to actually build that guarantee, and where 'mostly immutable' designs quietly leak mutability.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "immutability-as-a-design-tool-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "An **immutable object** never changes after it's constructed -- every field is set once and stays that way for the object's lifetime. That single property eliminates an entire category of concurrency bugs for free: there's no shared mutable state, so there's nothing for two threads to race on.\n\nThink of it like a printed photograph versus a shared whiteboard -- you can hand the photo to as many people as you want, simultaneously, and no one can corrupt what anyone else sees. This topic covers how to actually build that guarantee (not just call a class immutable), and where \"mostly immutable\" designs quietly fail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "immutability-as-a-design-tool-s02",
+      "order": 2,
+      "sectionTitle": "Immutable objects: state fixed at construction",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An object is **immutable** if none of its observable state can change after the constructor returns -- no setters, no mutating methods, every field assigned exactly once. If you need a \"changed\" version, you construct a new object; you never modify the original in place.\n\nA `String` in Java is the canonical example: `str.toUpperCase()` doesn't change `str`, it returns a brand-new `String`. `str` itself is exactly the same object, unchanged, for as long as it exists.\n\nThis is a design choice, not an accident -- you have to actively remove every setter and mutating method, and verify every field really is fixed, for a class to earn the label.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "immutability-as-a-design-tool-s03",
+      "order": 3,
+      "sectionTitle": "Why immutability makes thread-safety automatic",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every threading bug in this group so far -- races, torn reads, lost updates -- requires **shared mutable state**: two threads, at least one of them writing, to the same field. Remove the \"mutable\" and the whole category of bug disappears, because there's nothing left to race on.\n\nIf an object's fields never change after construction, any number of threads can read it simultaneously, in any order, without coordination -- there's no \"before\" and \"after\" write for a read to catch mid-flight. You don't need a lock, because there's no critical section: reading a field that will never change again isn't a critical operation.\n\nThis is why immutability is often the *first* tool reached for in concurrent design, not a fallback: it doesn't just make sharing safe, it makes the safety free -- zero synchronization code, zero lock contention, zero deadlock risk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "immutability-as-a-design-tool-s03-q1"
+      ]
+    },
+    {
+      "id": "immutability-as-a-design-tool-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: an immutable object shared with zero locking",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a single immutable Point object in the center with arrows from four separate threads all reading it simultaneously, no lock icon anywhere, contrasted with a small inset showing a mutable object with a lock icon and only one thread able to access it at a time >>>\n\nFour threads hold a reference to the same immutable `Point(x=3, y=7)`. All four can call `.getX()` at the exact same instant -- there's no ordering requirement between them, because none of them can change what the others see.\n\nCompare that to a mutable, lock-protected object: only one thread can be inside the critical section at a time, and the others queue. The immutable version has no queue, because it has no critical section to queue for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "immutability-as-a-design-tool-s05",
+      "order": 5,
+      "sectionTitle": "Code: designing an immutable class correctly",
+      "subTitle": "Java example",
+      "type": "code",
+      "markdown": "```java\nfinal class Money {\n    private final long cents;\n    private final String currency;\n\n    Money(long cents, String currency) {\n        this.cents = cents;\n        this.currency = currency;\n    }\n\n    long getCents() { return cents; }\n    String getCurrency() { return currency; }\n\n    Money plus(Money other) {\n        // returns a NEW Money, never mutates this or other\n        return new Money(this.cents + other.cents, this.currency);\n    }\n}\n```\n\nThis is Java, but the checklist generalizes to any language: mark the class itself non-extendable (`final`), mark every field final/read-only, assign every field only in the constructor, and expose no method that mutates state -- `plus()` returns a new instance instead of changing `this`.\n\nMissing any one of these reopens a hole: a mutable subclass could add a setter, or a field left non-final could be reassigned later.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "immutability-as-a-design-tool-s05-q1"
+      ]
+    },
+    {
+      "id": "immutability-as-a-design-tool-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: 'mostly immutable' objects that leak mutability",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I made every field `final` and removed the setters, so this class is immutable.\"\n\n**Why it's wrong:** `final` only prevents *reassigning* a field -- it says nothing about whether the object that field points to can itself be mutated. A `final List<String> tags` still lets any caller who obtains that list call `.add()` on it, changing the \"immutable\" object's observable state from outside.\n\n**Correct model:** for every field that's a reference to a mutable type (a `List`, a `Date`, an array, another mutable class), you need a **defensive copy** -- copy it on the way in (constructor) and copy it on the way out (getter), so no external reference can reach your internal state. Only primitives and genuinely immutable types are safe to store and expose directly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "immutability-as-a-design-tool-s06-q1"
+      ]
+    },
+    {
+      "id": "immutability-as-a-design-tool-s07",
+      "order": 7,
+      "sectionTitle": "Compare: immutable vs thread-safe mutable objects",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Immutable object | Thread-safe mutable object |\n|---|---|---|\n| Synchronization needed | None -- nothing to race on | Locks, atomics, or other coordination |\n| Performance under read-heavy load | Excellent -- unlimited concurrent reads | Bounded by lock contention |\n| Cost of a \"change\" | A new object per change (allocation) | In-place mutation (cheap per change) |\n| Best fit | Value objects -- money, coordinates, config | Objects that genuinely need to accumulate state -- a counter, a cache |\n\n**How to decide:** default to immutable for anything that represents a *value* rather than an evolving entity; reach for a carefully synchronized mutable design only when in-place state truly needs to change and the allocation cost of \"new object per change\" would actually matter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "immutability-as-a-design-tool-s08",
+      "order": 8,
+      "sectionTitle": "The Builder pattern: constructing immutable objects cleanly",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Immutable classes have one awkward spot: a constructor with ten required fields is unreadable and error-prone (which `long` was cents, and which was the exchange rate?). The **builder pattern** -- a separate object that collects values step by step and produces the immutable object only at the end, via a `.build()` call -- is the standard fix.\n\nThe builder itself is mutable (its whole job is accumulating state before construction), but the object it produces is fully immutable and only becomes visible once every field is set. This avoids the alternative -- a public multi-arg constructor or, worse, exposing setters \"just during setup\" and hoping nobody calls them again later.\n\nYou'll see this pairing constantly in interview answers: \"I'd make this immutable, and use a builder to construct it\" is a complete, defensible design sentence.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "immutability-as-a-design-tool-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a final reference to a mutable object",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This field is `final`, so it can't change -- the class is safe to share across threads.\"\n\n**Why it's wrong:** `final` (or any language's \"read-only reference\" keyword) only locks the *reference* -- which object the field points to. It says nothing about the object on the other end of that reference. A `final Map<String, String> settings` still allows `settings.put(\"key\", \"new-value\")` from anywhere holding that reference, silently mutating shared state that looked locked down.\n\n**Correct model:** immutability has to be checked two levels deep -- is the reference fixed, *and* is the referenced object itself immutable (or defensively copied so no one else holds a mutable reference to it)? A class with ten `final` fields, one of which is a mutable `List`, is not immutable -- it's one leaked reference away from a race.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "immutability-as-a-design-tool-s09-q1"
+      ]
+    }
+  ]
+}

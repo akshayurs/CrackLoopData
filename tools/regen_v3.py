@@ -40,6 +40,7 @@ AREA_META = {
     "computer-architecture": ("chip", "#C2571A"),
     "computer-networks": ("network", "#0E8A55"),
     "cs-theory-math": ("function", "#B8305A"),
+    "system-design": ("layers", "#2A6FB8"),
 }
 
 # Distinct group colours, cycled by global group index so groups within an area
@@ -52,6 +53,12 @@ GROUP_PALETTE = [
 
 # First matching keyword picks the group icon (AppIcons name); else the area icon.
 GROUP_ICON_RULES = [
+    # system-design families (first match wins, so these precede the generic rules)
+    (("interview-", "playbook", "experience-questions", "round-formats"), "book"),
+    (("-cases-", "case-studies"), "layers"),
+    (("patterns", "oop-", "design-principles", "uml", "lld-", "anti-patterns"), "tools"),
+    (("distributed-systems-core", "consistency", "geo-distribution"), "network"),
+    (("design-in-practice", "sd-fundamentals", "capacity-estimation"), "science"),
     (("security", "tls", "crypto", "auth", "attack", "vpn", "zero-trust", "mtls"), "security"),
     (("routing", "ip-", "-ip", "addressing", "dns", "transport", "link-", "wireless",
       "cdn", "load", "mesh", "gateway", "protocol", "network"), "network"),
@@ -134,15 +141,32 @@ def area_ranks():
 def group_ranks(area_slug):
     """Relevance order of an area's groups, from the `## Group: … (slug)`
     sequence in its expanded brief."""
+    return {slug: rank for slug, (rank, _) in group_brief(area_slug).items()}
+
+
+def group_titles(area_slug):
+    """Human group titles from the brief, e.g. 'System Design Fundamentals'.
+
+    Preferred over pretty(slug), which mangles initialisms it doesn't know
+    ('sd-fundamentals' -> 'Sd Fundamentals', 'hld-cases-core' -> 'Hld Cases Core').
+    """
+    return {slug: title for slug, (_, title) in group_brief(area_slug).items()}
+
+
+def group_brief(area_slug, _cache={}):
+    """{group_slug: (rank, title)} parsed once per area from its expanded brief."""
+    if area_slug in _cache:
+        return _cache[area_slug]
     p = os.path.join(ROOT, "briefs", "expanded", f"{area_slug}.md")
-    ranks, rank = {}, 0
+    out, rank = {}, 0
     if os.path.exists(p):
         for line in open(p, encoding="utf-8"):
-            m = re.match(r"^##\s+Group:.*\(([a-z0-9-]+)\)", line)
+            m = re.match(r"^##\s+Group:\s*(.+?)\s*\(([a-z0-9-]+)\)\s*$", line)
             if m:
-                ranks[m.group(1)] = rank
+                out[m.group(2)] = (rank, m.group(1).strip())
                 rank += 1
-    return ranks
+    _cache[area_slug] = out
+    return out
 
 
 def build():
@@ -160,6 +184,7 @@ def build():
         if not os.path.isdir(area_dir):
             continue
         grank = group_ranks(area_slug)
+        gtitles = group_titles(area_slug)
         for group_slug in sorted(os.listdir(area_dir)):
             group_dir = os.path.join(area_dir, group_slug)
             if not os.path.isdir(group_dir):
@@ -236,7 +261,7 @@ def build():
             aicon, acolor = area_meta(area_slug)
             groups[gslug] = {
                 "slug": gslug,
-                "name": pretty(group_slug),
+                "name": gtitles.get(group_slug) or pretty(group_slug),
                 "area": area_slug,
                 "areaName": pretty(area_slug),
                 "order": arank.get(area_slug, 900 + alpha_areas.get(area_slug, 0)) * 1000

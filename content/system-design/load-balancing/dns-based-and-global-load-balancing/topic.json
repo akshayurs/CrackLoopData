@@ -1,0 +1,113 @@
+{
+  "id": "dns-based-and-global-load-balancing",
+  "title": "DNS-Based & Global Load Balancing",
+  "area": "system-design",
+  "group": "load-balancing",
+  "order": 5,
+  "slug": "dns-based-and-global-load-balancing",
+  "summary": "Routing users to the nearest healthy region using DNS round robin, GSLB, and anycast — and the TTL trade-off that makes DNS-based failover slow.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "dns-based-and-global-load-balancing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything so far balanced load *within* one data center. **Global load balancing** answers a different question: which region or data center should a user's request go to at all, before it ever reaches a local load balancer?\n\nThis is mostly a DNS problem — the answer to \"which IP does `example.com` resolve to\" can differ by requester and by health, which is exactly how GSLB and anycast route around a downed region. The catch is speed: DNS answers get cached, and that caching is what makes DNS-based failover slower than an in-datacenter one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "dns-based-and-global-load-balancing-s02",
+      "order": 2,
+      "sectionTitle": "DNS round robin: the simplest global load balancing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**DNS round robin** returns multiple IP addresses for the same domain name, in a different order each time it's queried. A resolver querying `example.com` might get `[1.2.3.4, 5.6.7.8]` on one lookup and `[5.6.7.8, 1.2.3.4]` on the next, and most clients simply try the first address returned — spreading load across regions purely by which IP happens to come first.\n\nIt's trivially simple to set up — just add multiple A records — but it's blind: DNS doesn't know if `1.2.3.4` is actually healthy, or which address is geographically closest to this particular requester. Both problems are what GSLB exists to fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "dns-based-and-global-load-balancing-s02-q1"
+      ]
+    },
+    {
+      "id": "dns-based-and-global-load-balancing-s03",
+      "order": 3,
+      "sectionTitle": "GSLB and anycast: routing by network topology",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**GSLB** (Global Server Load Balancing) is DNS that answers differently depending on the requester — it looks at the resolver's location and each region's current health, then returns the IP of the nearest *healthy* region instead of a blind round robin. A user in Mumbai gets the Mumbai data center's IP; if Mumbai is down, GSLB stops handing out that IP until it recovers.\n\n**Anycast** works below DNS entirely: the exact same IP address is announced from multiple physical locations over BGP, and network routing itself — not DNS — delivers each packet to whichever location is topologically closest. Cloudflare and most CDNs use anycast so that one IP transparently resolves to \"the nearest edge,\" with no DNS-level geo-logic needed at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "dns-based-and-global-load-balancing-s03-q1"
+      ]
+    },
+    {
+      "id": "dns-based-and-global-load-balancing-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: geo-routing a user to the nearest region",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a world map with a user icon in India, three data-center icons in US, Europe, and India; a dashed line from the user through a \"GSLB / DNS\" box that checks each region's health and distance, then a solid line routing the user specifically to the India data center as the nearest healthy one; the Europe data center is shown greyed out and labelled \"unhealthy — excluded from answers\" >>>\n\nThe routing decision happens once, at DNS resolution time, before the user's actual request is ever sent: GSLB looks at where the query came from and which regions currently pass their health checks, then returns only healthy, nearby IPs.\n\nEvery request after that goes straight to the chosen region — there's no per-request re-evaluation the way an in-datacenter load balancer does it. If that region degrades mid-session, the user won't reroute until their cached DNS answer expires.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "dns-based-and-global-load-balancing-s05",
+      "order": 5,
+      "sectionTitle": "DNS TTLs and the failover-speed trade-off",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A DNS record's **TTL** (time-to-live) tells resolvers how long they're allowed to cache the answer before asking again. A 1-hour TTL means that once a resolver — and every client behind it — has cached an IP, they'll keep using it for up to an hour even if that region goes down five minutes later.\n\nShortening the TTL to, say, 30 seconds makes failover much faster, since clients re-check far more often — but it also means far more DNS query volume against your name servers, since caching helps far less.\n\nThis is a real trade-off, not a free lever: aggressive TTLs speed up failover at the cost of load and latency on every DNS lookup along the way.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "dns-based-and-global-load-balancing-s05-q1"
+      ]
+    },
+    {
+      "id": "dns-based-and-global-load-balancing-s06",
+      "order": 6,
+      "sectionTitle": "Compare: DNS-based vs proxy-based global load balancing",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | DNS-based (GSLB) | Proxy-based (anycast edge / global HTTP proxy) |\n|---|---|---|\n| Decision point | Once, at DNS resolution | Every request, at the network/proxy layer |\n| Failover speed | Limited by TTL — seconds to hours | Near-instant — no caching to expire |\n| Client visibility | Client connects directly to the chosen region | Client always connects to the same anycast IP or proxy edge |\n| Operational cost | Cheap — just DNS records + health checks | Higher — needs anycast BGP setup or a global proxy fleet |\n\n**How to decide:** DNS-based GSLB is the simpler, cheaper default for most services; reach for anycast or a global proxy layer (what CDNs and large platforms use) when failover speed genuinely can't tolerate any TTL-driven delay.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "dns-based-and-global-load-balancing-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: relying on DNS TTL for fast failover",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll set the DNS TTL to 60 seconds, so if a region goes down, everyone fails over within a minute.\"\n\n**Why it's wrong:** TTL is a *request* to resolvers to stop caching, not a guarantee. Many recursive resolvers, corporate DNS caches, and even some client OS-level caches ignore or override short TTLs, holding an answer far longer than configured. A meaningful slice of users will keep hitting a dead region well past your intended failover window.\n\n**Correct model:** treat DNS TTL as a rough, best-effort lever, not a reliable SLA — for failover speed that actually matters, add a mechanism DNS caching can't defeat, like anycast, a global proxy layer, or client-side retry logic that tries a secondary endpoint on connection failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "dns-based-and-global-load-balancing-s07-q1"
+      ]
+    }
+  ]
+}

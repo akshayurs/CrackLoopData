@@ -1,0 +1,113 @@
+{
+  "id": "health-checks-and-failover",
+  "title": "Health Checks & Failover",
+  "area": "system-design",
+  "group": "load-balancing",
+  "order": 4,
+  "slug": "health-checks-and-failover",
+  "summary": "How a load balancer detects a bad node and routes around it, and the interval, threshold, and draining choices that decide whether that happens fast or safely.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "health-checks-and-failover-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A load balancer can only route around a dead server if it knows the server is dead — that's what **health checks** are for. Get the checking wrong and you either keep sending traffic to a broken node for too long, or you yank healthy nodes out of rotation on false alarms.\n\nThis topic covers active vs passive checks, tuning intervals and thresholds, draining a node safely instead of dropping requests, and what actually happens during failover.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "health-checks-and-failover-s02",
+      "order": 2,
+      "sectionTitle": "Active health checks vs passive health checks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **active health check** is the load balancer proactively pinging each server on a schedule — hitting `/health` every 5 seconds and expecting a 200 OK — independent of whether any real traffic is flowing. It catches a dead server even during a lull with zero user requests.\n\nA **passive health check** watches real traffic instead: if the last N requests to a server timed out or returned 5xx, the load balancer marks it unhealthy without sending any extra probe traffic. It reacts using signal that's already there, but only detects a problem once real users have already hit it.\n\nProduction setups typically run both — active checks for fast, traffic-independent detection, passive checks as a backstop that catches failures active checks might miss between polls.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "health-checks-and-failover-s02-q1"
+      ]
+    },
+    {
+      "id": "health-checks-and-failover-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: health check loop pulling a bad node out of rotation",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a load balancer box with a periodic arrow labelled \"health check every 5s\" looping out to three backend nodes and back; node 2 is shown turning red after several consecutive failed checks; a second frame shows the load balancer's routing arrows no longer pointing at node 2, only at nodes 1 and 3 >>>\n\nThe loop is continuous and independent of user traffic: the load balancer polls every node on a fixed interval, and a node that fails enough consecutive checks in a row gets marked unhealthy and removed from the rotation the next routing decision makes.\n\nThe node isn't removed after one failed check — that would react to a single dropped packet — it's removed after crossing a configured failure threshold, which is the next slide's trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "health-checks-and-failover-s04",
+      "order": 4,
+      "sectionTitle": "Choosing check intervals and thresholds: flapping vs slow detection",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Two numbers control every health-check setup: the **interval** (how often to check) and the **threshold** (how many consecutive failures before marking a node unhealthy — and how many consecutive successes before marking it healthy again).\n\n| Setting | Aggressive (short interval, low threshold) | Conservative (longer interval, higher threshold) |\n|---|---|---|\n| Detects real failure | Fast (seconds) | Slower (tens of seconds) |\n| False positives | More likely — one blip pulls a healthy node | Less likely — needs a sustained pattern |\n| Risk | **Flapping** — a node bounces in and out of rotation | Traffic keeps hitting a genuinely dead node longer |\n\n**How to decide:** start conservative (e.g. 3 consecutive failures, 10s interval) and tighten only if real incidents show detection was too slow — tuning for the fastest possible detection first tends to cause flapping on ordinary network jitter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "health-checks-and-failover-s04-q1"
+      ]
+    },
+    {
+      "id": "health-checks-and-failover-s05",
+      "order": 5,
+      "sectionTitle": "Connection draining: removing a node without dropping in-flight requests",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pulling a node out of rotation the instant it's marked unhealthy (or scheduled for a deploy) can kill requests it's already in the middle of answering. **Connection draining** (also called graceful shutdown) instead stops sending it *new* requests immediately, while letting its in-flight requests finish normally within a timeout window.\n\nConcretely: a node about to be redeployed gets marked \"draining,\" the load balancer stops routing new traffic to it, and after 30 seconds (or when its last connection closes, whichever is first) it's safely removed and can be shut down.\n\nWithout draining, every deploy or scale-down event randomly cuts off whatever requests happened to be in flight on that node.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "health-checks-and-failover-s06",
+      "order": 6,
+      "sectionTitle": "Failover mechanics: how traffic re-routes when a node dies",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once a node is marked unhealthy, failover is mechanically simple: the load balancer just stops including it in whatever algorithm picks the next server — round robin skips it, least connections never considers it, a consistent-hashing ring routes its slice of keys to its ring neighbor instead.\n\nThe in-flight requests already on that node are the messy part: if it died outright (not just failed a health check), those requests fail outright and it's up to the client or an upstream retry policy to resend them to a different node. This is why idempotent request design matters upstream of load balancing — a retried request should be safe to run twice.\n\nRecovery mirrors removal: once the node passes enough consecutive health checks again, it re-enters the rotation gradually rather than all at once, to avoid a cold node getting slammed the instant it returns.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "health-checks-and-failover-s06-q1"
+      ]
+    },
+    {
+      "id": "health-checks-and-failover-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: a health check that passes while the app is actually unhealthy",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our `/health` endpoint returns 200, so the load balancer will correctly keep sending it traffic — the check is working.\"\n\n**Why it's wrong:** a shallow health check (does the process respond at all?) can pass even when the thing that actually matters is broken — the app can't reach its database, a critical dependency is timing out, or a memory leak has it thrashing under real load while still answering a trivial `/health` ping fast.\n\n**Correct model:** a good health check exercises the dependencies the app actually needs to serve real requests — check that the database connection pool has a live connection, not just that the HTTP server is listening. Shallow checks catch \"process crashed\"; they miss \"process alive but useless,\" which is the more common real-world failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "health-checks-and-failover-s07-q1"
+      ]
+    }
+  ]
+}

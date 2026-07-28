@@ -1,0 +1,193 @@
+{
+  "id": "lru-cache",
+  "title": "LRU Cache",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 1,
+  "slug": "lru-cache",
+  "summary": "The classic LLD prompt is a data-structures problem in disguise: hashmap plus doubly linked list for O(1) access and eviction, with real thread-safety and TTL follow-ups.",
+  "level": "intermediate",
+  "slideCount": 13,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "lru-cache-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design an LRU cache\" sounds like a systems question but it's really a **data-structures interview wearing an LLD hat** — the whole prompt collapses to picking the right combination of structures so two operations, `get` and `put`, both run in O(1).\n\nThink of it like a stack of recently-worn clothes on a chair: the shirt you just wore goes on top, and when the chair is full you remove from the bottom, not by digging through the pile. This topic builds that mechanism precisely, then pushes into the follow-ups — thread-safety and TTL — that separate a working answer from a strong one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what you're actually being asked to build",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pin down the contract before touching a whiteboard. **`get(key)`** returns the value or a miss signal, and counts as \"using\" the key. **`put(key, value)`** inserts or updates, and if the cache is at **fixed capacity**, it **evicts the least-recently-used entry** first. Both must run in **O(1)** time — that constraint is the entire point of the exercise, not a nice-to-have.\n\n**Non-goals** to state out loud early: this is a single-process, in-memory structure. Distribution across machines, persistence to disk, and network access are explicitly out of scope unless the interviewer raises them as a follow-up — naming that boundary signals you understand the difference between an LLD prompt and an HLD one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s03",
+      "order": 3,
+      "sectionTitle": "Core data structure: why one structure alone isn't enough",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hashmap** alone gives O(1) `get`/`put` by key, but it has no notion of order — you can't ask a hashmap \"which entry was touched longest ago\" without scanning every entry. A **doubly linked list** alone gives you a perfect recency order (keep the most-recent at the head, the least-recent at the tail), but finding *which node* corresponds to a given key means walking the list — O(n).\n\nThe standard LRU design combines both: a `Map<Key, Node>` for O(1) lookup, where each `Node` also sits inside a doubly linked list that tracks recency. The map tells you *where* a key lives; the list tells you *what order* things were used in. Neither structure could do the other's job alone, which is why interviewers expect you to name both immediately.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: hashmap pointers into a recency-ordered list",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a hashmap on the left with keys A, B, C each pointing to a node in a doubly linked list on the right; the list is drawn head-to-tail with bidirectional arrows between nodes, head labelled \"most recently used\" and tail labelled \"least recently used\"; a dashed arrow from the tail node back to the hashmap entry it corresponds to, to emphasize the map and list reference the same node objects >>>\n\nEvery node lives in exactly two places at once: as a value inside the hashmap (reachable by key in O(1)) and as a link inside the doubly linked list (reachable by recency order). They're the same object — moving a node in the list doesn't touch the map at all, and looking a node up in the map doesn't touch the list until you decide to reorder it.\n\nHead = most recently used. Tail = least recently used, and the first thing evicted.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s05",
+      "order": 5,
+      "sectionTitle": "Code: get() and put() moving nodes to the front",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Every touch — a hit on `get`, or an insert/update on `put` — moves that node to the head. Eviction always removes the tail.\n\n```python\nclass LRUCache:\n    def __init__(self, capacity):\n        self.capacity = capacity\n        self.map = {}                      # key -> Node\n        self.head, self.tail = Node(), Node()  # dummy sentinels\n        self.head.next, self.tail.prev = self.tail, self.head\n\n    def get(self, key):\n        if key not in self.map:\n            return -1\n        node = self.map[key]\n        self._move_to_front(node)\n        return node.value\n\n    def put(self, key, value):\n        if key in self.map:\n            node = self.map[key]\n            node.value = value\n            self._move_to_front(node)\n            return\n        if len(self.map) >= self.capacity:\n            lru = self.tail.prev\n            self._remove(lru)\n            del self.map[lru.key]\n        node = Node(key, value)\n        self.map[key] = node\n        self._add_to_front(node)\n```\n\nSentinel `head`/`tail` nodes remove every \"is this the first/last node\" edge case from `_remove`/`_add_to_front`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: proving every operation is actually O(1)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Claiming O(1) isn't enough — you should be able to justify each piece. `get`/`put` need exactly four primitive operations, and each is O(1) **only** for a specific structural reason:\n\n**Lookup** (\"does this key exist, and where\") is O(1) because the hashmap gives you the node directly — no traversal. **Remove a node from the middle of the list** is O(1) *only if the list is doubly linked*: removal needs `node.prev.next = node.next` and `node.next.prev = node.prev`, both of which require a `prev` pointer. A singly linked list only exposes `next`, so removing an arbitrary node forces a scan from the head to find its predecessor — O(n). **Insert at the head** is O(1) because you always have a direct reference to `head`. **Evict the tail** is O(1) only because a `tail` pointer is maintained directly, not found by search.\n\nSo the real claim is: *doubly* linked, with `head`/`tail` references, is the minimum structure that makes all four O(1) simultaneously.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "lru-cache-s06-q1"
+      ]
+    },
+    {
+      "id": "lru-cache-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: an \"O(1)\" cache that secretly scans for the victim",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I used a doubly linked list, so my cache is O(1).\"\n\n**Why it's wrong:** the doubly linked list only buys O(1) removal *if you already know which node to remove*. An implementation that, on eviction, walks the list looking for \"the node that hasn't been touched longest\" — instead of trusting that the tail already *is* that node — is O(n) per eviction, no matter how the list is wired.\n\n**Correct model:** the list's ordering invariant must be actively maintained on every access (move-to-front on touch), so the tail is *always*, by construction, the least-recently-used node. Eviction then means \"remove whatever is at the tail,\" a pointer dereference — never a search.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "lru-cache-s07-q1"
+      ]
+    },
+    {
+      "id": "lru-cache-s08",
+      "order": 8,
+      "sectionTitle": "Thread-safety, deep-dive: why a plain read-write lock doesn't help",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single coarse lock around all of `get` and `put` is **correct** — it serializes every operation, so no two threads can corrupt the list. But it also means concurrent `get` calls on *different* keys block each other, which feels wasteful since a lookup \"shouldn't\" need to block a read.\n\nThe tempting fix — a read-write lock, letting many `get`s run under a shared read-lock and only `put` take the exclusive write-lock — **doesn't actually work here**. `get` isn't a pure read: it mutates the list by moving the accessed node to the head, rewriting `prev`/`next` pointers on that node and its former neighbors. Two \"readers\" doing that concurrently under a shared lock can race on the same pointers and corrupt the list (a corrupted `head`/`tail` or a lost node). Every `get` is a writer with respect to the list, even though it reads with respect to the value.\n\nThe realistic next step for real contention is **sharding**: partition the keyspace by hash into N independent LRU instances, each with its own lock, trading a single global recency order for parallelism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "lru-cache-s08-q1"
+      ]
+    },
+    {
+      "id": "lru-cache-s09",
+      "order": 9,
+      "sectionTitle": "Code: a mutex-guarded get() that still reorders the list",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "This is what makes the previous slide concrete: the lock has to wrap the *entire* body of `get`, including the reorder, not just the value read.\n\n```python\nclass ThreadSafeLRUCache:\n    def __init__(self, capacity):\n        self._cache = LRUCache(capacity)\n        self._lock = threading.Lock()\n\n    def get(self, key):\n        with self._lock:                # guards the move-to-front too\n            return self._cache.get(key)\n\n    def put(self, key, value):\n        with self._lock:\n            self._cache.put(key, value)\n```\n\nIf `get` only locked around reading `node.value` and released the lock before calling `_move_to_front`, two concurrent \"readers\" could interleave their pointer updates and corrupt the list — the lock must cover the mutation, not just the lookup.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s10",
+      "order": 10,
+      "sectionTitle": "TTL + eviction interaction, deep-dive: two ways a key can die",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Add a TTL and a key can now be removed by **two independent triggers**: LRU eviction (capacity is full) or TTL expiry (time is up). They must not fight each other or leave the map and list inconsistent.\n\nThe standard approach: store an `expiresAt` timestamp on each node, and check it in two places. **Lazy expiry** — on `get`, if `expiresAt` has passed, treat it as a miss and remove the node right there, from *both* the map and the list, before returning. **Active sweep** — a periodic background pass walks the list (or a separate expiry-ordered structure) removing anything expired, so cold keys that are never accessed again don't linger forever in memory.\n\nThe invariant to hold onto: whichever path finds an expired node, it must remove that node from the map and unlink it from the list **together** — removing from only one leaves a dangling reference the other structure still thinks is valid.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "lru-cache-s10-q1"
+      ]
+    },
+    {
+      "id": "lru-cache-s11",
+      "order": 11,
+      "sectionTitle": "Diagram: lazy expiry on access vs active sweep on a timer",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a single node box showing two fields, \"LRU position (prev/next pointers)\" and \"expiresAt timestamp\"; two arrows into a trash icon labelled \"removed from map + list\" — one arrow from a \"get() call\" box labelled \"lazy: checked on access\", another from a \"background timer\" box labelled \"active: swept every N seconds\" >>>\n\nEach node carries both pieces of removal information at once: its place in the recency list and its own expiry time. Lazy expiry catches a key the moment someone tries to use it again; active sweep catches keys that are simply never touched after expiring, which lazy expiry alone would never find.\n\nBoth paths converge on the same removal routine — delete from the map, unlink from the list — so the invariant from the previous slide holds no matter which trigger fires first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s12",
+      "order": 12,
+      "sectionTitle": "Design patterns: Strategy for a pluggable eviction policy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once an interviewer asks \"how would you support LFU instead of LRU without a rewrite,\" the answer is the **Strategy pattern**: define a generic `Cache<K,V>` that owns the hashmap and delegates *which entry to evict* to an `EvictionPolicy` interface, rather than hardcoding tail-eviction inline.\n\n`LRUPolicy` implements the interface by tracking recency (the doubly linked list from this topic); a hypothetical `LFUPolicy` would track access frequency instead, using a different internal structure. The `Cache` class's `get`/`put` plumbing — map lookups, capacity checks — doesn't change at all when you swap policies; only the object passed into the constructor changes.\n\nThis is the difference between \"I built an LRU cache\" and \"I built a cache whose eviction policy happens to be LRU today\" — the second answer signals you're designing for extension, not just solving today's prompt.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lru-cache-s13",
+      "order": 13,
+      "sectionTitle": "Compare: LRU vs LFU vs FIFO eviction",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Interviewers ask \"why not just FIFO, it's simpler\" specifically to see if you can articulate what recency and frequency actually buy you.\n\n| | LRU | LFU | FIFO |\n|---|---|---|---|\n| Tracks | Recency of access | Frequency of access | Insertion order only |\n| O(1) structure | Hashmap + doubly linked list | Hashmap + frequency buckets (a doubly linked list per frequency) | Hashmap + queue |\n| Adapts to access pattern | Yes — hot keys stay resident | Yes, and resists one-off scans better | No — ignores usage entirely |\n| Weak spot | A single scan of cold keys can evict everything hot | More bookkeeping; slow-to-warm-up new keys look falsely \"cold\" | Evicts a hot key just because it was inserted first |\n\n**How to decide:** default to LRU — it's the cheapest structure that adapts to usage at all. Reach for LFU only when your access pattern has stable \"hot\" keys that a single burst of one-off traffic could otherwise wrongly evict under LRU. FIFO belongs only where access order genuinely carries no signal, which is rare for a cache.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "lru-cache-s13-q1"
+      ]
+    }
+  ]
+}

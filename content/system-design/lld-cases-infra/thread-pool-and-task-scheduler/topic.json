@@ -1,0 +1,180 @@
+{
+  "id": "thread-pool-and-task-scheduler",
+  "title": "Thread Pool & Task Scheduler",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 7,
+  "slug": "thread-pool-and-task-scheduler",
+  "summary": "A bounded worker-pool design from scratch: what happens when the queue is full, how workers survive their own task failures, and how to shut down without dropping in-flight work.",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "thread-pool-and-task-scheduler-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a thread pool from scratch\" asks you to build what most languages already ship as a library — `ThreadPoolExecutor` in Java and Python — which means the interviewer already knows the correct shape and is watching for the details: what happens at the queue's capacity limit, and whether shutdown can lose work.\n\nA thread pool is a small, fixed (or capped) set of worker threads pulling tasks off a shared queue, so callers don't pay the cost of spinning up a new OS thread per unit of work. The hard part isn't the happy path — it's backpressure and graceful shutdown, both of which show up as the deep-dives in this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: submit tasks, bounded workers, queued backlog, graceful shutdown",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The contract: callers **submit** units of work; a **bounded number of worker threads** execute them; work that arrives faster than workers can drain it sits in a **queued backlog**; and the pool supports a **graceful shutdown** that finishes in-flight and (optionally) queued work rather than abandoning it mid-execution.\n\n**Non-goals** to state up front: distributed job scheduling across machines is out of scope — this is a single-process executor. That framing keeps the design focused on concurrency correctness within one process, which is plenty hard on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: ThreadPool, WorkerThread, TaskQueue, Task, RejectionPolicy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Five classes. A **`ThreadPool`** is the public API — `submit(task)`, `shutdown()`. A **`WorkerThread`** runs a loop: pull a task, execute it, catch and report any failure, pull the next one, forever until told to stop. A **`TaskQueue`** holds submitted work waiting for a free worker, with a bounded capacity. A **`Task`** is the unit of work — typically a callable plus metadata. A **`RejectionPolicy`** decides what happens when a task is submitted but the queue is already full.\n\nThe relationship worth internalizing: workers don't receive tasks pushed to them — they **pull** from the shared queue, which is what lets N workers share one backlog without any of them needing to know about the others.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "thread-pool-and-task-scheduler-s03-q1"
+      ]
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the pool, its workers, and the shared task queue",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a \"submit(task)\" arrow entering a \"TaskQueue\" box (bounded, shown with a capacity marker); multiple \"WorkerThread\" boxes below, each with an arrow pulling from the TaskQueue; each worker looping back to itself labelled \"pull next task\"; a \"RejectionPolicy\" box with a dashed arrow triggered when submit() is called while the TaskQueue is at capacity >>>\n\nOne shared queue, N independent pullers — this is the same \"decouple producers from consumers\" shape as the message queue and the async logger, applied to CPU-bound or blocking work instead of log records or messages.\n\nThe `RejectionPolicy` only activates at the boundary condition: queue full, new task arriving. Everything else in the diagram runs without it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s05",
+      "order": 5,
+      "sectionTitle": "Code: submit() enqueuing work for idle workers to pick up",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`submit` is deliberately thin — it validates capacity and hands off, it never executes anything itself.\n\n```python\nclass ThreadPool:\n    def __init__(self, num_workers, max_queue_size):\n        self.queue = queue.Queue(maxsize=max_queue_size)\n        self.workers = [\n            threading.Thread(target=self._worker_loop, daemon=True)\n            for _ in range(num_workers)\n        ]\n        for w in self.workers:\n            w.start()\n\n    def submit(self, task):\n        self.queue.put_nowait(task)   # raises queue.Full if at capacity\n\n    def _worker_loop(self):\n        while True:\n            task = self.queue.get()\n            try:\n                task.run()\n            except Exception as exc:\n                log.error(f\"task failed: {exc}\")\n            finally:\n                self.queue.task_done()\n```\n\nWorkers are started once, up front, and loop forever pulling from the same queue — no per-task thread creation, which is the entire point of pooling.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: what happens when the queue is full",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every design so far assumes the queue has room. Once it doesn't — all workers busy, the backlog at its configured cap, and a new task arrives — the pool has exactly three honest options, and picking silently between them is a design smell.\n\n**Reject**: fail the submission immediately, pushing backpressure onto the caller, who must decide what to do (retry, drop, error out). **Block**: make the caller wait until a slot frees up, which throttles the producer automatically but risks the caller itself stalling indefinitely if the pool never drains. **Caller-runs**: execute the task synchronously on the calling thread instead of queuing it, which slows that one caller down but guarantees the task isn't lost and, as a side effect, naturally throttles submission rate. There's no universally correct choice — it depends entirely on whether losing a task, blocking a caller, or borrowing a caller's thread is the least bad option for the actual workload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "thread-pool-and-task-scheduler-s06-q1"
+      ]
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: a worker's loop — pull, execute, catch, pull again",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a circular flow diagram — \"pull task from queue\" -> \"execute task\" -> a branch: success goes straight to \"pull next task\" (looping back to the start), failure goes through \"catch exception, log/report\" before also looping back to \"pull next task\"; emphasize the loop never exits on a task failure >>>\n\nThe loop's defining property is that a failing task never kills the worker — the exception is caught right there, reported, and the worker immediately goes back to pulling the next task. A worker thread that dies from an uncaught task exception permanently shrinks the pool by one, silently, which compounds over time as more tasks fail.\n\nThis is structurally identical to the logging framework's \"a log call must never crash the caller\" pitfall, applied to task execution instead of logging.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s08",
+      "order": 8,
+      "sectionTitle": "Code: a pluggable RejectionPolicy",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Making the full-queue behavior an interface means the pool's core loop never hardcodes one answer.\n\n```python\nclass RejectionPolicy(ABC):\n    @abstractmethod\n    def on_rejected(self, task, pool) -> None: ...\n\nclass AbortPolicy(RejectionPolicy):\n    def on_rejected(self, task, pool):\n        raise RejectedExecutionError(task)\n\nclass CallerRunsPolicy(RejectionPolicy):\n    def on_rejected(self, task, pool):\n        task.run()          # executes on the submitting thread, not a worker\n\nclass DiscardOldestPolicy(RejectionPolicy):\n    def on_rejected(self, task, pool):\n        pool.queue.get_nowait()   # drop the oldest queued task\n        pool.queue.put_nowait(task)\n```\n\n`ThreadPool.submit` calls `self.rejection_policy.on_rejected(task, self)` only when `queue.put_nowait` raises `Full` — swapping policies means passing a different object at construction, not editing `submit` itself.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s09",
+      "order": 9,
+      "sectionTitle": "Compare: fixed-size pool vs dynamically-growing pool with a cap",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Real executors (Java's `ThreadPoolExecutor`) actually support both, controlled by core-size and max-size parameters.\n\n| | Fixed-size pool | Dynamically-growing pool (core + max, with a cap) |\n|---|---|---|\n| Worker count | Constant, set at creation | Grows from a core size toward a max under load, shrinks back when idle |\n| Resource use at idle | Wastes threads if load is usually low | Efficient — few threads when idle |\n| Behavior under a sudden burst | Extra tasks queue immediately | Can absorb some burst by spinning up workers before queuing kicks in |\n| Predictability | Very predictable resource footprint | Less predictable peak thread count, bounded only by max |\n\n**How to decide:** fixed-size fits steady, predictable load where resource footprint matters more than burst absorption (e.g. a fixed backend service). A dynamically-growing pool fits bursty load where you want to absorb short spikes without either over-provisioning idle threads or rejecting work immediately.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "thread-pool-and-task-scheduler-s09-q1"
+      ]
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s10",
+      "order": 10,
+      "sectionTitle": "Extending to a delayed/priority scheduler atop the same pool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Run this at time T\" or \"run the highest-priority task first\" doesn't require a different execution engine — it requires a different **queue**. Swap the plain FIFO `TaskQueue` for a priority queue (a min-heap ordered by priority, or by scheduled run time for delayed execution), and the workers' pull-execute-catch loop doesn't change at all.\n\nFor delayed execution specifically, a worker (or a dedicated scheduling thread) checks the heap's earliest entry; if its scheduled time hasn't arrived yet, nothing is pulled and the worker waits, rather than pulling and immediately re-queuing. This is exactly the same pattern as the LRU cache's Strategy-based eviction policy: swap one plugged-in component (here, the queue's ordering), leave the surrounding machinery untouched.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s11",
+      "order": 11,
+      "sectionTitle": "Concurrency: shutting down without dropping in-flight tasks or hanging forever",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A naive `shutdown()` that just kills every worker thread immediately risks dropping whatever task each worker is mid-execution on. A naive `shutdown()` that waits for the queue to fully drain risks hanging forever if tasks keep arriving faster than they complete.\n\nThe standard two-phase shutdown resolves both: first, **stop accepting new submissions** (any further `submit()` calls are rejected or queued into a separate rejection path), then **wait for currently in-flight and already-queued tasks to finish**, typically with a timeout after which remaining workers are interrupted. This mirrors the async logger's shutdown hook — refuse new work first, then drain what's already committed, accepting a bounded wait rather than either an unbounded one or an unsafe immediate kill.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "thread-pool-and-task-scheduler-s11-q1"
+      ]
+    },
+    {
+      "id": "thread-pool-and-task-scheduler-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: an unbounded queue that \"never rejects\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll make the task queue unbounded so `submit()` never fails — the pool should always accept work, that's simpler for callers.\"\n\n**Why it's wrong:** an unbounded queue doesn't eliminate the full-queue problem, it just delays and disguises it — instead of a clear, immediate rejection or block, the backlog grows silently until the process runs out of memory, which is a far worse failure mode than a caller occasionally having to handle a rejection. It also hides a real capacity problem (producers permanently outrunning workers) behind what looks like normal operation, right up until the crash.\n\n**Correct model:** always bound the queue, and make the RejectionPolicy an explicit, deliberate choice — reject, block, or caller-runs — so backpressure is visible and handled on purpose rather than deferred into an out-of-memory crash.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "thread-pool-and-task-scheduler-s12-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "id": "split-brain-and-quorum-loss",
+  "title": "Split-Brain & Quorum Loss",
+  "area": "system-design",
+  "group": "distributed-systems-core",
+  "order": 6,
+  "slug": "split-brain-and-quorum-loss",
+  "summary": "What happens when a partition leaves two sides each believing they're in charge, and how to recover without silently corrupting data.",
+  "level": "expert",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "split-brain-and-quorum-loss-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Give a cluster [distributed coordination](distributed-coordination) tools and it can usually elect one clear leader — right up until a network partition cuts it in half and *both* halves can no longer see each other well enough to tell who's actually still leader. Each side can end up convinced it's in charge.\n\nThis is **split-brain**, and it's one of the few distributed-systems failures that can silently corrupt data rather than just cause an outage — two \"leaders\" accepting conflicting writes is worse than no leader at all. This topic covers how quorum rules prevent it, and how to recover safely once it's already happened.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s02",
+      "order": 2,
+      "sectionTitle": "Split-brain: a partition that produces two \"leaders,\" each convinced it's the only one",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Split-brain** happens when a network partition splits a cluster into two (or more) groups that can each communicate internally but not with each other. If both groups independently conclude \"the old leader is unreachable, so I should elect a new one,\" you end up with two leaders simultaneously, each unaware the other exists.\n\nThe damage isn't hypothetical or contained: both leaders will happily accept writes, because from each one's local view, it's the only leader and everything looks normal. When the partition heals, the system is left holding two divergent histories for the same data with no principled way to say which is \"right.\"\n\nThis is specifically worse than a clean outage — an outage loses availability but not correctness; split-brain risks losing correctness while *appearing* fully available on both sides.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "split-brain-and-quorum-loss-s02-q1"
+      ]
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: a network partition splitting a cluster into a majority side and a minority side",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a five-node cluster diagram with a jagged line representing a network partition splitting it into a group of 3 nodes (labelled \"majority\") and a group of 2 nodes (labelled \"minority\"); the majority side keeps its leader crown icon and continues accepting writes; the minority side shows its nodes greyed out or with a \"read-only / stepped down\" label >>>\n\nA 5-node cluster split 3-2 by a partition isn't symmetric: the 3-node side holds a majority of the original cluster and can safely keep operating, because no other group of nodes elsewhere could also claim a majority at the same time. The 2-node side cannot form a majority alone, so it must refuse to elect a new leader or accept writes.\n\nThat asymmetry — only one side can ever hold a majority in any single partition — is exactly what quorum rules are built to exploit to prevent split-brain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s04",
+      "order": 4,
+      "sectionTitle": "Quorum loss: what a cluster should do when no side holds a majority",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Quorum loss** is the case a step worse than a clean majority/minority split: a partition (or enough simultaneous node failures) leaves *no* group holding a majority of the original cluster — for example, a 4-node cluster splitting exactly 2-2. Neither side can prove it's the legitimate majority, because neither is one.\n\nThe correct behavior here is uncomfortable but necessary: **both sides must refuse to accept writes**. Any side that kept operating without a provable majority could be operating alongside another side doing the same — the exact split-brain scenario quorum rules exist to prevent. Choosing availability over this rule is choosing the possibility of silent, undetectable data divergence.\n\nThis is why odd-sized clusters (3, 5, 7 nodes) are the norm for consensus-based systems — an even split is structurally impossible to divide into two majorities, but it's also impossible to have a *tied*, ambiguous split, since one side always strictly outnumbers the other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "split-brain-and-quorum-loss-s04-q1"
+      ]
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s05",
+      "order": 5,
+      "sectionTitle": "Fencing the losing side: cutting it off (e.g. STONITH) rather than trusting it to step down",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Detecting that you're on the minority side and deciding to step down isn't enough by itself — the exact partial-failure ambiguity from earlier topics applies here too: a node that *should* step down might be too slow, paused, or otherwise unable to actually execute that decision in time. Relying on a well-behaved minority to voluntarily go quiet is trusting the very thing that just failed.\n\n**STONITH** (\"Shoot The Other Node In The Head\") is the blunt but reliable answer: the majority side actively fences the minority off — cutting its network access, powering it down via an out-of-band management interface, or revoking its storage access — rather than waiting for it to self-quiet. The minority's cooperation is no longer required for safety.\n\nThe principle generalizes beyond literal power-cycling: any mechanism that makes the losing side's actions impossible (not just discouraged) qualifies — revoking its credentials to shared storage is just as valid as an actual power cut.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "split-brain-and-quorum-loss-s05-q1"
+      ]
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s06",
+      "order": 6,
+      "sectionTitle": "Compare: preventing split-brain with quorum rules vs. reconciling it after the fact",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Prevention (quorum rules) | Reconciliation (after the fact) |\n|---|---|---|\n| When it applies | Enforced continuously, before any divergent write is accepted | Only needed if prevention failed or wasn't in place (e.g. misconfigured quorum, multi-region active-active by design) |\n| Data divergence | Never happens — the minority is blocked from writing at all | Already happened — two histories exist and must be merged or one discarded |\n| Mechanism | Majority-only writes, fencing the minority | Conflict-resolution logic: vector clocks, CRDTs, last-writer-wins, manual review |\n| Cost | Some availability lost on the minority side during a partition | Engineering cost of a merge strategy, and sometimes real, unrecoverable data loss |\n\n**How to decide:** prevention is strictly preferable whenever your system can tolerate reduced availability on a partitioned minority — it avoids the problem entirely. Reconciliation is only appropriate when the system was deliberately designed for it (multi-region active-active with conflict resolution built in from the start), not as a rescue plan after an accidental split-brain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "split-brain-and-quorum-loss-s06-q1"
+      ]
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s07",
+      "order": 7,
+      "sectionTitle": "Safe recovery: rejoining a healed partition without triggering a second split",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a partition heals, the previously isolated minority can't just resume normal operation — it may hold stale state, or worse, writes it accepted during the split that the majority never saw. Safe recovery means the rejoining side **discards its own divergent state** and resynchronizes from the current majority, rather than attempting to merge or assert its version.\n\nConcretely: a rejoining node should first confirm the current cluster term or epoch (a number that only increases with each new leader), recognize its own term is stale, and pull a fresh copy of state rather than trying to reconcile in place. Consensus protocols like Raft build this in directly — a node with a stale term automatically defers to the current leader and truncates any uncommitted entries that never reached a majority.\n\nThe failure to avoid here is a rejoining node re-asserting itself as leader based on stale information, which would just trigger a second split rather than a clean recovery.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "split-brain-and-quorum-loss-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: \"fixing\" a split-brain by manually picking whichever side has more recent-looking data",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Both sides diverged during the split — I'll just keep whichever side's data looks more complete or has the later timestamp, and discard the other.\"\n\n**Why it's wrong:** \"more recent-looking\" is exactly the kind of judgment call that clock skew and partial visibility make unreliable — a side with a later wall-clock timestamp isn't necessarily the one that should have won, and picking based on surface appearance can silently discard writes that were legitimately accepted and even acknowledged to real users on the \"losing\" side.\n\n**Correct model:** recovery should follow a rule decided *before* the incident — a monotonic term/epoch number, a designated primary region, or an explicit conflict-resolution policy — not an ad hoc judgment call made under incident pressure. If no such rule exists, that's the actual gap to fix, not something to paper over by eyeballing which copy of the data \"looks right.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "split-brain-and-quorum-loss-s08-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "split-brain-and-quorum-loss",
+  "interviewQuestions": [
+    {
+      "id": "split-brain-and-quorum-loss-iq1",
+      "question": "Your cluster just healed from a partition — what do you check before it serves traffic again?",
+      "answerMarkdown": "I'd start by refusing to just \"turn everything back on\" — the previously isolated side may have stale state, or worse, writes it accepted that the majority never saw. My first check is the cluster term or epoch: I'd confirm every node agrees on the current term and that any node with a stale term defers to the current leader rather than asserting its own view.\n\nNext, I'd verify the rejoining side's uncommitted state is discarded, not merged — any writes it accepted that never reached a majority quorum have to be treated as never having happened, since keeping them risks silently reintroducing divergence. I'd confirm this against the source of truth (the majority side, or the designated primary), not by comparing timestamps or \"which side looks more complete.\"\n\nOnly once the rejoining side has resynced fresh state and confirmed it's on the current term would I let it rejoin the serving path. I'd close by flagging that if the incident revealed there was no clear rule for this ahead of time, that gap — not the individual incident — is the thing to actually fix.\n\n**Testing:** whether you understand that healing a partition safely means discarding divergent state, not merging it, and that this needs a rule decided in advance.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Safely rejoining a cluster after a partition heals"
+    },
+    {
+      "id": "split-brain-and-quorum-loss-iq2",
+      "question": "Why do consensus systems like etcd and ZooKeeper insist on an odd number of nodes?",
+      "answerMarkdown": "I'd explain it through what happens during a partition: with an odd-sized cluster, any way you split it, one side always has strictly more nodes than the other — there's no way to divide 5 into two equal halves. That guarantees at most one side can ever hold a majority at the same time, which is exactly the property quorum-based safety depends on to prevent split-brain.\n\nI'd contrast that with an even-sized cluster: a 4-node cluster can split exactly 2-2, and now *neither* side has a majority — that's quorum loss, and the correct (if painful) response is that both sides refuse to accept writes, since neither can prove it's the legitimate majority.\n\nI'd add the practical nuance: going from 4 to 5 nodes doesn't just avoid ties, it also tolerates the same number of failures (both tolerate 2 node failures) while adding meaningfully better split-resistance — which is why odd sizes are the default recommendation, not just tie-breaking folklore.\n\n**Testing:** whether you understand quorum math well enough to explain *why* odd cluster sizes matter, not just that they're a convention.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Why odd-sized clusters avoid quorum ties"
+    },
+    {
+      "id": "split-brain-and-quorum-loss-iq3",
+      "question": "A postmortem reveals two application instances both believed they were the primary database writer for several minutes. How do you determine what actually needs fixing?",
+      "answerMarkdown": "I'd first establish exactly how the second instance became convinced it was primary — usually either a missing or misconfigured quorum check (it promoted itself without confirming it held a majority), or a lock/lease that expired during a pause without a fencing mechanism to stop the original holder from continuing to act on stale state.\n\nFrom there, I'd check whether the resource actually written to (the database, the shared file) had any enforcement of its own — a fencing token check, a generation number — or whether it silently accepted writes from whoever showed up, which is the deeper structural gap regardless of what triggered this specific incident.\n\nI'd close by naming the two-layer fix: prevention (make sure leader election genuinely requires a majority, and that lock validity is enforced by the resource via fencing, not trusted from the client) and detection (alerting that would have caught two writers active simultaneously sooner than a postmortem).\n\n**Testing:** whether you can trace a split-brain incident to its actual root cause — usually a missing quorum check or missing fencing — rather than treating it as a one-off fluke.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Root-causing a real split-brain incident"
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+{
+  "id": "notification-system",
+  "title": "Notification System",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 4,
+  "slug": "notification-system",
+  "summary": "A multi-channel fan-out prompt built on Observer plus per-user strategy — the class-level design, not the HLD-scale fan-out pipeline of the same name.",
+  "level": "intermediate",
+  "slideCount": 14,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "notification-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is the **class-level** notification system prompt — design the objects for sending one event across email, SMS, push, and WhatsApp with user preferences and delivery tracking. It is a different question from the HLD \"design a notification service for a billion users,\" which is about queues, fan-out infra, and horizontal scale, not class design.\n\nIf an interviewer says \"design a notification system\" without qualifying it, ask which one they mean — the answer here is Observer plus per-user Strategy, cleanly separating \"an event happened\" from \"how each channel reacts to it.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: channels, templates, preferences, delivery tracking",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The contract: support **multiple channels** (email, SMS, push, WhatsApp), render each via a **template**, respect **per-user preferences** (which channels, quiet hours), and **track delivery** per attempt rather than firing and forgetting.\n\n**Non-goals** worth naming immediately: this design does not need to handle the HLD-scale fan-out pipeline — no discussion of a message broker's throughput, no multi-region delivery infrastructure. Those are the HLD version of this problem; here the unit of design is a single `Notification` object and how it reaches one user across several channels.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Notification, Channel, Template, UserPreference, DeliveryStatus",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Five classes. A **`Notification`** is the event to deliver — its payload, its target user, its type (e.g. \"order shipped\"). A **`Channel`** is a destination-specific sender (`EmailChannel`, `SmsChannel`) that knows how to actually deliver a rendered message. A **`Template`** renders a `Notification`'s data into channel-appropriate content — an email needs a subject and HTML body, an SMS needs a short plain string. **`UserPreference`** holds which channels a user allows and any quiet-hours window. **`DeliveryStatus`** tracks the outcome of one attempt on one channel.\n\nThe design principle underneath all five: `Notification` never knows *how* to reach a user on any specific channel — that knowledge lives entirely in `Channel` and `Template` implementations.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: an event fanning out through a dispatcher",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a \"Notification event\" box on the left, arrow into a \"Dispatcher\" box, which fans out with three arrows into \"EmailChannel\", \"SmsChannel\", and \"PushChannel\" boxes on the right, each with a small \"Template\" box feeding into it; a \"UserPreference\" box above the dispatcher with a dashed arrow indicating it filters which of the three arrows actually fire >>>\n\nOne event enters the dispatcher once; `UserPreference` determines which channels actually receive it, and each channel that does gets its own `Template` render before sending. Channels operate independently after the fan-out point — nothing about `EmailChannel` sending or failing affects `SmsChannel`.\n\nThis independence is what makes per-channel retry and failure tracking (later slides) straightforward instead of tangled.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s05",
+      "order": 5,
+      "sectionTitle": "Observer pattern: the event is the subject, channels are independent observers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The fan-out is a textbook **Observer pattern**: the notification event is the **subject**, and each registered channel sender is an **observer** that independently decides whether and how to act when notified, without the subject knowing any observer's internals.\n\nConcretely, the dispatcher calls `notify(event)` on every registered channel; each channel checks the user's preference for itself, renders its own template, and sends — or does nothing, if the user opted out of that channel. The subject (the event) never branches on \"if channel is email, do X; if SMS, do Y\" — that per-channel logic lives entirely inside each observer, which is exactly what keeps adding a new channel from touching existing code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "notification-system-s05-q1"
+      ]
+    },
+    {
+      "id": "notification-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: adding WhatsApp without touching the dispatcher",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A new channel is a new class implementing the same interface, registered once — the dispatcher's code never changes.\n\n```python\nclass ChannelSender(ABC):\n    @abstractmethod\n    def send(self, notification, user) -> DeliveryStatus: ...\n\nclass WhatsAppChannel(ChannelSender):\n    def __init__(self, client, template_renderer):\n        self.client = client\n        self.template_renderer = template_renderer\n\n    def send(self, notification, user) -> DeliveryStatus:\n        if not user.preferences.allows(\"whatsapp\"):\n            return DeliveryStatus.SKIPPED\n        message = self.template_renderer.render(notification, \"whatsapp\")\n        return self.client.send_message(user.phone, message)\n\ndispatcher.register(WhatsAppChannel(whatsapp_client, renderer))\n```\n\n`Dispatcher.dispatch()` only ever loops over registered `ChannelSender`s calling `send()` — it has no `WhatsAppChannel`-specific code path, satisfying open/closed: open for a new channel, closed to modifying the dispatcher.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s07",
+      "order": 7,
+      "sectionTitle": "Strategy for per-user channel preference and quiet hours",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Preference resolution is its own **Strategy**: given a notification and a user, decide which channels to actually attempt and whether quiet hours block delivery right now — resolved fresh per notification, not hardcoded per channel.\n\nThis matters because the same channel can behave differently for different notification types: a user might allow push for \"order shipped\" but block push for \"promotional offer,\" and might have quiet hours that suppress non-urgent notifications at night while still allowing a security alert through. Putting this logic in a dedicated `PreferenceResolver` — rather than scattering `if user.allows_email and not is_quiet_hours()` checks across each channel — keeps the policy in one place that both the dispatcher and any channel can consult consistently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s08",
+      "order": 8,
+      "sectionTitle": "The hard part: delivery isn't fire-and-forget",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once you accept that email, SMS, and push each call an external provider, you have to accept that each can **fail independently** — an email provider timeout doesn't mean the SMS provider is down too. That means one `Notification.send()` call doesn't produce one outcome; it fans out into **N independently-tracked delivery attempts**, one per (notification, channel) pair, each needing its own retry and backoff.\n\nThe design consequence: `DeliveryStatus` can't be a single field on `Notification` — it has to be a collection keyed by channel, because \"delivered\" for email and \"failed, retrying\" for SMS are simultaneously true states of the same notification.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "notification-system-s08-q1"
+      ]
+    },
+    {
+      "id": "notification-system-s09",
+      "order": 9,
+      "sectionTitle": "Code: per-channel retry with exponential backoff",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Each `(notification, channel)` pair gets its own `DeliveryAttempt`, so a failing SMS never blocks or is blocked by a successful email.\n\n```python\nclass DeliveryAttempt:\n    def __init__(self, notification_id, channel, max_retries=3):\n        self.notification_id = notification_id\n        self.channel = channel\n        self.attempt_count = 0\n        self.max_retries = max_retries\n        self.status = DeliveryStatus.PENDING\n\n    def retry(self):\n        if self.attempt_count >= self.max_retries:\n            self.status = DeliveryStatus.DEAD_LETTER\n            return\n        delay = (2 ** self.attempt_count)     # exponential backoff, seconds\n        schedule_retry(self, after=delay)\n        self.attempt_count += 1\n```\n\nBecause each pair tracks its own `attempt_count`, a channel that keeps failing lands in `DEAD_LETTER` on its own schedule, without pausing delivery attempts on any other channel for the same notification.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: per-channel delivery state, pending to delivered or dead-letter",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a state machine diagram with boxes \"pending\" -> \"sent\" -> \"delivered\", and a branch from \"sent\" to \"failed\", with a looping arrow from \"failed\" back to \"pending\" labelled \"retry (up to cap)\", and a final arrow from \"failed\" to \"dead-letter\" labelled \"retries exhausted\" >>>\n\nEvery (notification, channel) pair moves through this state machine independently. \"Sent\" means handed off to the provider; \"delivered\" means the provider confirmed receipt — the gap between the two is exactly where failures like a bounced email or an undelivered push get caught.\n\nA failed attempt loops back to retry up to the configured cap, then lands permanently in dead-letter rather than retrying forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s11",
+      "order": 11,
+      "sectionTitle": "Idempotency, deep-dive: a retry must not double-notify the user",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A retry exists to handle the case where the first attempt's *outcome* was uncertain — but \"uncertain\" includes \"actually succeeded, we just didn't get the confirmation in time.\" Retrying blindly in that case sends the user the same notification twice.\n\nThe fix is **deduplication on a stable key**: a `(notification_id, channel)` pair, checked before sending. If a retry fires after a slow-but-successful first attempt, the dedupe check finds that key already marked sent and turns the retry into a no-op instead of a second message. This requires the dedupe check and the actual send to be treated together carefully — recording \"sent\" only after a confirmed handoff to the provider, so a crash between sending and recording doesn't itself cause a duplicate on the next retry.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "notification-system-s11-q1"
+      ]
+    },
+    {
+      "id": "notification-system-s12",
+      "order": 12,
+      "sectionTitle": "Compare: push-based fan-out vs queue-based fan-out",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "How the dispatcher hands work to channels changes what a slow channel costs the rest of the system.\n\n| | Push-based (synchronous) | Queue-based (async) |\n|---|---|---|\n| Dispatcher calls channel | Directly, waits for the result | Enqueues a per-channel job, returns immediately |\n| Slow channel's blast radius | Blocks the caller until that channel responds | Isolated — a slow channel's queue backs up, others are unaffected |\n| Retry | Must be implemented inline in the call | Natural fit — a failed job re-enters the queue |\n| Simplicity | Simpler to trace end-to-end | More moving parts (a queue, workers per channel) |\n\n**How to decide:** push-based is fine for a low-volume internal tool where synchronous failures are acceptable to see immediately. Queue-based is the right default once any channel can be slow or unreliable — which, for email/SMS/push providers, is always.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "notification-system-s12-q1"
+      ]
+    },
+    {
+      "id": "notification-system-s13",
+      "order": 13,
+      "sectionTitle": "Pitfall: formatting per channel with if/else instead of delegating",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"`Notification` can just check `if channel == \"email\": format_html() elif channel == \"sms\": format_short_text()` — it's all in one place, easy to follow.\"\n\n**Why it's wrong:** every new channel means editing `Notification` again, and the class accumulates formatting knowledge for every channel that ever existed, violating the same open/closed principle the `ChannelSender` interface was built to satisfy. It also means `Notification` — which should just represent \"an event happened\" — now knows HTML structure, SMS length limits, and WhatsApp formatting rules all at once.\n\n**Correct model:** each `Channel`'s own `Template` renderer owns its formatting rules. `Notification` hands its data to whichever channel is sending it, and that channel asks its `Template` to render — `Notification` never branches on channel type.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "notification-system-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: treating \"sent\" and \"delivered\" as the same status",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Once we've handed the message to the provider's API and gotten a 200 response, the notification is delivered.\"\n\n**Why it's wrong:** a 200 from the provider means \"accepted for delivery,\" not \"the user received it.\" An email can still bounce, a push token can be stale and silently drop the message, an SMS can fail carrier-side — all after your system already recorded success. Collapsing \"sent\" and \"delivered\" into one status hides these real failures from anything downstream that depends on delivery outcome, including preference logic that might otherwise fall back to another channel.\n\n**Correct model:** treat \"sent\" (handed off) and \"delivered\" (provider-confirmed receipt, via webhook or callback where available) as distinct states in the delivery state machine, and let genuinely undelivered notifications trigger a fallback channel or a retry rather than being silently marked done.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "notification-system-s14-q1"
+      ]
+    }
+  ]
+}

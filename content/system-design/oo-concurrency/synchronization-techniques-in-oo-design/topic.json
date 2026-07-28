@@ -1,0 +1,139 @@
+{
+  "id": "synchronization-techniques-in-oo-design",
+  "title": "Synchronization Techniques in OO Design",
+  "area": "system-design",
+  "group": "oo-concurrency",
+  "order": 3,
+  "slug": "synchronization-techniques-in-oo-design",
+  "summary": "Locks, lock granularity, and lock-free alternatives at the object level, and the two failure modes -- deadlock and over-synchronization -- that come with them.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "synchronization-techniques-in-oo-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Once you can name a race condition, the next question is how to actually stop it. **Synchronization** means coordinating access to shared state so only one thread -- or a controlled, safe set of threads -- touches it at a time.\n\nThe tools range from coarse (lock the whole object) to precise (lock-free atomic operations), and each trades safety against throughput differently. Think of it like a single-lane bridge: you can put one gate at the very start (simple, but everyone queues), or several gates spread along the bridge so independent traffic doesn't wait on each other (faster, but more gates to get wrong). This topic covers locks, granularity, and the lock-free alternative.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s02",
+      "order": 2,
+      "sectionTitle": "Locks at the object level: methods vs blocks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **lock** (or mutex) lets only one thread execute a protected section at a time; any other thread that tries to enter blocks until the lock is released. In Java, marking an entire method `synchronized` locks on the object instance (`this`) for the whole method body -- simple, but it protects everything in the method, even work that doesn't touch shared state.\n\nA `synchronized` **block** locks the same way but around just the statements you name, using an explicit lock object: `synchronized (lock) { total++; }`. This is the finer-grained cousin of the method-level version -- same mechanism, smaller scope.\n\nThe general pattern (not Java-specific) is the same everywhere: acquire, do the minimum necessary work, release. The size of \"the minimum necessary work\" is the actual design decision -- the language keyword is just syntax for it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: two threads contending for one lock",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two thread lanes (Thread A, Thread B) both trying to enter a box labeled 'critical section' guarded by a single lock icon; Thread A is inside with the lock held, Thread B is shown waiting/blocked outside with a queue icon, then Thread A releases and Thread B enters >>>\n\nThread A acquires the lock and enters the critical section; Thread B arrives a moment later, finds the lock held, and blocks -- it does no useful work until Thread A releases. Only then does Thread B acquire the lock and proceed.\n\nThis is the direct cost of locking: correctness in exchange for one thread's full stop while another thread works. With two threads and a tiny critical section this cost is negligible; with a hundred threads all contending for the same lock, that queue becomes the system's actual bottleneck.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s04",
+      "order": 4,
+      "sectionTitle": "Lock granularity: one lock vs many smaller locks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Lock granularity** is how much state a single lock protects. A **coarse-grained** lock -- one lock for the whole object -- is simple to reason about: only one thread can be anywhere inside the object at a time, so there's no way to get the boundaries wrong.\n\n**Fine-grained** locking splits the object's state into independent regions, each with its own lock -- for example, a hash map segmented into 16 buckets, each with its own lock, so two threads updating different buckets never block each other. `ConcurrentHashMap`'s internal design historically worked this way (segment locks, later per-bin techniques).\n\nThe trade-off is real: finer granularity increases throughput under contention but multiplies the number of places you can get the locking wrong -- miss a lock on one field, or lock two regions in inconsistent order, and you reintroduce either races or deadlocks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "synchronization-techniques-in-oo-design-s04-q1"
+      ]
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s05",
+      "order": 5,
+      "sectionTitle": "Code: a cache using a read-write lock",
+      "subTitle": "Java example",
+      "type": "code",
+      "markdown": "```java\nclass Cache<K, V> {\n    private final Map<K, V> map = new HashMap<>();\n    private final ReadWriteLock lock = new ReentrantReadWriteLock();\n\n    V get(K key) {\n        lock.readLock().lock();\n        try { return map.get(key); }\n        finally { lock.readLock().unlock(); }\n    }\n\n    void put(K key, V value) {\n        lock.writeLock().lock();\n        try { map.put(key, value); }\n        finally { lock.writeLock().unlock(); }\n    }\n}\n```\n\nThis is Java's `ReentrantReadWriteLock`, but the underlying idea -- a **read-write lock** -- generalizes: any number of readers can hold the read lock simultaneously, since concurrent reads can't corrupt anything, but a writer needs exclusive access, blocking every reader and writer until it's done.\n\nFor a cache that's read far more often than written -- the common case -- this beats a plain single lock, where every read blocks every other read for no reason.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s06",
+      "order": 6,
+      "sectionTitle": "Atomic operations: a lock-free alternative for simple state",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For simple state -- a single counter, a single reference -- many platforms offer **atomic** operations that update a value in one indivisible hardware step, with no lock at all. Java's `AtomicInteger.incrementAndGet()` is the canonical example: it performs read-modify-write as a single atomic unit, so the lost-update race from earlier in this group can't happen.\n\nUnder the hood these typically use **compare-and-swap (CAS)**: the hardware attempts \"if the value is still what I last read, swap in my new value\" as one step; if another thread changed it first, the operation retries. No thread ever blocks waiting for a lock -- it just retries until its swap succeeds.\n\nThis only works for state simple enough to update in one atomic step. The moment you need to update two related fields together consistently (say, a balance and a transaction count), a single atomic variable can't express that -- you're back to needing a lock, or a more elaborate lock-free structure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "synchronization-techniques-in-oo-design-s06-q1"
+      ]
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s07",
+      "order": 7,
+      "sectionTitle": "Compare: coarse locking vs fine-grained locking vs lock-free",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Coarse-grained lock | Fine-grained locks | Lock-free (atomics/CAS) |\n|---|---|---|---|\n| Complexity to implement | Low | Medium-high (ordering, deadlock risk) | Medium (retry logic) but no lock ordering |\n| Throughput under contention | Low -- full serialization | Higher -- independent regions don't block each other | Highest for simple state -- no blocking at all |\n| Risk of deadlock | None (single lock) | Real, if locks are acquired in inconsistent order | None -- nothing ever blocks |\n| Best fit | Low-contention objects, simplicity matters most | Large shared structures under real contention | Single counters/references under heavy contention |\n\n**How to decide:** start coarse-grained -- it's correct by construction. Only move to fine-grained or lock-free once profiling shows the coarse lock is actually the bottleneck; each step adds real complexity you should only pay for when the throughput problem is proven, not assumed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "synchronization-techniques-in-oo-design-s07-q1"
+      ]
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: deadlock from inconsistent lock ordering",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"As long as every method that touches shared state acquires a lock first, the code is deadlock-free.\"\n\n**Why it's wrong:** deadlock doesn't require a missing lock -- it requires two threads acquiring the *same two locks in opposite order*. Classic case: `transferMoney(accountA, accountB)` locks A then B; a concurrent `transferMoney(accountB, accountA)` locks B then A. If both threads grab their first lock at nearly the same instant, Thread 1 holds A and waits for B, Thread 2 holds B and waits for A -- neither ever proceeds.\n\n**Correct model:** every lock is acquired correctly in isolation here; the bug is purely about *ordering* across multiple locks. The fix is a consistent global ordering -- for example, always lock the account with the lower ID first, regardless of which account was named first in the call -- so two threads can never form that circular wait.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "synchronization-techniques-in-oo-design-s08-q1"
+      ]
+    },
+    {
+      "id": "synchronization-techniques-in-oo-design-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: over-synchronizing unrelated work",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This method touches shared state somewhere in the middle, so I'll just synchronize the whole method to be safe.\"\n\n**Why it's wrong:** synchronizing far more code than the actual critical section forces threads to queue for work that never needed to be serial -- a slow network call or a heavy computation sitting inside a `synchronized` block serializes every thread that calls the method, even though only three lines actually touch shared state.\n\n**Correct model:** find the true minimal critical section -- usually just the read-modify-write on shared fields -- and synchronize only that. Everything else (validation, formatting, I/O, computing values that don't touch shared state) should happen outside the lock, so threads only wait for the genuinely unsafe part.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "id": "lld-url-shortener",
+  "title": "URL Shortener — Class Design",
+  "area": "system-design",
+  "group": "lld-cases-business",
+  "order": 7,
+  "slug": "lld-url-shortener",
+  "summary": "The encoding-scheme trade-off and the encoder/repository class boundary — the class-level version of the HLD scaling question, built around a swappable Encoder abstraction.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "lld-url-shortener-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The HLD version of \"design a URL shortener\" is about scale: how many redirects per second, how to shard the datastore, how to keep IDs unique across machines. This class-level version is a different, narrower question: what's the actual object model — how does an `Encoder` and a `Repository` divide responsibility so the encoding scheme can change without touching storage, or vice versa.\n\nIt's a good intermediate case study precisely because the entities are small, but the one real decision — how to turn a long URL into a short code — has several genuinely different correct answers with different trade-offs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-url-shortener-s02",
+      "order": 2,
+      "sectionTitle": "Requirements and non-goals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** shortening a long URL into a short code, redirecting a short code back to its long URL, optional custom aliases, and optional per-link expiry.\n\n**Out of scope:** distributed unique-ID generation at scale (multiple machines generating non-colliding IDs concurrently, without a single database bottleneck) — that's the HLD question's job. This class design assumes a single logical ID source and focuses on the object boundaries around encoding and storage.\n\nBeing explicit about that boundary is exactly what the interviewer wants to hear: it shows you know this is the class-design half of a two-part problem, not the whole thing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-url-shortener-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: UrlMapping, Encoder, Repository, ExpiryPolicy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**UrlMapping** is the record: a short code, the original long URL, a creation timestamp, and an optional expiry. **Encoder** is an interface with one real job — turn some input (a counter value, a hash, nothing at all) into a short code string. **Repository** persists and looks up `UrlMapping`s by their short code, with no opinion on how codes are generated. **ExpiryPolicy** decides whether a given `UrlMapping` is still valid.\n\nThe interview-relevant design choice is that `Encoder` and `Repository` don't know about each other's internals — a `ShortenerService` composes them, but swapping the encoding scheme never means touching how mappings are stored, and vice versa.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "lld-url-shortener-s03-q1"
+      ]
+    },
+    {
+      "id": "lld-url-shortener-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: encoding strategy separated from storage",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram showing ShortenerService composing an Encoder interface (with concrete Base62CounterEncoder and HashEncoder implementations) and a Repository interface, with UrlMapping as the data both operate on >>>\n\n`ShortenerService` depends on the `Encoder` and `Repository` **interfaces**, not on any concrete implementation. A `Base62CounterEncoder` and a `HashEncoder` are two interchangeable `Encoder`s; an in-memory map and a real database are two interchangeable `Repository`s.\n\nThis boundary is what makes the encoding-scheme trade-off (next few slides) a real design decision instead of a foregone conclusion baked into the storage layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-url-shortener-s05",
+      "order": 5,
+      "sectionTitle": "Code: ShortenerService composes an Encoder and a Repository",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass ShortenerService {\n    Encoder encoder;\n    Repository repository;\n\n    String shorten(String longUrl) {\n        String code = encoder.generate(longUrl);\n        repository.save(new UrlMapping(code, longUrl, Instant.now(), null));\n        return code;\n    }\n\n    String resolve(String code) {\n        UrlMapping mapping = repository.findByCode(code)\n            .orElseThrow(NotFoundException::new);\n        if (mapping.isExpired())\n            throw new ExpiredLinkException();\n        return mapping.longUrl;\n    }\n}\n```\n\nNeither `shorten` nor `resolve` cares which `Encoder` or `Repository` implementation is wired in — the entire encoding-scheme decision on the next slides only changes what's behind the `Encoder` interface, never this class.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-url-shortener-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: base62-counter vs hash-with-collisions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Base62 counter**: maintain a global incrementing counter, encode its value in base62 (`[a-zA-Z0-9]`) to get a short code. It's simple and has zero collisions by construction — every counter value is unique — but it needs a single, coordinated counter source, which is exactly the distributed-ID problem the HLD version tackles at scale.\n\n**Hash-of-URL**: hash the long URL (MD5/SHA) and truncate to a few characters. It needs no shared counter and the same URL always maps to the same code, which can be a feature — but truncating a hash means **collisions are possible** (two different URLs truncating to the same short code), so the design needs an explicit collision-handling path, unlike the counter approach.\n\nNeither is \"wrong\" — the trade-off is coordination-free-but-needs-collision-handling versus collision-free-but-needs-coordination.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "lld-url-shortener-s06-q1"
+      ]
+    },
+    {
+      "id": "lld-url-shortener-s07",
+      "order": 7,
+      "sectionTitle": "Compare: base62 counter vs hash truncation vs random-then-check",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Base62 counter | Hash truncation (MD5/SHA) | Random-then-check |\n|---|---|---|\n| Collisions possible? | No — every counter value is unique | Yes — different URLs can truncate to the same code | Yes — a random code can already exist |\n| Needs coordination? | Yes — one shared counter source | No | No |\n| Same URL twice | Produces a new code each time (or needs a lookup-first check) | Produces the same code every time | Produces a new code each time |\n| Collision handling needed | None | Required — retry with a longer hash or a salt | Required — retry with a new random code |\n\n**How to decide:** pick the counter when you can afford the coordination cost (or already have the HLD's distributed-ID solution available) for guaranteed uniqueness; pick hash or random when avoiding shared state matters more, and you're willing to add a bounded collision-retry loop.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "lld-url-shortener-s07-q1"
+      ]
+    },
+    {
+      "id": "lld-url-shortener-s08",
+      "order": 8,
+      "sectionTitle": "Code: a bounded collision-retry loop for hash-based encoding",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass HashEncoder implements Encoder {\n    static final int MAX_ATTEMPTS = 5;\n\n    String generate(String longUrl) {\n        String salt = \"\";\n        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {\n            String code = truncate(sha256(longUrl + salt), 7);\n            if (!repository.existsByCode(code)) {\n                return code;\n            }\n            salt = String.valueOf(attempt);  // perturb the hash input and retry\n        }\n        throw new EncodingExhaustedException(longUrl);\n    }\n}\n```\n\nThe `MAX_ATTEMPTS` bound matters as much as the retry itself — an unbounded retry loop against a persistently colliding namespace (or a bug) could spin forever. Five attempts with a growing salt is enough that a real collision run is astronomically unlikely; hitting the bound signals a deeper problem worth surfacing, not silently looping.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-url-shortener-s09",
+      "order": 9,
+      "sectionTitle": "Extending to custom aliases and expiry without changing the contract",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A custom alias (\"shorten this to `/promo2024`\") and a per-link expiry both need to slot into the existing `shorten`/`resolve` contract, not replace it. For a custom alias, `ShortenerService` skips calling `Encoder.generate()` entirely and uses the caller-supplied code directly — after checking the `Repository` for a collision, since a human-chosen alias can just as easily already exist as a generated one.\n\nExpiry is even simpler: it's already a field on `UrlMapping`, checked once in `resolve()` (slide 5). Adding expiry never touched `Encoder` or `Repository` at all — it lived entirely in the data model and one `if` in the read path from the start.\n\nBoth extensions land without modifying `Encoder` or `Repository`'s interfaces, which is the point of keeping `shorten`/`resolve` as the stable contract everything else builds around.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-url-shortener-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: exposing the internal counter or ID directly",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just return the raw counter value (or database auto-increment ID) as the short code — base62-encoding it is an unnecessary extra step.\"\n\n**Why it's wrong:** it locks the system into exactly one encoding scheme forever, since the short code *is* the internal ID, not a representation of it. It also leaks information — a raw sequential ID tells anyone watching how many URLs have been shortened total, and lets them guess or enumerate other users' links by trying nearby numbers.\n\n**Correct model:** always generate the short code through the `Encoder` abstraction, even for the simplest counter-based scheme. The one extra encode/decode step is what keeps the internal ID private and the encoding scheme swappable later without changing every stored short code's meaning.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

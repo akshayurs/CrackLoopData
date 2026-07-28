@@ -1,0 +1,126 @@
+{
+  "id": "refactoring-legacy-into-patterns",
+  "title": "Refactoring Legacy Code into Patterns Safely",
+  "area": "system-design",
+  "group": "lld-in-practice",
+  "order": 5,
+  "slug": "refactoring-legacy-into-patterns",
+  "summary": "Introducing structure into an untested, tangled codebase without breaking it in the process — the actual mechanics of a safe refactor.",
+  "level": "expert",
+  "slideCount": 8,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "refactoring-legacy-into-patterns-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A 2,000-line class with no tests isn't a design problem yet — it's a safety-net problem. Any change you make could be silently correct or silently catastrophic, and without tests you have no way to tell which until it's in production. Refactoring this kind of code isn't about knowing the right pattern to apply; it's about the discipline that lets you apply it without breaking something you can't see.\n\nThink of it like defusing a device you didn't wire: you don't start cutting wires based on what looks reasonable — you first figure out, safely, what each one currently does.\n\nThis topic covers characterization tests, the seam technique for inserting a test double without a redesign, and how to sequence a refactor so every step stays reversible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s02",
+      "order": 2,
+      "sectionTitle": "Why you can't refactor what you can't verify: the safety-net problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Refactoring means changing a system's internal structure **without changing its observable behavior**. That definition has a hard requirement baked in: you need a way to know whether behavior actually stayed the same. Without tests, you have no such signal — you're changing code and hoping, not refactoring and verifying.\n\nThis is the **safety-net problem**: in an untested codebase, every \"obviously safe\" cleanup — renaming a method, extracting a helper, reordering two lines — carries the same risk as a real behavior change, because you can't distinguish \"definitely fine\" from \"looks fine.\" The bugs that bite are rarely in the change you were focused on; they're in the incidental side effect nobody was watching for.\n\nThe fix isn't to refactor more carefully by eye — it's to build the missing safety net first, before touching the design at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s03",
+      "order": 3,
+      "sectionTitle": "Characterization tests: pinning down current behavior, bugs included, before changing anything",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **characterization test** doesn't test what the code *should* do — it pins down what the code *currently* does, bugs included. You call the method with representative inputs, record whatever it actually outputs today, and assert on that recorded output. If a method has a bug where negative quantities silently become zero, the characterization test asserts that exact behavior, not the fix.\n\nThis feels backwards the first time you do it — you're writing tests that encode a bug on purpose. The point isn't correctness, it's a **tripwire**: once the characterization tests pass, any refactor that changes behavior, intentionally or not, breaks a test immediately, giving you the safety net the code never had.\n\nOnce refactoring is done and you understand the code, you fix the bug deliberately, in its own commit, and update that one test to match — never as a side effect of a structural change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "refactoring-legacy-into-patterns-s03-q1"
+      ]
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: strangling a god class — extracting one responsibility at a time behind a seam",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a large box labelled GodClass with many internal methods; over three sequential panels, one responsibility at a time is extracted behind a seam into a small new class, while the GodClass shrinks and keeps delegating to the extracted classes instead of doing the work itself >>>\n\n**Strangling** a god class means extracting one responsibility at a time into its own class, while the original class keeps working the whole time — it delegates to the new class instead of doing that piece of work itself. The class never stops functioning mid-refactor; it just does less of the actual work with each extraction.\n\nAfter enough extractions, the original class becomes a thin coordinator over several focused classes — the same technique used for strangling a legacy monolith into services, just at class scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s05",
+      "order": 5,
+      "sectionTitle": "The seam technique: finding a point to insert a test double without a redesign",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **seam** is a point in the code where you can alter behavior without editing the code at that point — the insertion point for a test double in code that wasn't written with testing in mind. In a language with virtual methods, overriding one method in a test subclass is a seam; a plain global function call is not, unless the language lets you intercept it.\n\nThe technique: find the one call inside the untested method that reaches out to something slow, external, or nondeterministic — a database call, a network request, the system clock — and identify the smallest possible seam that lets a test substitute something safe there, without redesigning the class around dependency injection first.\n\nA seam is a temporary scaffold, not the end state — once characterization tests are in place and you understand the code, later work can turn that seam into a proper injected dependency.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "refactoring-legacy-into-patterns-s05-q1"
+      ]
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s06",
+      "order": 6,
+      "sectionTitle": "Code: extracting an interface from a god class's most-used method, incrementally",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The god class has one heavily-used method, `calculateInvoiceTotal`, buried among forty others:\n\n```typescript\nclass BillingGodClass {\n  calculateInvoiceTotal(invoice: Invoice): number {\n    // 80 lines of untested logic, unchanged for now\n  }\n  // ...39 other methods\n}\n```\n\nStep one: introduce an interface capturing just this method, and make the god class implement it — no behavior changes yet:\n\n```typescript\ninterface InvoiceCalculator {\n  calculateInvoiceTotal(invoice: Invoice): number;\n}\n\nclass BillingGodClass implements InvoiceCalculator {\n  calculateInvoiceTotal(invoice: Invoice): number {\n    // identical body, still unchanged\n  }\n}\n```\n\nCallers can now depend on `InvoiceCalculator` instead of the god class directly. That single change creates a seam: a future extraction of the real logic into its own class can happen behind this interface, one caller at a time, without ever breaking one in the middle of the migration.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "refactoring-legacy-into-patterns-s06-q1"
+      ]
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s07",
+      "order": 7,
+      "sectionTitle": "Sequencing a refactor: smallest safe step, verify, commit, repeat",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every step in a legacy refactor should be small enough to verify in isolation: **make the smallest safe change, run the tests, commit, repeat.** \"Smallest safe change\" means one thing — extract one method, rename one class, introduce one interface — not a batch of related-seeming changes landed together.\n\nThe discipline pays off when something breaks: with small, verified, committed steps, you know exactly which change caused the failing test, and reverting it costs one commit. Batch ten changes together and a failure could be any of them, with no clean way to revert just the guilty one.\n\nThis feels slow compared to redesigning the class in one sitting — it is slower, in wall-clock time, for the first refactor. It's dramatically faster in total, because it doesn't produce the debugging session that a big, unverified batch eventually causes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "refactoring-legacy-into-patterns-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a \"big bang\" rewrite that hides regressions until launch",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This class is too tangled to refactor incrementally — let's rewrite it from scratch and swap it in when it's done.\"\n\n**Why it's wrong:** a rewrite has no working version to compare against along the way — you're building a second implementation in the dark, with no characterization tests verifying it matches the original's actual behavior, bugs and edge cases included, and no way to catch a missed edge case until the swap happens and it's already live. The old system also doesn't stand still while you rewrite — real bugs get fixed and real features get added to it, so the rewrite is chasing a moving target.\n\n**Correct model:** strangle the class incrementally behind characterization tests instead — extract and verify one responsibility at a time, with the old code still running throughout, so every step is independently checkable and a regression is caught at the step that caused it, not at launch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "refactoring-legacy-into-patterns-s08-q1"
+      ]
+    }
+  ]
+}

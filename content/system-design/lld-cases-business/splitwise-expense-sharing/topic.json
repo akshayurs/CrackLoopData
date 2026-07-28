@@ -1,0 +1,247 @@
+{
+  "id": "splitwise-expense-sharing",
+  "title": "Splitwise (Expense Sharing)",
+  "area": "system-design",
+  "group": "lld-cases-business",
+  "order": 2,
+  "slug": "splitwise-expense-sharing",
+  "summary": "A ledger-modeling case study built around split strategies and a debt-simplification algorithm, with real money-math pitfalls around rounding and concurrency.",
+  "level": "advanced",
+  "slideCount": 17,
+  "estReadMinutes": 15,
+  "slides": [
+    {
+      "id": "splitwise-expense-sharing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Splitwise is a favorite ledger-modeling case study because the CRUD surface — add an expense, view a balance — is trivial, but two genuinely hard problems hide behind it: splitting money into parts that sum back exactly, and collapsing a tangle of pairwise debts into the fewest possible settling payments.\n\nThe entities are easy. The graph algorithm and the money arithmetic are what actually separates a working design from a broken one, and they're where most candidates get quietly wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s02",
+      "order": 2,
+      "sectionTitle": "Requirements and non-goals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** groups of users, expenses with a payer and participants, four split types (equal, exact amount, percentage, shares), a running balance per user, and settle-up recording.\n\n**Out of scope:** actually moving money — no card networks, no bank transfers. Splitwise the app tracks who owes whom; a separate payment system (see the payment/wallet case study) is what would move real funds.\n\nCalling this out early matters: interviewers sometimes probe whether you'll conflate \"tracking a debt\" with \"processing a payment.\" They're different systems with very different correctness requirements.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: balances are derived, not stored",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**User**, **Group**, **Expense**, **Split**, and **BalanceSheet** are the five entities. An `Expense` has a payer, a total amount, and a list of `Split`s — one per participant, recording what they owe from that specific expense.\n\nThe important design decision: a user's **balance is derived from the full history of expenses and settlements, not stored as an independently-updated source of truth**. If balances were just a mutable number you increment and decrement, a bug or a missed event permanently corrupts the ledger with no way to recompute the truth. Treating expenses as the source of truth and balances as a materialized view of them means you can always rebuild a correct balance by replaying history.\n\nIn practice, \"derived\" doesn't mean \"recomputed from scratch on every read\" — see the concurrency slide for how to keep it both correct and fast.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "splitwise-expense-sharing-s03-q1"
+      ]
+    },
+    {
+      "id": "splitwise-expense-sharing-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: expenses, splits, and the balance sheet",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram showing Expense (payer, amount, group) with one-to-many Split (user, owed amount), and a BalanceSheet aggregating Splits into a net-balance-per-user-pair view >>>\n\nOne `Expense` fans out into several `Split` rows, one per participant. The `BalanceSheet` isn't a separate table of truth — it's what you get by aggregating every `Split` (and every `Settlement`, covered later) by user.\n\nThis is why `Expense` and `Split` are immutable once created: editing history in place would silently change a balance that's already been shown to users and possibly acted on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s05",
+      "order": 5,
+      "sectionTitle": "Strategy pattern for the four split types",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Equal, exact-amount, percentage, and share-based splits are four different ways to turn one `Expense` total into a list of `Split`s — a textbook fit for the **Strategy** pattern: one `SplitStrategy` interface, one implementation per split type, selected when the expense is created.\n\nEach strategy has its own validation rule: exact-amount splits must sum to the expense total exactly; percentages must sum to 100; shares (e.g. \"2 shares for Alice, 1 for Bob\") get normalized by total share count. Equal splits look trivial but hide the hardest arithmetic in this whole topic, covered two slides from now.\n\nAdding a fifth split type later — say, splitting by item line rather than by person — means adding one new strategy class, not touching the other four.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s06",
+      "order": 6,
+      "sectionTitle": "Code: computeSplits for equal and exact strategies",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\ninterface SplitStrategy {\n    List<Split> computeSplits(long amountInCents, List<User> participants, Map<User, Object> params);\n}\n\nclass EqualSplitStrategy implements SplitStrategy {\n    public List<Split> computeSplits(long amountInCents, List<User> participants, Map<User, Object> params) {\n        return splitEqually(amountInCents, participants);\n    }\n}\n\nclass ExactSplitStrategy implements SplitStrategy {\n    public List<Split> computeSplits(long amountInCents, List<User> participants, Map<User, Object> amounts) {\n        long sum = amounts.values().stream().mapToLong(v -> (Long) v).sum();\n        if (sum != amountInCents)\n            throw new InvalidSplitException(\"exact amounts must sum to \" + amountInCents);\n        return participants.stream()\n            .map(u -> new Split(u, (Long) amounts.get(u)))\n            .toList();\n    }\n}\n```\n\nValidation lives inside each strategy because the rule genuinely differs per type — exact-amount validates a sum, percentage validates against 100, shares can't fail validation at all since any positive share count is valid.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s07",
+      "order": 7,
+      "sectionTitle": "The money-math pitfall: floating point never sums back",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Split $10.00 three ways with floating-point division and you get 3.333333... per person; store three `Double` values of 3.33 and they sum to $9.99, not $10.00. That missing cent isn't cosmetic — over millions of expenses it's real, systematic, unaccounted-for money, and a ledger that doesn't reconcile is a ledger nobody can trust.\n\nThe fix is two-part. First, **never use floating point for money** — store every amount as an integer count of the smallest currency unit (cents for USD, paise for INR). Second, when a division doesn't divide evenly, the leftover smallest units (the remainder) must be **deterministically assigned to specific participants**, not silently dropped or left to rounding.\n\nDeterministic means the same split, computed twice, always assigns the extra cents to the same people — usually the first N participants in a stable, defined order (e.g., the order they were added to the expense).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s08",
+      "order": 8,
+      "sectionTitle": "Code: splitEqually assigns the remainder, cent by cent",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nList<Split> splitEqually(long amountInCents, List<User> participants) {\n    int n = participants.size();\n    long base = amountInCents / n;       // integer division, floor\n    long remainder = amountInCents % n;  // 0 <= remainder < n\n\n    List<Split> splits = new ArrayList<>();\n    for (int i = 0; i < n; i++) {\n        long share = base + (i < remainder ? 1 : 0);\n        splits.add(new Split(participants.get(i), share));\n    }\n    return splits;\n}\n\n// splitEqually(1000, [alice, bob, carol]) -> base=333, remainder=1\n// alice=334, bob=333, carol=333  ->  sum = 1000 exactly\n```\n\nThe first `remainder` participants (by list order, which callers must keep stable) get one extra cent each. `base * n + remainder == amountInCents` always holds, so the splits sum to the original total with no floating-point step anywhere.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "splitwise-expense-sharing-s08-q1"
+      ]
+    },
+    {
+      "id": "splitwise-expense-sharing-s09",
+      "order": 9,
+      "sectionTitle": "The hard part: minimizing settlement transactions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A group of 6 friends with 40 shared expenses over a trip could have dozens of pairwise IOUs. Settling one transaction per original expense would mean dozens of actual payments — nobody wants to send twelve separate small transfers.\n\n**Debt simplification** asks: given everyone's net position (how much they're owed or owe in total, ignoring who specifically it's tied to), what's the smallest set of payments that zeroes everyone out? This only works because money is fungible — if Alice owes Bob $10 and Bob owes Carol $10, that's equivalent to Alice owing Carol $10 directly, and the original Bob link can disappear entirely.\n\nThis reduction from \"per-expense debts\" to \"minimum settling transactions\" is the single thing that makes this case study a step above library-management or URL-shortener in difficulty.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "splitwise-expense-sharing-s09-q1"
+      ]
+    },
+    {
+      "id": "splitwise-expense-sharing-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: a debt graph before and after simplification",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two graphs side by side — left shows 5 users with many pairwise weighted edges representing individual expense debts; right shows the same 5 users with only 2-3 net edges after simplification, each edge weight equal to a user's net balance >>>\n\nThe left graph is what raw expense history looks like: an edge for every pairwise debt an expense created, many of them redundant once netted out. The right graph is the simplification's output: at most one net-settling edge per remaining nonzero balance, with the total money moved unchanged.\n\nNotice the graph's edges change entirely — the simplified payments don't need to follow any of the original expense relationships, only the final net numbers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s11",
+      "order": 11,
+      "sectionTitle": "Code: greedy two-heap debt simplification",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nList<Transaction> simplifyDebts(Map<User, Long> netBalanceCents) {\n    PriorityQueue<Balance> creditors =\n        new PriorityQueue<>((a, b) -> Long.compare(b.amount, a.amount));\n    PriorityQueue<Balance> debtors =\n        new PriorityQueue<>((a, b) -> Long.compare(b.amount, a.amount));\n\n    for (var e : netBalanceCents.entrySet()) {\n        if (e.getValue() > 0) creditors.add(new Balance(e.getKey(), e.getValue()));\n        else if (e.getValue() < 0) debtors.add(new Balance(e.getKey(), -e.getValue()));\n    }\n\n    List<Transaction> settlements = new ArrayList<>();\n    while (!creditors.isEmpty() && !debtors.isEmpty()) {\n        Balance c = creditors.poll();\n        Balance d = debtors.poll();\n        long settle = Math.min(c.amount, d.amount);\n        settlements.add(new Transaction(d.user, c.user, settle));\n        c.amount -= settle;\n        d.amount -= settle;\n        if (c.amount > 0) creditors.add(c);\n        if (d.amount > 0) debtors.add(d);\n    }\n    return settlements;\n}\n```\n\nEach round matches the largest creditor with the largest debtor and settles the smaller of the two amounts, so every round fully zeroes out at least one person. That bounds the result at `n - 1` transactions for `n` people with a nonzero balance, and runs in `O(n log n)`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "splitwise-expense-sharing-s11-q1"
+      ]
+    },
+    {
+      "id": "splitwise-expense-sharing-s12",
+      "order": 12,
+      "sectionTitle": "Compare: pairwise balances vs net balances",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Pairwise balances (who-owes-whom per pair) | Net balances (one number per person) |\n|---|---|---|\n| Storage | One row per user pair that has ever transacted | One row per user |\n| \"How much does Alice owe Bob specifically?\" | Direct lookup | Not answerable — the whole point is it doesn't matter |\n| Feeds debt simplification? | No — has to be netted first anyway | Yes, directly — it's exactly the algorithm's input |\n| What \"settle up\" shows the user | A relationship-by-relationship view that gets noisy fast | \"You're owed $42 overall\" — what people actually want to see |\n\n**How to decide:** keep pairwise history for audit and dispute purposes (an expense's `Split` rows already provide this), but maintain net-per-user balances as the queryable, always-current view — it's both what the simplification algorithm needs and what the settle-up screen actually shows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "splitwise-expense-sharing-s12-q1"
+      ]
+    },
+    {
+      "id": "splitwise-expense-sharing-s13",
+      "order": 13,
+      "sectionTitle": "Concurrency: two expenses touching one balance sheet",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two group members each add an expense that affects Alice's balance, at nearly the same moment. If updating her balance means \"read the current total, add the delta, write it back,\" both requests can read the same starting value, and one update silently overwrites the other — Alice's balance ends up wrong by exactly one expense's worth, with no error anywhere.\n\nThe fix is the same principle that shows up across ledger and inventory systems: apply the change as an **atomic increment** (`UPDATE balances SET amount = amount + ? WHERE user_id = ?`) rather than a read-modify-write in application code. An atomic increment can't lose a concurrent update because there's no separate read step to go stale.\n\nThis is also why \"balance is derived from expense history\" (slide 3) doesn't mean recomputing from scratch on every write — it means the running balance is an atomically-maintained materialized view, always reconcilable against history if it's ever in doubt.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "splitwise-expense-sharing-s13-q1"
+      ]
+    },
+    {
+      "id": "splitwise-expense-sharing-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: floating point that never sums to the total",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Splitting $10 three ways is just `10.0 / 3`, store it as a `double`, done.\"\n\n**Why it's wrong:** `10.0 / 3 = 3.3333...`, which as a stored `double` rounds to 3.33 per person — three of those sum to $9.99. Multiply this across every expense a group ever records and the ledger accumulates a small, systematic, unexplainable gap between what was spent and what the splits add up to.\n\n**Correct model:** store money as integer minor units and use integer division plus explicit remainder assignment (slide 8's `splitEqually`), so `base * n + remainder` always equals the original amount exactly — no floating point involved anywhere in the money path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: replaying full history on every balance query",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Since balances are derived, just recompute a user's net balance by summing every `Split` and `Settlement` they've ever been part of, every time someone asks.\"\n\n**Why it's wrong:** it's correct but doesn't scale — a user in an active group for two years might have thousands of expenses behind their balance, and re-summing all of them on every app open turns a cheap read into an expensive scan, repeated constantly.\n\n**Correct model:** maintain a running balance per user, updated atomically the moment each expense or settlement is recorded (slide 13), and treat \"replay full history\" as a reconciliation tool you run occasionally to verify the running balance hasn't drifted — not the primary read path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s16",
+      "order": 16,
+      "sectionTitle": "Extending to multi-currency groups",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A trip with expenses in USD, EUR, and INR breaks the single-number net-balance model, because \"Alice is owed 40\" is meaningless without a currency. The fix: every `Split` carries its own currency, and net balances are computed **per currency pair** rather than pooled into one number.\n\nTwo ways to make this usable for settle-up: show separate balances per currency (\"Alice is owed $40 and owes €15\"), or normalize everything to a group base currency using an **FX rate captured at the time each expense was recorded** — never a live lookup at settle-up time, since that would let a currency swing retroactively change what a past expense \"really\" cost.\n\nDebt simplification then either runs once per currency independently, or once over normalized amounts if the group has opted into a single base currency.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "splitwise-expense-sharing-s17",
+      "order": 17,
+      "sectionTitle": "Extending to partial settle-ups",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A user paying back part of what they owe — \"I'll pay you $20 of the $50 now\" — doesn't need a special code path if you model a **Settlement** as itself a kind of `Expense`: a zero-split expense between exactly two users where the payer's payment directly reduces the payee's net balance toward them, with no other participants and no further splitting.\n\nThis reuses the entire existing pipeline — it lands in the same expense history, updates the same atomic running balance, and needs no simplification re-run for the rest of the group, because it only ever touches the balance between the two people involved.\n\nThe payoff of choosing derived-from-history balances back in slide 3 shows up here directly: a partial settle-up is just one more event in the ledger, not a special mutation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

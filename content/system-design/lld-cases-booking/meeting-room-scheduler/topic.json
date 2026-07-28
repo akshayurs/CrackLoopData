@@ -1,0 +1,165 @@
+{
+  "id": "meeting-room-scheduler",
+  "title": "Meeting Room & Calendar Scheduler — LLD",
+  "area": "system-design",
+  "group": "lld-cases-booking",
+  "order": 5,
+  "slug": "meeting-room-scheduler",
+  "summary": "A harder version of \"check one resource for overlap\": finding a slot free for a room and every attendee at once, plus recurrence expanded without materializing years of instances.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "meeting-room-scheduler-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a meeting room booking system\" sounds like it reduces to checking one room's calendar for overlaps — and if you scope it that way, you'll finish the interview early having solved the easy 20% of the problem.\n\nThe real system has to satisfy **every attendee's calendar** simultaneously, not just the room's, and handle recurring meetings (a weekly standup) without pre-generating years of individual occurrences. Those two requirements are where the actual design work lives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what's in scope, what isn't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** rooms with a capacity and a booking calendar; meetings with a list of attendees, a time range, and optionally a recurrence rule; conflict detection across a room and all its attendees; rescheduling and cancellation.\n\n**Explicitly out of scope:** video-call platform integration (Zoom/Meet links) and room hardware/IoT concerns — treat a room purely as a bookable time-and-capacity resource.\n\nFraming this early as \"multi-resource conflict detection,\" not \"one room's calendar,\" sets the right scope before you start drawing classes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Room, Meeting, Attendee, RecurrenceRule, Calendar",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Calendar` is the reusable abstraction here — both a `Room` and an `Attendee` have one, and both are checked the same way. A `Meeting` references a room, a list of attendees, a time range, and optionally a `RecurrenceRule` describing how it repeats.\n\nCritically, a recurring `Meeting` is stored once, as a rule (\"every Monday 10am\"), not as N pre-generated occurrence rows — `RecurrenceRule` is a separate value object precisely so expansion into concrete instances can happen on demand rather than at creation time.\n\nGiving `Room` and `Attendee` the same `Calendar` interface is what lets conflict-checking code treat \"is this room free\" and \"is this person free\" as the same operation, just applied to different resources.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class model for rooms, meetings, and attendee calendars",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML class diagram — Room and Attendee both implement a Calendar interface (hasConflict method). Meeting has a room reference, a list of attendee references, a timeRange, and an optional RecurrenceRule. Show Meeting as the thing that gets checked against multiple Calendar instances (one Room + several Attendees) rather than Meeting owning the calendars directly. >>>\n\nDrawing `Room` and `Attendee` as two implementations of the same `Calendar` interface, both consulted by the same conflict-check logic, is the diagram detail that shows you generalized past \"just a room's schedule.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s05",
+      "order": 5,
+      "sectionTitle": "Code: checking one resource for a conflict",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "This is the easy 20% — checking a single `Calendar` (room or attendee) for overlap with a proposed time range:\n\n```java\nboolean hasConflict(TimeRange proposed) {\n    for (Meeting existing : bookedMeetings) {\n        if (existing.getTimeRange().overlaps(proposed)) {\n            return true;\n        }\n    }\n    return false;\n}\n```\n\nThis works fine for one room. The next slides are about what changes when you need this to be true for a room **and** ten attendees simultaneously, and when meetings recur.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: a slot free for the room AND every attendee",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Booking a meeting isn't \"is the room free\" — it's \"is the room free, and is every one of the N attendees free, all at the same proposed time.\" Checking these one at a time and rejecting on the first conflict works for validation, but it doesn't help you find a **free** slot; it only tells you a specific guess failed.\n\nTo actually find a free slot, you need the intersection of free/busy across all N+1 calendars (the room plus each attendee) — a time is only usable if it's free in every single one. With 10 attendees, that's 11 calendars whose free intervals must overlap.\n\nThe efficient approach: pull each calendar's busy intervals for the search window, merge each into sorted non-overlapping busy blocks, then walk all N+1 sorted interval lists together to find gaps common to all of them — rather than testing candidate time slots one at a time against every calendar.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "meeting-room-scheduler-s06-q1"
+      ]
+    },
+    {
+      "id": "meeting-room-scheduler-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: intersecting free/busy intervals",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a timeline diagram with 4 rows — Room, Attendee A, Attendee B, Attendee C — each row showing that person's/room's busy blocks as shaded rectangles along a shared time axis. Below all four rows, a highlighted narrow band marks the one time window where none of the four rows have a shaded block — the common free slot. >>>\n\nSeeing all four timelines stacked makes it visual why a slot has to be free in every row at once — the common free slot is often much narrower than any single row's free time would suggest.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s08",
+      "order": 8,
+      "sectionTitle": "Code: expanding a recurrence rule lazily",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A weekly standup shouldn't create thousands of `Meeting` rows years in advance. Instead, `RecurrenceRule` expands into concrete occurrences only for the window a query actually needs:\n\n```java\nList<TimeRange> expand(RecurrenceRule rule, TimeRange queryWindow) {\n    List<TimeRange> occurrences = new ArrayList<>();\n    LocalDateTime cursor = rule.getFirstOccurrenceOnOrAfter(queryWindow.getStart());\n    while (cursor.isBefore(queryWindow.getEnd())) {\n        occurrences.add(new TimeRange(cursor, cursor.plus(rule.getDuration())));\n        cursor = rule.nextOccurrence(cursor);\n    }\n    return occurrences;\n}\n```\n\nA query for \"next two weeks\" only ever materializes a handful of instances, no matter whether the rule has been running for one month or five years.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "meeting-room-scheduler-s09",
+      "order": 9,
+      "sectionTitle": "Compare: eager materialization vs lazy expansion of recurring instances",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Eager materialization | Lazy expansion |\n|---|---|---|\n| Storage | One row per occurrence, grows without bound over time | One row per rule, regardless of how long it runs |\n| Query cost | Simple — just read existing rows | Computed on demand from the rule for the queried window |\n| Editing \"this and future\" occurrences | Requires bulk-updating many rows | Split the rule at that date — cheap, one new rule |\n| Handling exceptions (one occurrence moved/cancelled) | Natural — that row is just edited | Needs a separate exceptions list layered on the rule |\n\n**How to decide:** lazy expansion wins for pure storage and edit-going-forward efficiency, but real calendar apps (Google Calendar included) end up needing an exceptions list anyway for one-off changes — so the practical answer is lazy expansion plus a small exceptions table, not either extreme alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "meeting-room-scheduler-s09-q1"
+      ]
+    },
+    {
+      "id": "meeting-room-scheduler-s10",
+      "order": 10,
+      "sectionTitle": "Extending to double-booking policies per room type",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Not every room needs the same conflict-handling strictness. A dedicated executive boardroom should hard-block any conflicting booking, while a large open-plan huddle space might allow a soft double-booking with a warning, since two small groups sometimes genuinely fit.\n\nModeling this as a `DoubleBookingPolicy` on `Room` (`HardBlockPolicy` vs `AllowWithWarningPolicy`) keeps the conflict-check logic itself unchanged — `hasConflict` still runs the same way, but what the system *does* with a true result (reject outright vs. warn and allow) is delegated to the room's policy.\n\nThis is a smaller, more targeted use of the same plug-in-a-policy shape seen elsewhere in this group's pricing strategies — proof that the pattern generalizes beyond pricing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "meeting-room-scheduler-s10-q1"
+      ]
+    },
+    {
+      "id": "meeting-room-scheduler-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: checking conflicts only at creation time",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Conflict detection runs when a meeting is created — once it's booked, it's booked, no further checks needed.\"\n\n**Why it's wrong:** meetings get rescheduled constantly, and a reschedule is really a delete-and-recreate at a new time. If the system only validates conflicts at creation and treats a reschedule as a special \"just update the time\" path that skips the same check, it silently introduces double-bookings that creation-time validation would have caught.\n\n**Correct model:** every operation that changes a meeting's time or attendee list — creation, reschedule, or adding an attendee after the fact — must run through the same conflict-check path, not a shortcut that assumes an already-valid meeting stays valid after being edited.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "meeting-room-scheduler-s11-q1"
+      ]
+    }
+  ]
+}

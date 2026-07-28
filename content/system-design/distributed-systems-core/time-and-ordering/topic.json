@@ -1,0 +1,141 @@
+{
+  "id": "time-and-ordering",
+  "title": "Time & Ordering Without a Shared Clock",
+  "area": "system-design",
+  "group": "distributed-systems-core",
+  "order": 3,
+  "slug": "time-and-ordering",
+  "summary": "Physical clocks vs. logical clocks vs. vector clocks for establishing causality across machines, and how hybrid logical clocks and TrueTime close the gap in production systems.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "time-and-ordering-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"What happened first?\" is trivial on one machine — events happen in the order your single CPU executed them. Across machines, each with its own clock drifting at its own rate, the question stops having an obvious answer. This topic covers the tools distributed systems use instead of wall-clock time: **logical clocks** that order events by cause and effect, and **hybrid** approaches that keep wall time's intuition while staying safe.\n\nThink of it like coordinating a group project over email with no shared calendar: you can't trust each person's watch, but you *can* tell that a reply came after the message it's replying to. That causal thread is what logical clocks capture.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "time-and-ordering-s02",
+      "order": 2,
+      "sectionTitle": "Why wall-clock time lies across machines: clock skew, drift, and NTP's limits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every machine has its own physical clock, and no two crystal oscillators tick at exactly the same rate — this is **clock drift**, typically tens of milliseconds per day even on server-grade hardware. **NTP** (Network Time Protocol) periodically corrects for drift by syncing to a reference server, but the correction itself takes non-zero, variable network time to apply, so two NTP-synced machines can still disagree by single-digit to tens of milliseconds at any given instant — this gap is **clock skew**.\n\nThat sounds small, but it's larger than the time between two causally related events in a busy system: a write on node A and a dependent read on node B, milliseconds apart, can have their `System.currentTimeMillis()` timestamps come out in the *wrong* order purely from skew.\n\nThe conclusion isn't \"sync clocks better\" — it's that wall-clock timestamps are fundamentally the wrong tool for ordering events that happened close together on different machines.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "time-and-ordering-s02-q1"
+      ]
+    },
+    {
+      "id": "time-and-ordering-s03",
+      "order": 3,
+      "sectionTitle": "Lamport clocks: ordering events with a single counter and a simple rule",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **Lamport clock** is a single integer counter per node, updated by one rule: increment it before every local event, and when you receive a message carrying a counter value, set your own counter to `max(your counter, received counter) + 1`. No wall-clock time involved at all.\n\nThis produces a **happens-before** ordering: if event A causally influenced event B (a message from A's node arrived before B occurred), then A's counter is guaranteed to be smaller than B's. It captures cause and effect perfectly for events on a causal chain.\n\nWhat it can't do is order events that never causally interacted — two unrelated writes on different nodes might get the same counter value, or an arbitrary order, and Lamport clocks alone can't tell you they're actually **concurrent** rather than one preceding the other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "time-and-ordering-s03-q1"
+      ]
+    },
+    {
+      "id": "time-and-ordering-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: Lamport timestamps ordering a chain of causally related events",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: three vertical timelines labelled Node A, Node B, Node C, each with dots representing local events numbered by their Lamport counter; an arrow from an event on Node A to an event on Node B represents a message send/receive, with Node B's counter jumping to max(sender, receiver)+1 on arrival; two dots on Node C with no incoming arrows from A or B are labelled \"concurrent — order not determined\" >>>\n\nFollow one message from Node A to Node B: A's local counter increments with each event, and when B receives A's message, B's counter jumps to one more than the larger of the two values — guaranteeing B's event is numbered *after* the message that caused it.\n\nNode C's events, with no message link to A or B, get counter values too, but those values don't mean C's events happened before or after A's and B's — Lamport clocks are silent on concurrent events, which is the gap vector clocks close.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "time-and-ordering-s05",
+      "order": 5,
+      "sectionTitle": "Vector clocks: capturing causality a single counter can't — and detecting true concurrency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **vector clock** replaces Lamport's single integer with one counter *per node*, so an N-node system carries an N-length vector. A node increments its own slot on a local event, and on receiving a message, takes the element-wise max of its vector and the sender's, then increments its own slot.\n\nThe payoff: comparing two vector clocks tells you not just an order, but the *relationship* — one vector clock is provably \"before\" another only if every element is less-than-or-equal and at least one is strictly less. If neither vector dominates the other, the events are genuinely **concurrent** — they happened independently, with no causal link either way.\n\nThis is exactly what systems like Dynamo-style databases use to detect conflicting concurrent writes to the same key, rather than silently picking one and losing data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "time-and-ordering-s05-q1"
+      ]
+    },
+    {
+      "id": "time-and-ordering-s06",
+      "order": 6,
+      "sectionTitle": "Hybrid Logical Clocks: keeping the intuition of wall time with the safety of logical time",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Logical clocks solve ordering but produce numbers with no relationship to real time — useless if you want a timestamp a human (or a TTL, or a cache expiry) can reason about. A **Hybrid Logical Clock (HLC)** fixes this by combining both: it tracks a physical-time component (kept close to wall-clock time) plus a logical counter that only increments when needed to preserve happens-before ordering despite clock skew.\n\nIn practice, an HLC timestamp looks like wall-clock time and advances with it under normal conditions, but the logical component absorbs any skew-caused inversion — if a received message's timestamp is ahead of local wall time, the HLC bumps its logical counter instead of going backward.\n\nCockroachDB uses HLCs for exactly this reason: transaction timestamps need to be both causally correct and roughly meaningful as real time, without needing atomic clocks in every node.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "time-and-ordering-s07",
+      "order": 7,
+      "sectionTitle": "Google TrueTime: bounding clock uncertainty instead of eliminating it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Google's **TrueTime** API, underlying Spanner, takes a different approach: instead of pretending clocks are perfectly synced, it exposes the *uncertainty* directly. `TT.now()` doesn't return a single timestamp — it returns an interval `[earliest, latest]` guaranteed to contain the true time, backed by GPS and atomic clocks in every datacenter to keep that interval tight (typically a few milliseconds).\n\nSpanner uses this interval explicitly: before committing a transaction, it waits out the remaining uncertainty window (\"commit wait\") so that any transaction which could have observed the commit is guaranteed to see a later timestamp. This turns clock uncertainty from a correctness risk into a small, bounded latency cost.\n\nThe insight worth remembering: TrueTime doesn't achieve perfect clock sync — it achieves something more useful, a known, tight bound on how wrong the clock might be, and designs the protocol around that bound.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "time-and-ordering-s08",
+      "order": 8,
+      "sectionTitle": "Compare: Lamport vs. vector clocks vs. HLC vs. TrueTime on what each can and can't order",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Lamport | Vector | HLC | TrueTime |\n|---|---|---|---|---|\n| Size/event | Single int | One int per node | Physical time + logical counter | Interval `[earliest, latest]` |\n| Detects concurrency? | No | Yes | No — total order | Yes, via non-overlapping intervals |\n| Looks like wall time? | No | No | Yes, closely | Yes, plus uncertainty |\n| Needs special hardware? | No | No | No | Yes — GPS/atomic clocks |\n| Typical use | Causal ordering, log merging | Conflict detection (Dynamo-style) | Timestamps that also look like time (CockroachDB) | Global transactions (Spanner) |\n\n**How to decide:** Lamport for *an* order only; vector clocks when concurrent conflicts must be detected; HLC when consumers need wall-time-like timestamps; TrueTime only if you can invest in the hardware it requires.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "time-and-ordering-s08-q1"
+      ]
+    },
+    {
+      "id": "time-and-ordering-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: using System.currentTimeMillis() to decide which of two events happened first",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Node A's write has timestamp `T1` and node B's write has timestamp `T2`, and `T1 < T2`, so A's write happened first.\"\n\n**Why it's wrong:** wall-clock timestamps from different machines are only comparable if the clocks are perfectly synchronized, and they never are — clock skew of even a few milliseconds is enough to invert the true order of two events that happened close together, silently and with no error raised.\n\n**Correct model:** if you need a real ordering guarantee across machines, use a mechanism designed for it — a logical or vector clock for causal order, or a bounded-uncertainty scheme like TrueTime's commit-wait if you specifically need wall-clock-like timestamps with a correctness guarantee. Never compare two different machines' local timestamps and treat the smaller one as \"earlier\" without knowing the clock-sync guarantee behind it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "time-and-ordering-s09-q1"
+      ]
+    }
+  ]
+}

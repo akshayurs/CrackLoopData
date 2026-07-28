@@ -1,0 +1,206 @@
+{
+  "id": "atm-system",
+  "title": "ATM System",
+  "area": "system-design",
+  "group": "lld-cases-machines",
+  "order": 3,
+  "slug": "atm-system",
+  "summary": "A banking-domain LLD case study pairing a transaction state machine with idempotent, auditable Command objects and first-class hardware faults.",
+  "level": "intermediate",
+  "slideCount": 14,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "atm-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ATM prompt tests whether you can scope \"banking\" down to what the interview actually wants:\ncard authentication plus balance/withdraw/deposit against a `BankService` boundary \u2014 not ledger\ninternals, fraud scoring, or multi-currency settlement. Get `ATM`, `Card`, `Account`,\n`Transaction`, and the session state machine sketched fast, then spend your time on the two things\nthat actually differentiate a strong answer: idempotency against network failures, and treating\nhardware/insufficient-funds as first-class outcomes instead of exceptions.\n\nIf your design lets a retried withdrawal debit twice, that's the one bug this case study is built\nto catch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: authentication, balance/withdraw/deposit, hardware",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Scope it as: a customer **authenticates** with a card and PIN, then can check **balance**,\n**withdraw**, or **deposit** cash, all mediated through hardware components \u2014 a card reader and a\ncash dispenser.\n\nDeclare non-goals early: fraud-scoring, multi-currency conversion, and full ledger/audit-trail\ninternals belong to the bank's core system, not the ATM. The ATM's job is to be a thin, reliable\nclient of that system, which is itself the framing an interviewer wants to hear.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 31,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: ATM, Card, Account, Transaction, CashDispenser, BankService",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Card` (number, PIN hash), `Account` (balance, owned by the bank, not the ATM), `Transaction`\n(type, amount, status), `CashDispenser` (a hardware component with its own denomination counts),\nand `ATM` orchestrating a session across all of them.\n\nThe entity worth naming explicitly: `BankService` \u2014 the boundary between the physical machine and\nthe actual account data. The ATM never touches account storage directly; every balance check,\ndebit, or credit goes through this one interface. That boundary is where most of this topic's real\ndesign decisions live.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class diagram including hardware and the bank-service boundary",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram with ATM at center, connected to CardReader and CashDispenser as hardware\ncomponents, Session, Transaction, and a BankService interface that is the only path to Account\ndata, implemented by a concrete bank-integration class >>>\n\nNotice what has no direct edge: `ATM` to `Account`. Every path from the ATM to account data passes\nthrough `BankService` \u2014 drawn this way deliberately, because \"does the ATM talk to the bank\ndirectly or through a boundary\" is exactly what the pitfall slide later interrogates.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the ATM's session lifecycle as a state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state diagram: idle to cardInserted to authenticated to transactionInProgress to\ndispensing/complete, with a timeout arrow from every state back to idle >>>\n\nThe detail worth drawing explicitly: a timeout-to-idle transition from *every* state, not just\nfrom `cardInserted`. A customer who walks away mid-withdrawal has to have the session reset and\nthe card ejected \u2014 an ATM with no universal timeout path is a design gap, not a minor detail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: Transaction.execute() as a Command object",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\ninterface Transaction {\n    TransactionResult execute(BankService bank);\n    TransactionResult undo(BankService bank);\n    String describe(); // for the audit log\n}\n\nclass WithdrawTransaction implements Transaction {\n    private final String accountId;\n    private final long amountCents;\n    private final String idempotencyKey;\n\n    public TransactionResult execute(BankService bank) {\n        return bank.debit(accountId, amountCents, idempotencyKey);\n    }\n    public TransactionResult undo(BankService bank) {\n        return bank.credit(accountId, amountCents, idempotencyKey + \"-undo\");\n    }\n    public String describe() {\n        return \"Withdraw \" + amountCents + \" from \" + accountId;\n    }\n}\n```\n\nMaking each transaction type a `Transaction` object with `execute`/`undo`/`describe` is the\nCommand pattern earning its keep: the ATM can log every `describe()` for an audit trail, and\nreversing a transaction is a defined operation instead of a manual database fix.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s07",
+      "order": 7,
+      "sectionTitle": "The hard part: idempotent withdrawal against network timeouts",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A network timeout after the bank debits the account but before the ATM gets confirmation is the\nATM case study's signature failure mode. If the ATM's response is \"no confirmation, so retry the\nwithdrawal,\" and the retry succeeds this time, the customer has been debited twice for cash they\ntook out once.\n\nThe fix isn't retrying more carefully \u2014 it's making the debit itself **idempotent**: the same\nrequest, sent twice, has the same effect as sent once. That has to be a property of\n`BankService.debit()`, not something the ATM tries to reason about after the fact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "atm-system-s07-q1"
+      ]
+    },
+    {
+      "id": "atm-system-s08",
+      "order": 8,
+      "sectionTitle": "Code: Transaction carrying an idempotency key BankService dedupes on",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass BankService {\n    private final Set<String> processedKeys = ConcurrentHashMap.newKeySet();\n\n    TransactionResult debit(String accountId, long amountCents, String idempotencyKey) {\n        if (!processedKeys.add(idempotencyKey)) {\n            return TransactionResult.alreadyProcessed(idempotencyKey);\n        }\n        return applyDebit(accountId, amountCents); // real debit against account storage\n    }\n}\n```\n\nThe key is generated once per transaction attempt on the ATM side and resent unchanged on every\nretry. `processedKeys.add()` returning false on the second call is the whole mechanism: a retry\nafter a timeout is recognized as a duplicate and short-circuited to the original result, not\nre-executed.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": [
+        "atm-system-s08-q1"
+      ]
+    },
+    {
+      "id": "atm-system-s09",
+      "order": 9,
+      "sectionTitle": "Modeling insufficient funds and hardware failure as outcomes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Insufficient funds and a jammed dispenser are both *expected* outcomes of a withdrawal attempt,\nnot exceptional ones \u2014 they happen routinely in production. Model them as values of a\n`TransactionResult` (`SUCCESS`, `INSUFFICIENT_FUNDS`, `DISPENSER_FAILURE`, `ALREADY_PROCESSED`)\nthat every caller has to handle explicitly, rather than exceptions a caller might forget to catch.\n\nThis matters most at the boundary between `execute()` returning and the ATM deciding what to show\nthe customer and whether to trigger `undo()` \u2014 exceptions make that decision implicit and easy to\nget wrong; a result type forces it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 37,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s10",
+      "order": 10,
+      "sectionTitle": "Compare: Command for transactions; deliberately no Observer here",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Command | Observer |\n|---|---|---|\n| Fits when | one caller needs execute/undo/audit on a discrete action | many independent subscribers need to react to one event |\n| ATM's actual shape | a single screen and a single audit log react to a transaction | there's no second, independent subscriber to notify |\n| Using it anyway would | fit exactly what's needed | add an abstraction with nothing to abstract |\n\n**How to decide:** don't reach for Observer just because \"patterns are good\" \u2014 a single ATM\ngenuinely has one thing to update per transaction. Save Observer for cases like elevator or\nvending-machine telemetry, where multiple independent listeners actually exist.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "atm-system-s10-q1"
+      ]
+    },
+    {
+      "id": "atm-system-s11",
+      "order": 11,
+      "sectionTitle": "Compare: a Command per type vs one Transaction class with a type field",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | One Transaction class + type field | Command per type (Withdraw/Deposit/Balance) |\n|---|---|---|\n| Adding a new transaction type | edit the type field's switch logic everywhere it's handled | add a new class implementing Transaction |\n| undo() semantics | one method branching on type \u2014 easy to miss a case | each class defines its own, honest undo |\n| Audit log entries | generic, built from the type field | describe() is specific per class, better logs |\n\n**How to decide:** Command wins as soon as `undo()` and audit matter, which for a banking system is\nimmediate \u2014 a generic type-field class defers the real complexity to a switch statement no one\nwants to maintain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s12",
+      "order": 12,
+      "sectionTitle": "Concurrency: the BankService boundary is also where a lock lives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Beyond the obvious pitfall of the ATM skipping the boundary entirely, that same boundary is where\na second concurrency question lives: a customer's mobile app and this ATM both initiating a\nwithdrawal against the same account at nearly the same instant.\n\n`BankService` is the natural place for a per-account lock or lease during an in-flight withdrawal \u2014\nacquired before the debit, released after \u2014 so a second channel's request either waits or is told\nthe account is mid-transaction, rather than both channels reading the same \"sufficient funds\"\nsnapshot and both succeeding against a balance that can't cover both.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 41,
+      "mcqIds": [
+        "atm-system-s12-q1"
+      ]
+    },
+    {
+      "id": "atm-system-s13",
+      "order": 13,
+      "sectionTitle": "Pitfall: the ATM talking directly to the bank's account storage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"For a quick MVP, `ATM` can just query the account balance table directly \u2014\nadding `BankService` is extra layering for no reason.\"\n\n**Why it's wrong:** every channel that needs account data \u2014 this ATM, another ATM, a mobile app \u2014\nwould re-implement its own path to storage, with no single place to add idempotency keys, locking,\nor auditing. The idempotency fix and the lock/lease from earlier slides have nowhere to live.\n\n**Correct model:** `BankService` is the one interface every channel goes through; `ATM` only ever\ncalls it, never account storage. This is what actually makes the idempotency and concurrency\nslides implementable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 43,
+      "mcqIds": []
+    },
+    {
+      "id": "atm-system-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: dispensing cash before confirming the bank-side debit",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Dispense the cash as soon as the withdrawal is approved, then record the debit \u2014\nit's simpler and faster for the customer.\"\n\n**Why it's wrong:** if the debit call fails or times out *after* cash has already physically left\nthe machine, you've dispensed money with no matching debit on the account \u2014 a loss the bank eats,\ndiscovered only during reconciliation, not at the moment it happened.\n\n**Correct model:** the debit must be confirmed successful *before* `CashDispenser.dispense()` runs.\nIf the debit fails, no cash moves; if it succeeds but the dispenser then jams, that's the\n`DISPENSER_FAILURE` path triggering `undo()`, not a race between the two.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "atm-system-s14-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,243 @@
+{
+  "id": "chess-game",
+  "title": "Chess Game",
+  "area": "system-design",
+  "group": "lld-cases-games",
+  "order": 6,
+  "slug": "chess-game",
+  "summary": "The canonical polymorphism-heavy case study — pieces that know their own legal moves, and a huge domain you must scope down fast.",
+  "level": "advanced",
+  "slideCount": 17,
+  "estReadMinutes": 14,
+  "slides": [
+    {
+      "id": "chess-game-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Chess is the canonical LLD interview because the domain is genuinely huge — six piece types, check, checkmate, castling, en passant, promotion — and a 45-minute interview cannot cover all of it. The skill being tested is **scoping**, not memorizing chess rules.\n\nPick a core slice up front, out loud: basic piece movement, turn order, and check/checkmate detection. Explicitly defer special moves (castling, en passant, promotion) and anything engine-like (opening books, time controls) to follow-up questions — that's exactly how this topic is structured.\n\nThe payoff for scoping well: you spend your design time on the one idea that actually differentiates a strong answer — polymorphic piece movement — instead of running out of time explaining pawn rules.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 49,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s02",
+      "order": 2,
+      "sectionTitle": "Requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** an 8x8 board, six piece types (pawn, knight, bishop, rook, queen, king) each with correct movement geometry, alternating turns, move legality (a move is illegal if it leaves your own king in check), and check/checkmate detection.\n\n**Non-goals** unless asked: a full UCI-compatible engine, an opening book or position evaluation for AI play, and draw detection beyond stalemate (threefold repetition, 50-move rule are follow-ups, not core scope).\n\nState explicitly which special moves you're deferring — castling, en passant, pawn promotion — and come back to them only after the core (movement + check detection) works. Trying to design all of chess's edge cases before the core loop exists is the most common way this topic runs out of time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s03",
+      "order": 3,
+      "sectionTitle": "Core entities",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Six entities. **Board** owns the 8x8 grid and piece positions — nothing about rules. **Piece** is an abstract base with six subclasses (Pawn, Knight, Bishop, Rook, Queen, King), each knowing its own movement geometry. **Move** represents one ply — from-square, to-square, and (for special moves) extra metadata. **Player** holds a color and a piece set. **Game** orchestrates turns and owns overall state. **MoveValidator** checks whether a candidate move is legal given the full board state.\n\nThe responsibility split worth defending: a `Piece` knows its own **geometry** (how a bishop moves) but not whether a specific move is **legal** in context (would it leave your king in check). That second question needs the whole board, so it lives in `MoveValidator`/`Game`, not on the piece.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 51,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the Piece hierarchy and where logic lives",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML diagram showing an abstract Piece base class with six subclasses (Pawn, Knight, Bishop, Rook, Queen, King), each subclass overriding getCandidateMoves(); separately, a Board class and a MoveValidator class, with an annotation splitting responsibility — 'geometry lives in Piece subclasses' vs 'board-state legality (check safety) lives in MoveValidator' >>>\n\nThe split shown here is the single most important line in the whole design: geometry (can a bishop physically reach that square) is per-piece; legality-in-context (does this move leave my king in check) is board-wide and belongs above any individual piece.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s05",
+      "order": 5,
+      "sectionTitle": "Polymorphic candidate moves vs one rules engine",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two designs solve \"what can this piece do\": a giant `MoveEngine.getLegalMoves(piece, board)` with an if/else or switch per piece type, or **polymorphic** `Piece.getCandidateMoves(board)` where each subclass implements its own geometry.\n\nPolymorphism wins here for a concrete reason: the six piece types have genuinely different movement shapes (sliding vs jumping vs single-step), and a switch-based engine grows a new branch — and a new bug surface — every time a rule is touched. With polymorphism, `Bishop` and `Knight` are independently testable, independently correct, and adding a new variant piece (a chess-variant \"archbishop\") is a new subclass, not an edit to a shared switch.\n\nThis is a textbook argument for the Open/Closed Principle: [new piece types are added, not switched on](ocp-open-closed).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "chess-game-s05-q1"
+      ]
+    },
+    {
+      "id": "chess-game-s06",
+      "order": 6,
+      "sectionTitle": "Code: two structurally different piece implementations",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`Bishop` and `Knight` share the same interface but have structurally different logic — sliding along a line vs jumping to fixed offsets.\n\n```java\nclass Bishop extends Piece {\n    List<Move> getCandidateMoves(Board board) {\n        List<Move> moves = new ArrayList<>();\n        for (int[] dir : DIAGONAL_DIRECTIONS) {\n            moves.addAll(slideInDirection(board, dir));\n        }\n        return moves;\n    }\n}\n\nclass Knight extends Piece {\n    List<Move> getCandidateMoves(Board board) {\n        List<Move> moves = new ArrayList<>();\n        for (int[] offset : KNIGHT_OFFSETS) {\n            addIfOnBoardAndNotOwnPiece(board, offset, moves);\n        }\n        return moves;\n    }\n}\n```\n\n`slideInDirection` walks squares one at a time until it hits a piece or the board edge; the knight's loop is a fixed, small set of offsets with no sliding at all — same method signature, genuinely different algorithms underneath.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 49,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s07",
+      "order": 7,
+      "sectionTitle": "Deep-dive: check and checkmate detection",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A candidate move is **legal** only if, after simulating it, the mover's own king is not under attack. This is why \"generate candidate moves\" and \"filter to legal moves\" are two separate steps — a piece's raw geometry can include moves that would illegally expose the king (a pinned piece moving off its pin line, for instance).\n\n**Checkmate** is defined recursively in terms of legality: a player is in check if any opposing piece's candidate moves include the king's square; they're in **checkmate** if they're in check *and* no legal move — across every piece they own — removes that check. There's no separate \"is this checkmate\" algorithm; it falls directly out of \"try every legal move, see if any escapes check.\"\n\nThis simulate-then-validate shape is the one idea worth rehearsing before the interview — it's asked almost every time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s08",
+      "order": 8,
+      "sectionTitle": "Code: isInCheck and isCheckmate",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`isInCheck` scans every opposing piece's attack squares against the king's square; `isCheckmate` tries every legal move to see if any escapes check.\n\n```java\nboolean isInCheck(Color color) {\n    Square kingSquare = board.findKing(color);\n    for (Piece opponentPiece : board.getPieces(opposite(color))) {\n        if (opponentPiece.getCandidateMoves(board).stream()\n                .anyMatch(m -> m.getTo().equals(kingSquare))) {\n            return true;\n        }\n    }\n    return false;\n}\n\nboolean isCheckmate(Color color) {\n    if (!isInCheck(color)) return false;\n    for (Piece piece : board.getPieces(color)) {\n        for (Move move : moveValidator.getLegalMoves(piece, board)) {\n            if (!wouldLeaveKingInCheck(move, color)) return false; // an escape exists\n        }\n    }\n    return true; // in check, and nothing removes it\n}\n```\n\n`getLegalMoves` already filters out self-check moves, so `isCheckmate` only needs to confirm the legal-move set is non-empty *and* that check persists — it reuses `isInCheck` rather than duplicating attack-scanning logic.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 51,
+      "mcqIds": [
+        "chess-game-s08-q1"
+      ]
+    },
+    {
+      "id": "chess-game-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: simulate-then-validate for one candidate move",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: flow diagram for validating one candidate move — start with candidate move, apply it to a scratch copy of the board, check whether the mover's own king is now under attack, if yes revert and mark the move illegal, if no keep it in the legal-moves list, with a note that the real board is never mutated during this check >>>\n\nThe critical detail the diagram calls out: this check happens on a **scratch copy** of the board, or with a clean revert — never on the live game state, which is exactly what the pitfall on the next-to-last slide is about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 43,
+      "mcqIds": [
+        "chess-game-s09-q1"
+      ]
+    },
+    {
+      "id": "chess-game-s10",
+      "order": 10,
+      "sectionTitle": "Design patterns: Command for moves, no State for turns",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Decision | Pattern | Why |\n|---|---|---|\n| Move execution/undo | **[Command](command-pattern)** — each `Move` (or a `MoveCommand` wrapping it) knows how to `execute()` and `undo()` against the board | Needed for check-simulation (apply, check, revert) and for replay/undo — both need the same execute/reverse capability |\n| Whose turn it is | **No pattern** — one color flag flipped after each successful move | Turn order is a single alternation with no guarded transitions; a State machine would model complexity that doesn't exist here |\n\n**How to decide:** Command earns its place because two genuinely different features (check-simulation and undo/replay) both need \"do this, then possibly reverse it\" — one abstraction serving two needs. A bare turn flag has no second need to justify a pattern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 53,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s11",
+      "order": 11,
+      "sectionTitle": "Deep-dive: special moves as first-class Move subtypes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Castling, en passant, and promotion each have **extra board-state side effects** beyond \"move a piece from A to B\" — castling moves two pieces at once, en passant captures a piece not on the destination square, promotion replaces a pawn with a new piece type entirely.\n\nThe design that scales: make each of these a first-class `Move` subtype — `CastlingMove`, `EnPassantMove`, `PromotionMove` — where each subtype's `execute(board)` implements its own full side effect. `Board.movePiece()` or `Game.applyMove()` just calls `move.execute(board)` polymorphically, with zero knowledge of which special case it's handling.\n\nThis is the direct payoff of the Command pattern from the previous slide: special moves aren't a new problem, they're just more `Move` implementations behind the same interface.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 49,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s12",
+      "order": 12,
+      "sectionTitle": "Code: CastlingMove.execute",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`CastlingMove.execute(board)` moves both the king and the rook and marks both as having-moved, in one method the board just calls.\n\n```java\nclass CastlingMove extends Move {\n    void execute(Board board) {\n        board.movePieceRaw(king.getSquare(), kingDestination);\n        board.movePieceRaw(rook.getSquare(), rookDestination);\n        king.setHasMoved(true);\n        rook.setHasMoved(true);\n    }\n\n    void undo(Board board) {\n        board.movePieceRaw(kingDestination, king.getSquare());\n        board.movePieceRaw(rookDestination, rook.getSquare());\n        king.setHasMoved(false);\n        rook.setHasMoved(false);\n    }\n}\n```\n\n`Game.applyMove(move)` calls `move.execute(board)` without an if/else for castling versus a normal move — the polymorphism from §11 means the caller never branches on move type at all.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s13",
+      "order": 13,
+      "sectionTitle": "Pitfall: special moves as if/else bolted onto movePiece",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Castling and en passant are rare, so I'll just add `if (isCastlingMove) { ... } else if (isEnPassant) { ... }` inside `Board.movePiece()`.\"\n\n**Why it's wrong:** every new special case grows one already-large method, makes `Board` responsible for knowing rules it shouldn't need to know, and couples unrelated logic (a rook's involvement in castling) into a method whose name suggests it only moves one piece. It also makes each special case harder to unit-test in isolation.\n\n**Correct model:** special moves are their own `Move` subtypes (§11) with self-contained `execute`/`undo` logic. `Board.movePiece()` stays a single, simple, general operation; `Game` dispatches to whichever `Move` subtype a candidate move actually is.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: mutating the live board without a clean revert",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"To check if a move causes self-check, I'll just apply it directly to the real board, check, and manually move the piece back if it's illegal.\"\n\n**Why it's wrong:** manual revert code is exactly the kind of thing that has an edge case you miss — a capture that needs the captured piece restored, a pawn's en passant side effect, a rook moved during castling. Any interruption or overlooked field between the mutation and the revert leaves the live game in a corrupted, inconsistent state that's hard to detect until much later.\n\n**Correct model:** simulate on a scratch copy of the board (or use the Command pattern's `undo()`, §10, which is exactly designed for symmetric, complete reversal) — never mutate-then-hope-to-revert the authoritative game state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "chess-game-s14-q1"
+      ]
+    },
+    {
+      "id": "chess-game-s15",
+      "order": 15,
+      "sectionTitle": "Extending to a time-control clock",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A per-move time budget and \"flag-fall\" loss (running out of time loses the game, independent of board position) is a feature that sits **beside** `Game`, not inside `Piece` or `Move`.\n\nConcretely: a `Clock` object tracks remaining time per player, started when `Game` hands control to that player and stopped when they submit a move. `Game` checks the clock alongside its normal checkmate/stalemate checks after each move — a timeout is just another terminal-state trigger, reported the same way a checkmate is. Neither `Piece.getCandidateMoves()` nor any `Move` subtype needs to know a clock exists at all.\n\nThe test this passes: a feature that's clearly \"real chess, but with a new axis of losing\" should attach at the `Game` level, not leak into the piece/move layer that has nothing to do with time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s16",
+      "order": 16,
+      "sectionTitle": "Follow-up: move undo and replay",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because every move — including special ones — is a `Command`-style object with `execute()`/`undo()`, undo is simply calling `undo()` on the last move in the game's move history and popping it off. No separate \"reverse this move\" logic needs to be written per move type; each subtype already carries its own inverse.\n\nReplay works the same way as Tic-Tac-Toe's and Snake and Ladder's: re-run the recorded move list, in order, against a freshly-constructed starting board, calling `execute()` on each. This is more expensive per replay than a specialized diffing approach, but it's simple, always correct, and reuses code that already exists for the live game — no parallel replay-specific logic to maintain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 47,
+      "mcqIds": []
+    },
+    {
+      "id": "chess-game-s17",
+      "order": 17,
+      "sectionTitle": "Follow-up: speeding up move generation for a bot",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An 8x8 array of `Piece` objects is readable but slow for the volume of positions a bot needs to evaluate — each `getCandidateMoves()` call does object dispatch and allocates lists, and a searching bot calls this millions of times per move decision.\n\nThe standard answer is **bitboards**: represent each piece type/color combination as a 64-bit integer, one bit per square. Move generation becomes bitwise AND/OR/shift operations instead of object traversal — dramatically faster, at the cost of readability (a `long` doesn't self-document the way a `Piece` object does) and a much less approachable codebase for anyone maintaining it later.\n\nThe trade-off worth naming out loud: bitboards make sense once profiling shows piece-object overhead is the actual bottleneck — not as a default starting design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

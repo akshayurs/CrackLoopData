@@ -1,0 +1,163 @@
+{
+  "id": "issue-tracker-system",
+  "title": "Issue Tracker (Jira-style)",
+  "area": "system-design",
+  "group": "lld-cases-business",
+  "order": 6,
+  "slug": "issue-tracker-system",
+  "summary": "Configurable per-project workflow state machines — the state machine is data, not a hardcoded enum, so two teams can run entirely different processes on the same model.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "issue-tracker-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A Jira- or Linear-style issue tracker looks like ordinary CRUD — issues with a status field, updated by a form. The design problem an interviewer actually wants to see is that different teams need genuinely different workflows: one project's \"Done\" might require a code review and a QA sign-off; another's is a single click. Hardcoding a status enum can't express that.\n\nThe fix running through this whole topic: **the workflow itself is data**, configured per project, not a fixed set of statuses baked into the `Issue` class.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements and non-goals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** projects, issues, per-project configurable workflows (which statuses exist and which transitions between them are legal), assignment, and comments.\n\n**Out of scope:** reporting dashboards, burndown charts, and analytics — those consume the issue/workflow data this design produces, but building the data model correctly is the actual interview question, not the charts on top of it.\n\nThis scoping keeps the conversation on the two things that are genuinely hard here: configurable workflows and, in the extension slides, permissions — not on rendering a dashboard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Issue, Workflow, Status, Transition",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Status** is a named state (\"Open\", \"In Review\", \"Done\") — just a label, no behavior of its own. **Transition** connects two statuses (`from`, `to`) and belongs to a specific **Workflow**. A `Workflow` is the full set of statuses and legal transitions for one project — effectively a directed graph the `Issue` must move through.\n\n`Issue` holds a reference to its `Project` (which determines its `Workflow`) and its current `Status`, plus `assignee`, `reporter`, and a list of `Comment`s. Critically, `Issue` does **not** hardcode which statuses are valid or which transitions are legal — that logic lives entirely in `Workflow`.\n\nThis separation is what lets two projects use the same `Issue` class but completely different status sets and rules, without a single `if (project.type == X)` branch anywhere in `Issue`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "issue-tracker-system-s03-q1"
+      ]
+    },
+    {
+      "id": "issue-tracker-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: an issue and its configurable workflow",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram showing Issue referencing Project and a current Status, Project referencing one Workflow, and Workflow containing a set of Status nodes connected by Transition edges >>>\n\n`Issue` points at a `Status`, and `Status` belongs to a `Workflow` that a `Project` selects. Nothing on `Issue` encodes the shape of the workflow graph — it just holds whatever current `Status` it's in, and the `Workflow` is what knows which transitions are legal from there.\n\nThis is the same shape as the library's `FinePolicy` extraction: instead of the core entity (`Issue`, `Member`) knowing every variant's rules, a separate configurable object owns them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s05",
+      "order": 5,
+      "sectionTitle": "The hard part: workflow as data, not a hardcoded enum",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A naive design makes `Status` a fixed enum (`OPEN`, `IN_PROGRESS`, `DONE`) shared by every project, with transition rules written as `if/else` in the `Issue` class. It works for exactly one workflow shape. The moment a second project needs a `QA_REVIEW` status between `IN_PROGRESS` and `DONE`, or wants to skip straight from `OPEN` to `DONE` for trivial tasks, the enum and its hardcoded rules have to change for every project at once.\n\nMaking the workflow **data** — rows in a `Status` table and a `Transition` table, scoped per `Workflow` — means each project's process is configuration, not code. A team's admin can add a status or a transition without a deploy, and two projects can have entirely different graphs while sharing the same `Issue` and `Workflow` classes.\n\nThis is the extensibility interviewers are specifically probing when they ask \"how would a new team configure their own process?\" — the answer should never be \"add a case to the codebase.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "issue-tracker-system-s05-q1"
+      ]
+    },
+    {
+      "id": "issue-tracker-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: Workflow.canTransition validated against a transition table",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Workflow {\n    Set<Transition> transitions;\n\n    boolean canTransition(Issue issue, Status target) {\n        return transitions.stream().anyMatch(t ->\n            t.from.equals(issue.status) && t.to.equals(target));\n    }\n\n    void transition(Issue issue, Status target, User actor) {\n        if (!canTransition(issue, target))\n            throw new IllegalTransitionException(issue.status, target);\n        issue.status = target;\n        issue.history.add(new StatusChange(actor, issue.status, target, now()));\n    }\n}\n```\n\n`canTransition` is a lookup against this workflow's own `transitions` set — nothing here mentions a specific project or hardcodes which statuses exist. Two `Workflow` instances with entirely different `transitions` sets run through the exact same code.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: two projects, two distinct transition graphs",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two side-by-side directed graphs over the same Issue model — Project A's simple workflow (Open to In Progress to Done) versus Project B's workflow (Open to In Progress to QA Review to Done, with a Reopened loop back from QA Review to In Progress) >>>\n\nBoth graphs are built from the exact same `Status` and `Transition` classes — only the specific rows differ per `Workflow`. Project A's simpler process and Project B's QA gate with a reopen loop are both just data, not two different code paths.\n\nThis is the visual proof of the whole topic's thesis: the `Issue`/`Workflow` code never needed to know these two graphs would look different.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: global fixed enum vs per-project configurable workflow",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Global fixed status enum | Per-project configurable workflow |\n|---|---|---|\n| Adding a new status | Requires a code change and deploy, affecting every project | An admin action — insert a `Status` row scoped to one project's workflow |\n| Two projects, different processes | Impossible without special-casing in code | Each project just has its own `Workflow` row set |\n| Where transition rules live | Scattered `if/else` in the `Issue` class or its service layer | Centralized in `Workflow.canTransition`, one lookup |\n| Risk of an illegal transition | High — every new status needs its rules added everywhere they're checked | Low — a single `Transition` table is the one source of truth |\n\n**How to decide:** a fixed enum is fine for a single-tenant tool that will only ever have one process; the moment more than one team or customer needs its own process, per-project configurability is what the interview is actually testing for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "issue-tracker-system-s08-q1"
+      ]
+    },
+    {
+      "id": "issue-tracker-system-s09",
+      "order": 9,
+      "sectionTitle": "Modeling permissions without an if/else per role",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Only a project admin can delete an issue, only the assignee or a reviewer can move it to Done\" is a permission rule, and hardcoding it as `if (user.role == ADMIN) ...` inside `Issue` methods creates the exact same rigidity workflow-as-enum did: every new role or rule means editing core classes again.\n\nThe fix follows the same shape as the workflow itself: define a `Permission` check as an interface (`canPerform(user, action, issue)`) with pluggable implementations per action — `CanTransitionCheck`, `CanDeleteCheck` — that `Issue`'s service layer calls without knowing which concrete rule is behind it. Swapping or combining rules (e.g. \"assignee OR reviewer OR admin\") means composing checks, not branching on role names inline.\n\nThis depends on the calling code (`Issue`'s service) knowing only the abstraction (`Permission`), never the concrete role logic — the same principle that keeps `Workflow` swappable per project.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s10",
+      "order": 10,
+      "sectionTitle": "Extending to sub-tasks and issue-linking",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sub-tasks (\"this issue breaks down into three smaller issues\") and issue-linking (\"blocks\", \"relates to\", \"duplicates\") both need to be added without touching the core `Issue` model, since they're relationships *between* issues, not new fields on one.\n\nA sub-task is just an `Issue` with a `parentId` pointing at another `Issue` — no new class needed, since a sub-task is fully an issue in its own right (it has its own workflow, assignee, status). Cross-issue relationships like \"blocks\" get a separate `IssueLink` entity: `sourceIssueId`, `targetIssueId`, `linkType`. Neither addition requires a new field on `Issue` beyond the optional `parentId`.\n\nThe pattern to notice: both extensions are additive — a new nullable reference and a new join-style entity — rather than changes to `Issue`'s existing fields or its workflow logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "issue-tracker-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: hardcoding done/in-progress as special strings",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"It's fine to check `if (issue.status.equals(\"Done\"))` in a few places — it's just a string comparison.\"\n\n**Why it's wrong:** it silently re-introduces the fixed-enum problem this whole design exists to avoid. If \"Done\" is scattered as a magic string through reporting code, notification triggers, and permission checks, a project that names its terminal status \"Closed\" or \"Resolved\" instead breaks every one of those call sites, invisibly, with no compiler error to catch it.\n\n**Correct model:** a `Status` should carry an explicit boolean or enum flag like `isTerminal` (or `category: TODO | IN_PROGRESS | DONE`) that every project's workflow sets per status, so code checks the *flag*, never a specific status's display name.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

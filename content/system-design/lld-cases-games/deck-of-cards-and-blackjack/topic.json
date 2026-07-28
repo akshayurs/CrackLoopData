@@ -1,0 +1,163 @@
+{
+  "id": "deck-of-cards-and-blackjack",
+  "title": "Deck of Cards & Blackjack",
+  "area": "system-design",
+  "group": "lld-cases-games",
+  "order": 3,
+  "slug": "deck-of-cards-and-blackjack",
+  "summary": "A reusable Card/Deck abstraction plus Blackjack's Ace-value ambiguity and a dealer state machine — two related but distinct interview prompts.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "deck-of-cards-and-blackjack-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a deck of cards\" and \"design Blackjack\" sound like the same prompt, but they test different things — and interviewers ask both, sometimes as two stages of the same interview.\n\nA deck of cards is a **reuse** problem: build `Card`, `Deck`, and `Hand` generically enough that Poker, War, and Blackjack can all sit on top without touching each other's rules. Blackjack on top of that is a **rules-and-state** problem: an Ace that's worth 1 or 11 depending on context, and a dealer that follows a fixed, non-negotiable procedure.\n\nThe skill being tested: keep the reusable primitives boring, and put all the game-specific cleverness in a layer above them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s02",
+      "order": 2,
+      "sectionTitle": "Requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** a reusable `Card`/`Deck` abstraction (52-card deck, suits, ranks, shuffle, deal), plus Blackjack's rules on top — dealing two cards each, hitting, standing, busting past 21, and a dealer that plays a fixed strategy (hit until 17).\n\n**Non-goals** unless asked: betting/wagering amounts, multiplayer tournaments with side pots, and card-counting detection (that's a common *follow-up*, not core scope — see interview questions).\n\nState the two-layer scope out loud early: \"I'll build generic card primitives first, then Blackjack rules on top of them\" — it previews the exact structure the rest of the design follows and shows you're not planning to bake Blackjack logic into `Card` from line one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s03",
+      "order": 3,
+      "sectionTitle": "Core entities",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Seven entities split across two layers. **Generic layer:** `Card` (suit + rank, immutable), `Deck` (52 cards, shuffle, deal), `Hand` (a player's held cards, generic add/list). **Blackjack layer:** `Shoe` (multiple decks combined, since casino Blackjack rarely deals from a single 52-card deck), `Player`, `Dealer` (a specialized player with a fixed strategy), `Game` (orchestrates a round).\n\nThe line to defend: `Hand` lives in the generic layer as a plain collection of cards, but **scoring** a hand is Blackjack-specific — so scoring is not a `Hand` method in the generic sense, it's added by the Blackjack layer (§ the hard part). Poker's hand-ranking would add its own scoring the same way, without touching `Card`, `Deck`, or `Hand`'s core shape.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: generic primitives vs Blackjack-specific rules",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: layered class diagram — bottom layer boxes for Card, Deck, Hand (generic, reusable); top layer boxes for Shoe, Player, Dealer, Game, BlackjackHand (Blackjack-specific), with arrows showing the top layer depending on the bottom layer but not vice versa >>>\n\nThe one-way dependency is the whole point: the bottom layer has zero imports from, or knowledge of, Blackjack. A second game (War, Poker) sits beside the Blackjack layer, both depending downward on the same `Card`/`Deck`/`Hand`, never on each other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 33,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s05",
+      "order": 5,
+      "sectionTitle": "Code: the shared Deck and Hand contract",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`Deck.shuffle()`/`deal()` and `Hand.addCard()` are the entire contract any card game builds on.\n\n```java\nclass Deck {\n    private final List<Card> cards;\n\n    void shuffle() { Collections.shuffle(cards); }\n\n    Card deal() {\n        if (cards.isEmpty()) throw new IllegalStateException(\"deck is empty\");\n        return cards.remove(cards.size() - 1);\n    }\n}\n\nclass Hand {\n    private final List<Card> cards = new ArrayList<>();\n    void addCard(Card c) { cards.add(c); }\n    List<Card> getCards() { return List.copyOf(cards); }\n}\n```\n\nNotice `Hand` has no `value()` or `isBust()` method — those are Blackjack concepts, added by a `BlackjackHand` subtype or a separate scorer, not baked into the generic contract.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 39,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: scoring a hand with a flexible Ace",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An Ace counts as **1 or 11**, whichever keeps the hand's total at or under 21 (or, if both bust, the smaller value). A naive implementation special-cases this per hand — \"if there's exactly one Ace and the total would bust, subtract 10\" — which breaks the moment a hand has two or three Aces.\n\nThe clean model: sum every card at its **hard** value (Ace = 11, face cards = 10), then count how many Aces are in the hand. While the total exceeds 21 and at least one Ace hasn't been \"downgraded\" yet, subtract 10 (treat one more Ace as 1 instead of 11) and repeat. This handles any number of Aces uniformly, with no per-hand special case.\n\nA **soft** hand still has an Ace counted as 11; a **hard** hand has none (or all downgraded to 1).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s07",
+      "order": 7,
+      "sectionTitle": "Code: resolving soft/hard totals",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`Hand.value()` applies the downgrade loop from the previous slide — no per-hand special casing.\n\n```java\nint value() {\n    int total = 0;\n    int aceCount = 0;\n    for (Card c : cards) {\n        total += c.getRank().hardValue(); // Ace=11, face=10, else pip value\n        if (c.getRank() == Rank.ACE) aceCount++;\n    }\n    while (total > 21 && aceCount > 0) {\n        total -= 10;\n        aceCount--;\n    }\n    return total;\n}\n```\n\nThis same loop correctly scores a hand with zero, one, two, or four Aces — the number of Aces only changes how many times the `while` loop can fire, never the logic itself.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 41,
+      "mcqIds": [
+        "deck-of-cards-and-blackjack-s07-q1"
+      ]
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: the round's state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state machine diagram for one Blackjack round — states Betting, Dealing, PlayerTurns, DealerTurn, Payout, connected by arrows showing the fixed sequence, with a note that PlayerTurns loops per active player before advancing >>>\n\nThe round only moves forward — there's no going back from `DealerTurn` to `PlayerTurns` once players have finished acting. That one-directional shape is what makes `Game` easy to reason about: at any moment there is exactly one current state, and the transition rules are fixed and small.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "deck-of-cards-and-blackjack-s08-q1"
+      ]
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s09",
+      "order": 9,
+      "sectionTitle": "Designing for reuse: War and Poker on the same primitives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "War needs `Card`, `Deck`, and `Hand` exactly as built — it compares single card ranks, no scoring needed at all. Poker needs the same `Card`/`Deck`, plus its own hand-ranking logic (pairs, flushes, straights) layered the same way Blackjack layers `value()` on top of `Hand` — as a separate scorer or subtype, never as an edit to the generic `Hand` class.\n\nThe test for whether this reuse actually works: can you write a Poker `HandRanker` or a War `Game` without opening `Card.java`, `Deck.java`, or `Hand.java` at all? If yes, the layering held. If you find yourself adding a Poker-specific field to `Card`, the generic layer has already leaked game-specific concerns — see [strategy-pattern](strategy-pattern) for how a Strategy object formalizes this per-game variation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s10",
+      "order": 10,
+      "sectionTitle": "Compare: superclass with hooks vs a Strategy per game",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | `Game` superclass with hooks | Strategy object per game variant |\n|---|---|---|\n| Shape | `BlackjackGame extends Game`, overriding `dealInitialHand()`, `scoreHand()`, etc. | One `Game` class holding a `GameRules` strategy object; Blackjack and Poker each provide their own `GameRules` implementation |\n| Adding a new game | New subclass, inherits the whole `Game` skeleton | New `GameRules` implementation, `Game` itself never changes |\n| Risk | Deep inheritance chains get brittle as more games add more hook methods | Slightly more indirection to trace for a reader unfamiliar with the pattern |\n\n**How to decide:** prefer the Strategy object once you have three or more game variants, or any variant that doesn't cleanly fit the hook sequence the first game assumed — composition scales better than inheritance here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "deck-of-cards-and-blackjack-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: putting Blackjack scoring inside Card",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Since Aces are worth 1 or 11 in Blackjack, I'll just give `Card` a `getBlackjackValue()` method.\"\n\n**Why it's wrong:** a card's value is meaningless outside the context of a specific game and a specific hand — the same Ace is worth 1 point in one Blackjack scoring path and 14 in a high-Ace Poker variant. Putting `getBlackjackValue()` on `Card` bakes one game's rules into the layer every other card game is supposed to reuse, breaking the whole point of the split in §3.\n\n**Correct model:** `Card` exposes only its intrinsic, game-agnostic identity (suit, rank). Scoring — Blackjack's soft/hard totals, Poker's hand ranks — lives entirely in that game's layer, reading a card's rank but never asking it for a game-specific value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 51,
+      "mcqIds": [
+        "deck-of-cards-and-blackjack-s11-q1"
+      ]
+    }
+  ]
+}

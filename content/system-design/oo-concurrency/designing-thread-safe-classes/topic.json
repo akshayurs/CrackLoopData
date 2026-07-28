@@ -1,0 +1,139 @@
+{
+  "id": "designing-thread-safe-classes",
+  "title": "Designing Thread-Safe Classes",
+  "area": "system-design",
+  "group": "oo-concurrency",
+  "order": 4,
+  "slug": "designing-thread-safe-classes",
+  "summary": "Putting it together: a worked walkthrough designing a thread-safe LRU cache from scratch, plus thread confinement, safe publication, and compound-operation traps.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "designing-thread-safe-classes-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "You've now seen the individual tools -- locks, granularity, atomics. This topic puts them together the way an interview actually asks for it: design a specific thread-safe class from a blank page, and defend every decision.\n\nThe walkthrough uses an LRU cache -- a bounded map that evicts its least-recently-used entry -- because it forces every concept in this group at once: what state is shared, what the critical section is, and where a \"safe-looking\" design still hides a compound-operation race. Think of it as the group's capstone: less new theory, more application.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-thread-safe-classes-s02",
+      "order": 2,
+      "sectionTitle": "Worked walkthrough: designing a thread-safe LRU cache",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **LRU (least-recently-used) cache** holds a fixed number of key-value entries; when it's full and a new entry arrives, it evicts whichever entry was accessed longest ago. Internally that's usually a hash map (for O(1) lookup) plus a doubly-linked list or ordering structure (to track recency) -- two data structures that must stay consistent with each other.\n\nThe design question: `get(key)` needs to both read the value *and* update recency (move this entry to \"most recent\") -- that's a read-and-write on shared state in a single logical operation, not a pure read. `put(key, value)` needs to insert, update recency, and possibly evict -- three things that must happen together or not at all.\n\nThat's the shape of a real thread-safe design problem: identify every operation that touches the shared map and the shared ordering structure together, because each one is a compound operation, not a simple read or write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-thread-safe-classes-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: the cache's locking boundary",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a box representing the LRU cache containing two internal structures -- a hash map and a doubly-linked recency list -- both enclosed inside a single dashed boundary labeled 'one lock guards both structures together', with a get() and put() arrow both crossing that boundary >>>\n\nThe lock boundary wraps *both* internal structures together, not one lock per structure. If the map had its own lock and the list had a separate lock, a thread could update the map's entry but be interrupted (or another thread could interleave) before the list's ordering update -- leaving the two structures inconsistent with each other.\n\nThe rule this illustrates: when two pieces of state must always change together, they need to share one lock, not two. Splitting them looks like finer granularity but actually reopens a race between the two locks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "designing-thread-safe-classes-s03-q1"
+      ]
+    },
+    {
+      "id": "designing-thread-safe-classes-s04",
+      "order": 4,
+      "sectionTitle": "Thread confinement: keep it local instead of sharing it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Thread confinement** sidesteps synchronization entirely by never sharing the mutable object across threads in the first place -- if only one thread ever touches it, there's no race to prevent, because there's no second thread to race with.\n\nThe common real form is **stack confinement**: a local variable inside a method is confined to that thread's call stack automatically -- a `StringBuilder` created and used entirely inside one method, never passed to another thread, never needs a lock. Another form is a dedicated worker thread that owns a data structure exclusively, with other threads only communicating with it through a message queue rather than touching its state directly.\n\nConfinement isn't a fallback -- for state that genuinely doesn't need to be shared, it's the cheapest correct design available, because \"not shared\" beats \"shared safely\" on both simplicity and performance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-thread-safe-classes-s05",
+      "order": 5,
+      "sectionTitle": "Safe publication: handing off a finished object",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Safe publication** is about the moment an object becomes visible to another thread -- even a perfectly immutable object can be seen in a half-constructed, corrupted state if the reference to it \"leaks\" to another thread before the constructor finishes (for example, by starting a thread from inside the constructor, or registering `this` in a shared list before construction completes).\n\nThe safe patterns: publish the reference through a properly synchronized mechanism -- a `final` field set once and read after construction, a thread-safe collection, or a mechanism your language guarantees establishes a happens-before relationship (like starting a new thread with the object already fully built). The unsafe pattern is any path where another thread can obtain the reference *before* the constructor has returned.\n\nThis matters even for immutable objects, which is the counterintuitive part: immutability protects you from mutation races *after* construction, but publication races happen *during* construction, before immutability even kicks in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "designing-thread-safe-classes-s05-q1"
+      ]
+    },
+    {
+      "id": "designing-thread-safe-classes-s06",
+      "order": 6,
+      "sectionTitle": "Code: a thread-safe Singleton, revisited",
+      "subTitle": "Java example",
+      "type": "code",
+      "markdown": "```java\nclass ConfigLoader {\n    private static final class Holder {\n        static final ConfigLoader INSTANCE = new ConfigLoader();\n    }\n\n    static ConfigLoader getInstance() {\n        return Holder.INSTANCE;\n    }\n\n    private ConfigLoader() { /* expensive setup */ }\n}\n```\n\nThis is the Java **static holder idiom**: the JVM guarantees a class is initialized exactly once, lazily, the first time it's referenced -- so `Holder.INSTANCE` is created on the first call to `getInstance()`, safely published, with no explicit lock at all.\n\nThe older, more error-prone approach -- **double-checked locking** -- checks if the instance is null, locks, checks again, then creates it, to avoid paying lock overhead on every call after the first. It's easy to get subtly wrong (the object can be seen partially constructed) without an explicit memory-visibility guarantee (Java's `volatile` on the field, specifically); the static holder idiom sidesteps that hazard entirely by relying on class-loading guarantees instead of hand-rolled locking.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "designing-thread-safe-classes-s06-q1"
+      ]
+    },
+    {
+      "id": "designing-thread-safe-classes-s07",
+      "order": 7,
+      "sectionTitle": "Compare: synchronized wrapper vs concurrent collection",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Synchronized wrapper (e.g. `Collections.synchronizedMap`) | Concurrent collection (e.g. `ConcurrentHashMap`) |\n|---|---|---|\n| Locking strategy | One lock around the whole structure | Fine-grained internal locking or lock-free techniques |\n| Throughput under contention | Low -- every access serializes | High -- independent regions don't block each other |\n| Compound operations (check-then-act) | Still unsafe unless the caller locks externally | Offers atomic compound methods (`putIfAbsent`, `computeIfAbsent`) |\n| Iteration while modifying | Requires external locking to avoid `ConcurrentModificationException` | Safe to iterate while other threads modify (weakly consistent view) |\n\n**How to decide:** a synchronized wrapper is a quick retrofit for existing single-threaded code with light concurrent use; a real concurrent collection is the right default for anything built for concurrent access from the start, since it solves compound-operation safety that the wrapper doesn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-thread-safe-classes-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a thread-safe class with unsafe compound operations",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I built this on `ConcurrentHashMap`, so every operation my class does is automatically thread-safe.\"\n\n**Why it's wrong:** `ConcurrentHashMap` guarantees each *individual* method call is safe -- but a class built on top of it that does `if (!cache.containsKey(k)) cache.put(k, expensiveCompute(k))` still has a check-then-act race: two threads can both see the key absent and both call `expensiveCompute(k)`, wasting work (and worse, producing two different values if the computation isn't deterministic).\n\n**Correct model:** the underlying collection's thread-safety is necessary but not sufficient -- your own class's *compound* operations need their own atomicity, either by using the collection's built-in atomic compound methods (`computeIfAbsent`) or by adding your own synchronization around the whole sequence. Building on a thread-safe component doesn't make everything you build on top of it thread-safe automatically.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "designing-thread-safe-classes-s08-q1"
+      ]
+    },
+    {
+      "id": "designing-thread-safe-classes-s09",
+      "order": 9,
+      "sectionTitle": "Interview framing: narrating the trade-offs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For a \"design a thread-safe X\" question, the strongest signal isn't landing on the \"correct\" final design -- it's narrating the trade-offs as you go. Say out loud: \"I could lock the whole structure -- simplest, but every access serializes. Given the access pattern you described (read-heavy), I'd instead consider a read-write lock, trading some complexity for real throughput.\"\n\nExpect the interviewer to change the constraints mid-conversation -- \"now this needs to support a million reads per second\" or \"now two operations must be atomic together\" -- specifically to see whether you adapt your design or defend your first answer past the point it still fits.\n\nTreat your first design as a draft, not a commitment: naming the next three alternatives you'd consider under different constraints demonstrates more understanding than any single \"correct\" answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

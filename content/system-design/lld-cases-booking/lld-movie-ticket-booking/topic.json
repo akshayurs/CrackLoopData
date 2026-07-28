@@ -1,0 +1,165 @@
+{
+  "id": "lld-movie-ticket-booking",
+  "title": "Movie Ticket Booking — LLD",
+  "area": "system-design",
+  "group": "lld-cases-booking",
+  "order": 1,
+  "slug": "lld-movie-ticket-booking",
+  "summary": "Class design for theaters, shows, and seats, with the real interview payoff: making concurrent seat holds and checkout genuinely double-booking-proof.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "lld-movie-ticket-booking-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "You may already know this prompt as an HLD question — \"design BookMyShow.\" The LLD version drops the multi-city, multi-cinema-chain scale problem and asks you to get one thing exactly right: the classes for `Theater`, `Screen`, `Show`, `Seat`, and `Booking`, and the seat-locking logic that stops two people from paying for the same seat.\n\nThink of one theater on one evening, not a whole city's inventory. Search ranking, geo-sharding, and recommendation feeds are explicitly off the table — an interviewer who lets you drift there is testing whether you know the difference between HLD and LLD scope.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what's in scope, what isn't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** a theater with multiple screens; each screen has a fixed seat layout (rows, categories like Silver/Gold/Recliner); a show is a specific movie playing in a specific screen at a specific time; a user books one or more seats for a show and pays for them.\n\n**Explicitly out of scope:** cross-city show search and ranking, recommending movies, geo-sharded inventory, notification delivery infrastructure — those are HLD concerns for the platform-scale version of this problem, not this design.\n\nStating the non-goals out loud in the first two minutes is what signals you're answering the LLD question, not restarting the HLD one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Theater, Screen, Show, Seat, Booking, Payment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A `Theater` owns multiple `Screen`s. Each `Screen` has one seat layout — the physical rows and categories — that's reused by every `Show` scheduled in it.\n\nThe subtle part: seat **state** (available/held/booked) belongs to the `Show`, not the `Screen`. The same physical seat F12 is independently bookable for the 3pm show and the 7pm show in the same screen, so `Show` holds a map of seat-id to status, not the screen.\n\nA `Booking` references a `Show`, a list of seat ids, and a `Payment`. Keeping `Payment` a separate entity — not a field on `Booking` — means payment-gateway logic never leaks into booking logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class model for theaters, screens, shows, and seats",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML class diagram — Theater 1--* Screen, Screen 1--1 SeatLayout (rows of Seat entries tagged with category SILVER/GOLD/RECLINER), Screen 1--* Show, Show has a seatStates map keyed by seatId, Show 1--* Booking, Booking 1--* seat ids and Booking 1--1 Payment. Label the seatStates map on Show to make clear state lives per-show, not per-screen. >>>\n\nThe layered ownership matters more than any single class: `SeatLayout` is the reusable geometry, `Show` is where bookable state actually lives, and `Booking` is a thin record pointing at both — it never mutates seat state directly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s05",
+      "order": 5,
+      "sectionTitle": "Code: holding seats for the checkout window",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`holdSeats` must check every requested seat and place the hold atomically — a hold that succeeds for 2 of 3 seats is worse than no hold, because it needs a compensating release.\n\n```java\nsynchronized HoldResult holdSeats(List<String> seatIds, String userId) {\n    for (String id : seatIds) {\n        if (seatStates.get(id) != SeatState.AVAILABLE) {\n            return HoldResult.failed(id);\n        }\n    }\n    String holdId = UUID.randomUUID().toString();\n    Instant expiry = Instant.now().plus(HOLD_DURATION);\n    for (String id : seatIds) {\n        seatStates.put(id, SeatState.HELD);\n        activeHolds.put(id, new Hold(holdId, userId, expiry));\n    }\n    return HoldResult.success(holdId, expiry);\n}\n```\n\nThis single-process `synchronized` version is a starting point, not the answer — the next slides show where it breaks.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: preventing double-booking under concurrent checkout",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two users click \"Book\" on seat F12 within milliseconds of each other. A naive **check-then-act** — read the seat's status, then write BOOKED — has a race window between the read and the write where both requests can pass the check before either writes.\n\n`synchronized` on a single `Show` object only closes that window within one JVM process. The moment you run more than one app server (which any real deployment does), two servers each hold their own lock and the race reopens at the database.\n\nThe real fix moves the check into the write: `UPDATE seats SET state='HELD' WHERE show_id=? AND seat_id=? AND state='AVAILABLE'`, then look at rows-affected. Zero rows means someone else won the race — no separate read step exists to be stale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "lld-movie-ticket-booking-s06-q1"
+      ]
+    },
+    {
+      "id": "lld-movie-ticket-booking-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: a seat's lifecycle across one show",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state diagram for one seat within one show — AVAILABLE transitions to HELD on hold-created (edge labeled with TTL, e.g. 8 minutes), HELD transitions back to AVAILABLE on TTL expiry or explicit release, HELD transitions to BOOKED on payment success. BOOKED is terminal in this diagram except a dashed separate edge to CANCELLED reachable only through a refund flow, not a direct revert. >>>\n\nBOOKED is intentionally a dead end here — a cancellation is a distinct, audited transition through a refund flow, never a silent revert back to AVAILABLE. That distinction is what a `Booking.cancel()` method should encode.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s08",
+      "order": 8,
+      "sectionTitle": "Code: an expiring hold that releases itself",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Instead of a background sweeper polling every hold, check expiry lazily on the next access to that seat — whoever touches it next reclaims it if it's stale:\n\n```java\nSeatState effectiveState(String seatId) {\n    SeatState state = seatStates.get(seatId);\n    if (state == SeatState.HELD) {\n        Hold hold = activeHolds.get(seatId);\n        if (Instant.now().isAfter(hold.expiry)) {\n            seatStates.put(seatId, SeatState.AVAILABLE);\n            activeHolds.remove(seatId);\n            return SeatState.AVAILABLE;\n        }\n    }\n    return state;\n}\n```\n\nNo seat waits on a cron job to free up, and the one moment staleness could matter — right when someone else tries to book it — is exactly when this check runs.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "lld-movie-ticket-booking-s08-q1"
+      ]
+    },
+    {
+      "id": "lld-movie-ticket-booking-s09",
+      "order": 9,
+      "sectionTitle": "Pricing tiers as a pluggable strategy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Seat category (Silver/Gold/Recliner) times showtime slot (matinee/evening/prime-time) times day-of-week multiplies into a lot of price combinations fast. Hardcoding them into `Show` or `Booking` as if-else chains makes every new pricing rule a change to booking logic.\n\nInstead, define a `PricingStrategy` interface with `price(seat, show)`, and let `Show` hold a reference to one. A `WeekendSurchargeStrategy` or a `MatineeDiscountStrategy` plugs in without either class knowing the rule exists — this is the Strategy pattern applied to pricing, and it's the same shape you'll reuse for surge pricing in ride-hailing or rate plans in hotel booking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "lld-movie-ticket-booking-s10",
+      "order": 10,
+      "sectionTitle": "Compare: pessimistic row locks vs optimistic version checks",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Both approaches solve the same race from slide 6, but they cost differently depending on how much contention a given seat actually sees.\n\n| | Pessimistic lock (`SELECT ... FOR UPDATE`) | Optimistic version check |\n|---|---|---|\n| Mechanism | Row lock held for the transaction | `UPDATE ... WHERE version=X`, retry on 0 rows |\n| Under low contention | Cheap — lock is rarely contended | Cheap — retries are rare |\n| Under high contention | Requests queue behind the lock | Many wasted retries, thrashing |\n| Failure mode | Deadlock risk if lock ordering isn't careful | No deadlocks, but retry storms under a hot seat |\n\n**How to decide:** most seats in most shows see near-zero contention — pessimistic locks are simple and fine. Reach for optimistic checks (or a queue in front of the hot seat) only for a specific predictable hotspot, like the last few seats of a blockbuster's opening show.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "lld-movie-ticket-booking-s10-q1"
+      ]
+    },
+    {
+      "id": "lld-movie-ticket-booking-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: holding seats with no expiry",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Once a user starts checkout, hold their seats until they explicitly cancel — don't release them out from under a paying customer.\"\n\n**Why it's wrong:** users abandon carts constantly — a closed tab, a failed card, a dead network. With no TTL, an abandoned hold looks identical to a sold seat to everyone else. A sold-out show display can be lying: half those seats might be dead holds from an hour ago, and no one can book them.\n\n**Correct model:** every hold carries a server-enforced TTL (typically 5-10 minutes), independent of the client. The client can show a countdown, but the server — not the browser tab — is what reclaims the seat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "lld-movie-ticket-booking-s11-q1"
+      ]
+    }
+  ]
+}

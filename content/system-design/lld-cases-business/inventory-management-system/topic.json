@@ -1,0 +1,165 @@
+{
+  "id": "inventory-management-system",
+  "title": "Inventory Management System",
+  "area": "system-design",
+  "group": "lld-cases-business",
+  "order": 5,
+  "slug": "inventory-management-system",
+  "summary": "Multi-location stock tracking with on-hand/reserved/available separation — the warehouse-side counterpart to the cart's customer-side problem, and how it prevents overselling under concurrency.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "inventory-management-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "An inventory system for a warehouse or retail chain tracks how much of each product exists, where, and how much of it is actually free to sell right now — which are three different numbers, not one. This is the warehouse-side mirror of the e-commerce cart's checkout problem: that topic asks how a customer's purchase gets locked in; this one asks how the stock behind it never gets oversold.\n\nThe entire topic hangs on one distinction: **on-hand** stock physically sitting on a shelf is not the same as **available** stock that's actually free to promise to a new order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "inventory-management-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements and non-goals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** SKUs, stock levels tracked per warehouse location, reservations against incoming orders, transfers between locations, and automatic reordering when stock runs low.\n\n**Out of scope:** demand-forecasting models — predicting *how much* to reorder and *when* is a data-science problem; this design only needs a pluggable point where a forecasting model's output (a reorder threshold) plugs in.\n\nCalling out the forecasting boundary matters because it's easy to over-scope into a whole predictive-analytics system when the actual ask is the inventory data model and its concurrency guarantees.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "inventory-management-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: SKU, Warehouse, StockLevel, Reservation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**SKU** identifies a specific sellable product variant (a shoe in one size and color is its own SKU). **Warehouse** is a physical location. **StockLevel** is the join between them — one row per (SKU, warehouse) pair, holding the three quantities that matter: `onHand`, `reserved`, and `available` (`available = onHand - reserved`).\n\n**Reservation** represents stock provisionally claimed by an order that hasn't shipped yet — it reduces `available` immediately but leaves `onHand` untouched until the order actually ships. **Transfer** moves stock between two warehouses' `StockLevel` rows; **ReorderRule** is a per-SKU policy for when to trigger a restock.\n\nEverything else in this topic is really about keeping those three quantities — on-hand, reserved, available — consistent under concurrent updates.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "inventory-management-system-s03-q1"
+      ]
+    },
+    {
+      "id": "inventory-management-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: SKUs and stock levels across warehouses",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram showing one SKU linked to multiple StockLevel rows, each StockLevel tied to a different Warehouse and holding onHand, reserved, and available quantities >>>\n\nOne `SKU` fans out into several `StockLevel` rows, one per warehouse that stocks it — the same shoe-in-size-9 might have 40 on hand in one warehouse and 12 in another, tracked completely independently.\n\nA `Reservation` always references a specific `StockLevel`, not the `SKU` directly, because reserving stock is inherently a per-location decision — you can't reserve inventory that physically sits in a different warehouse from the one fulfilling the order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "inventory-management-system-s05",
+      "order": 5,
+      "sectionTitle": "Code: Inventory.reserve decrements available, not on-hand",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Inventory {\n    boolean reserve(String sku, int qty, String warehouseId) {\n        int rows = stockLevelRepo.decrementAvailableIfSufficient(sku, warehouseId, qty);\n        // UPDATE stock_levels SET reserved = reserved + ?\n        // WHERE sku = ? AND warehouse_id = ?\n        //   AND (on_hand - reserved) >= ?\n        if (rows == 0) return false;\n\n        reservationRepo.insert(sku, warehouseId, qty, ReservationStatus.ACTIVE);\n        return true;\n    }\n}\n```\n\nThe `WHERE (on_hand - reserved) >= ?` clause checks *available* stock, not on-hand — reserving never touches `onHand`, since nothing has physically left the warehouse yet. `onHand` only drops later, when the reservation is fulfilled (the item is actually picked and shipped).",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "inventory-management-system-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: on-hand, reserved, and available are three numbers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The single most common design mistake in this topic is treating \"how much do we have\" as one field. It isn't: `onHand` is physical reality (what's actually on the shelf, changed only by receiving stock or shipping it out), `reserved` is provisional commitment (stock promised to orders that haven't shipped), and `available` is what's left to promise to a *new* order — `onHand - reserved`.\n\nA warehouse with 100 units on hand and 30 already reserved against pending orders has only 70 truly available. If the system only tracked `onHand` and let it double as \"sellable,\" every pending order's stock could be resold to someone else before the first order ships — a guaranteed oversell.\n\nGetting this right is what makes reservations, cancellations, and fulfillment all consistent: reserving decrements `available` (raises `reserved`), fulfilling decrements `onHand` (and clears `reserved`), and cancelling a reservation just decrements `reserved` back down, restoring `available`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "inventory-management-system-s06-q1"
+      ]
+    },
+    {
+      "id": "inventory-management-system-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: a stock movement through reserve and fulfill",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: sequence showing onHand staying at 100 throughout, reserved rising from 0 to 20 on reservation (available drops from 100 to 80), then onHand dropping to 80 and reserved returning to 0 on fulfillment (available stays at 80) >>>\n\nReserving 20 units: `onHand` stays at 100, `reserved` rises to 20, `available` drops to 80 — nothing has physically moved yet. Fulfilling that reservation (picking and shipping the order): `onHand` drops to 80 to match reality, `reserved` falls back to 0, and `available` stays at 80 throughout the whole handoff.\n\nThe number that changes at each step tells you exactly what happened: a change in `reserved` alone means a commitment was made or released; a change in `onHand` means stock physically moved.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "inventory-management-system-s08",
+      "order": 8,
+      "sectionTitle": "Concurrency: two reservations racing for the last unit",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two orders for the same SKU at the same warehouse arrive within milliseconds, and only one unit is available. If reservation logic reads `available`, checks it's enough, then writes the reservation as separate steps, both requests can read \"1 available,\" both decide they can proceed, and both succeed — selling the same physical unit twice.\n\nThe fix, identical in shape to the wallet system's overdraft prevention and the library's last-copy race: fold the check and the write into one atomic conditional update — `UPDATE stock_levels SET reserved = reserved + ? WHERE (on_hand - reserved) >= ?` — so the database evaluates the condition against the true current row, and only one of two concurrent requests can match it. The loser's update affects zero rows and the code treats that as \"insufficient stock,\" not an error.\n\nThis pattern — collapse read-decide-write into a single atomic operation — is the recurring concurrency lesson across every case study in this group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "inventory-management-system-s08-q1"
+      ]
+    },
+    {
+      "id": "inventory-management-system-s09",
+      "order": 9,
+      "sectionTitle": "Automating reorder as a pluggable policy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each SKU can carry a `ReorderRule` — typically a threshold (\"reorder when available drops below 20\") and a quantity to reorder. A scheduled job or an event triggered on every reservation/fulfillment checks the rule and, if breached, creates a purchase order automatically.\n\nMaking this a **Strategy**-style pluggable policy rather than a hardcoded threshold check matters because different SKUs genuinely need different logic: a slow-moving item might use a simple fixed threshold, while a fast-moving seasonal item might need a rule that factors in recent sales velocity. Swapping the policy per SKU means adding a new `ReorderRule` implementation, not editing a shared threshold-check function every time a new SKU category needs different behavior.\n\nThe forecasting model that decides the *right* threshold is out of scope (slide 2) — this is just the mechanism that acts on whatever threshold it's given.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "inventory-management-system-s10",
+      "order": 10,
+      "sectionTitle": "Compare: single-location reservation vs pooled availability",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Reserve at a single location | Pool availability across nearby locations |\n|---|---|---|\n| \"Do we have this SKU?\" | Checked against one warehouse's `available` only | Checked against the sum of several nearby warehouses' `available` |\n| Fulfillment complexity | Simple — the reserving warehouse always fulfills | Higher — needs a rule for which warehouse actually ships |\n| Stockout rate for the customer | Higher — an item can show unavailable even if a nearby warehouse has it | Lower — a customer sees an item as in-stock more often |\n| Operational complexity | Low | Higher — requires knowing shipping cost/time between the customer and each candidate warehouse |\n\n**How to decide:** pool availability when stockouts materially hurt conversion and warehouses are close enough that shipping-cost variance is small; keep it single-location when operational simplicity matters more than squeezing out every stockout.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "inventory-management-system-s10-q1"
+      ]
+    },
+    {
+      "id": "inventory-management-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: modeling quantity as one field",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just track `quantity` per SKU per warehouse — one number, decrement it when something sells.\"\n\n**Why it's wrong:** it conflates physical stock with sellable stock. The moment an order reserves inventory before it ships, there's no way to represent \"this stock physically exists but is already promised to someone else\" — every pending order's stock stays visible as sellable, and a second customer can be sold the exact same physical unit. That's a phantom oversell, and it's not a rare edge case; it happens constantly under normal order volume.\n\n**Correct model:** track `onHand`, `reserved`, and derive `available` from the two (slide 6). Any state that isn't captured by these three fields — like \"in transit between warehouses\" — gets a fourth explicit field or its own entity, never folded back into a single ambiguous count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

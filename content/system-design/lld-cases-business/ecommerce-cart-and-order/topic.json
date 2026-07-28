@@ -1,0 +1,165 @@
+{
+  "id": "ecommerce-cart-and-order",
+  "title": "E-commerce Cart & Order",
+  "area": "system-design",
+  "group": "lld-cases-business",
+  "order": 4,
+  "slug": "ecommerce-cart-and-order",
+  "summary": "Cart-to-order snapshotting — locking price and product details at checkout — plus an order state machine spanning payment, shipping, and returns.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "ecommerce-cart-and-order-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "An e-commerce cart looks like a shopping list that becomes an order. The interesting design problem is what happens **at the moment of checkout**: prices, product details, and inventory all have to be frozen at that instant, because the catalog keeps changing after — a price update, a renamed product, a sold-out item — none of which should reach backward and alter an order someone already placed.\n\nThe second half of the topic is the order's lifecycle: placed, paid, shipped, delivered, with cancellation and returns branching off at nearly every stage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "ecommerce-cart-and-order-s02",
+      "order": 2,
+      "sectionTitle": "Requirements and non-goals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** a cart holding items before purchase, checkout converting a cart into an order, inventory reservation, and returns.\n\n**Out of scope:** search and recommendations — this is a transactional-correctness problem (what does an order actually freeze, and how does its state evolve), not a catalog-discovery one.\n\nScoping out search matters because it's tempting to sketch a whole storefront; the interview is testing whether you get checkout and order-state right, not whether you can also design search ranking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "ecommerce-cart-and-order-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Cart, Order, Inventory, Payment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cart** holds `CartItem`s — a live reference to a `Product` and a quantity, nothing frozen yet. **Order** holds `OrderItem`s — once created, these are **immutable snapshots**: the product name, price, and any options as they were at checkout, independent of what the catalog says now.\n\n`Inventory` tracks sellable stock per product (see the inventory-management-system case study for the full model); `Payment` represents the transaction that funds the order, whose own correctness is the payment/wallet case study's job, not this one's.\n\nThe `Cart` → `Order` boundary is the whole topic: everything before it is mutable and disposable, everything after it is a permanent record.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "ecommerce-cart-and-order-s03-q1"
+      ]
+    },
+    {
+      "id": "ecommerce-cart-and-order-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the cart-to-order transition",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: diagram showing CartItem (live reference to Product, quantity) on the left, an arrow labelled 'checkout()' crossing to OrderItem (frozen productName, unitPriceAtPurchase, quantity) on the right, emphasizing OrderItem has no live link back to Product >>>\n\n`CartItem` points at a live `Product` — if the product's price changes while it sits in someone's cart, the cart reflects the new price. `OrderItem` deliberately does **not** point at `Product` the same way; it copies the fields it needs (name, price, options) at the moment of checkout.\n\nThat one arrow — copy instead of reference — is what makes an order a permanent, self-contained record instead of a view that changes underneath the customer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "ecommerce-cart-and-order-s05",
+      "order": 5,
+      "sectionTitle": "The hard part: snapshotting price and product at checkout",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If `OrderItem` just held a foreign key to `Product` and read its price on demand, a price change next week would silently change what a customer's receipt from last week shows was charged — which is both confusing and, in most jurisdictions, not even legal for a completed sale.\n\nThe fix is to copy every fact the order needs to stay meaningful forever: product name, unit price, chosen options (size, color), all written onto the `OrderItem` row itself at checkout time, not looked up live from `Product` afterward. If the seller later renames or discontinues the product, or changes its price, every past order is unaffected because it never depended on `Product` staying the same.\n\nThe interview signal here: recognizing that \"just reference the product\" is the wrong default the moment a record needs to represent a specific point in time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "ecommerce-cart-and-order-s05-q1"
+      ]
+    },
+    {
+      "id": "ecommerce-cart-and-order-s06",
+      "order": 6,
+      "sectionTitle": "Code: Cart.checkout() creates immutable snapshots",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Cart {\n    List<CartItem> items;\n\n    Order checkout(PaymentMethod payment) {\n        List<OrderItem> orderItems = items.stream()\n            .map(ci -> new OrderItem(\n                ci.product.id,\n                ci.product.name,          // snapshot, not a live lookup\n                ci.product.currentPrice,  // frozen at this instant\n                ci.quantity,\n                ci.selectedOptions))\n            .toList();\n\n        for (OrderItem item : orderItems) {\n            inventory.reserve(item.productId, item.quantity);\n        }\n\n        Order order = orderRepo.create(orderItems, OrderStatus.PLACED);\n        paymentService.charge(payment, order.total());\n        return order;\n    }\n}\n```\n\nThe `.name` and `.currentPrice` reads happen once, at checkout, and are copied by value into `OrderItem` — nothing about the resulting `Order` changes if `Product` is edited afterward.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "ecommerce-cart-and-order-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: the order state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state machine for Order — PLACED to PAID to SHIPPED to DELIVERED, with a CANCELLED branch off PLACED and PAID, and a RETURNED branch off DELIVERED >>>\n\nAn order moves `PLACED` → `PAID` → `SHIPPED` → `DELIVERED` on the happy path. `CANCELLED` is only reachable before shipment — once a package has left the warehouse, cancellation is no longer meaningful and the only remaining branch is a post-delivery `RETURNED`.\n\nEach transition is a real business event (payment captured, carrier pickup, proof of delivery, a return authorized) — not something that happens by editing an `orderStatus` field from an arbitrary state to any other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "ecommerce-cart-and-order-s08",
+      "order": 8,
+      "sectionTitle": "Inventory reservation: at checkout vs at payment confirmation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Reserving inventory the moment a cart hits checkout guarantees a customer who's paying right now won't lose the item to someone else mid-payment — but if their payment fails or they abandon the flow, that stock is locked away from other buyers until the reservation times out.\n\nReserving only after payment confirms avoids that lockup entirely, but opens a window where two customers can both reach \"payment successful\" for the last unit, and one has to be told after paying that the item is actually gone — a much worse customer experience than a failed reservation.\n\nMost real systems reserve at checkout with a short expiry (minutes, not hours) precisely to bound the abandoned-cart lockup while still avoiding the post-payment oversell.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "ecommerce-cart-and-order-s08-q1"
+      ]
+    },
+    {
+      "id": "ecommerce-cart-and-order-s09",
+      "order": 9,
+      "sectionTitle": "Compare: soft-reserve on add-to-cart vs only at checkout",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Reserve on add-to-cart | Reserve only at checkout |\n|---|---|---|\n| Protects against | Losing stock between browsing and buying | Losing stock only during the actual payment window |\n| Lockup risk | High — items sit reserved in abandoned carts for as long as the cart lives | Low — reservation only exists for the short checkout window |\n| Customer experience for popular items | \"Add to cart\" itself can fail if stock is momentarily gone | Item can vanish between add-to-cart and checkout, which is more common but a smaller commitment lost |\n| Typical choice | Rare — usually only for flash sales with very limited stock | The default for general e-commerce |\n\n**How to decide:** reserve at add-to-cart only when the business genuinely needs to guarantee a browsing customer keeps their spot (a flash sale); otherwise reserving at checkout with a short expiry is the better trade-off for everyday retail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "ecommerce-cart-and-order-s10",
+      "order": 10,
+      "sectionTitle": "Modeling partial shipment and return as first-class events",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An order with three items might ship in two boxes because one item is on backorder, or a customer might return only one of three items. Neither is an edit to the original `Order` or its `OrderItem`s — both are new events layered on top.\n\nA `Shipment` entity links a subset of `OrderItem`s to a carrier and tracking number, so an order can have multiple shipments over time without its own record ever being rewritten. A `Return` entity similarly references specific `OrderItem`s (not the whole order) with a reason, a status, and eventually a refund amount tied back to the original snapshotted price.\n\nThe pattern matches the rest of this topic: the `Order` and its `OrderItem`s are the permanent record of what was purchased; shipments and returns are a separate, append-only history of what happened to it afterward.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "ecommerce-cart-and-order-s10-q1"
+      ]
+    },
+    {
+      "id": "ecommerce-cart-and-order-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: recalculating totals from current prices",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"To show an order's total, just look up each item's current price from the product catalog and sum it.\"\n\n**Why it's wrong:** it silently changes a customer's receipt every time the underlying product's price moves — a $40 shirt bought last month suddenly shows as $45 on the order history page because it went up since, even though the customer was correctly charged $40.\n\n**Correct model:** every total, past or present, is computed from the `OrderItem`'s snapshotted `unitPriceAtPurchase`, never from a live `Product` lookup. An order's total is fixed the moment it's placed and never recalculated from anything that can change afterward.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

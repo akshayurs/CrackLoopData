@@ -1,0 +1,126 @@
+{
+  "id": "failure-detection",
+  "title": "Failure Detection: Heartbeats, Phi-Accrual & Its Limits",
+  "area": "system-design",
+  "group": "distributed-systems-core",
+  "order": 2,
+  "slug": "failure-detection",
+  "summary": "How systems decide a peer is dead, why perfect failure detection is provably impossible over an asynchronous network, and the heartbeat/phi-accrual mechanics behind real detectors.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "failure-detection-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Before a system can react to [partial failure](partial-failure-and-failure-models) — retry, fail over, evict a node — something first has to decide a peer is actually dead. That decision is a **failure detector**, and it's fundamentally a guess: over an asynchronous network, you cannot prove a silent node is dead rather than just slow.\n\nThink of it like waiting for a friend to text back: no reply could mean they're busy, their phone died, or they're ignoring you — and the longer you wait before assuming the worst, the more annoying false alarms you avoid, at the cost of reacting slower to real problems. This topic covers the mechanics real systems use to make that trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "failure-detection-s02",
+      "order": 2,
+      "sectionTitle": "Heartbeats: the simplest failure detector, and why it produces false positives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The simplest failure detector is a **heartbeat**: each node periodically sends \"I'm alive\" to a monitor, and the monitor declares it dead if no heartbeat arrives within some fixed window. It's cheap, easy to reason about, and used everywhere from Kubernetes liveness probes to database replica monitoring.\n\nThe catch is that a missed heartbeat doesn't prove death — it proves *silence*, and silence has many innocent causes: a garbage-collection pause, a momentary network blip, a CPU-starved scheduler delaying the heartbeat thread. Every one of these looks identical, from the monitor's side, to the node actually being gone.\n\nSo every heartbeat-based detector is really a bet: pick a window short enough to react fast, and you'll occasionally evict a node that was only briefly slow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "failure-detection-s02-q1"
+      ]
+    },
+    {
+      "id": "failure-detection-s03",
+      "order": 3,
+      "sectionTitle": "Fixed timeouts: the tension between detecting fast and crying wolf",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **fixed timeout** turns the heartbeat window into a single hard number: miss N seconds of heartbeats, you're out. The number encodes a direct trade-off. Set it short, and you detect real crashes fast — but you'll also evict nodes during ordinary hiccups: a JVM GC pause, a brief network reroute, a noisy-neighbor CPU spike on shared hardware.\n\nSet it long, and you avoid those false evictions, but a genuinely dead node keeps looking \"alive\" to the rest of the system for longer, during which requests keep getting routed to it and failing.\n\nThere's no single correct number — it depends on your workload's actual tail latency. A timeout tuned for a service with a 50ms p99 will falsely evict constantly if reused for a service whose p99 is 2 seconds under load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "failure-detection-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a heartbeat missing a beat under GC pause vs. an actual crash",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two side-by-side timelines of heartbeat pulses from a node to a monitor; left timeline shows a gap during a labelled \"GC pause\" followed by heartbeats resuming; right timeline shows heartbeats simply stopping forever after a labelled \"crash\" point — both timelines look identical up to the timeout threshold marker >>>\n\nA GC pause and a real crash produce the exact same signal up to the timeout threshold: silence. The only thing that tells them apart is whether heartbeats resume *after* the timeout window — which is too late to have avoided the false-positive eviction in the GC case.\n\nThis is the structural reason no fixed-timeout detector can be both fast and free of false positives: the information that would distinguish them doesn't exist yet at decision time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "failure-detection-s05",
+      "order": 5,
+      "sectionTitle": "Phi-accrual failure detection: a continuous suspicion level instead of a binary verdict",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Phi-accrual** detectors (used by Cassandra and Akka) replace the binary \"alive or dead\" verdict with a continuously rising **suspicion level**, `phi`. Instead of a fixed timeout, the detector tracks the recent history of heartbeat inter-arrival times and computes how statistically unlikely the current silence is given that history.\n\nA node with a jittery, GC-prone heartbeat pattern naturally gets a more lenient threshold, because its own history says gaps are normal for it. A node with rock-steady heartbeats gets flagged fast if it goes quiet, because that silence is statistically surprising for it specifically.\n\nThe caller picks a `phi` threshold (say, 8) that maps to \"how confident do I need to be before acting,\" rather than picking a single timeout that has to work for every node's noise profile at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "failure-detection-s05-q1"
+      ]
+    },
+    {
+      "id": "failure-detection-s06",
+      "order": 6,
+      "sectionTitle": "The impossibility result: no failure detector can be both accurate and complete over an unreliable network",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This isn't just an engineering limitation — it's provable. Over a truly **asynchronous network** (one with no upper bound on message delay), no failure detector can guarantee both **completeness** (every crashed node is eventually suspected) and **accuracy** (no live node is ever wrongly suspected). Any finite timeout you pick, an adversarial-enough delay can exceed it, producing a false positive; any detector that never falsely suspects a live node must be willing to wait forever for a genuinely dead one.\n\nThis is closely related to the FLP impossibility result for consensus, and it's why every real system quietly accepts one of the two: either occasional false evictions (most heartbeat systems) or slow detection of real failures (systems that bias toward patience).\n\nKnowing this changes how you evaluate a vendor's failure detector: the honest question isn't \"is it accurate,\" it's \"which side of this trade-off did it choose, and does that match my workload.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "failure-detection-s06-q1"
+      ]
+    },
+    {
+      "id": "failure-detection-s07",
+      "order": 7,
+      "sectionTitle": "Compare: fixed timeout vs. phi-accrual vs. gossip-based detection on speed, false-positive rate, and cost",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Fixed timeout | Phi-accrual | Gossip-based |\n|---|---|---|---|\n| Detection speed | Fast, but same for every node | Adapts per node's own jitter history | Depends on gossip fanout and round interval |\n| False-positive rate | High if one timeout serves nodes with different latency profiles | Lower — thresholds self-tune to each node's normal noise | Lower — multiple peers must agree before eviction |\n| Implementation cost | Very low — one config value | Moderate — needs a rolling window of inter-arrival times | Higher — needs a gossip protocol and membership list |\n| Scales to | Small, uniform clusters | Single-cluster monitoring (Cassandra, Akka) | Large, dynamic clusters (Consul, Cassandra ring) |\n\n**How to decide:** start with a fixed timeout for a small, homogeneous set of nodes — it's simplest and good enough. Move to phi-accrual once nodes have meaningfully different latency profiles, and to gossip-based detection once the cluster is large enough that no single node should unilaterally declare another dead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "failure-detection-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: one global timeout tuned for the happy path, wrong for every slow dependency",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We picked a 3-second timeout for our health checks — that's a sensible default, use it everywhere.\"\n\n**Why it's wrong:** \"sensible\" only holds for the service it was tuned against. A batch-processing worker with a legitimately bursty 5-second p99 will get falsely evicted constantly under that timeout, while a latency-critical service with a 20ms p99 will take far too long to detect a real crash if it inherits the same 3 seconds.\n\n**Correct model:** tune the timeout — or the phi threshold — against *that dependency's own* latency distribution, not a company-wide default. A detector's job is to notice when a node deviates from *its own* normal, and \"normal\" is different for every service.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "failure-detection-s08-q1"
+      ]
+    }
+  ]
+}

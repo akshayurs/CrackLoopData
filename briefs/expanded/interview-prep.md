@@ -1,0 +1,297 @@
+# Area: Interview Prep & Career (interview-prep)
+
+Meta area — the interview *process* itself (format, communication, judgment, logistics), not the underlying technical material. Two groups below intentionally overlap in subject with other Areas per `area-group-map.md`'s own overlap flags (`sd-playbook` (A7) = `sd-interview-playbook` (A17); `behavioral` (A9) = `behavioral-interview` (A17)); rather than duplicate, those groups here own the *interview-specific* layer (format, framework execution, calibration, scoring) and cross-link to the technical/competency Topics in Area 7 (`system-design`) and Area 9 (`engineering-craft`) for the underlying material. Area 1's `coding-interview-strategy` is a narrower subset of this Area's `coding-playbook` per the same overlap notes.
+
+## Group: Coding Interview Playbook (coding-playbook)
+
+### Topic: The Coding Interview Format (interview-format, beginner)
+What a coding round actually evaluates and how its shape differs by stage and company, so prep effort targets the real rubric instead of a guess.
+- What a coding interview actually measures beyond "did it run"
+- The rubric: correctness, communication, complexity, code quality
+- Phone screen vs onsite vs virtual-onsite differences
+- Diagram: timeline of a 45-minute round, phase by phase
+- Who's in the room and what they write down afterward
+- Compare: FAANG-style multi-round loop vs startup single-round format
+- How many problems to expect and the difficulty progression within a round
+- Pitfall: solving it correctly and still failing the interview
+
+### Topic: Clarifying Requirements & Edge Cases (clarifying-requirements, beginner)
+Turning a deliberately ambiguous prompt into a bounded problem — constraints, edge cases, expected scale — before writing any code.
+- Why interviewers write ambiguous prompts on purpose
+- The checklist: input shape, size, duplicates, ordering, nulls
+- Questions that signal seniority vs questions that just stall
+- Concrete example: clarifying "find the shortest path" before coding
+- Turning stated constraints into Big-O expectations up front
+- Pitfall: asking questions whose answers wouldn't change your approach
+- Compare: over-clarifying vs under-clarifying the same prompt
+- When to state an assumption out loud and just move on
+
+### Topic: Thinking Out Loud (thinking-out-loud, intermediate)
+The narration skill that keeps a correct solution from reading as a silent black box — saying the idea and the why before and while coding it.
+- Why silence is the top failure mode even with working code
+- The narration loop: state the idea, why it works, then code it
+- Talking through a brute force before jumping to the optimal approach
+- Code: narrating a two-pointer solution line by line, as a worked script
+- How to narrate without rambling past the point of signal
+- Handling an interviewer's interrupting question mid-flow
+- Pitfall: narrating what the code does instead of why you chose it
+- Practicing this alone: recording yourself and rubber-ducking
+
+### Topic: Pattern Recognition Playbook (pattern-recognition, intermediate)
+Mapping problem cues — keywords, constraints, data shape — to the short list of standard techniques, so an unfamiliar-looking problem gets triaged fast.
+- Why interviews reward pattern-matching, not novel algorithm invention
+- Diagram: cue-to-technique decision tree (sorted array, "top k", subarray, etc.)
+- Constraint-to-technique table: N≤20 → backtracking, N≤10^6 → O(N log N)
+- Reading "top k" / "kth largest" as a heap signal
+- Reading "subarray" / "substring" as a sliding-window signal
+- Reading graph-shaped input that isn't phrased as a graph
+- Compare: two plausible patterns on the same problem, and how to pick
+- Pitfall: forcing a memorized pattern onto the wrong problem
+- Building your own cue-to-pattern index while practicing
+
+### Topic: Talking Through Complexity (complexity-communication, intermediate)
+Deriving and stating time/space complexity live and correctly — including amortized and multi-variable cases — instead of quoting a memorized answer.
+- Deriving complexity from the code you just wrote, not from memory
+- Multi-variable complexity (O(V+E), O(n·m)) and naming each variable out loud
+- Amortized analysis in plain language: dynamic array resizing
+- Space complexity: accounting for the recursion call stack
+- Compare: your solution's complexity vs the theoretical optimum
+- Pitfall: quoting a complexity that doesn't match the code on the screen
+- Responding when the interviewer pushes "can you do better?"
+
+### Topic: Testing & Debugging Your Own Code Live (live-testing-debugging, intermediate)
+The end-of-round ritual of tracing test cases by hand and fixing bugs under time pressure, without a compiler to lean on.
+- Why "looks right" isn't the bar — trace it before declaring done
+- Picking test cases that stress the logic: empty, single element, duplicates, max size
+- Dry-running your own code line by line on a shared doc or whiteboard
+- Common bug classes: off-by-one, mutation during iteration, integer overflow
+- Code: a buggy loop and the trace that surfaces the bug
+- What to do when you find a bug with five minutes left
+- Pitfall: testing only the happy path
+
+### Topic: Handling Being Stuck (handling-being-stuck, advanced)
+Concrete recovery moves for the moment you don't see the approach — using hints productively and falling back to brute force instead of freezing.
+- Why freezing silently costs more than voicing a wrong idea
+- The fallback ladder: brute force first, then optimize from there
+- Using an interviewer's hint without it reading as giving up
+- Reframing the problem out loud to unstick your own thinking
+- Time-boxing an idea before abandoning it for another
+- Pitfall: repeatedly apologizing instead of continuing to work the problem
+- When to explicitly ask for a hint vs keep grinding alone
+
+### Topic: Common Pitfalls & Anti-Patterns (coding-interview-pitfalls, intermediate)
+The recurring, avoidable mistakes — cutting across any single phase — that sink otherwise-technically-strong candidates.
+- Coding before stating an approach out loud
+- Ignoring interviewer hints or pushback
+- Illegible code: poor names, no structure, dense one-liners
+- Losing track of time across a multi-problem round
+- Over-engineering a simple problem with premature abstraction
+- Compare: what strong vs weak candidates do in the first two minutes
+- Pitfall recap as a pre-interview self-check
+
+### Topic: Remote & Virtual Coding Interview Mechanics (remote-coding-mechanics, beginner)
+The logistics unique to shared-doc/CoderPad-style remote rounds — no autocomplete or compiler, and screen-share etiquette.
+- Common platforms (CoderPad, HackerRank, a shared doc) and what they lack
+- Coding without autocomplete, syntax highlighting, or a compiler
+- Screen-share and camera etiquette during a live round
+- Handling connectivity issues without losing composure
+- Compare: remote round expectations vs in-person whiteboard expectations
+- Pitfall: relying on IDE muscle memory that doesn't exist in the tool
+
+### Topic: Mock Interviews & Deliberate Practice (mock-interviews-practice, beginner)
+Structuring practice so it actually transfers — timed mocks, self-review, and progressing from untimed to cold problems.
+- Why solving problems untimed at home doesn't transfer to the real thing
+- Structuring a 45-minute mock end to end
+- Giving and receiving useful feedback after a mock session
+- Recording yourself: what to listen for afterward
+- Tracking the patterns in problems you keep failing
+- Compare: platform practice vs mock interviews vs pairing with a friend
+- Building a multi-week practice plan before an onsite
+
+## RETIRED — System Design Interview Playbook [was sd-interview-playbook]
+
+This group was a duplicate of the `system-design` area's `sd-playbook` group (8 of its 9
+topics overlapped). The design-interview playbook is now homed in `system-design`; its one
+unique topic, `sd-remote-mechanics`, was ported there. Do not re-author it here.
+
+## Group: Behavioral Interview (behavioral-interview)
+
+*STAR structure and leadership/scope-impact competency itself are taught in `behavioral` (Area 9, engineering-craft). Topics here are the interview-specific layer: how the round is run and scored, story-bank strategy, question archetypes, and company frameworks — they assume STAR as a given tool rather than re-teaching it.*
+
+### Topic: How Behavioral Interviews Are Structured & Scored (behavioral-format-scoring, beginner)
+What a behavioral round or loop looks like end to end and the rubric interviewers actually fill out, versus a casual conversation.
+- What's on the interviewer's scorecard: named competencies, not vibes
+- Compare: one dedicated behavioral round vs competencies spread across a whole loop
+- How answers get cross-checked for consistency across interviewers
+- Typical structure: two to three stories deep-dived per session
+- Where behavioral scoring sits in the overall hire/no-hire decision
+- Pitfall: treating it as an informal chat that needs no preparation
+
+### Topic: Building Your Story Bank (behavioral-story-bank, intermediate)
+Selecting and organizing 8-12 real work stories ahead of time so any question maps to a ready answer, reusing the STAR structure rather than improvising live.
+- Why improvising a story live is the top cause of rambling
+- Mining your work history for 8-12 candidate stories
+- Tagging each story by the competencies it can answer
+- One story, multiple angles: reusing it for conflict, failure, and leadership
+- Concrete example: turning one incident into three different STAR answers
+- Compare: a vague story vs a metric-anchored story on the same incident
+- Pitfall: a story bank where you're only ever the hero
+
+### Topic: Common Question Archetypes (behavioral-question-archetypes, intermediate)
+The recurring question families and what each is actually probing beneath its surface wording.
+- Conflict with a peer or manager — what's really being tested
+- "A time you failed" — why a real failure beats a humblebrag
+- Ambiguity and incomplete information
+- Disagreeing with a decision and committing anyway
+- Influencing without authority
+- Giving and receiving hard feedback
+- Pitfall: the fake-failure answer ("I worked too hard")
+
+### Topic: Company-Specific Frameworks (behavioral-company-frameworks, intermediate)
+How the same underlying competencies get relabeled and weighted differently by company, and how to map one story bank onto each.
+- Amazon's Leadership Principles and how they're interviewed against
+- Compare: Amazon LPs vs Google's "Googleyness" vs Meta's core values
+- Mapping a single story onto multiple companies' frameworks
+- Where to find a target company's stated values before the loop
+- How much company-specific research is actually worth doing
+- Pitfall: name-dropping a leadership principle with no real story behind it
+
+### Topic: Answering for Your Level (behavioral-calibrating-level, advanced)
+How scope, ownership, and the size of the "we" in a story should shift between IC, senior, and staff+/manager answers to the same question.
+- Compare: an IC-level vs a staff-level answer to the same conflict question
+- Scope signals: individual task vs team vs cross-org outcomes
+- Talking about impact with real metrics at increasing seniority
+- When "I" should become "I decided, and here's how the team executed"
+- Preparing at least one story that demonstrates the next level up
+- Pitfall: a staff candidate's story that stays at IC scope
+
+### Topic: Red Flags & Common Mistakes (behavioral-red-flags, intermediate)
+The answer patterns that actively hurt candidates regardless of the underlying story.
+- Badmouthing a former manager or company
+- Taking full credit for a team result
+- No real self-reflection in a failure story
+- Rambling past the point the interviewer already has enough signal
+- An answer with no measurable outcome
+- Compare: a self-aware vs a defensive answer to "tell me about a failure"
+- Pitfall recap as a pre-loop self-check
+
+### Topic: Panel & Loop Dynamics (behavioral-panel-loop-dynamics, beginner)
+How behavioral signal gets combined across a multi-interviewer loop, and why consistency across your own stories matters.
+- How interviewers compare notes after a loop
+- Why contradicting an earlier answer in a later round costs you
+- Handling the same question asked twice by different interviewers
+- What a debrief or hiring-committee packet actually looks like
+- What happens when two interviewers disagree in the debrief
+- Pitfall: telling a "better" version of the same story to a later interviewer
+
+### Topic: Questions to Ask the Interviewer (behavioral-questions-to-ask, beginner)
+Using the "any questions for me?" close as a two-way evaluation signal instead of a formality.
+- Why this moment is still being evaluated, not just courtesy
+- Tailoring questions to the interviewer's role: peer, manager, skip-level
+- Questions that signal genuine interest vs generic ones
+- Concrete good vs bad question examples
+- Building a short list of three to four questions before the loop starts
+- Pitfall: "no questions" or only asking about perks and PTO
+
+## Group: Take-Home & Pair Programming (take-home)
+
+### Topic: Take-Home Assignment Strategy (take-home-strategy, beginner)
+Approaching a multi-hour or multi-day take-home so effort matches signal, reading the prompt for what's actually graded before time-boxing the work.
+- Why take-homes are evaluated on judgment, not just a working solution
+- Reading the prompt for explicit and implicit grading criteria
+- Time-boxing before writing a single line of code
+- Deciding what to build vs explicitly deferring with a note
+- Compare: a 3-hour suggested take-home vs an open-ended one
+- Pitfall: over-engineering a toy problem for days
+
+### Topic: Structuring & Documenting a Submission (take-home-submission-structure, intermediate)
+What a take-home repo needs beyond working code, since evaluators often review it without you present to explain it.
+- The README as your only chance to narrate decisions
+- What tests to include given the time budget
+- Writing a trade-offs section: what you'd do with more time
+- Code: a minimal but complete project layout example
+- Compare: a bare code dump vs a documented submission on the same problem
+- Pitfall: no setup instructions, so the evaluator can't even run it
+
+### Topic: Pair Programming Interview Format (pair-programming-format, beginner)
+How a live pairing round differs from solo coding rounds: shared control, an existing codebase, and genuine back-and-forth collaboration.
+- How pairing rounds are typically run: driver/navigator, an existing repo
+- What's evaluated beyond correctness: collaboration and adaptability
+- Working inside someone else's codebase and conventions
+- Negotiating who drives and when to swap
+- Compare: solo whiteboard coding vs pairing round expectations
+- Pitfall: steamrolling the interviewer's suggestions instead of collaborating
+
+### Topic: Live Collaborative Coding Tools & Mechanics (pair-programming-tools-mechanics, beginner)
+The practical mechanics of screen-shared or remote-pair tools and the etiquette for a smooth session.
+- Common tools: Live Share, tmux/tmate sharing, repl-based links
+- Setting up your environment beforehand vs configuring it live
+- Etiquette: narrating actions before you take them
+- Handling latency or a dropped connection mid-session
+- Compare: synchronous pairing tools vs async shared-repo review
+- Pitfall: silently taking over the keyboard without narrating intent
+
+### Topic: Common Take-Home & Pairing Pitfalls (take-home-pairing-pitfalls, intermediate)
+The failure modes specific to unsupervised or collaborative formats, distinct from the live solo-coding pitfalls covered elsewhere.
+- Scope creep: building features nobody asked for
+- Ignoring the stated time budget entirely
+- Not clarifying ambiguous requirements when working async
+- Skipping tests because "it's just a take-home"
+- Compare: a candidate who sends one clarifying email vs one who guesses
+- Pitfall recap checklist before submitting
+
+## Group: Negotiation & Offer (negotiation)
+
+### Topic: Understanding Levels & Compensation Bands (levels-comp-bands, beginner)
+How company leveling works and why the negotiated level matters more than a single number, since it sets the comp band and future raises.
+- What a "level" is and why it's negotiated before the number
+- How comp bands work: base, bonus target, equity range per level
+- Cross-company level mapping: a rough equivalence table
+- Where to find real leveling and comp data before you negotiate
+- Compare: a higher number at a low level vs a level-up at a lower number
+- Pitfall: accepting a lowballed level just to "get in the door"
+
+### Topic: Reading & Evaluating an Offer (reading-evaluating-offer, intermediate)
+Decomposing a written offer into its real components and converting them into one comparable, risk-adjusted number.
+- Base, bonus, sign-on, equity: what each line actually means
+- RSUs vs stock options vs a private company's paper valuation
+- Diagram: a standard 4-year vesting schedule with a 1-year cliff
+- Converting equity into an annualized, risk-adjusted estimate
+- Compare: two offers with the same headline total, different risk profiles
+- Pitfall: comparing headline total comp without adjusting for vesting and risk
+
+### Topic: Negotiation Tactics & Scripts (negotiation-tactics-scripts, intermediate)
+Concrete phrasing and sequencing for a comp negotiation call — anchoring, staying collaborative, and negotiating without a competing offer.
+- Why almost every initial offer has room, and why a counter is expected
+- Anchoring: giving a number or range vs making them go first
+- Script: opening a counter-offer conversation by email or call
+- Negotiating without a competing offer in hand
+- Staying collaborative in tone while still pushing for more
+- Pitfall: an ultimatum you're not actually willing to enforce
+
+### Topic: Competing Offers & Leverage (competing-offers-leverage, advanced)
+Using multiple offers as real leverage: sequencing timelines, deciding what to disclose, and how much a competing number typically moves the needle.
+- Why a competing offer is the strongest lever a candidate has
+- Sequencing interview timelines so offers land close together
+- What to disclose to a recruiter vs keep private
+- Concrete example: using Offer A's number to move Offer B
+- Compare: disclosing a specific number vs a range vs staying silent
+- Pitfall: bluffing a competing offer that doesn't actually exist
+
+### Topic: Closing, Deadlines & Exploding Offers (closing-deadlines-exploding-offers, intermediate)
+Handling artificial urgency in an offer's deadline and the final steps to actually close.
+- What an "exploding offer" really means and how firm it usually is
+- Scripts for requesting a deadline extension
+- Verbal acceptance vs a signed offer letter — what's actually binding
+- Negotiating start date and pre-start logistics
+- Compare: accepting verbally now vs asking for a short extension
+- Pitfall: treating a verbal deadline as more rigid than it actually is
+
+### Topic: Special Cases (negotiation-special-cases, advanced)
+Negotiation mechanics that diverge from the standard external-hire case.
+- Internal transfer or promotion: what's negotiable vs fixed by policy
+- Relocation packages: what's typically covered and what to ask for
+- Visa sponsorship constraints on leverage and timelines
+- New-grad offers: less room, different levers (sign-on, start date)
+- Compare: external-hire leverage tactics vs what's actually available internally
+- Pitfall: applying standard leverage tactics to a visa-constrained offer

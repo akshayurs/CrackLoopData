@@ -1,0 +1,29 @@
+{
+  "topicId": "connection-pooling",
+  "interviewQuestions": [
+    {
+      "id": "connection-pooling-iq1",
+      "question": "Your database says 'too many connections' under load — what's your first move?",
+      "answerMarkdown": "I'd first check the math rather than guess: multiply the configured per-instance pool size by the current instance count, and compare it to the database's configured connection limit. This error is very often exactly that — a pool sized reasonably for one instance, multiplied by however many instances autoscaling spun up, blowing past a limit nobody re-checked after the fleet grew.\n\nIf the math confirms it, I have two levers: lower the per-instance pool size, or raise the database's connection limit (bounded by what the database itself can actually sustain — connections aren't free on that side either). I'd also check for connection leaks — code paths that check out a connection but don't reliably return it on error — since a leak produces the same symptom without needing a big fleet at all.\n\nI'd close by proposing a concrete guardrail: `pool_size × max_instances` should be checked against the database's limit as part of capacity planning, not discovered during an incident.\n\n**Testing:** whether you reach for the specific, checkable cause (the multiplication) before reaching for a bigger database or a bigger limit.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Diagnosing 'too many connections'"
+    },
+    {
+      "id": "connection-pooling-iq2",
+      "question": "How would you size a connection pool for a service calling a downstream database or API?",
+      "answerMarkdown": "I'd anchor the size on the downstream's sustainable concurrency, not on how much my service could theoretically send. Concretely, I'd start from what the database or API can actually handle at once — its documented connection limit, or a number I've load-tested it against — divide that by the maximum number of instances my service could autoscale to, and use that as the per-instance pool size.\n\nI'd add a checkout timeout so a caller fails fast instead of queueing forever if the pool is exhausted, and I'd flag the trade-off either way: too small caps throughput below what the database could actually sustain, too big lets the fleet overwhelm the database with connection overhead it can't absorb.\n\nI'd close by noting this number isn't set-and-forget — it needs revisiting whenever the fleet's max instance count or the downstream's capacity changes.\n\n**Testing:** whether you size from the callee's real capacity and account for the whole fleet, not just one instance in isolation.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Sizing a connection pool"
+    },
+    {
+      "id": "connection-pooling-iq3",
+      "question": "What happens when a connection pool is exhausted, and how do you prevent one slow dependency from taking down everything else?",
+      "answerMarkdown": "I'd first describe the mechanics: once every connection is checked out, new requests either block waiting for one to free up or fail immediately, depending on configuration. The dangerous case is a slow (not dead) downstream — requests hold their connections longer than usual, the pool fills with slow-but-alive connections, and every new request queues up behind them, even ones that would otherwise complete fast.\n\nTo contain that, I'd isolate pools per dependency rather than sharing one pool across every downstream call — the bulkhead pattern — so a slowdown in one dependency can only exhaust its own pool, not starve calls to unrelated services. I'd pair that with a checkout timeout so callers fail fast and visibly instead of queueing indefinitely behind a stuck pool.\n\n**Testing:** whether you connect pool exhaustion to cascading failure, and know the specific isolation pattern that contains it.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Pool exhaustion and isolating dependencies"
+    }
+  ]
+}

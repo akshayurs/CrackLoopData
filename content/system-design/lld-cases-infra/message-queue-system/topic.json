@@ -1,0 +1,167 @@
+{
+  "id": "message-queue-system",
+  "title": "Message Queue",
+  "area": "system-design",
+  "group": "lld-cases-infra",
+  "order": 6,
+  "slug": "message-queue-system",
+  "summary": "Producer/consumer decoupling with real delivery-semantics guarantees — an in-process simplified Kafka/RabbitMQ core, and a different concurrency lesson than a cache's indexing problem.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "message-queue-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design an in-process message queue\" means building a simplified Kafka/RabbitMQ core: producers publish, consumers consume, and the interesting design questions are all about what happens when a consumer is slow, crashes, or a message needs to be retried.\n\nUnlike the LRU cache's data-structure puzzle, the hard part here is a **delivery-semantics** question — what does the queue guarantee about a message actually being processed, and what does it do when that guarantee is at risk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "message-queue-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: producers, consumers, topics, ack-based delivery",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The contract: **producers** publish messages to **queues/topics**, **consumers** pull and process them, and delivery is **acknowledgement-based** — a message isn't considered done until a consumer explicitly acks it. That single requirement (ack-based, not fire-and-forget) is what makes reliable delivery possible at all.\n\n**Non-goals** to state up front: multi-broker replication and cross-machine distribution are out of scope — this is a single-process core. That framing keeps the design focused on the concurrency and delivery-semantics problems that are the actual point of the exercise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "message-queue-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Queue, Message, Producer, Consumer, ConsumerGroup, Acknowledgement",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Six classes. A **`Queue`** holds messages and tracks which are unacked. A **`Message`** is the payload plus metadata (an ID, a timestamp, a delivery count). A **`Producer`** publishes messages in. A **`Consumer`** pulls messages out and processes them. A **`ConsumerGroup`** is a set of consumers sharing the work of one queue, so a message goes to exactly one consumer within the group, not all of them. An **`Acknowledgement`** is the consumer's signal back to the queue that a specific message was successfully processed.\n\nThe critical relationship: a message isn't removed from the queue's unacked set the moment a consumer *receives* it — only when the queue receives that message's `Acknowledgement`. Everything about delivery guarantees flows from that one distinction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "message-queue-system-s03-q1"
+      ]
+    },
+    {
+      "id": "message-queue-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: queues, in-flight messages, and consumer acknowledgement",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a class diagram — a \"Queue\" box holding two collections, \"pending messages\" and \"in-flight (unacked) messages\"; a \"Producer\" box with an arrow into pending; a \"Consumer\" box with an arrow pulling from pending into in-flight, and a return arrow labelled \"ack()\" removing from in-flight; a dashed arrow from in-flight back to pending labelled \"nack() or ack timeout — requeue\" >>>\n\nA message occupies exactly one of three states from the queue's point of view: pending (not yet delivered), in-flight (delivered, awaiting ack), or gone (acked). The in-flight set is where all the reliability logic lives — anything that stays there too long, or is explicitly nacked, goes back to pending.\n\nThis three-state model is what makes at-least-once delivery possible: a crash between delivery and ack simply means the message never leaves in-flight, and it gets requeued.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "message-queue-system-s05",
+      "order": 5,
+      "sectionTitle": "Code: publish() and consume() with an in-flight tracking set",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The in-flight set is what separates \"delivered\" from \"done\" — nothing is removed from the queue until it's acked.\n\n```python\nclass Queue:\n    def __init__(self, ack_timeout=30):\n        self.pending = deque()\n        self.in_flight = {}      # message_id -> (Message, delivered_at)\n        self.ack_timeout = ack_timeout\n\n    def publish(self, message):\n        self.pending.append(message)\n\n    def consume(self):\n        if not self.pending:\n            return None\n        message = self.pending.popleft()\n        self.in_flight[message.id] = (message, time.time())\n        return message\n\n    def ack(self, message_id):\n        self.in_flight.pop(message_id, None)\n\n    def requeue_expired(self):\n        now = time.time()\n        for mid, (msg, delivered_at) in list(self.in_flight.items()):\n            if now - delivered_at > self.ack_timeout:\n                self.pending.append(msg)\n                del self.in_flight[mid]\n```\n\n`requeue_expired` is the mechanism that catches a consumer that received a message and then crashed before acking it — it never explicitly nacks, it just times out.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "message-queue-system-s06",
+      "order": 6,
+      "sectionTitle": "The hard part: guaranteeing at-least-once when a consumer crashes mid-processing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A consumer pulls a message, starts processing, and crashes before calling `ack()`. From the queue's perspective, that message is stuck in-flight forever unless something notices. The fix is the **ack timeout**: if a message has been in-flight longer than a configured window without an ack, the queue assumes the consumer died (or hung) and **requeues** it for another consumer to try.\n\nThis is what makes the guarantee **at-least-once**, not exactly-once: the original consumer might have actually finished the work right before crashing, just before it could send the ack — in which case requeuing causes the message to be processed twice. The queue can't tell \"crashed before finishing\" apart from \"finished but didn't get to ack\" from the outside, so it has to assume the safer, more-repeats case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "message-queue-system-s06-q1"
+      ]
+    },
+    {
+      "id": "message-queue-system-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: a message's lifecycle from queued to dead-lettered",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a state machine — \"queued\" -> \"in-flight\" -> branching to \"acked\" (terminal, success) or \"nacked/timed-out\" -> looping back to \"queued\" labelled \"retry, up to N times\" -> after N failures, arrow to \"dead-lettered\" (terminal, failure) >>>\n\nEvery message walks this same path regardless of what it contains: queued, delivered (in-flight), and then either a clean ack, or a nack/timeout that sends it back to queued for another attempt. After enough failed attempts, it moves permanently to dead-lettered instead of retrying forever.\n\nThe retry loop is exactly what makes at-least-once delivery real rather than theoretical — without it, a single failed attempt would just lose the message.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "message-queue-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: at-most-once, at-least-once, exactly-once",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Interviewers ask this to see if you understand that \"exactly-once\" is a much stronger, costlier claim than it sounds.\n\n| | At-most-once | At-least-once | Exactly-once |\n|---|---|---|---|\n| Can lose a message | Yes — no retry on failure | No — retries until acked or dead-lettered | No |\n| Can duplicate a message | No | Yes — crash-before-ack causes reprocessing | No, in principle |\n| Implementation cost | Trivial — ack immediately, no retry | Moderate — ack timeout, in-flight tracking, retry | High — needs idempotent consumers or transactional coordination between queue and consumer state |\n| Typical use | Best-effort metrics, where a dropped point is fine | Most real work queues (orders, emails) | Financial ledgers, exactly-billed events |\n\n**How to decide:** default to at-least-once and make consumers idempotent — that combination is what most production systems actually call \"exactly-once\" in practice, since true exactly-once delivery at the transport layer is expensive and rarely necessary once the consumer side is idempotent anyway.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "message-queue-system-s08-q1"
+      ]
+    },
+    {
+      "id": "message-queue-system-s09",
+      "order": 9,
+      "sectionTitle": "Ordering guarantees: per-partition vs global, and the throughput trade",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Global ordering** — every message processed in exactly the order it was published, across all consumers — requires a single consumer processing one message at a time, since any parallelism risks two consumers finishing out of publish order. That caps throughput at what one consumer can do.\n\n**Per-partition (or per-key) ordering** relaxes this: messages are grouped by a key (e.g. a user ID or order ID) into partitions, order is guaranteed *within* a partition, and different partitions can be consumed in parallel by different consumers. This is the trade real systems make — you give up a single global order, which most business logic never actually needed (does message ordering matter *across* different users' orders? usually not), in exchange for throughput that scales with partition count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "message-queue-system-s09-q1"
+      ]
+    },
+    {
+      "id": "message-queue-system-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: acking before processing completes",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll ack the message as soon as I pull it off the queue, then process it — that way if processing is slow, the queue doesn't think I've fallen behind.\"\n\n**Why it's wrong:** acking removes the message from the in-flight set permanently. If the consumer then crashes *while processing*, the message is already acked — the queue has no record that it needs to be retried, and the work silently never happens. This converts the queue's at-least-once guarantee into at-most-once, exactly the weaker guarantee the design was trying to avoid, without anyone deciding that trade-off on purpose.\n\n**Correct model:** ack only *after* processing genuinely completes successfully. If processing is slow enough to risk the ack timeout, extend the timeout or send periodic \"still working\" heartbeats — never ack early just to avoid a timeout.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "message-queue-system-s10-q1"
+      ]
+    },
+    {
+      "id": "message-queue-system-s11",
+      "order": 11,
+      "sectionTitle": "Extending to a dead-letter queue for repeatedly-failing messages",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Without a cap, a message that always fails processing (a poison message — say, one with malformed data that crashes every consumer that touches it) retries forever, endlessly consuming consumer capacity and never making progress. The extension is a **dead-letter queue**: once a message's retry count exceeds a threshold, move it out of the main queue into a separate DLQ instead of requeuing it again.\n\nThis keeps the main queue's throughput unaffected by poison messages, while preserving the failed message for inspection rather than silently discarding it — an engineer can look at the DLQ, fix whatever made that message unprocessable, and republish it deliberately.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

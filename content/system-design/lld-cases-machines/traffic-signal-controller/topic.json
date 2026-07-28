@@ -1,0 +1,167 @@
+{
+  "id": "traffic-signal-controller",
+  "title": "Traffic Signal Controller",
+  "area": "system-design",
+  "group": "lld-cases-machines",
+  "order": 4,
+  "slug": "traffic-signal-controller",
+  "summary": "A timed phase state machine for one intersection with a hard safety invariant \u2014 no two conflicting directions ever green \u2014 plus emergency-vehicle preemption.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "traffic-signal-controller-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Designing a traffic light controller for one intersection looks simple \u2014 a few lights, a timer \u2014\nuntil the interviewer asks the one question this case study exists for: how do you guarantee two\nconflicting directions are never both green, even under a bug, an interrupt, or a rushed code\nchange? Get `Intersection`, `SignalGroup`, `Phase`, and `Controller` sketched fast, then spend your\ntime proving the safety invariant is enforced structurally, not just \"usually true.\"\n\nScope stays to one intersection \u2014 no network-wide coordination \u2014 which is itself worth saying out\nloud.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-signal-controller-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: phases, timing, pedestrian crossing, emergency override",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Scope it as: the intersection cycles through **phases** (which directions get green, in what\ncombination), each phase has a **duration**, a **pedestrian crossing** signal is tied to specific\nphases, and an **emergency-vehicle override** can force a phase change out of the normal cycle.\n\nNon-goal: coordinating with adjacent intersections for city-wide green-wave timing \u2014 that's a\ndistributed, multi-intersection problem worth naming as a natural follow-up, not something to\ndesign here. One intersection's own safety and timing logic is plenty for one round.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-signal-controller-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Intersection, SignalGroup, Light, Phase, Controller, Timer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Light` is the single red/yellow/green bulb-set for one direction; a `SignalGroup` bundles the\nlights that always change together \u2014 all northbound lanes, say. A `Phase` names which\n`SignalGroup`s are green, and for how long, at once. `Intersection` holds all the `SignalGroup`s;\n`Controller` owns the current `Phase` and a `Timer` driving transitions.\n\nThe reason `Phase` is its own entity rather than a raw duration on `SignalGroup`: a phase is a\n*combination* \u2014 \"NS green, EW red\" \u2014 and the safety invariant is a property of combinations, not\nof any single light.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-signal-controller-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class diagram for signal groups and the shared controller",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram with Intersection containing multiple SignalGroup objects, each with\nLight objects for red/yellow/green, a Controller referencing the current Phase and a Timer, and a\nlist of Phase objects each mapping to which SignalGroups are green >>>\n\nOne `Controller` per `Intersection` is deliberate: it's the single authority deciding which\n`Phase` is active, so there's exactly one place the safety invariant has to be enforced, not one\nper `SignalGroup`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 29,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-signal-controller-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the phase state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state diagram: NS-green/EW-red to all-red clearance to NS-red/EW-green to all-red\nclearance back to NS-green/EW-red, forming a cycle with all-red clearance as its own state between\nevery green-to-green transition >>>\n\n`all-red clearance` sits between every pair of conflicting-direction phases, never skipped. It\nexists specifically so a car still clearing the intersection under a yellow light isn't met with\ncross-traffic already moving \u2014 cutting straight from one green combination to the next is the\nclassic real-world collision cause this state machine avoids by construction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-signal-controller-s06",
+      "order": 6,
+      "sectionTitle": "Code: Controller.tick() advancing phases on a timer",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Controller {\n    private Phase current;\n    private long phaseStartMillis;\n\n    void tick(long nowMillis) {\n        if (nowMillis - phaseStartMillis >= current.getDurationMillis()) {\n            Phase next = phaseTable.next(current);\n            transitionTo(next, nowMillis);\n        }\n    }\n\n    private void transitionTo(Phase next, long nowMillis) {\n        if (!conflictMatrix.isSafe(next)) {\n            throw new UnsafePhaseException(current, next);\n        }\n        applyPhase(next);\n        current = next;\n        phaseStartMillis = nowMillis;\n    }\n}\n```\n\n`tick()` runs on a fixed schedule \u2014 every 100ms, say \u2014 rather than hardware driving transitions\ndirectly. The timer only ever *asks* the controller to check, and `transitionTo` is the one place a\nphase change actually happens, which is where the next slide's safety check plugs in.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "traffic-signal-controller-s06-q1"
+      ]
+    },
+    {
+      "id": "traffic-signal-controller-s07",
+      "order": 7,
+      "sectionTitle": "The hard part: 'no two conflicting directions are ever green'",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The invariant sounds obvious stated in English, and is exactly the kind of thing a rushed edit \u2014\nadding a new phase, tweaking a duration \u2014 can silently violate if it isn't enforced in code. A\ndeveloper adding a new left-turn phase six months from now shouldn't be trusted to manually\nre-verify every combination by eye.\n\nThe fix is structural, not procedural: represent every phase's SignalGroup-to-light-color mapping,\nand check any proposed transition against a **conflict matrix** before it's ever applied. The\ninvariant becomes something the code enforces, not something a human has to remember.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 39,
+      "mcqIds": [
+        "traffic-signal-controller-s07-q1"
+      ]
+    },
+    {
+      "id": "traffic-signal-controller-s08",
+      "order": 8,
+      "sectionTitle": "Code: a conflict-matrix check before switching any Light",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass ConflictMatrix {\n    // conflictsWith.get(A) = SignalGroups that must never be green while A is green\n    private final Map<SignalGroup, Set<SignalGroup>> conflictsWith;\n\n    boolean isSafe(Phase proposed) {\n        for (SignalGroup a : proposed.getGreenGroups()) {\n            for (SignalGroup b : proposed.getGreenGroups()) {\n                if (a != b && conflictsWith.get(a).contains(b)) {\n                    return false;\n                }\n            }\n        }\n        return true;\n    }\n}\n```\n\n`ConflictMatrix` is checked on *every* transition, including ones from the normal timed cycle and\nones from an emergency override \u2014 there's no code path that applies a `Phase` without going\nthrough `isSafe()` first. That's what turns \"this phase table looks correct\" into \"this can never\nbe wrong.\"",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "traffic-signal-controller-s08-q1"
+      ]
+    },
+    {
+      "id": "traffic-signal-controller-s09",
+      "order": 9,
+      "sectionTitle": "Compare: hardcoded phase sequence vs data-driven phase table",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Hardcoded sequence | Data-driven phase table |\n|---|---|---|\n| Adding a new phase (e.g. protected left turn) | edit Controller's transition logic directly | add a row to a config/table read at startup |\n| Changing timing for one intersection type | requires a code change and redeploy | a different table file per intersection |\n| Risk surface | every change touches the class enforcing safety | only ConflictMatrix and Controller's core loop need review for safety |\n\n**How to decide:** intersections vary a lot \u2014 four-way, T-junction, protected turns \u2014 and their\nphase tables change more often than the controller logic itself should. Data-driven wins once you\nsupport more than a couple of intersection shapes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "traffic-signal-controller-s09-q1"
+      ]
+    },
+    {
+      "id": "traffic-signal-controller-s10",
+      "order": 10,
+      "sectionTitle": "Extending to emergency-vehicle preemption",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An emergency vehicle approaching should be able to force an early transition to a phase that\nclears its path, without abandoning the safety invariant \u2014 the forced phase still has to pass\n`ConflictMatrix.isSafe()`, and the return to the normal cycle has to resume cleanly rather than\ngetting stuck.\n\nI'd model preemption as an interrupt request `Controller` checks at the top of every `tick()`,\nahead of the normal timer check: a pending request resolves into an early `transitionTo()` call \u2014\nthrough the same safety check as any other transition \u2014 and the controller remembers where the\nnormal cycle left off so it can resume once the preemption clears. Keeping the interrupt as a\nsingle well-defined \"requested action to apply\" avoids a special-cased branch scattered through\nthe timer logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 53,
+      "mcqIds": []
+    },
+    {
+      "id": "traffic-signal-controller-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: modeling all-red clearance as an afterthought",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The main phases are NS-green and EW-green; I'll just insert a brief pause\nbetween them if there's time.\"\n\n**Why it's wrong:** treating the clearance interval as an optional pause rather than a first-class\n`Phase` means it's easy to skip under time pressure \u2014 a preemption interrupt or a buggy\nphase-table edit can jump straight from one green combination to the conflicting one, precisely\nthe collision the whole design exists to prevent.\n\n**Correct model:** `all-red clearance` is a `Phase` like any other, subject to the same\n`ConflictMatrix` check and the same phase-table entry \u2014 not a gap between phases, but one of them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 43,
+      "mcqIds": [
+        "traffic-signal-controller-s11-q1"
+      ]
+    }
+  ]
+}

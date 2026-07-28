@@ -1,0 +1,165 @@
+{
+  "id": "online-auction-system",
+  "title": "Online Auction System — LLD",
+  "area": "system-design",
+  "group": "lld-cases-booking",
+  "order": 6,
+  "slug": "online-auction-system",
+  "summary": "Real-time competitive bidding: deterministic bid ordering under concurrency, anti-snipe timing, and proxy bidding that raises your bid automatically without exposing your true max.",
+  "level": "expert",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "online-auction-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design an eBay-style live auction\" is the hardest concurrency problem in this group, because unlike a seat or a room, there's no fixed inventory to protect — the contested resource is **the current highest bid itself**, and every bid changes it.\n\nThe design has to answer three things simultaneously: which of two near-simultaneous bids wins deterministically, how proxy (automatic) bidding raises your bid without revealing your true maximum to competitors, and how a last-second bid (\"sniping\") is prevented from unfairly ending the auction before others can respond.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "online-auction-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: what's in scope, what isn't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** sellers create listings with a starting price and an end time; bidders place bids (manual or proxy/auto-bid up to a max); the system determines the current highest bid and, at auction close, the winner; anti-sniping extension logic.\n\n**Explicitly out of scope:** payment settlement, escrow, and shipping/fulfillment mechanics — assume a `PaymentService` handles the winner's charge as a black box once a winner is determined.\n\nThe interview payoff is concentrated entirely in bid concurrency and timing — spending time on listing CRUD or payment flow instead is a scoping mistake at this level.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "online-auction-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Listing, Bid, Auction, Bidder, ProxyBid",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`Listing` describes the item and starting price; `Auction` is the live, time-bound process wrapping a listing — it's `Auction`, not `Listing`, that owns bid state and the end time, since the same listing concept could in principle be re-auctioned.\n\nEvery placed `Bid` is an immutable, timestamped record — bids are never edited or deleted, only superseded by a newer one, which is what makes the bid history trustworthy for dispute resolution.\n\n`ProxyBid` is a distinct entity from `Bid`: it stores a bidder's private maximum and generates real `Bid`s automatically on the bidder's behalf as competing bids come in, up to that maximum — the max itself is never exposed as a `Bid`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "online-auction-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: class model for listings, auctions, and bid history",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: UML class diagram — Listing 1--1 Auction, Auction 1--* Bid (append-only, ordered by timestamp), Auction 1--* ProxyBid (one per bidder who enabled auto-bidding), Bid has bidderId, amount, timestamp, and a flag indicating whether it was system-generated from a ProxyBid. >>>\n\nMarking each `Bid` with whether it came from a human click or a `ProxyBid` reacting automatically is a small field that matters a lot for the bid-history UI and for debugging disputed outcomes later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "online-auction-system-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the auction's state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state diagram for Auction — SCHEDULED -> OPEN (start time reached) -> CLOSING (a special window near the announced end time, during which any new bid triggers an extension) -> CLOSED (no bid arrived during the last extension window). Show a self-loop on CLOSING labeled \"bid arrives -> extend end time, re-enter CLOSING\" to depict the anti-snipe mechanism visually. >>>\n\nThe self-loop on `CLOSING` is the whole anti-snipe mechanism in one picture: the auction doesn't leave that state until a full window passes with no new bid.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "online-auction-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: placing a bid",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A bid is only valid if it clears the current highest bid by at least the minimum increment — checked and applied atomically, not read-then-compared-then-written:\n\n```java\nBidResult placeBid(String auctionId, String bidderId, BigDecimal amount) {\n    return jdbcTemplate.execute(conn -> {\n        Auction auction = lockAuctionForUpdate(conn, auctionId);\n        BigDecimal minValid = auction.getCurrentHighBid().add(auction.getMinIncrement());\n        if (amount.compareTo(minValid) < 0) {\n            return BidResult.rejected(minValid);\n        }\n        recordBid(conn, auctionId, bidderId, amount);\n        auction.setCurrentHighBid(amount);\n        maybeExtendClosingWindow(conn, auction);\n        return BidResult.accepted(amount);\n    });\n}\n```\n\nLocking the auction row for the duration of the check-and-write is what makes \"clears the current high bid by the minimum increment\" an atomic decision rather than a race.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "online-auction-system-s07",
+      "order": 7,
+      "sectionTitle": "The hard part: two bids arriving in the same instant",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two bidders submit $105 within the same few milliseconds on a $100 auction. Both look valid against a stale read of \"current high bid is $100\" — exactly the same race shape as seat holding and room inventory, but here the resource being contended isn't a fixed slot, it's a single mutable number that every bid both reads and updates.\n\nThe fix is the same family as before: serialize access to that number, either with a row lock held for the whole check-and-write (as in the code above) or an atomic compare-and-swap on `currentHighBid` with a version check, so only one of the two $105 bids can actually win the write. The loser's bid is rejected outright — not queued, not silently dropped — with a clear \"someone else bid first\" response naming the new current high bid.\n\nWhat makes this the hardest version of the pattern in this group: unlike a seat or room count, there's no natural batching or pre-check that avoids the write — every single bid must go through this exact serialized path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "online-auction-system-s07-q1"
+      ]
+    },
+    {
+      "id": "online-auction-system-s08",
+      "order": 8,
+      "sectionTitle": "Code: proxy/auto-bidding without exposing your max",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A `ProxyBid` reacts to a new competing bid by raising the bidder's own bid to the minimum needed to stay ahead — never revealing the stored maximum unless forced to bid it:\n\n```java\nvoid onNewHighBid(Auction auction, Bid newBid) {\n    for (ProxyBid proxy : auction.getActiveProxyBids()) {\n        if (proxy.getBidderId().equals(newBid.getBidderId())) continue;\n        BigDecimal needed = newBid.getAmount().add(auction.getMinIncrement());\n        if (proxy.getMaxAmount().compareTo(needed) >= 0) {\n            BigDecimal counterBid = needed.min(proxy.getMaxAmount());\n            placeBid(auction.getId(), proxy.getBidderId(), counterBid);\n        }\n    }\n}\n```\n\nThe counter-bid is `min(needed, maxAmount)` — just enough to retake the lead, capped at the stored max — so competitors only ever see the smallest amount required to beat them, never the ceiling the bidder was actually willing to pay.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "online-auction-system-s08-q1"
+      ]
+    },
+    {
+      "id": "online-auction-system-s09",
+      "order": 9,
+      "sectionTitle": "Compare: hard close time vs anti-snipe extension window",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Hard close time | Anti-snipe extension |\n|---|---|---|\n| Behavior at end time | Auction ends exactly on schedule, no exceptions | A late bid within the closing window extends the end time |\n| Vulnerability to sniping | High — a bid placed at the last second wins unopposed | Low — snipers just trigger another round instead of winning silently |\n| Predictability of end time | Fully predictable in advance | Can extend indefinitely if bids keep arriving |\n| Fairness perception | Rewards last-second timing over true willingness to pay | Better reflects genuine highest willingness to pay |\n\n**How to decide:** a hard close is simpler and fine for low-stakes listings; anti-snipe extension is worth the added complexity whenever the item's value makes last-second sniping likely, which is most competitive auctions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "online-auction-system-s09-q1"
+      ]
+    },
+    {
+      "id": "online-auction-system-s10",
+      "order": 10,
+      "sectionTitle": "Modeling outbid notification as an Observer, not a poll",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a new high bid lands, every bidder who's now been outbid needs to know — but having each bidder's client poll \"am I still winning?\" every few seconds wastes requests and still leaves a notification lag.\n\nModeling `Auction` as a subject that bidders' notification handlers observe means `placeBid` fires an `outbid` event exactly once, at the moment it happens, to exactly the bidders affected — no polling, no wasted requests, and the notification is as close to instant as the event pipeline allows. This is the Observer pattern: bidders subscribe to an auction's bid events instead of the auction (or its notification code) needing to know who to individually push to ahead of time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "online-auction-system-s10-q1"
+      ]
+    },
+    {
+      "id": "online-auction-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: determining the winner by re-scanning the entire bid history",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"To find the winner at close, scan all of an auction's bids and pick the maximum — the bid table has everything, so just query it.\"\n\n**Why it's wrong:** for a popular listing with thousands of bids (proxy bidding alone can generate many automatic counter-bids), re-scanning the full history at close is needless work for information the system already knew the entire time it was tracking `currentHighBid` incrementally, bid by bid.\n\n**Correct model:** `Auction.currentHighBid` (and the bidder who placed it) is maintained incrementally on every accepted bid, exactly as shown in the `placeBid` code — closing the auction just reads that already-current field. A full bid-history scan should exist only for audits and disputes, never on the hot path of determining who won.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

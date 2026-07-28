@@ -1,0 +1,165 @@
+{
+  "id": "payment-wallet-system",
+  "title": "Payment / Wallet System",
+  "area": "system-design",
+  "group": "lld-cases-business",
+  "order": 3,
+  "slug": "payment-wallet-system",
+  "summary": "Double-entry ledger correctness and idempotent transaction processing — a different ledger lesson than Splitwise's debt graph, built around a balance you derive, never mutate.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "payment-wallet-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A digital wallet (Paytm, Venmo, a store-credit balance) looks like it just needs a `balance` number that goes up and down. It doesn't — real money systems use **double-entry bookkeeping**, where every movement is recorded as a debit and a credit that must always balance, and a balance is something you compute, not something you store and mutate directly.\n\nThis is a different ledger lesson from Splitwise: Splitwise's hard part is a graph algorithm over derived balances; this topic's hard part is making every single transaction provably correct and safely retryable, which matters more once real money is actually moving.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "payment-wallet-system-s02",
+      "order": 2,
+      "sectionTitle": "Requirements and non-goals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**In scope:** wallet balance, topping up from an external source, transferring between two wallets, and transaction history.\n\n**Out of scope:** integrating with an actual card network or bank rail — a top-up or withdrawal here just moves value between an internal wallet account and a placeholder \"external\" account; the real-world card/ACH integration is a separate system this one would sit behind.\n\nThis distinction matters in an interview: you're being asked to design the ledger correctness problem, not a payment gateway integration.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "payment-wallet-system-s03",
+      "order": 3,
+      "sectionTitle": "Core entities: Wallet, Account, Transaction, LedgerEntry",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Account** is the general-ledger concept — it can belong to a user's `Wallet`, or it can be a system account (e.g. an \"External\" account representing money entering or leaving the system via top-up or withdrawal). **Transaction** represents one logical business event — a transfer, a top-up. **LedgerEntry** is the actual money movement: one row per account touched by a transaction, with a signed amount.\n\nA `Wallet` doesn't store its own balance directly — it's a thin wrapper around one `Account`, and that account's balance is the sum of its `LedgerEntry` rows. This is the same \"derive, don't store as sole truth\" idea as Splitwise's balance sheet, but stricter here: every entry must net to zero across the accounts it touches, not just sum correctly per person.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "payment-wallet-system-s03-q1"
+      ]
+    },
+    {
+      "id": "payment-wallet-system-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a transfer as two linked ledger entries",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: class diagram showing Wallet wrapping an Account, Transaction linked to exactly two LedgerEntry rows (one negative amount on the source account, one positive on the destination account), both entries sharing the same transactionId >>>\n\nA transfer is never \"subtract from A's balance, add to B's balance\" as two independent writes. It's one `Transaction` producing exactly two `LedgerEntry` rows — one negative on the source account, one positive on the destination — created together, in the same database transaction, or not at all.\n\nThis is the structural guarantee double-entry gives you: sum the entries for any single `Transaction` and it's always zero, which makes a corrupted or partial transfer detectable by construction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "payment-wallet-system-s05",
+      "order": 5,
+      "sectionTitle": "The hard part: every movement is a debit and a credit",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Double-entry bookkeeping** means no money movement is ever recorded as a single number changing — it's always two entries, a debit on one account and an equal credit on another, so the system's total balance across all accounts never silently changes from an internal transfer.\n\nFor a $50 transfer from Alice to Bob: a `-5000` cent entry on Alice's account and a `+5000` cent entry on Bob's account, both tagged with the same `Transaction`. A top-up from a bank pulls the same trick — `-X` on the external \"Bank\" account, `+X` on the user's account — so top-ups and withdrawals aren't special-cased, they're transfers to or from a system account.\n\nThe invariant this buys you: sum every `LedgerEntry` in the whole system and it's always zero. If it's ever not zero, you have a bug, and you can prove exactly where by finding the unbalanced transaction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "payment-wallet-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: Ledger.transfer writes both entries atomically",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\n@Transactional\nTransaction transfer(Account from, Account to, long amountCents) {\n    int rows = accountRepo.debitIfSufficient(from.id, amountCents);\n    // debitIfSufficient: UPDATE accounts SET balance = balance - ?\n    //                    WHERE id = ? AND balance >= ?\n    if (rows == 0) throw new InsufficientFundsException();\n    accountRepo.credit(to.id, amountCents);\n\n    Transaction txn = transactionRepo.insert(TransactionStatus.PENDING);\n    ledgerEntryRepo.insert(txn.id, from.id, -amountCents);\n    ledgerEntryRepo.insert(txn.id, to.id, +amountCents);\n    txn.status = TransactionStatus.COMPLETED;\n    return txn;\n}\n```\n\n`@Transactional` makes the balance updates and both `LedgerEntry` inserts one atomic unit — either the whole transfer lands or none of it does. `debitIfSufficient`'s `WHERE balance >= ?` is what makes the funds check itself safe under concurrent transfers, covered two slides from now.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "payment-wallet-system-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: the transaction state machine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: state machine for Transaction — PENDING to COMPLETED or FAILED, with a separate REVERSED state reached only by a new compensating Transaction, never by editing the original >>>\n\nA `Transaction` starts `PENDING`, then resolves to `COMPLETED` or `FAILED` once its ledger entries are durably written (or rejected, e.g. insufficient funds). If a completed transfer later needs to be undone — a dispute, a merchant refund — that's a **new** `Transaction` with entries that exactly reverse the original's, not an edit to the original.\n\nThe original transaction's record never changes after it completes; \"undone\" is a relationship between two transactions, not a mutation of one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "payment-wallet-system-s08",
+      "order": 8,
+      "sectionTitle": "Idempotency: surviving a retried transfer request",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A client sends a transfer request, the network drops the response before the client sees it, and the client — not knowing whether the transfer succeeded — retries. Without protection, that's two transfers instead of one, and Bob gets paid twice.\n\nThe fix: the client generates an **idempotency key** (a UUID) once per logical request and sends it with every retry. The server persists that key against the resulting `Transaction`, with a **unique constraint** on the key column. On a retry, the server checks for an existing `Transaction` with that key first — if found, it returns the original result instead of executing the transfer again.\n\nThe subtle part is that the check-then-insert must itself be race-safe: two near-simultaneous retries with the same key must not both pass the check before either has inserted. Relying on the database's unique constraint to reject the second insert (rather than an application-level check-then-write) is what actually closes that gap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "payment-wallet-system-s08-q1"
+      ]
+    },
+    {
+      "id": "payment-wallet-system-s09",
+      "order": 9,
+      "sectionTitle": "Concurrency: two transfers draining the same wallet",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Alice has $50. Two transfer requests for $40 each fire at nearly the same instant — one to Bob, one to Carol. If the balance check is \"read balance, check it's enough, then write the debit\" as separate steps, both requests can read $50, both see \"enough,\" and both debit — Alice ends up at -$30, a balance that should have been impossible.\n\nThe fix is the `debitIfSufficient` conditional update from slide 6: `UPDATE accounts SET balance = balance - ? WHERE id = ? AND balance >= ?` performs the check and the write as one atomic database operation. Only one of the two concurrent updates can match `balance >= 40` against the true current value — the second sees the already-reduced balance, fails the `WHERE` clause, affects zero rows, and the code treats that as insufficient funds.\n\nThis is the identical pattern to inventory's oversell prevention and the library's last-copy race: collapse read-decide-write into a single atomic conditional operation, never three separate steps.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "payment-wallet-system-s09-q1"
+      ]
+    },
+    {
+      "id": "payment-wallet-system-s10",
+      "order": 10,
+      "sectionTitle": "Compare: mutable balance field vs append-only ledger",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Mutable balance field | Append-only ledger, derived balance |\n|---|---|---|\n| How balance changes | `UPDATE SET balance = balance +/- x` | Insert new `LedgerEntry` rows; balance is their sum |\n| Auditability | Only the current number survives; history of *how* it got there is gone unless logged separately | Every change is a permanent, timestamped record — the full history *is* the audit log |\n| Detecting a bug | Hard — you only see a wrong number, not which operation caused it | Provable — sum entries and find exactly which transaction breaks the zero-sum invariant |\n| Undo | Overwrite the field again and hope you have the right prior value | Write a compensating entry; the original record is untouched |\n\n**How to decide:** for anything involving real money, interviewers expect the ledger model — it's the only one that makes a dispute (\"where did my money go\") answerable and a bug provable rather than just visible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "payment-wallet-system-s10-q1"
+      ]
+    },
+    {
+      "id": "payment-wallet-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: fixing a bad transaction by editing history",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This transaction was wrong, let's just update its `LedgerEntry` rows to the correct amounts and move on.\"\n\n**Why it's wrong:** it destroys the audit trail double-entry exists to provide — anyone who already saw or acted on the original balance now has no record of what actually happened, and if the edit itself has a bug, there's no prior state to recover. In a real financial system this is often not just bad practice but a compliance violation.\n\n**Correct model:** never edit a settled `LedgerEntry` or `Transaction`. To fix a mistake, write a new **compensating transaction** — a reversal with entries that exactly cancel the original — so both the error and its correction are permanently visible in the history.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}
