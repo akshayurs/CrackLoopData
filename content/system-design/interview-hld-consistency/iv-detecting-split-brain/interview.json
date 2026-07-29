@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-detecting-split-brain",
+  "interviewQuestions": [
+    {
+      "id": "iv-detecting-split-brain-iq1",
+      "question": "How would you detect and resolve split-brain in this system?",
+      "answerMarkdown": "I'd separate prevention from detection. Prevention: leadership requires a time-bound lease that only a majority-agreeing consensus store — etcd or ZooKeeper-style — can grant, and a node that can't renew its lease (say, because it's stuck on the minority side of a partition) must stop acting as leader. I'd fence every write with a token tied to that lease, so even a zombie old leader that doesn't yet know it lost leadership gets its writes rejected by storage for carrying a stale token.\n\nDetection is a separate, simpler signal: alert the moment two nodes simultaneously report holding the same epoch or term number as leader — a correctly functioning consensus system should never grant that twice.\n\nI'd be honest about the limitation: fencing only works if every downstream write path actually checks the token, so I'd want to confirm that during design review, not assume it.\n\n**Testing:** whether you know the concrete mechanism — fencing tokens and quorum-backed leases — not just that split-brain is bad.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Preventing and detecting split-brain"
+    },
+    {
+      "id": "iv-detecting-split-brain-iq2",
+      "question": "Your fencing mechanism itself needs a quorum store — what happens if that store partitions too?",
+      "answerMarkdown": "The same majority-quorum logic that protects the application's leadership also protects the consensus store's own internal leader election — so if the consensus store itself partitions, the minority side of that store simply can't grant new leases at all, by the same mechanism.\n\nThe result isn't a silent failure — it surfaces as your application having no leader on that side, which is a safe outcome, not a dangerous one. No leader means no writes get accepted there, which is exactly the behavior you want during an ambiguous state, rather than two leaders both believing they're valid.\n\nI'd want the consensus store itself deployed with enough nodes and spread across enough failure domains that this scenario is rare, but if it happens, \"no leader until it heals\" is the correct, boring outcome, not a new failure mode to design around separately.\n\n**Testing:** whether you understand that the fencing mechanism's safety is inherited from the consensus store's own correctness, and what that implies under the store's own partition.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Partition in the consensus store itself"
+    },
+    {
+      "id": "iv-detecting-split-brain-iq3",
+      "question": "How would you have caught this in a postmortem — what signal shows split-brain happened after the fact?",
+      "answerMarkdown": "The clearest signal is a spike in fencing-rejected writes around the incident window — that's direct, concrete evidence that two leaders existed simultaneously and the fencing mechanism actually caught it. I'd check that metric first, before digging through general logs.\n\nA secondary signal is the epoch-number history: if the consensus store's logs show two nodes both claiming the same epoch, even briefly, that's proof split-brain occurred at the leadership layer — worth investigating even if the fencing-rejection metric shows zero damage got through, since it points at something worth understanding in the election path itself.\n\nI'd name the specific metric and log source rather than a vague \"we'd review the incident,\" since that's what actually makes a postmortem fast instead of another open-ended investigation.\n\n**Testing:** whether you can name a concrete, checkable signal for a postmortem instead of a generic investigation plan.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Finding split-brain evidence after the fact"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "backpressure-and-dead-letter-handling",
+  "interviewQuestions": [
+    {
+      "id": "backpressure-and-dead-letter-handling-iq1",
+      "question": "Consumers are falling behind during a spike — what do you do?",
+      "answerMarkdown": "I'd first check whether this is genuinely a capacity problem or a slow-consumer bug — queue depth climbing steadily while consumer CPU is pegged points to capacity; queue depth climbing while consumers sit idle points to a stuck or crash-looping consumer.\n\nIf it's capacity, my first lever is horizontal: add more consumer instances via the competing-consumers pattern, since that's usually the fastest, safest fix and needs no code change. If that's not enough or not fast enough, I'd check whether buffering is safe here — can the backlog just sit and drain once the spike passes, or does queue growth risk hitting a size limit first.\n\nI'd also check retry behavior specifically: if part of the backlog is failed messages retrying immediately, I'd want backoff in place so retries aren't adding to the load on top of the spike itself.\n\n**Testing:** whether you diagnose before reaching for a fix, and know more than one lever — scale consumers, buffer, backoff, shed load — rather than reflexively adding servers.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Consumers falling behind during a spike"
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-iq2",
+      "question": "How would you design retry behavior for a consumer that calls a flaky downstream payment API?",
+      "answerMarkdown": "I'd use exponential backoff with jitter — each retry waits longer than the last, and the jitter, randomizing the exact delay, prevents every failed consumer from retrying at the same instant and re-creating the spike that failed in the first place.\n\nI'd cap the retry count, say 5 attempts, since a payment API still failing after 5 tries with growing delays is unlikely to succeed on attempt 6 for a reason that resolves itself moments later. Past that cap, the message goes to a dead-letter queue rather than retrying indefinitely.\n\nI'd also distinguish retryable failures, like a timeout or a 503, from non-retryable ones, like a 400 bad request or invalid card — the latter should go straight to the DLQ without burning through retries that can't possibly help.\n\n**Testing:** whether you can design a concrete, bounded retry policy instead of just saying \"retry with backoff\" abstractly.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Designing retries for a flaky payment API"
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-iq3",
+      "question": "A message keeps failing every time it's processed, and it's blocking every message behind it because ordering must be preserved. What do you do?",
+      "answerMarkdown": "I'd recognize this as a poison message combined with an ordering constraint, which is worse than a normal poison message because it's not just wasting retries, it's stalling the entire partition or queue behind it.\n\nMy first move is to get it out of the way: move it to a dead-letter queue as soon as the retry cap is hit, so the partition can advance past it, then investigate separately why it's failing, whether it's a bad payload, a missing referenced record, or a genuine bug.\n\nI'd flag the ordering trade-off explicitly: pulling the poison message out preserves relative ordering for everything after it, but that one message is now out of its original sequence — for most systems that's an acceptable trade for not stalling the whole pipeline, but I'd confirm that assumption for this specific use case.\n\n**Testing:** whether you can reason about the interaction between poison-message handling and an ordering guarantee, not just the individual concepts.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "A poison message blocking an ordered queue"
+    }
+  ]
+}

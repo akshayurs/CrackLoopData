@@ -1,0 +1,115 @@
+{
+  "id": "designing-authorization-models",
+  "title": "Designing Authorization at Scale",
+  "area": "system-design",
+  "group": "design-security",
+  "order": 2,
+  "slug": "designing-authorization-models",
+  "summary": "RBAC, ABAC, and ReBAC as design choices, and where the permission-check decision actually gets made when a request has to clear it in single-digit milliseconds.",
+  "level": "advanced",
+  "slideCount": 7,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "designing-authorization-models-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Authorization** answers a different question than authentication: not \"who are you\" but \"can *you* do *this*, to *that*.\" At scale, that check has to run on nearly every request, in single-digit milliseconds, without becoming the thing that decides whether the whole system feels fast.\n\nThis topic covers the models for expressing permissions (RBAC, ABAC, ReBAC), where the decision itself gets made — one central service or logic copied into every service — and why a permission model that works at 100 users can silently become wrong at 10 million.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-authorization-models-s02",
+      "order": 2,
+      "sectionTitle": "Compare: RBAC vs ABAC vs ReBAC",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "All three answer \"can this user do this,\" but they model the *rule* differently.\n\n| | RBAC | ABAC | ReBAC |\n|---|---|---|---|\n| Core idea | User has a **role**; the role has permissions | Decision is a **function of attributes** — user, resource, context | Access follows a **relationship graph** — owner, editor, member-of |\n| Good fit | Stable, coarse-grained permissions (\"admin,\" \"editor\") | Fine-grained, conditional rules (\"only during business hours,\" \"only same department\") | Sharing-heavy systems — documents, folders, social graphs |\n| Weak point | Role explosion once permissions get fine-grained | Rules become a hard-to-audit tangle as attributes multiply | Answering \"can X access Y\" means a graph traversal, not a lookup |\n| Example | \"Admins can delete any ticket\" | \"Engineers can view billing data only from their own region\" | \"Anyone this doc was shared with, or a member of a group it's shared with\" |\n\n**How to decide:** start from what the permission rule actually depends on — a fixed role, a combination of attributes, or a chain of relationships — and let that pick the model, since bolting fine-grained sharing onto pure RBAC is where most systems get stuck.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "designing-authorization-models-s02-q1"
+      ]
+    },
+    {
+      "id": "designing-authorization-models-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: one policy decision point, many enforcement points",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Split the question \"is this allowed?\" from the question \"where does that get asked?\" The **policy decision point (PDP)** is the one place that actually evaluates a rule and returns allow/deny. **Policy enforcement points (PEPs)** are scattered everywhere a request needs a permission check — the API gateway, individual services, even a background job — and each one calls the PDP instead of deciding on its own.\n\nEvery PEP sends the same shape of question (who, what action, what resource) and gets the same shape of answer back, so the actual rule logic lives in exactly one place no matter how many services enforce it.\n\n![A central policy decision point with the API gateway, order service, and billing service each acting as policy enforcement points querying it](assets/pdp-pep-architecture.svg)",
+      "assets": [
+        {"alt": "A central policy decision point with the API gateway, order service, and billing service each acting as policy enforcement points querying it", "path": "assets/pdp-pep-architecture.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-authorization-models-s04",
+      "order": 4,
+      "sectionTitle": "Compare: a central decision service vs logic embedded per-service",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Once you've picked a permission model, you still have to decide *where* it's evaluated — and that choice matters as much as the model itself.\n\n| | Central decision service (PDP) | Logic embedded per-service |\n|---|---|---|\n| Consistency | One rule engine, one answer for everyone | Each team implements its own version — drift is almost guaranteed |\n| Change speed | Update the policy once, every service picks it up | A permission fix means redeploying every service that has its own copy |\n| Latency | Extra network hop per check, unless cached | No extra hop — the check runs in-process |\n| Failure mode | The PDP going down can block every request in the system | One service's bug stays contained to that service |\n\n**How to decide:** centralize the rules but keep evaluation fast — most production systems use a **library embedding the same policy engine** in every service (so no network hop) while still pulling rules from one central source, getting consistency without a single point of failure per request.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "designing-authorization-models-s04-q1"
+      ]
+    },
+    {
+      "id": "designing-authorization-models-s05",
+      "order": 5,
+      "sectionTitle": "Permission checks at scale: caching, latency budget, and staleness risk",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A permission check that adds 50ms to every request is invisible at 10 requests per second and a real problem at 10,000. Once authorization sits on the hot path, it inherits whatever latency budget the request has left — often single-digit milliseconds.\n\nThe standard fix is **caching decisions**: cache \"can user X do Y on Z\" for a short TTL so repeat checks skip the full evaluation. That trades correctness for speed — a permission revoked mid-TTL still appears valid until the cache expires, so the TTL length is really a decision about how much staleness the system can tolerate.\n\nHigh-stakes actions (deleting an account, transferring funds) usually skip the cache entirely and pay the full latency cost; low-stakes reads (can this user view this page) tolerate a few seconds of staleness in exchange for speed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "designing-authorization-models-s05-q1"
+      ]
+    },
+    {
+      "id": "designing-authorization-models-s06",
+      "order": 6,
+      "sectionTitle": "Modeling relationship-based access (ReBAC) for \"who can see whose data\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Some permission questions aren't about roles or attributes at all — they're about a chain of relationships. \"Can Priya open this document?\" might depend on whether she owns it, was directly shared on it, or belongs to a team that was shared on its parent folder.\n\n**ReBAC** models this as a graph: nodes are users and resources, edges are relationships (owner, editor, member-of, parent-of), and answering an access question means traversing that graph rather than checking a static table. This is exactly the model behind Google Docs-style sharing — a doc's access set is really the union of everyone reachable through its relationship edges.\n\nThe cost is that \"can X access Y\" is no longer a single lookup — it's a graph query, and systems like Google's Zanzibar exist specifically to make that traversal fast and consistent at massive scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-authorization-models-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: the same authorization check, reimplemented slightly differently everywhere",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Each service knows its own data best, so each team can just write its own permission check.\"\n\n**Why it's wrong:** ten services end up with ten slightly different interpretations of \"can this user edit this resource\" — one checks role only, another also checks ownership, a third forgot to check team membership at all. None of these are caught by a single test suite because there is no single implementation to test.\n\n**Correct model:** treat authorization as a shared concern with one source of truth for the *rules*, even if evaluation is distributed for latency reasons (§4). A single policy engine or library, fed by centrally-owned rules, means a fix in one place closes the gap everywhere at once — instead of hunting down the one service that never got the memo.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "designing-authorization-models-s07-q1"
+      ]
+    }
+  ]
+}

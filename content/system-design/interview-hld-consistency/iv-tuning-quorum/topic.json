@@ -1,0 +1,165 @@
+{
+  "id": "iv-tuning-quorum",
+  "title": "How would you tune read/write quorum for this system's needs?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 4,
+  "slug": "iv-tuning-quorum",
+  "summary": "Tests whether you can reason about the R+W>N trade-off for a specific latency or consistency target, not just recite the formula.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-tuning-quorum-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Reciting \"R+W>N gives strong consistency\" gets you nowhere on its own — the interviewer wants to see you actually pick R and W for a stated workload and defend the numbers. Quorum tuning is a knob, and the question is testing whether you know which direction to turn it and why.\n\nThis topic walks the trade-off concretely: N=3 with different R/W splits, what happens when replicas disagree, and what you silently give up if you shave R+W down to exactly N.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-tuning-quorum-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask which side of the request path is more latency-sensitive for this workload: does it favor fast reads (a feed that's read constantly, written rarely), fast writes (a logging or event-ingestion pipeline), or does it need strict consistency more than either side needs to be fast?\n\nThat answer decides which of R and W you shrink and which you grow — quorum tuning without knowing the read:write ratio and latency priority is just guessing at numbers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-tuning-quorum-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: R and W relative to N",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The skeleton: pick **R** (replicas that must acknowledge a read) and **W** (replicas that must acknowledge a write) relative to **N** (total replicas), based on which side needs to be fast and which needs to be safe. A low R with a high W makes writes expensive but reads cheap; a low W with a high R does the reverse.\n\nAlways state the constraint you're aiming to satisfy — usually R+W>N for strong read-after-write guarantees — before naming the specific split, so the interviewer sees you're choosing deliberately, not just picking numbers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-tuning-quorum-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-tuning-quorum-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: N=3 with three different splits",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "For a 3-replica cluster (N=3), three concrete splits and what each optimizes for:\n\n```\nN=3\nW=1, R=3   # write-optimized: 1 replica must ack a write, but every replica must ack a read\nW=3, R=1   # read-optimized: every replica must ack a write, but 1 replica can serve a read\nW=2, R=2   # balanced default: R+W=4 > N=3, satisfies the strong-consistency constraint\n```\n\nW=1/R=3 suits a write-heavy, read-light workload (event ingestion) where you want writes to return fast and can afford to wait on reads. W=3/R=1 suits the opposite. W=2/R=2 is the common default when neither side clearly dominates.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-tuning-quorum-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-tuning-quorum-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: what happens when R=2 replicas disagree",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "With R=2, a read waits for two replicas to respond — and they might disagree, because one is slightly behind the other. Two common resolutions: the client (or coordinator) picks whichever value carries the **newer timestamp or version**, or it triggers a **read repair**, writing the newer value back to the stale replica before returning the result.\n\nNaming read repair specifically is a strong signal — it shows you know quorum reads don't just tolerate disagreement, they can actively fix it as a side effect of the read path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-tuning-quorum-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: the measured latency difference between splits",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A worked latency comparison for the same cluster, same network:\n\n```\nR=1, W=3   ->  read p99:  8ms   |  write p99: 45ms\nR=3, W=1   ->  read p99: 42ms   |  write p99:  9ms\nR=2, W=2   ->  read p99: 22ms   |  write p99: 24ms\n```\n\nThe pattern: whichever side requires more replicas to respond pays roughly the latency of the *slowest* replica in that quorum, not the fastest — so R=2/W=2 sits in the middle for both, while the lopsided splits make one side fast at the direct expense of the other.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-tuning-quorum-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**R=W=2 balances both sides, but neither reads nor writes get the lowest latency either could have alone.** Balance isn't free — it's a deliberate choice to give up the best-case latency on both sides in exchange for not being lopsided on either.\n\n| Split | Read latency | Write latency | Best for |\n|---|---|---|---|\n| R=1, W=3 | Fastest | Slowest | Read-heavy workloads |\n| R=3, W=1 | Slowest | Fastest | Write-heavy workloads |\n| R=2, W=2 | Middling | Middling | No clearly dominant side |\n\nSay which workload shape you're assuming before picking a split — the \"balanced default\" isn't automatically correct for every case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-tuning-quorum-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-tuning-quorum-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: a node is down — does your quorum setting still work?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Check the arithmetic against a failure, not just the happy path: with N=3 and W=2, losing one node still leaves 2 of 3 available — writes still succeed. But if N=3 and W=3, losing even one node makes every write impossible until it recovers.\n\nName this explicitly: a quorum setting that requires all N replicas (W=N or R=N) has zero tolerance for a single node failure, which is often a bigger risk than the latency you saved by picking that lopsided split.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-tuning-quorum-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: you set R+W=N to save latency — what did you give up?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If R+W=N exactly (say R=1, W=1, N=2), you save latency on both sides compared to R+W>N, but you lose the guarantee that a read always sees the latest write — the read and write quorums are no longer guaranteed to overlap on at least one replica, so a read can return stale data even with no failures involved.\n\nThe honest answer here is: \"I get lower latency, and I'm explicitly trading away the read-your-latest-write guarantee to get it — that's a deliberate choice, not an oversight.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-tuning-quorum-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: setting R+W=N without realizing what's lost",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll shave R+W down to exactly N to save latency — it's basically the same as R+W>N.\"\n\n**Why it's wrong:** R+W>N is what guarantees the read and write quorums always share at least one replica in common, which is what makes a read see the latest write. Dropping to R+W=N breaks that overlap guarantee silently — the system still runs, but strong consistency is gone without any error or warning.\n\n**Correct model:** treat R+W>N as the line between \"strongly consistent\" and \"eventually consistent, just tunable\" — crossing it is a real trade-off decision, not a free latency win.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-tuning-quorum-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-tuning-quorum-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd pick R and W relative to N based on which side of this workload needs to be fast and which needs to be safe — R=1/W=N-ish for read-heavy, the reverse for write-heavy, R=W=middle when neither dominates. I'd keep R+W>N unless I'm deliberately trading away the read-your-latest-write guarantee for lower latency, and I'd say that trade-off out loud rather than let it happen silently. I'd also check the setting against a node failure, not just the happy path — W=N means one dead node blocks every write.\"\n\nSee [quorum-systems](quorum-systems) for the full R+W>N derivation this answer assumes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

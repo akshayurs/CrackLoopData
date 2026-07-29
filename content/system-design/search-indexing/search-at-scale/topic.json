@@ -1,0 +1,111 @@
+{
+  "id": "search-at-scale",
+  "title": "Search at Scale",
+  "area": "system-design",
+  "group": "search-indexing",
+  "order": 5,
+  "slug": "search-at-scale",
+  "summary": "Sharding an index across nodes and merging scatter-gather results without one slow shard stalling every query.",
+  "level": "advanced",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "search-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "An [inverted index](inverted-index) that fits on one machine is simple to query — a single lookup, done. Once a document collection outgrows one machine's RAM and disk, the index has to be split across many nodes, and a single query now has to fan out to all of them and merge the results.\n\nThis is the same **scatter-gather** pattern that shows up whenever a dataset is partitioned: send the query everywhere the data might be, wait for every partition to answer, then combine. It's simple to describe and surprisingly easy to get wrong under real failure and latency conditions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "search-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "Why one index eventually must be sharded",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single-node inverted index has two hard ceilings. **Memory** — posting lists for a large collection eventually exceed what fits in RAM (or even on one machine's disk), and disk-backed lookups get slow. **Query throughput** — one machine can only serve so many concurrent queries per second before CPU saturates, no matter how efficient the index structure is.\n\nSharding solves both by splitting the document collection across multiple machines, each holding and serving only a slice of the total index — more documents and more query volume are handled by adding more shards, the same horizontal-scaling principle behind scaling any other stateful system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "search-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "Sharding an index: partitioning documents across nodes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sharding a search index usually means splitting **documents** across nodes — shard 1 holds documents 1 through 10 million, shard 2 the next 10 million, and so on (by hash of document ID, or a range, similar to sharding a database). Each shard builds and holds its own complete inverted index over just its slice of documents.\n\nThis is different from splitting the index *by term* (each shard owning some terms' posting lists for all documents), which is possible but far less common — document-based sharding means a query for any term touches every shard, but each shard's work is proportionally smaller, which tends to balance load more evenly across real, uneven term distributions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "search-at-scale-s03-q1"
+      ]
+    },
+    {
+      "id": "search-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: scatter-gather — query fanned out to shards, results merged",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Query scatters to shards, results gather back to coordinator](assets/query-fanout.svg)\n\nA **coordinator** node receives the query, sends it to every shard (or every shard that could plausibly hold a match), and each shard runs the query independently against its own local index, returning its own top matches with scores. The coordinator then merges all the shards' results by score and returns the overall top results.\n\nEvery shard does real work on every query — this is the cost of sharding a searchable dataset, unlike sharding a key-value store where a lookup by key touches exactly one shard.",
+      "assets": [{"alt": "Query scatters to shards, results gather back to coordinator", "path": "assets/query-fanout.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "search-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "Replicas for search: read scaling and availability",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each shard is usually replicated — multiple copies of the same shard's index on different nodes — for two independent reasons. **Availability**: if a shard's only copy goes down, that entire slice of documents becomes unsearchable, which silently degrades every query touching it, not just queries for that shard's documents. **Read scaling**: query load for a single shard can be spread across its replicas, since search reads (unlike writes) don't need strict consistency between replicas at query time.\n\nReplicas make a shard's *loss* survivable, but they don't reduce how much data one shard holds — that's what sharding itself is for. The two techniques solve different problems and are used together.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "search-at-scale-s05-q1"
+      ]
+    },
+    {
+      "id": "search-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "Compare: single large index vs many small shards on latency and relevance",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single large index | Many small shards |\n|---|---|---|\n| Max collection size | Bounded by one machine's RAM/disk | Scales by adding shards |\n| Per-query latency | Faster if it fits comfortably in memory | Bounded by the slowest responding shard |\n| Relevance stats (IDF) | Computed globally, exactly correct | Approximated per-shard unless coordinated (see pitfall) |\n| Operational complexity | Low — one node to manage | Higher — coordinator, rebalancing, replica management |\n| When it breaks down | Collection outgrows one machine | Too many tiny shards adds overhead without real benefit |\n\n**How to decide:** stay on a single index as long as it comfortably fits one machine — it's simpler and its relevance scoring is exact. Shard once you hit a real memory or throughput ceiling, not preemptively; more shards than needed adds coordination overhead for no benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "search-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: a scatter-gather query where one slow shard delays every query",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Sharding makes search faster, so more shards is always better.\"\n\n**Why it's wrong:** in scatter-gather, the coordinator typically waits for every shard to respond before merging results — so the overall query latency is bounded by the *slowest* shard, not the average. One overloaded, GC-pausing, or unhealthy shard silently degrades every single query touching the index, even though the other shards answered instantly, and more shards means more chances for one of them to be the slow one at any given moment.\n\n**Correct model:** design for tail latency explicitly — set per-shard timeouts and return partial results rather than blocking indefinitely on one straggler, monitor per-shard latency (not just averages), and size shard count to your actual data volume rather than maximizing it, since each additional shard is one more potential tail-latency source.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "search-at-scale-s07-q1"
+      ]
+    }
+  ]
+}

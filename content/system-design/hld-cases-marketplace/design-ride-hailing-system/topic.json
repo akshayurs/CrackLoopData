@@ -1,0 +1,184 @@
+{
+  "id": "design-ride-hailing-system",
+  "title": "Design a Ride-Hailing System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 2,
+  "slug": "design-ride-hailing-system",
+  "summary": "Match a rider to a nearby driver in seconds, on top of a live location feed — the real difficulty is the matching-and-pricing loop, not finding nearby drivers.",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-ride-hailing-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: a rider taps \"request ride,\" and within seconds gets matched to a nearby driver who is actually available and actually heading in a useful direction.\n\nIt looks like a proximity-search problem — \"find nearby drivers\" — but the hard part is everything downstream of the search: scoring candidates fairly, committing one match before the driver gets offered to someone else, and pricing the marketplace so supply and demand don't collapse during a spike.\n\nTreat this as a live, continuously-updating auction with a latency budget measured in seconds, not a static lookup.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** a rider requests a ride from A to B; the system matches them with an available driver; either party can cancel before pickup; the fare adjusts for demand via surge pricing.\n\n**Non-functional:** match latency in the single-digit seconds even in a dense city; graceful cancellation handling that doesn't strand either party mid-match; surge fairness — the multiplier should track real local scarcity, not be gameable by a few drivers going offline together.\n\nThe tension to name up front: fast matching (grab whoever's closest, now) can conflict with marketplace-wide efficiency (holding out half a second longer might produce much better matches for everyone).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: pings, rides, and matches per second",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A dense city might have 100,000 active drivers, each pinging location every 4 seconds — that's 25,000 location writes/sec from location updates alone, before a single ride is requested. Concurrent active rides in a metro area can run into the tens of thousands during peak hours.\n\nMatches/sec during a normal evening might be a few hundred; during a demand spike (a concert letting out, a rainstorm) it can spike 10-20x in one neighborhood in minutes. The location-ping volume dwarfs the ride-request volume by orders of magnitude — which is why the location feed needs its own high-write-throughput store, separate from the transactional ride/trip data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-ride-hailing-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-ride-hailing-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three calls anchor the flow:\n\n- `requestRide(riderId, pickup, dropoff)` — kicks off matching; returns a match or a short wait.\n- `driverLocationUpdate(driverId, lat, lng, heading)` — a continuous, high-frequency stream from every online driver, feeding the location index.\n- `acceptMatch(matchId)` — the driver's confirmation; until this fires, the rider isn't committed to that driver, and the driver isn't removed from the candidate pool for anyone else.\n\nNotice the asymmetry: `driverLocationUpdate` is by far the highest-volume call and the one that must never block on anything slow — it just needs to land in the location index fast and often.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s05",
+      "order": 5,
+      "sectionTitle": "Compare: live driver locations vs durable ride records",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Live driver locations | Ride/trip records |\n|---|---|---|\n| Update rate | Every few seconds, per driver — extremely high write volume | A handful of state changes per ride (requested, matched, started, completed) |\n| Durability need | Ephemeral — only the latest position matters, history is disposable | Durable — needed for billing, disputes, support, analytics |\n| Right store | In-memory geospatial index (e.g. a geohash-backed cache) | A transactional database with real persistence guarantees |\n| Failure cost | Losing a few seconds of a stale position is a minor UX hit | Losing a trip record is a billing/compliance problem |\n\n**How to decide:** these two datasets have opposite durability and volume profiles, so forcing them into one store either overpays for durability on the location feed or underpays for it on trip records — split them from day one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-ride-hailing-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-ride-hailing-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: architecture overview",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Ride-hailing architecture: location, matching, trip, and pricing services with requestRide flowing through the matching engine](assets/architecture-overview.svg)\n\nEach service has a distinct load and durability profile: the location service is write-heavy and ephemeral, the matching engine is CPU-bound and stateless per request, the trip service is the durable system of record, and pricing runs its own aggregation loop over recent supply/demand.\n\nSplitting these lets each scale on its own axis instead of one monolith straining to satisfy all four profiles at once.",
+      "assets": [
+        {"alt": "Ride-hailing architecture: location, matching, trip, and pricing services with requestRide flowing through the matching engine", "path": "assets/architecture-overview.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s07",
+      "order": 7,
+      "sectionTitle": "The matching algorithm: nearest-driver vs marketplace efficiency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The naive algorithm — offer the ride to whichever available driver is physically closest — is simple and fast, but it's myopic: it can send a driver who's about to finish another trip three streets away while ignoring one who just became free and is a better fit for the *next* request too.\n\nA marketplace-aware matcher looks slightly wider: it considers driver heading (are they already moving toward this pickup?), ETA (not just straight-line distance), and sometimes holds a match decision for a fraction of a second to consider multiple riders and drivers together, so the overall set of matches is better even if any single one isn't the fastest possible.\n\nThe trade-off is real: nearest-driver minimizes this rider's wait; marketplace-aware matching minimizes average wait across all riders, at the cost of a small delay per match.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-ride-hailing-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-ride-hailing-system-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: the match loop",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![The match loop: query candidates, offer top candidate, retry next-best on decline, acceptMatch on success](assets/match-loop.svg)\n\nThe loop is designed to fail forward: a declined or timed-out offer doesn't restart the whole search, it just advances to the next-ranked candidate from the same scored list.\n\nThat's what keeps end-to-end match latency low even when the first-choice driver doesn't respond immediately.",
+      "assets": [
+        {"alt": "The match loop: query candidates, offer top candidate, retry next-best on decline, acceptMatch on success", "path": "assets/match-loop.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s09",
+      "order": 9,
+      "sectionTitle": "Dynamic (surge) pricing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Surge pricing** raises the fare multiplier in a zone when demand (open ride requests) outstrips supply (available drivers) there, computed continuously per geographic zone from a rolling window of recent requests and driver availability.\n\nThe purpose isn't just extra revenue — it's a signaling mechanism on both sides: a higher price both dampens marginal demand (some riders wait it out) and pulls supply in (drivers in nearby, calmer zones are incentivized to reposition toward the surge). Without it, a demand spike just produces a long queue with no mechanism to relieve it.\n\nThe multiplier needs to update fast enough to track a real spike (a stadium emptying) but not so jumpily that it flickers on normal minute-to-minute noise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s10",
+      "order": 10,
+      "sectionTitle": "Compare: greedy nearest-match vs batched matching",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Greedy nearest-match | Batched matching |\n|---|---|---|\n| Decision timing | Matches each request the instant a driver is available | Collects requests and drivers over a short window, then matches the whole batch at once |\n| Optimizes for | This rider's wait time | Aggregate marketplace efficiency (total distance, total wait) |\n| Latency cost | Near-zero added delay | Adds the batch window (often just 1-3 seconds) to match time |\n| Best fit | Low-density areas with few simultaneous requests | Dense areas or spikes, where many requests and drivers overlap in time |\n\n**How to decide:** greedy wins where there's rarely more than one plausible match to choose from; batching earns its small added latency exactly when a spike creates enough simultaneous options that a smarter global assignment meaningfully beats first-come-first-served.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-ride-hailing-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-ride-hailing-system-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: the matching engine during a demand spike",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a concert lets out, thousands of riders in a few square blocks request rides within minutes of each other. The location service and pricing service scale relatively gracefully — they're mostly independent per-zone computations — but the matching engine has to reconcile a sudden, dense many-to-many problem: many riders, a comparatively small pool of nearby drivers, all needing consistent, non-conflicting assignments.\n\nThis is exactly where batched matching earns its keep over pure greedy assignment — a short batching window lets the engine solve a better global assignment instead of a stampede of independent nearest-match lookups colliding on the same handful of nearby drivers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ride-hailing-system-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: matching purely by straight-line distance",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The closest driver by GPS distance is always the best match.\"\n\n**Why it's wrong:** straight-line distance ignores road network reality and driver intent. A driver 200 meters away but heading the opposite direction on a one-way street, or stuck across a river with no nearby bridge, can have a far worse real ETA than a driver 600 meters away who's already moving toward the pickup on the right road.\n\n**Correct model:** score candidates by estimated ETA along the actual road network, factoring in current heading and traffic — not raw distance. A short straight-line distance is a weak proxy for \"will arrive soonest,\" and treating it as the ranking signal produces bad matches that look correct on a map.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-ride-hailing-system-s12-q1"
+      ]
+    }
+  ]
+}

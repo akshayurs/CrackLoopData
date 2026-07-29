@@ -1,0 +1,167 @@
+{
+  "id": "iv-local-vs-distributed-cache",
+  "title": "Would you use a local (in-process) cache or a distributed cache here?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 11,
+  "slug": "iv-local-vs-distributed-cache",
+  "summary": "Tests whether you know the concrete trade-off — local is faster but inconsistent across nodes; distributed is consistent but adds a network hop — and can pick per use case, including combining both.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-local-vs-distributed-cache-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just use Redis\" is the reflex this question is testing against. A **distributed cache** (Redis, Memcached) gives every node the same view of the data at the cost of a network hop; a **local, in-process cache** is sub-microsecond fast but every node can hold a different, independently-stale copy.\n\nThe strong answer picks based on whether the data can tolerate per-node inconsistency — and often proposes using both together.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **does every app node need to see the exact same value, or is per-node staleness acceptable?** A feature flag or compiled config that's fine being a few seconds out of sync across nodes tolerates local caching well. A shared rate-limit counter or an inventory count that every node must agree on cannot — two nodes disagreeing on the same counter is a correctness bug, not just staleness.\n\nThis single question is almost the entire decision.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "State the rule: **local cache for data tolerant of per-node inconsistency that needs sub-millisecond access; distributed cache for shared state every node must agree on.** Local wins purely on latency — no network hop, just a process-memory lookup. Distributed wins on consistency — one shared source every node reads and writes against.\n\nThe two aren't mutually exclusive; a strong answer often proposes layering them (covered a few slides ahead).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-local-vs-distributed-cache-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s04",
+      "order": 4,
+      "sectionTitle": "Worked example: a feature flag vs a shared rate-limit counter",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Compiled config / feature flag | Shared rate-limit counter |\n|---|---|---|\n| Tolerates per-node inconsistency? | Yes — a few seconds' lag across nodes is harmless | No — every node must see the same count to enforce a limit correctly |\n| Right cache | Local, in-process | Distributed (Redis) |\n| Latency need | Sub-millisecond, read on every request | Can tolerate a network hop |\n\n**How to decide:** ask what breaks if two nodes disagree on this value right now. For a feature flag, nothing meaningful. For a rate limit, a user gets 2x the allowed requests by hitting different nodes — a real correctness failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a two-tier cache — local in front of distributed",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Request flow through local cache, then Redis, then the database, with hit rates at each tier](assets/two-tier-cache-flow.svg)\n\nA small local cache placed in front of a distributed cache absorbs the hottest keys' traffic before it ever leaves the process — most requests for a truly hot key never even make the network hop to Redis. The distributed cache still exists as the shared, consistent source of truth for everything the local tier doesn't hold.\n\nThis pattern gets local's speed for the hottest data without giving up a shared consistent view for everything else.",
+      "assets": [
+        {"alt": "Request flow through local cache, then Redis, then the database, with hit rates at each tier", "path": "assets/two-tier-cache-flow.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-local-vs-distributed-cache-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: measuring the latency gap",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The two options aren't close on raw latency:\n\n```\n# local, in-process lookup — a hash map read in the app's own memory\nlocal_lookup_time = 0.0005   # ~0.5 microseconds\n\n# distributed cache lookup — a network round trip to Redis\ndistributed_lookup_time = 1.0   # ~1 millisecond\n\nspeedup = distributed_lookup_time / local_lookup_time\n# speedup ~= 2000x\n```\n\nA local lookup can be roughly 2000x faster than a distributed one — for a code path called on every single request, that gap is often the entire reason to reach for local caching at all, not just a nice-to-have.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Local cache | Distributed cache |\n|---|---|\n| Fastest possible access — no network hop | Adds a network round trip |\n| Memory use multiplies across every node holding a copy | One shared copy, sized once |\n| Can't be invalidated from one place — every node's copy is independent | Invalidate once, every node sees it |\n\n**How to decide:** local caching is fastest, but it multiplies memory use across every node and can't be invalidated centrally — you have to reach every node individually (or wait out a TTL) to clear a stale entry, which is a real operational cost the raw speed doesn't show.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how do you invalidate a local cache across every node?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "There's no single delete call that reaches every node's memory at once, the way there is for a distributed cache. The concrete fix: a **pub/sub invalidation channel** — when the data changes, publish an event, and every node subscribes and clears its own local copy on receipt. This is effectively event-driven invalidation (from the earlier invalidation question) applied to N independent local caches instead of one shared one.\n\nA short TTL as a backstop is still worth keeping, in case a node misses the pub/sub message — the two layers (event + TTL) cover for each other's failure mode.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-local-vs-distributed-cache-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"a node has been up for weeks with a stale entry — how would you catch that?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the local-cache-specific version of drift detection: a node that missed an invalidation event (a dropped pub/sub message, a brief network partition) can silently hold a wrong value indefinitely if there's no TTL backstop and no monitoring. The fix is the same shape as elsewhere in this group — **periodically spot-check a sample of local cache entries against the source of truth**, per node, and alert on disagreement.\n\nThe uncomfortable truth worth naming: a long-lived node is exactly where this failure is most likely, since it's had the most opportunities to miss an event over its lifetime.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming a distributed cache alone is \"fast enough\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We already have Redis — that's fast enough for any caching need.\"\n\n**Why it's wrong:** a network round trip, even to a fast in-memory store, is orders of magnitude slower than an in-process lookup — for a hot path called on every request, that gap can dominate total latency even when Redis itself responds in under a millisecond. \"Fast enough\" depends entirely on what the workload actually needs, and some workloads genuinely need sub-microsecond access a network hop can't provide.\n\n**Correct model:** check the latency budget for the specific hot path before assuming a distributed cache is sufficient — if the numbers don't work, a local cache (possibly layered in front of the distributed one) is the fix, not a Redis performance tune.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-local-vs-distributed-cache-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Local cache for data tolerant of per-node inconsistency needing sub-millisecond access; distributed cache for shared state every node must agree on. A two-tier setup — local in front of distributed — gets both. Local caching multiplies memory across nodes and can't be invalidated centrally, so pair it with a pub/sub invalidation channel and a TTL backstop. Don't assume a distributed cache is \"fast enough\" without checking the specific hot path's latency budget against a real network round trip.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+{
+  "id": "iv-designing-an-object-safe-to-share",
+  "title": "How do you design an object that's safe to share across threads?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 10,
+  "slug": "iv-designing-an-object-safe-to-share",
+  "summary": "Designing FOR safe publication from the start, not retrofitting a lock onto a class that was never built to be shared.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-designing-an-object-safe-to-share-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A different framing from \"fix this broken class\": here you're designing an object from scratch to be shared across threads safely, which means the decision happens at design time, not as a patch afterward.\n\nThe graded skill is picking one of a small set of real strategies up front, based on how the object will actually be accessed — not defaulting to \"add synchronized\" after the fact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: shared read-mostly, or shared read-write?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **will this object be shared read-mostly, or will multiple threads actually write to it?** Read-mostly sharing (a config, a lookup table built once) points straight at immutability — no synchronization needed at all once published. Genuine concurrent writes point toward synchronization or a concurrent data structure instead, since no amount of clever construction avoids needing to coordinate mutation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name the three strategies — immutability, confinement, synchronization — and pick by access pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three real strategies. **Immutability** — no mutable state after construction, so nothing to protect; best for read-mostly sharing. **Confinement** — the object is never actually shared; it's rebuilt or owned by exactly one thread at a time (a per-request object, a thread-local). **Synchronization** — the object genuinely has shared mutable state accessed concurrently, so access must be coordinated with locks or an atomic/concurrent structure.\n\nPick by access pattern, in that preference order — immutability and confinement both avoid synchronization's cost entirely when they fit. See [designing thread-safe classes](designing-thread-safe-classes) for the deeper design methodology behind this choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-designing-an-object-safe-to-share-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s04",
+      "order": 4,
+      "sectionTitle": "Code: a class published safely via a final field set once in the constructor (safe publication)",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Settings {\n    private final Map<String, String> values;\n\n    Settings(Map<String, String> values) {\n        this.values = Map.copyOf(values);   // defensive copy, immutable\n    }\n\n    String get(String key) { return values.get(key); }\n}\n\n// publication:\nstatic final Settings SETTINGS = new Settings(loadFromDisk());\n```\n\nBecause `values` is `final` and assigned entirely inside the constructor, and `SETTINGS` itself is published through a `static final` field, the JVM's initialization guarantees ensure any thread that observes `SETTINGS` sees the fully-constructed `Settings` object, including its fully-populated map. No explicit lock needed anywhere in this path.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s05",
+      "order": 5,
+      "sectionTitle": "Code: the unsafe version — a reference escaping through a non-final field before construction fully completes",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Settings {\n    static Settings LATEST;   // not final — the bug\n    private Map<String, String> values;\n\n    Settings(Map<String, String> values) {\n        LATEST = this;              // 'this' escapes before the field below is set!\n        this.values = Map.copyOf(values);\n    }\n}\n```\n\nAssigning `LATEST = this` inside the constructor, before `values` is set, publishes the reference before the object is fully built — another thread reading `LATEST` at exactly that moment can see a `Settings` instance whose `values` field is still `null`. This is called **letting `this` escape** during construction, and it's unsafe regardless of whether the field is later made final.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-designing-an-object-safe-to-share-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the three strategies laid out — immutable, confined to one thread, or synchronized",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Three panels: immutable object read by many threads with no lock, an object confined inside one thread's boundary, and an object reached by many threads only through a shared lock gate](assets/three-sharing-strategies.svg)\n\nEach panel represents a strategy that fits a different access pattern — the design decision is picking which panel matches how the object will actually be used, before writing any code.",
+      "assets": [{"alt": "Three panels: immutable object read by many threads with no lock, an object confined inside one thread's boundary, and an object reached by many threads only through a shared lock gate", "path": "assets/three-sharing-strategies.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"what does 'safe publication' actually mean — why can a half-constructed object leak?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Safe publication\" means a reference to an object is shared with other threads in a way that guarantees they see the object in a fully-constructed state — every field write inside the constructor is visible before the reference itself is visible.\n\nA half-constructed object can leak because, without a safe-publication mechanism, the reference write and the constructor's field writes can be reordered relative to each other, or the reference can genuinely become visible before the constructor finishes (as in s05's `this`-escape). Safe mechanisms include a `final` field, a `static final` field, publishing through a properly locked collection, or publishing via a volatile reference — each gives the ordering guarantee construction alone doesn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how does thread confinement work in a UI framework, concretely?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Most UI frameworks (Swing's Event Dispatch Thread, Android's main thread) enforce that all UI object mutation happens on exactly one designated thread — background threads that need to update the UI must post a task to that thread rather than touching UI objects directly. The UI objects themselves are never actually shared in the concurrent sense; they're confined to one thread by convention (and sometimes runtime checks) rather than protected by locks.\n\nThis is why UI code look single-threaded even in an app doing heavy background work — the confinement moves the coordination problem to \"how do I hand off to the UI thread\" instead of \"how do I lock this widget.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-designing-an-object-safe-to-share-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"if you can't make it immutable, what's the smallest change that makes it safe to share?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the object genuinely must mutate after sharing, the smallest change is usually **synchronizing exactly the methods that touch the mutable state**, sized to the minimum critical section identified by the same skeleton used for \"make this class thread-safe.\" A common middle ground: keep the object's own fields immutable, but hold a mutable reference to it (an `AtomicReference` or a `volatile` field) that gets swapped wholesale on update — the object never mutates, only which object is current changes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: adding synchronized everywhere as the default answer regardless of the access pattern",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** designing every method as `synchronized` by default, without asking whether the object could have been immutable or confined instead.\n\n**Why it's wrong:** it treats synchronization as the only tool, missing the two strategies (immutability, confinement) that avoid its cost entirely and are often the better fit for how the object is actually accessed.\n\n**Correct model:** ask the access-pattern question first; reach for synchronization only for the subset of design that genuinely needs concurrent mutation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: assuming a final field alone guarantees safe publication of everything the object transitively reaches",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** assuming a `final` field on the shared reference alone guarantees safe publication of everything the object transitively reaches.\n\n**Why it's wrong:** `final` guarantees the reference itself is safely published, but if that object holds a reference to a further mutable object that isn't itself immutable or safely published, a reader can still observe *that* nested object in a half-constructed or subsequently-mutated state — safety doesn't automatically propagate through the whole graph.\n\n**Correct model:** safe publication has to be verified (or defensively copied) at every level of the object graph that's actually shared, not assumed from one `final` at the top.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-designing-an-object-safe-to-share-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-an-object-safe-to-share-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd first ask whether this is shared read-mostly or read-write, since that decides the strategy: immutability for read-mostly, confinement if it's never truly shared, synchronization only if there's genuine concurrent mutation. I'd make sure publication is safe — a final or static final field, not a reference escaping mid-construction — and check that safety extends through the whole object graph, not just the top-level reference. I'd only reach for synchronized on the specific methods that touch shared mutable state, not the whole class by default.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

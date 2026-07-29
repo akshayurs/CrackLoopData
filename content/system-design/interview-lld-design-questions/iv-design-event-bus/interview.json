@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-event-bus",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-event-bus-iq1",
+      "question": "Design an event bus that decouples publishers from subscribers within a single application.",
+      "answerMarkdown": "I'd start with the API surface: `publish(event)` and `subscribe(eventType, handler)`, keyed by the event's type rather than one global listener list, so a publisher of an `OrderPlacedEvent` only reaches handlers registered for that specific type. Internally, that's a map from type to a list of handlers — publish looks up the type and calls each one.\n\nThe part that's easy to skip past: dispatch behavior when a handler misbehaves. I'd wrap each handler call in its own try/catch so a throwing subscriber can't stop delivery to the rest or leak back into the publisher, which has no idea subscribers even exist. I'd default to synchronous dispatch and mention async as the upgrade if a slow subscriber shouldn't block the publisher.\n\nI'd close by naming the boundary of this design: it lives entirely in process memory, so it's the wrong tool once delivery needs to survive a restart or reach a different process — that's a message queue's job, not the bus's.\n\n**Testing:** whether you treat failure isolation as core to the design, and whether you know where an in-process bus stops being sufficient.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-event-bus-iq2",
+      "question": "How does an event bus differ from a message queue, and when do you need the queue instead?",
+      "answerMarkdown": "I'd frame it as two systems solving a similar decoupling goal at very different scales. An event bus lives entirely in one process's memory: no persistence, dispatch happens immediately or on a local thread pool, and every subscriber and every undelivered event disappears the moment the process restarts.\n\nA message queue is a separate, durable system — messages are written to storage independent of any consumer, so they survive a consumer crashing or restarting, and they can be picked up by processes running on entirely different machines. That durability and cross-process reach is exactly what the bus can't offer.\n\nI'd reach for the queue specifically when delivery has to survive a restart, when more than one independent service needs to consume the same events, or when I need back-pressure or replay — none of which an in-memory bus is built to provide, no matter how it's tuned.\n\n**Testing:** whether you can name the actual capability gap — durability and process boundaries — rather than a vague \"queues are for bigger systems.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Event bus vs message queue"
+    },
+    {
+      "id": "iv-design-event-bus-iq3",
+      "question": "How do you avoid a memory leak from subscribers that never unsubscribe?",
+      "answerMarkdown": "I'd name the mechanism directly: the bus holds a reference to every subscribed handler in its internal list, so if a component is discarded elsewhere in the app but never calls unsubscribe, the bus keeps that handler — and everything it closes over — alive indefinitely. It's the same root cause as the classic memory leak in the plain Observer pattern, just at API scale.\n\nThe fix is discipline plus structure: every `subscribe` call should have a corresponding `unsubscribe`, and I'd tie that unsubscribe to whatever natural lifecycle the subscribing component already has — a request completing, a UI screen closing — rather than relying on every call site to remember it manually.\n\nAs a defensive backstop, some bus implementations hold handlers via weak references so an orphaned subscriber can still be garbage collected even if unsubscribe was missed, though that trades a hard guarantee for unpredictable cleanup timing, so I wouldn't lead with it as the primary fix.\n\n**Testing:** whether you connect this back to the same failure mode as Observer-pattern leaks rather than treating it as a brand-new problem.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Subscriber leak follow-up"
+    }
+  ]
+}

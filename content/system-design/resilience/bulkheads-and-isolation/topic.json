@@ -1,0 +1,111 @@
+{
+  "id": "bulkheads-and-isolation",
+  "title": "Bulkheads & Isolation",
+  "area": "system-design",
+  "group": "resilience",
+  "order": 5,
+  "slug": "bulkheads-and-isolation",
+  "summary": "Containing one dependency's or tenant's failure to its own compartment instead of letting it starve everything else sharing the same pool.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "bulkheads-and-isolation-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A ship's hull is divided into watertight compartments so a single puncture floods one section, not the whole ship. The **bulkhead pattern** applies the same idea to software: isolate resources (thread pools, connection pools) per dependency or tenant, so one slow or failing one can't exhaust the pool everything else depends on.\n\nWithout bulkheads, a single misbehaving dependency sharing a pool with everything else can quietly take down unrelated features. This topic covers pool isolation, how to draw the isolation boundaries, and the cost of doing it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "bulkheads-and-isolation-s02",
+      "order": 2,
+      "sectionTitle": "The bulkhead analogy: containing failure to one compartment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The failure mode bulkheads exist for: an app server has one shared thread pool of 50 threads serving requests to three dependencies — payments, recommendations, and search. If recommendations starts responding slowly, requests to it pile up holding threads for longer, and eventually all 50 threads are stuck waiting on recommendations. Now payments and search — completely healthy dependencies — can't get a thread either.\n\nA bulkhead gives each dependency its **own** pool: 20 threads for payments, 15 for recommendations, 15 for search. Recommendations exhausting its 15 threads only degrades recommendations — payments keeps working normally on its own untouched 20.\n\nThe key insight: the failure wasn't really \"recommendations is slow,\" it was \"a shared resource let recommendations' slowness become everyone's problem.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "bulkheads-and-isolation-s02-q1"
+      ]
+    },
+    {
+      "id": "bulkheads-and-isolation-s03",
+      "order": 3,
+      "sectionTitle": "Thread pool / connection pool isolation per dependency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In practice, bulkheading means giving each outbound dependency its own bounded resource: a separate **thread pool** (or async equivalent — a separate semaphore/concurrency limit) and often a separate **connection pool** to that dependency's servers, sized to what that dependency alone needs.\n\nSizing each pool matters as much as separating them — a pool sized too small throttles a healthy dependency unnecessarily; one sized too large defeats the isolation by still letting that dependency consume most of the shared machine's capacity if it misbehaves.\n\nMost HTTP client libraries and service meshes support this natively (per-destination connection pools, per-route thread pools) — bulkheading is often a configuration decision, not a from-scratch build.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "bulkheads-and-isolation-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: one slow dependency exhausting a shared thread pool vs isolated pools",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Shared thread pool exhausted vs bulkheaded pools per service](assets/bulkhead-isolation.svg)\n\nThe total thread count is similar in both panels — bulkheading isn't about having more capacity, it's about drawing a wall around where a failure can spread.\n\nThe right panel's Recommendations feature is just as degraded as the left's — bulkheading doesn't fix the slow dependency, it stops that dependency's problem from becoming Payments' problem too.",
+      "assets": [{"alt": "Shared thread pool exhausted vs bulkheaded pools per service", "path": "assets/bulkhead-isolation.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": [
+        "bulkheads-and-isolation-s04-q1"
+      ]
+    },
+    {
+      "id": "bulkheads-and-isolation-s05",
+      "order": 5,
+      "sectionTitle": "Isolating by tenant, priority, or dependency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Isolation by dependency (previous slides) is the most common case, but the same pattern applies along other axes. **By tenant** — in a multi-tenant system, give each tenant (or each large tenant) its own resource slice so one tenant's traffic spike or bad query can't starve every other tenant sharing the same infrastructure. **By priority** — reserve a slice of capacity for high-priority traffic (checkout) separate from lower-priority traffic (analytics events), so a burst of the latter can't block the former.\n\nThe axis to isolate on should match where real failures actually originate in your system — a single-tenant B2C app has no tenant-isolation problem, but a B2B platform selling to a handful of large customers almost always does.\n\nChoosing the isolation boundary is itself a design decision — it should follow from a concrete \"what could take down what else\" analysis, not be applied uniformly everywhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "bulkheads-and-isolation-s06",
+      "order": 6,
+      "sectionTitle": "Compare: shared resource pool vs bulkheaded pools — cost vs blast radius",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Shared pool | Bulkheaded (per-dependency) pools |\n|---|---|---|\n| Resource utilization | Efficient — unused capacity flows to whoever needs it | Less efficient — capacity reserved per pool can sit idle |\n| Blast radius of one slow dependency | Can exhaust the whole pool, degrading everything | Contained to that dependency's own pool |\n| Operational complexity | Simple — one pool to size and monitor | Higher — each pool needs its own sizing and monitoring |\n| Best for | Low dependency count, similar risk profiles | Multiple dependencies with different failure risk or criticality |\n\n**How to decide:** bulkhead the dependencies that are either high-risk (flaky, third-party, historically unreliable) or high-criticality (payments) — leave low-risk, low-stakes calls sharing a pool rather than fragmenting capacity everywhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "bulkheads-and-isolation-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: one noisy tenant/dependency starving all others from a shared pool",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have plenty of total capacity, so sharing one pool across all dependencies is fine.\"\n\n**Why it's wrong:** total capacity being sufficient on average doesn't prevent one dependency (or tenant) from consuming most of a shared pool during its own incident — the pool doesn't know or care that it's degrading unrelated features while doing so. This is exactly how a third-party integration's outage, or one large customer's traffic spike, ends up taking down features that have nothing to do with it.\n\n**Correct model:** identify dependencies or tenants with meaningfully different risk or blast-radius profiles and give the risky/critical ones their own bounded pool — plenty of average capacity is irrelevant if it can all be claimed by one bad actor at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "bulkheads-and-isolation-s07-q1"
+      ]
+    }
+  ]
+}

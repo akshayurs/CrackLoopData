@@ -1,0 +1,29 @@
+{
+  "topicId": "design-key-value-store",
+  "interviewQuestions": [
+    {
+      "id": "design-key-value-store-iq1",
+      "question": "Design a distributed key-value store like DynamoDB?",
+      "answerMarkdown": "I'd frame this as building the store itself, which changes the emphasis versus most system-design questions — the interesting parts are partitioning, replication, and consistency, not the API, which stays deliberately tiny (`put`/`get`/`delete`).\n\nI'd partition keys with consistent hashing on a ring using virtual nodes, so membership changes only move a bounded slice of keys. I'd replicate each key to N nodes and make R/W quorum sizes tunable per use case, calling out that `R + W > N` buys read-your-writes at some latency cost, while smaller quorums trade that away for speed.\n\nI'd close on conflict resolution: when replicas diverge under concurrent writes, I'd pick vector clocks over last-write-wins if silently dropping a concurrent update is unacceptable for this data.\n\n**Testing:** whether you can reason about the availability/consistency trade-off concretely, with real knobs (N, R, W), instead of gesturing at \"eventual consistency\" abstractly.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core Dynamo-style design"
+    },
+    {
+      "id": "design-key-value-store-iq2",
+      "question": "Two replicas of the same key end up with different values after a network partition heals. How does your system reconcile them?",
+      "answerMarkdown": "First I'd determine whether the two writes were genuinely concurrent or one causally followed the other — that's exactly what a vector clock is for: it lets the store tell \"these are conflicting, unrelated writes\" apart from \"this one clearly supersedes that one.\"\n\nIf they're truly concurrent, I'd surface both versions to the client on the next `get` rather than silently picking one — the caller (or a merge function specific to the data, like combining two shopping-cart deltas) is often better positioned to reconcile than the store itself. If the data can tolerate it, I'd mention last-write-wins as the simpler fallback, accepting the rare silent loss of one write.\n\n**Testing:** whether you understand conflict resolution as a real design decision with a data-loss trade-off, not an implementation detail to wave away.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Reconciling divergent replicas"
+    },
+    {
+      "id": "design-key-value-store-iq3",
+      "question": "How does your key-value store handle a node failing, and how does the ring rebalance afterward?",
+      "answerMarkdown": "With virtual nodes, the failed physical node's arcs are spread across many other nodes rather than concentrated on one neighbor, so no single node absorbs a disproportionate share of the failed node's load or data.\n\nFor reads and writes in flight, the coordinator simply routes to the next healthy replica in the preference list for that key — since N replicas already exist per key, losing one node still leaves N-1 available, and as long as the quorum (W or R) can still be met among the survivors, the store keeps serving without interruption. Once the node is confirmed down (not just slow), a background process re-replicates its arcs' data to restore the target replication factor.\n\n**Testing:** whether you can trace what actually happens operationally during a failure, not just state that the system is \"highly available\" as a slogan.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Node failure and rebalancing"
+    }
+  ]
+}

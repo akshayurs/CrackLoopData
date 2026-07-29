@@ -1,0 +1,180 @@
+{
+  "id": "design-rate-limiter-service",
+  "title": "Design a Rate Limiter Service",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 6,
+  "slug": "design-rate-limiter-service",
+  "summary": "Rate limiting as a shared, low-latency service every other system calls — the distributed service around the algorithm, not the algorithm itself.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-rate-limiter-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Build a central service any microservice in the company can call to ask \"is this request allowed?\" — a shared rate limiter, not a per-service local one. The algorithm (token bucket, sliding window) is table stakes; the actual interview is about making that check fast and available when every downstream service depends on it.\n\nThe core tension: the limiter must never add meaningful latency to calls it's protecting, yet it needs a shared, consistent view of counts across every instance checking it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** support per-user and per-API limits (different callers, different quotas), and allow limit configuration to change without redeploying any service that consumes the limiter.\n\n**Non-functional:** a strict latency budget — the limiter check sits in front of every protected call, so it must add single-digit milliseconds at most — and high availability, since an outage in the limiter shouldn't take down every service that calls it.\n\nThe \"config changes without redeploy\" requirement is easy to skip past but shapes a whole slide later: it means limits live in a store the limiter reads dynamically, not in code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: check QPS across all callers vs the limiter's own capacity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If 200 services each call the limiter on every request, and the platform handles 500,000 requests/sec in aggregate, the limiter itself must sustain 500,000 checks/sec — a check volume that can exceed the request volume of any single service it protects.\n\nThis reframes the problem: the rate limiter isn't a lightweight helper, it's one of the highest-QPS services in the whole company, and its own architecture needs the same scaling rigor as anything it's rate-limiting.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-rate-limiter-service-s03-q1"
+      ]
+    },
+    {
+      "id": "design-rate-limiter-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single call covers it: `checkAndIncrement(key, limit, window)` → returns allow/deny, where `key` identifies the caller+resource being limited (e.g. `user:123:checkout-api`), and `limit`/`window` describe the quota (e.g. 100 requests per 60 seconds).\n\nThe operation is atomic by necessity — checking the count and incrementing it must happen as one step, or two concurrent requests can both read \"under limit\" and both proceed, silently letting the count exceed the intended cap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s05",
+      "order": 5,
+      "sectionTitle": "Data model: where counters live",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | In-memory per node | Shared store (Redis) |\n|---|---|---|\n| Accuracy | Approximate — each limiter instance only sees its own share of traffic | Accurate — one shared source of truth per key |\n| Latency | Fastest possible — no network hop | An extra network round-trip per check |\n| Scaling the limiter | Trivial — just add more stateless instances | The shared store itself must scale with total QPS |\n\n**How to decide:** a shared store (Redis, with atomic `INCR` + expiry) is the default for correctness, since per-node in-memory counters undercount whenever a client's requests are load-balanced across multiple limiter instances. Accept the extra hop's latency, and mitigate it later with a local cache layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-rate-limiter-service-s05-q1"
+      ]
+    },
+    {
+      "id": "design-rate-limiter-service-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: architecture — client SDK, limiter service, shared counter store",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Rate limiter architecture: calling service, load balancer, limiter nodes, shared Redis store](assets/rate-limiter-architecture.svg)\n\nEvery calling service links a thin SDK that wraps the `checkAndIncrement` call, rather than each team hand-rolling their own HTTP client — this keeps retry/timeout/fallback behavior consistent across every consumer of the limiter.\n\nThe limiter service instances themselves are stateless (all state lives in the shared store), so they scale horizontally like any other stateless tier.",
+      "assets": [{"alt": "Rate limiter architecture: calling service, load balancer, limiter nodes, shared Redis store", "path": "assets/rate-limiter-architecture.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s07",
+      "order": 7,
+      "sectionTitle": "Sharing counters across limiter instances without a single point of contention",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single Redis instance holding every counter becomes exactly the contention point the design is trying to avoid at high enough QPS. The fix is the same one used throughout this group: shard the counter keyspace across multiple Redis nodes (consistent hashing on the limiter key), so no one node holds every caller's counters.\n\nBatching also helps: rather than one round-trip per check, a limiter instance can locally batch a small burst of allowed requests using a short-lived local token allowance, syncing with the shared store periodically instead of on every single call.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s08",
+      "order": 8,
+      "sectionTitle": "Propagating limit-config changes globally with low delay",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Since limits must change without a redeploy, config lives in a separate store (or a config service) that limiter instances poll or subscribe to, rather than being baked into the deployed binary. A pub/sub channel (or a short-TTL cache with periodic refresh) lets a config change propagate to every limiter instance within seconds.\n\nThe trade-off to name: near-instant propagation via pub/sub adds an extra dependency and a small \"eventually applied\" window; polling every few seconds is simpler but slower to take effect. Either is usually acceptable — config changes are rare compared to the check volume.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-rate-limiter-service-s08-q1"
+      ]
+    },
+    {
+      "id": "design-rate-limiter-service-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: request path under normal and overload conditions",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Normal request path vs. Redis-overload fallback to a local approximate decision](assets/rate-limiter-fallback.svg)\n\nUnder normal conditions, every check consults the shared store. Under overload or a partial outage of that store, the limiter falls back to a **local, approximate** decision (e.g. allow based on a recent cached count) rather than either blocking every request or failing open with no limit at all.\n\nThis fallback path is what separates a limiter that's actually production-ready from one that only works in the common case.",
+      "assets": [{"alt": "Normal request path vs. Redis-overload fallback to a local approximate decision", "path": "assets/rate-limiter-fallback.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: the shared counter store outgrowing the service it protects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because the limiter checks nearly every request across every protected service, its counter store can see higher QPS than any individual downstream service — a rate limiter meant to protect a 10,000 QPS service can itself need to sustain far more than 10,000 QPS once you count every service it protects in aggregate.\n\nThis is a subtle but important framing: the limiter's own scaling ceiling can become the platform's actual bottleneck, ahead of the services it was built to shield.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-rate-limiter-service-s11",
+      "order": 11,
+      "sectionTitle": "Trade-off: strict global accuracy vs relaxed per-node approximate limits",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Strict global accuracy | Relaxed per-node approximate |\n|---|---|---|\n| Enforcement | Exact — never lets a caller exceed the limit | Approximate — a caller might briefly exceed it across nodes |\n| Latency | Every check pays the shared-store round-trip | Local batching cuts most round-trips |\n| Availability under store outage | Degrades hard if the store is unreachable | Keeps functioning with locally cached allowances |\n\n**How to decide:** most production limiters accept the approximate mode — a caller occasionally squeaking a few requests over a soft quota is a far cheaper failure than the limiter itself becoming a bottleneck or single point of failure for the whole platform.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-rate-limiter-service-s11-q1"
+      ]
+    },
+    {
+      "id": "design-rate-limiter-service-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: the limiter becoming a single point of failure for every call",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If the rate limiter is unreachable, we should block all calls until it's back — better safe than letting unlimited traffic through.\"\n\n**Why it's wrong:** this makes a shared utility service's availability the availability ceiling for literally every service in the company. A rate limiter outage under this policy takes down the entire platform, which is a far worse outcome than temporarily under-enforcing limits.\n\n**Correct model:** design an explicit fail-open (or approximate-fallback) behavior for limiter unavailability, accepting temporarily relaxed enforcement over a company-wide outage — the limiter's job is to protect services from abuse, not to become the platform's biggest single point of failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-rate-limiter-service-s12-q1"
+      ]
+    }
+  ]
+}

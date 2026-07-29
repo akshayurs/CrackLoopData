@@ -1,0 +1,148 @@
+{
+  "id": "secondary-indexes-in-sharded-systems",
+  "title": "Secondary Indexes in a Sharded System",
+  "area": "system-design",
+  "group": "storage-scale",
+  "order": 9,
+  "slug": "secondary-indexes-in-sharded-systems",
+  "summary": "Querying by anything other than the shard key means either fanning out to every shard or maintaining a second, harder-to-keep-consistent index.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "secondary-indexes-in-sharded-systems-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Sharding a table (see [partitioning-and-sharding](partitioning-and-sharding)) makes one query pattern fast — the one that matches the shard key — and every other query pattern homeless. A **secondary index** gives you a second, non-shard-key way to find rows, but it has to be maintained across every shard.\n\nThe real decision here is local vs global: index each shard's own data separately, or build one separate, cluster-wide index structure. Both cost something; this topic is about which cost fits your read/write balance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s02",
+      "order": 2,
+      "sectionTitle": "The problem: your shard key answers one query pattern; every other query has nowhere to go",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A table sharded by `user_id` makes \"get this user's data\" a fast, single-shard query, because the shard key deterministically routes the request to one node. But a query on any other field — \"find the user with this `email`\" — has no such routing: the email you're looking for could belong to a row on any of the shards, and the shard key gives you no hint which one.\n\nThis isn't a bug in the sharding scheme, it's an inherent cost of picking one shard key: you made exactly one access pattern cheap, and every other pattern now needs its own solution — either search every shard, or build a structure that maps the other field to a shard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "secondary-indexes-in-sharded-systems-s02-q1"
+      ]
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s03",
+      "order": 3,
+      "sectionTitle": "Scatter-gather queries: asking every shard and merging, when there's no secondary index at all",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Without any secondary index, the only way to answer \"find the user with this email\" is a **scatter-gather** query: send the same filter to every shard, have each one search its own local data, and merge whatever comes back. It always produces a correct answer and needs no extra infrastructure to maintain — the appeal of doing nothing.\n\nThe cost is that every such query touches every shard, no matter how selective the filter is — one matching row still means N shards did work, and total query latency is bounded by the slowest shard, not the average one. This is workable for rare, low-volume queries (an admin lookup tool) and a real liability for anything on a hot request path — the pattern also shows up when searching without any index at all, covered further in search-at-scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "secondary-indexes-in-sharded-systems-s03-q1"
+      ]
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s04",
+      "order": 4,
+      "sectionTitle": "Local secondary indexes: each shard indexes only its own data — fast to write, needs a fan-out to read",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **local secondary index** lives on each shard and indexes only the rows that shard already holds — an index on `email` on shard 3 only helps find emails belonging to rows physically stored on shard 3. Writes stay cheap: updating a row updates its local index entry on the same shard, in the same operation, with no cross-shard coordination.\n\nReads still have to fan out: since any shard might hold the matching row, a query still visits every shard, but now each shard can use its local index to find matches quickly rather than scanning its whole dataset — this speeds up each shard's part of the work without removing the scatter-gather shape itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a local secondary index per shard vs one global secondary index",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Local secondary index fans a read out to every shard; global secondary index routes a read through one index shard to the single correct data shard](assets/local-vs-global-index.svg)\n\nThe local-index side shows every read still touching every data shard, just faster once there. The global-index side shows a read taking two hops total — one to the index, one to the exact data shard — but the index shard itself has to be kept in sync with every write across the whole cluster.\n\nThis is the trade in one picture: local indexes push cost onto every read; a global index concentrates cost onto keeping one extra structure consistent.",
+      "assets": [
+        {
+          "alt": "Local secondary index fans a read out to every shard; global secondary index routes a read through one index shard to the single correct data shard",
+          "path": "assets/local-vs-global-index.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s06",
+      "order": 6,
+      "sectionTitle": "Global secondary indexes: a separate index structure that itself must be partitioned and kept in sync",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **global secondary index** is a separate structure — itself partitioned, often by the secondary field's hash — that maps a non-shard-key value (like `email`) directly to which data shard owns the matching row. A read for \"find the user with this email\" hits the global index first (a single, targeted lookup), gets back the data shard to query, then makes one more request there — two hops total, instead of N.\n\nThe index itself is now a distributed system that needs write traffic from every data shard routed to it, and it needs to be partitioned and scaled like any other sharded structure — you've traded a slow read pattern for a second piece of sharded infrastructure to operate and keep correct.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "secondary-indexes-in-sharded-systems-s06-q1"
+      ]
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s07",
+      "order": 7,
+      "sectionTitle": "Keeping a global index consistent: synchronous dual-write vs async, and the staleness window either way",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Keeping a global secondary index correct means every write to a data shard also has to update the index — and how you do that update trades latency for freshness. A **synchronous dual-write** updates the index as part of the original write's transaction (or a two-phase commit across both), so the index is never stale, but every write now pays the latency and availability cost of a cross-shard operation, similar to the replication trade-offs in replication-strategies.\n\nAn **asynchronous update** — publishing an event the index consumes shortly after the write commits — keeps the original write fast and shard-local, but opens a staleness window: a query against the index right after a write might not find the row yet, or might find a stale value. Most systems accept async and design around the staleness window rather than pay synchronous cost on every write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "secondary-indexes-in-sharded-systems-s07-q1"
+      ]
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s08",
+      "order": 8,
+      "sectionTitle": "Compare: local vs global secondary indexes on write cost, read cost, and consistency",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Local secondary index | Global secondary index |\n|---|---|---|\n| Write cost | Low — same-shard update, no coordination | Higher — every write must also update the separate index |\n| Read cost | Every shard visited (scatter-gather), each faster locally | Two targeted hops, no scatter-gather |\n| Consistency | Always consistent with its own shard's data | Sync (slower, always fresh) or async (fast, staleness window) |\n| Extra infrastructure | None beyond the existing shards | A second sharded structure to run and keep in sync |\n\n**How to decide:** if secondary-field reads are rare or the cluster is small enough that scatter-gather is cheap, local indexes avoid the extra system; if secondary-field reads are frequent and low-latency, a global index's read speed is usually worth taking on write cost and a sync/async consistency trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "secondary-indexes-in-sharded-systems-s08-q1"
+      ]
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: adding a global secondary index and not noticing every write just got slower or eventually-consistent",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll add a global secondary index on `email` for fast lookups — it's just an extra index, it shouldn't change how writes behave.\"\n\n**Why it's wrong:** a global index isn't a free-standing read optimization; every write to the base table now also has to reach the index, either synchronously (adding cross-shard latency to every write) or asynchronously (introducing a staleness window where the index briefly disagrees with the source data). Teams that add the index only thinking about the read path get surprised by one of these two costs in production.\n\n**Correct model:** decide the consistency model for the index — sync or async — as part of adding it, not after a bug report about stale search results. Name explicitly which writes now pay extra latency, or which reads can briefly see stale data, before shipping the index.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "secondary-indexes-in-sharded-systems-s09-q1"
+      ]
+    }
+  ]
+}

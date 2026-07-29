@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-replaying-and-reprocessing",
+  "interviewQuestions": [
+    {
+      "id": "iv-replaying-and-reprocessing-iq1",
+      "question": "A bug corrupted a day of processed events — how do you replay or reprocess safely?",
+      "answerMarkdown": "I'd say replay is only safe if you designed for it before the incident. My sequence: reset the consumer offset to before the bug, reprocess through idempotent consumers, and isolate the replay output from live output until it's verified — never straight into production.\n\nConcretely: a billing aggregation bug double-counted refunds for 6 hours. The fix replays that window from Kafka — 7-day retention comfortably covers it — into a shadow aggregation table, confirms the corrected totals against a manual sample, and only then swaps the shadow table in as the source of truth. If retention had already expired, I'd be stuck reconstructing from a weaker secondary source like a data warehouse copy, which is exactly the argument for setting retention with replay scenarios in mind from the start.\n\nI'd close by naming the cost: shadow-and-diff is slower and temporarily doubles storage, but it's worth it versus the risk of replaying straight into production and creating a second, live-visible incident on top of the first.\n\n**Testing:** whether you can sequence a safe replay instead of just saying \"rerun it.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core safe-replay question"
+    },
+    {
+      "id": "iv-replaying-and-reprocessing-iq2",
+      "question": "Downstream systems already double-counted from the bad run before you caught it — do you need to undo anything beyond the replay?",
+      "answerMarkdown": "Yes, and I'd flag that this is often the harder half of the incident, not the replay itself. Fixing the source aggregation doesn't retroactively fix a number a downstream system already displayed to a user, sent in a report, or acted on — like a customer-facing balance that showed a wrong figure, or a downstream billing system that already issued a refund based on the bad number.\n\nMy approach: after the source is corrected, do a targeted audit of what downstream systems consumed the bad data during the corrupted window, and issue compensating writes or corrections specifically to those systems rather than assuming a source-side fix propagates automatically.\n\nI'd use the billing example concretely: if the corrupted 6-hour window caused three customers to be double-refunded before the bug was caught, fixing the aggregation table doesn't claw back money already returned — that needs its own remediation, likely involving support or finance, separate from the technical replay.\n\n**Testing:** whether you think past the immediate technical fix to the full blast radius of a bad data window.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Downstream double-counting beyond the replay"
+    },
+    {
+      "id": "iv-replaying-and-reprocessing-iq3",
+      "question": "How do you replay a day of events without re-triggering non-idempotent side effects, like resending confirmation emails to real customers?",
+      "answerMarkdown": "I wouldn't run the replay through the exact same live consumer code path unmodified — that would resend a day's worth of confirmation emails, since the consumer has no way to know this is a replay rather than the original event.\n\nInstead I'd route the replay through a path that suppresses external, customer-visible side effects while still recomputing internal state correctly — either a replay-mode flag the consumer checks before firing an email, or relying on the existing dedup key so a message it already processed for that side effect is recognized as already-done and skipped.\n\nI'd give a concrete example: for the billing scenario, the replay needs to recompute the aggregation totals (internal state) without re-sending refund-confirmation emails (external side effect) for orders that were already correctly notified the first time. Building this distinction into the consumer — which state gets recomputed versus which actions are idempotent and safely skippable — has to happen ahead of the incident, not improvised during one.\n\n**Testing:** whether you distinguish idempotent state recomputation from non-idempotent external actions when designing for replay.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Avoiding duplicate side effects during replay"
+    }
+  ]
+}

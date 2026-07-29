@@ -1,0 +1,234 @@
+{
+  "id": "design-news-feed",
+  "title": "Design a News Feed",
+  "area": "system-design",
+  "group": "hld-cases-social",
+  "order": 1,
+  "slug": "design-news-feed",
+  "summary": "Fan-out-on-write vs fan-out-on-read, and the hybrid that survives the celebrity problem — the case study every feed-shaped interview question descends from.",
+  "level": "advanced",
+  "slideCount": 16,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "design-news-feed-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Design a feed: every user opens the app and sees new posts from everyone they follow, ordered and reasonably fresh — think Twitter's or Instagram's home timeline. The core tension is *where* you pay the cost: **precompute each follower's feed the moment a post is published** (fast reads, expensive writes) or **assemble the feed from scratch when someone opens the app** (cheap writes, expensive reads).\n\nThink of it like a newsletter: you can print and mail a personalized copy to every subscriber the instant an article goes live (push), or make each subscriber compile their own reading list from every source they follow when they check the mailbox (pull). Production feeds use both at once, and *why* is the whole lesson here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** users follow other users, publish posts, and fetch a feed of posts from everyone they follow in roughly reverse-chronological or ranked order, paginated as they scroll.\n\n**Non-functional:** feed reads dominate — they happen orders of magnitude more often than posts are written, so read latency (target well under a second) matters more than write latency. Some staleness is acceptable: a post landing 5-10 seconds late for a slice of followers is a fine trade for throughput; losing a post entirely is not.\n\n**Explicit non-goal:** this topic designs the delivery pipeline — getting the right candidate posts to the right feed cheaply. *Which* posts win a slot and in what order is a separate machine-learning ranking system, out of scope here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: posts, followers, and feed reads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take 500M daily active users, each averaging 200 followees, publishing 100M posts/day (~1,200 posts/sec). A typical account has a few hundred followers, but a celebrity account can have 50M+ — six orders of magnitude more.\n\nFeed *reads* dwarf writes: if each user checks their feed 10 times/day, that's 5B reads/day (~58,000 reads/sec) against 1,200 writes/sec — roughly a 50:1 read-to-write ratio. Naively fanning out every post to every follower's precomputed feed means one celebrity post alone triggers 50M individual writes.\n\nThe numbers tell you the design goal before you draw a single box: optimize for cheap, fast reads, and treat celebrity-scale fan-out as a special case, not the common path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-news-feed-s03-q1"
+      ]
+    },
+    {
+      "id": "design-news-feed-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two calls carry almost the whole system. `publish(userId, content)` creates a post and is the trigger for whatever fan-out strategy you pick. `getFeed(userId, cursor)` returns the next page of feed items, oldest-shown-first via an opaque cursor so pagination survives new posts arriving mid-scroll.\n\nNotice what's *not* here: there's no `rankFeed()` call — ranking is a concern of the model that scores candidates, not the API that serves them. Keeping the surface this thin is deliberate: it's the same two calls whether the implementation underneath is pure push, pure pull, or the hybrid you'll land on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s05",
+      "order": 5,
+      "sectionTitle": "Data model: precomputed feed vs raw post table",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Precomputed per-user feed store** — for each user, a sorted structure (think a Redis sorted set keyed by post timestamp) holding the IDs of posts destined for their feed. `getFeed` is then a cheap range read off one key.\n\n**Raw post table fanned out at read time** — posts live once, in one table keyed by author. `getFeed` joins the caller's follow list against that table, pulling and merging the latest posts from every followee on the fly.\n\nThe precomputed store makes reads nearly free at the cost of write amplification; the raw table makes writes free at the cost of an expensive fan-in read. Everything that follows is really about which side of that trade you accept, and where.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s06",
+      "order": 6,
+      "sectionTitle": "Fan-out-on-write (push)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In **fan-out-on-write**, publishing a post immediately looks up every follower and inserts the post ID into each of their precomputed feed stores. By the time a follower opens the app, their feed is already sitting there — `getFeed` is just a fast read of one key, no joins, no fan-in.\n\nThe cost moves entirely to write time: one post from a user with 500 followers becomes 500 writes, done asynchronously via a queue so `publish()` itself stays fast. For the overwhelming majority of accounts, whose follower counts are small, this is a great deal — reads are the hot path, and this makes them essentially free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s07",
+      "order": 7,
+      "sectionTitle": "Fan-out-on-read (pull)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In **fan-out-on-read**, publishing a post is a single cheap write to the author's own post table — nothing else happens. The work shifts to `getFeed`: for every request, the service fetches the caller's followee list, pulls each followee's recent posts, and merges them by time on demand.\n\nWrites are now O(1) regardless of follower count, which is exactly what a celebrity account needs. The price is a read path that gets more expensive as the followee list grows — merging posts from 200 followees on every single feed load, for every one of your 500M daily reads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: push vs pull fan-out side by side",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Push fans a post out into per-follower feed-store writes at publish time; pull merges followees' post tables at read time](assets/push-vs-pull.svg)\n\nThe picture is the trade-off itself: push does the fan-out work once, at write time, spread across many small writes; pull defers all the work to every single read, redone from scratch each time.",
+      "assets": [
+        {"alt": "Push fans a post out into per-follower feed-store writes at publish time; pull merges followees' post tables at read time", "path": "assets/push-vs-pull.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s09",
+      "order": 9,
+      "sectionTitle": "The celebrity problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pure fan-out-on-write breaks the moment a single account has an outsized follower count. A celebrity with 50M followers turns one `publish()` call into 50M feed-store writes — even queued asynchronously, that's a write storm that can take minutes to fully propagate and can back up the whole fan-out queue behind it, delaying *everyone else's* posts too.\n\nWorse, most of that work is wasted: a large fraction of those 50M followers won't open the app before the next post arrives and overwrites the value of precomputing theirs at all. Push's core assumption — follower counts are small enough that fan-out is cheap — simply stops holding at the tail of the distribution.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-news-feed-s09-q1"
+      ]
+    },
+    {
+      "id": "design-news-feed-s10",
+      "order": 10,
+      "sectionTitle": "Hybrid fan-out",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The fix isn't picking one strategy — it's routing by follower count. Define a threshold (say, 10,000 followers): accounts under it fan out on write, same as before, since 500 writes is cheap. Accounts over it are flagged **celebrity** and skip write-time fan-out entirely.\n\nAt read time, `getFeed` merges the caller's precomputed push feed with a small, live pull against just their celebrity followees (typically a handful, not hundreds). This bounds the expensive pull path to a tiny follow list per user instead of every followee, and bounds the expensive push path to accounts where fan-out is actually cheap. Twitter's actual production design is this hybrid, not either pure strategy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s11",
+      "order": 11,
+      "sectionTitle": "Compare: push vs pull vs hybrid",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Push (write) | Pull (read) | Hybrid |\n|---|---|---|---|\n| Read latency | Very low — one key read | High — fan-in merge per request | Low — one key read + tiny merge |\n| Write cost | O(followers) per post | O(1) per post | O(followers) capped at threshold |\n| Celebrity accounts | Breaks — write storm | Handles fine | Handled explicitly, opt-out of push |\n| Storage | Duplicated per follower | Single copy | Duplicated below threshold only |\n\n**How to decide:** if your follower-count distribution is heavy-tailed (true of nearly every real social graph), pure push or pure pull each fail at one end of it — the hybrid's added complexity is worth it precisely because that tail exists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-news-feed-s11-q1"
+      ]
+    },
+    {
+      "id": "design-news-feed-s12",
+      "order": 12,
+      "sectionTitle": "Ranking the feed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once candidate posts are assembled — by push, pull, or the hybrid merge — you still choose their order. **Chronological** is the simplest: sort by timestamp, no model needed, fully predictable to users.\n\n**Relevance-ranked** feeds instead score each candidate (recency, affinity to the author, predicted engagement) and sort by score. The fan-out pipeline you've built stays the same either way — ranking plugs in as a step between \"candidates assembled\" and \"return to client,\" scoring whatever the fan-out strategy handed it. This separation is why the earlier non-goal call-out matters: the delivery pipeline and the ranking model can be built, scaled, and owned by different teams.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s13",
+      "order": 13,
+      "sectionTitle": "Diagram: end-to-end architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Write path from publish through the fan-out queue to per-user feed stores, and read path from getFeed through a live-pull merge and ranking to the response](assets/end-to-end-architecture.svg)\n\nEvery box in this diagram traces back to a decision already made: the queue exists because fan-out must not block `publish()`; the celebrity skip exists because of the write-storm problem; the merge step exists because hybrid needs both paths at read time.",
+      "assets": [
+        {"alt": "Write path from publish through the fan-out queue to per-user feed stores, and read path from getFeed through a live-pull merge and ranking to the response", "path": "assets/end-to-end-architecture.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s14",
+      "order": 14,
+      "sectionTitle": "The bottleneck: a mid-size account going viral",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The celebrity threshold catches known celebrities, but it can't catch an account that crosses from ordinary to viral in minutes — a post gets reshared, the account's follower count spikes, and the fan-out worker is now pushing to a follower list that grew 100x since the threshold check last ran.\n\nThe practical fix is to make the celebrity check dynamic rather than a static flag set once: recompute it periodically (or on a follower-count trigger) and re-route fan-out for an account the moment it crosses the line, rather than trusting a stale classification made when the account was still small.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-news-feed-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: recomputing the entire feed on every read",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just run the fan-in query fresh every time someone loads their feed — it's simpler than maintaining precomputed stores.\"\n\n**Why it's wrong:** at Twitter scale, that query means joining hundreds of followees' recent posts, on every one of tens of thousands of reads per second, for every user, forever. It's the fan-out-on-read strategy applied everywhere it doesn't fit — the read path becomes the bottleneck precisely because reads outnumber writes 50:1.\n\n**Correct model:** precompute for the common case (push), and reserve the expensive live merge for the narrow slice — celebrity followees — where precomputing would be worse, not the other way around.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-news-feed-s15-q1"
+      ]
+    },
+    {
+      "id": "design-news-feed-s16",
+      "order": 16,
+      "sectionTitle": "Summary: hybrid fan-out plus a pluggable ranking stage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A production news feed is push for ordinary accounts, pull for celebrity followees merged in at read time, and a ranking stage that scores whatever candidates that pipeline assembles. Every design choice traces back to one fact: reads vastly outnumber writes, except at the extreme tail of the follower-count distribution, where the opposite is true.\n\nThe same shape — precompute for the common case, fall back to on-demand for the tail — reappears once you look at the follow relationships themselves as a graph with its own celebrity problem, and again in feed ranking as a full machine-learning system in its own right.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

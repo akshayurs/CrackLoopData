@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-migrating-under-load",
+  "interviewQuestions": [
+    {
+      "id": "iv-migrating-under-load-iq1",
+      "question": "How would you migrate this system to a new architecture while it's serving live traffic?",
+      "answerMarkdown": "I'd rule out \"switch over one weekend\" immediately — a mistake discovered at 100% cutover has no graceful way back. Instead I'd stage it: shadow the new system with live traffic first, then dual-write, then phase reads over, verifying at each gate before proceeding.\n\nConcretely, for an orders database moving to a sharded design: stage one, the new store is written to in shadow with nothing reading from it yet. Stage two, a small percentage of reads are served from the new store and diffed against the old store's answer. Stage three, once the diff rate is near zero for a sustained window, reads phase over fully. Stage four, the old store is decommissioned after a safety window with zero incidents.\n\nI'd make each gate concrete — for example, proceed only if mismatches stay under 0.01% over 48 hours — not a subjective \"looks good\" call.\n\n**Testing:** whether you can sequence a live migration with real verification gates instead of a single risky cutover.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Sequencing a live-traffic migration"
+    },
+    {
+      "id": "iv-migrating-under-load-iq2",
+      "question": "Midway through a dual-write migration, you discover the new system's data has drifted from the old one — how do you catch and handle that?",
+      "answerMarkdown": "I'd catch it with the same diffing pipeline used to gate the cutover, but run continuously throughout the dual-write period rather than as a one-time check before flipping reads — drift detection isn't a separate mechanism, it's the existing gate infrastructure run on an ongoing basis.\n\nOnce drift is detected, I'd pause any further read cutover until the root cause is found and fixed — continuing to phase over more reads onto a store known to be drifting just widens the blast radius of whatever bug caused it.\n\nI'd also treat a drift event as new information about the gate's threshold: if drift showed up despite passing the diff-rate check, I'd tighten the check or extend the observation window before trusting it again for future stages, rather than assuming the original threshold was fine and this was a one-off.\n\n**Testing:** whether your migration plan includes ongoing verification, not just a checkpoint before the riskiest step.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Catching data drift during dual-write"
+    },
+    {
+      "id": "iv-migrating-under-load-iq3",
+      "question": "The new system's schema can't represent the old one exactly, so a clean dual-write isn't possible — how do you handle that?",
+      "answerMarkdown": "I'd add a translation layer at the write path that maps the old shape into the new one during the transition, and I'd be explicit that this layer is temporary migration-only complexity, not a permanent part of either system's design.\n\nConcretely, I'd scope the translation layer as narrowly as possible — handling only the specific fields that differ, rather than becoming a general-purpose adapter — and schedule its deletion for the same milestone as decommissioning the old system, so it doesn't quietly become permanent, unmaintained code that outlives its purpose.\n\nI'd also make sure the diffing pipeline accounts for the translation, comparing the *intended* semantic equivalence between old and new records rather than a literal field-by-field match that the schema difference would always fail.\n\n**Testing:** whether you can handle a genuine schema mismatch without either blocking the migration entirely or accumulating permanent, unaccounted-for complexity.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Handling an incompatible schema during migration"
+    }
+  ]
+}

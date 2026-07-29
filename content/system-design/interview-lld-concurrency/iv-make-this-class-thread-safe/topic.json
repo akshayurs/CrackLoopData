@@ -1,0 +1,178 @@
+{
+  "id": "iv-make-this-class-thread-safe",
+  "title": "How would you make this class thread-safe?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 1,
+  "slug": "iv-make-this-class-thread-safe",
+  "summary": "The open-ended live-coding LLD question: name the invariant at risk before reaching for a lock, then defend the smallest fix that protects it.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-make-this-class-thread-safe-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is the open-ended live-coding LLD question: an interviewer hands you a class — a counter, a cache, a connection pool — and says **\"make this thread-safe.\"** There is no single right answer; what gets graded is *process*. You name the invariant at risk, pick the smallest fix that protects it, and defend the trade-off out loud.\n\nExpect 15-20 minutes: read the class, ask one clarifying question, write the fix, then field 2-3 follow-ups that check whether you understood your own fix or just pattern-matched \"add `synchronized`.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: what's the actual race — shared mutable state, or just visibility?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before touching the code, ask: **is the risk shared mutable state, or just visibility?** These need different fixes. A **race condition** is two threads reading and writing the same mutable field with no ordering guarantee, causing a lost update. A **visibility problem** is one thread writing a value and another never seeing the fresh value, because of caching or reordering, with no actual interleaving of writes.\n\nNaming this out loud tells the interviewer whether you reach for `volatile` (visibility only) or a lock/atomic (visibility and atomicity). Guessing skips the diagnosis step that's actually being graded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-make-this-class-thread-safe-s02-q1"
+      ]
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: identify the invariant at risk, name the smallest fix that protects it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The skeleton that works for almost every version of this question: **(1) name the invariant** — what must stay true across the fields this class touches. **(2) name the exact operation that breaks it** — usually a check-then-act or read-modify-write spanning more than one memory access. **(3) pick the smallest fix that restores the invariant** — an atomic type for one field, a `synchronized` block for fields that must move together, an explicit `Lock` only if you need a timeout or fairness.\n\nFor the deeper theory behind step 3's menu, see [designing thread-safe classes](designing-thread-safe-classes) — this question is that concept applied live, under a clock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s04",
+      "order": 4,
+      "sectionTitle": "Code: an unsafe counter class with the race made explicit",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Take the simplest version of this question: a shared counter hit by multiple request-handling threads.\n\n```java\nclass RequestCounter {\n    private int count = 0;\n\n    public void increment() {\n        count = count + 1;   // read, add, write — three steps, not one\n    }\n\n    public int get() {\n        return count;\n    }\n}\n```\n\n`count = count + 1` looks like one operation but is really three: read `count`, add 1, write it back. If two threads interleave between the read and the write, one increment is silently lost — under load this counter undercounts, and the bug never shows up in a single-threaded test.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s05",
+      "order": 5,
+      "sectionTitle": "Code: the fixed version with the minimal synchronized region",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass RequestCounter {\n    private int count = 0;\n\n    public synchronized void increment() {\n        count = count + 1;\n    }\n\n    public synchronized int get() {\n        return count;\n    }\n}\n```\n\nWrap the read-modify-write in `synchronized` so only one thread executes it at a time. Note `get()` also needs synchronizing — not because reading alone is unsafe, but because without it there is no guarantee the reading thread ever observes the latest write. Lock the smallest region that protects the invariant — here, that's each method body, not the whole class.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-make-this-class-thread-safe-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s06",
+      "order": 6,
+      "sectionTitle": "Code: an alternative fix using AtomicInteger instead of a lock, for comparison",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass RequestCounter {\n    private final AtomicInteger count = new AtomicInteger(0);\n\n    public void increment() {\n        count.incrementAndGet();\n    }\n\n    public int get() {\n        return count.get();\n    }\n}\n```\n\nFor a single counter, `AtomicInteger` is usually the stronger answer than a lock: it uses a hardware compare-and-swap loop instead of blocking, so threads never wait on each other for this one field. Say this out loud if you reach for it — it signals locks aren't your only tool. It stops being the right tool the moment two fields must change together (s09).",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"can you make it lock-free instead?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For the single-field counter, you already did — `AtomicInteger` *is* the lock-free version, built on a CAS (compare-and-swap) loop under the hood: read the value, compute the new one, attempt to write it only if nobody else changed it since, and retry on failure.\n\nThe honest caveat: lock-free stays simple only for operations on one variable. Once the invariant spans two fields, a single CAS can't cover both atomically, and you're choosing between a lock and a genuinely harder lock-free data structure. See [lock-free and atomic object design](lock-free-and-atomic-object-design) for where that trade-off stops paying off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"what's the performance cost of your fix under contention?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A `synchronized` block serializes every thread that reaches it — under heavy contention, threads queue up and throughput flattens even while CPUs sit idle waiting for the lock. `AtomicInteger`'s CAS loop degrades differently: instead of blocking, a failed thread retries immediately, wasting cycles on retries but never blocking outright — better under short critical sections, worse if the loop body ever grows non-trivial.\n\nNaming which failure mode your fix has — blocking versus retry-spinning — is the answer here, not a specific benchmark number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-make-this-class-thread-safe-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"what invariant would still break if two fields must update together atomically?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Neither `synchronized` on separate methods nor two separate `AtomicInteger`s protects a rule like \"balance and pendingWithdrawals must never let balance go negative\" — each field is individually safe, but a thread can read a still-valid balance, get preempted, and have another thread invalidate it before the first writes back.\n\nThe fix is coarsening the lock to cover both fields in one `synchronized` block, or moving to a single atomic reference over an immutable pair swapped together via CAS.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: synchronizing every method \"to be safe\" — coarse locking that kills throughput",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** slapping `synchronized` on every method \"to be safe,\" including ones that don't touch shared mutable state or that only read an already-final field.\n\n**Why it's wrong:** every synchronized method becomes a serialization point — calls that could safely run in parallel now queue behind each other, and nested locking across methods risks a deadlock you didn't need to create. Interviewers read blanket synchronization as \"found a hammer, stopped thinking.\"\n\n**Correct model:** synchronize only the operations that touch the shared mutable state identified in step 1 of the skeleton — nothing more.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: \"just use a ConcurrentHashMap\" when the real bug is a check-then-act race across two calls",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** when the class wraps a map and the interviewer flags a bug, reaching straight for \"just use a `ConcurrentHashMap`\" without checking what the actual race is.\n\n**Why it's wrong:** `ConcurrentHashMap` makes each individual call thread-safe, but a common version of this bug is a check-then-act spanning two calls — `if (!map.containsKey(k)) map.put(k, compute())` — where another thread can insert between the check and the put no matter how thread-safe each call is on its own.\n\n**Correct model:** name the operation's span before naming the fix; a compound operation across calls needs `computeIfAbsent`, not a different collection type.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-make-this-class-thread-safe-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-make-this-class-thread-safe-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd first ask whether the risk is a race or a visibility gap, since they need different fixes. I'd name the invariant this class must protect and the exact operation that can break it — usually a check-then-act or a multi-field update. Then I'd apply the smallest fix that restores it: an atomic type for one field, a `synchronized` block sized to exactly the fields that must move together, or a `Lock` only if I need a timeout. I'd close by naming the cost my fix adds under contention.\"\n\nThat sentence, in that order, is the whole skeleton — practice saying it before you touch any code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

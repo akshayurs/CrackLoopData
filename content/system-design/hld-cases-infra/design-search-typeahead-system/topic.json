@@ -1,0 +1,186 @@
+{
+  "id": "design-search-typeahead-system",
+  "title": "Design a Search Typeahead System",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 4,
+  "slug": "design-search-typeahead-system",
+  "summary": "Sub-100ms ranked prefix suggestions as a user types — a specialized prefix data-structure and freshness problem, distinct from full-text search ranking.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-search-typeahead-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: as a user types into a search bar, show ranked query suggestions **before they finish typing**, under a 100ms budget per keystroke. Think Google's search-box dropdown.\n\nThis is easy to mistake for a smaller version of full-text search — it isn't. Full-text search ranks documents by relevance to a complete query; typeahead ranks **completions of a partial prefix** by popularity, and it has to do it fast enough to feel instant on every single keystroke, not just on submit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** given a partial prefix, return the top completions ranked by likelihood the user wants them.\n\n**Non-functional:** a strict **latency budget** (under 100ms, since it fires on every keystroke — anything slower feels laggy), **personalization** (a developer typing \"pyth\" likely wants \"python\", not \"pythagoras\"), and **freshness for trending queries** (a breaking-news term needs to surface within minutes, not after the next nightly batch job).\n\nThese three pull in different directions: strict latency pushes toward precomputing everything offline, but freshness demands some suggestions reflect what happened moments ago — the tension the rest of this topic resolves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: keystroke volume and fan-out",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At **100,000** searches/sec platform-wide, and an average query of **20 characters** typed (not pasted), each search generates roughly 20 keystrokes — so `100,000 * 20 = 2 million` `getSuggestions` calls/sec at peak, not 100,000. Typeahead's real request volume is an order of magnitude above the underlying search volume, because it fires continuously while typing, not once on submit.\n\nThat multiplier is exactly why typeahead needs its own optimized, precomputed path rather than piggybacking on the full-text search index — hitting that index 2 million times/sec for partial-prefix lookups would be far more expensive than a purpose-built structure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-search-typeahead-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-search-typeahead-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "One call carries the whole read path: `getSuggestions(prefix, userId)` — given what's typed so far and who's typing, return a ranked list of completions, typically 5-10 results.\n\n`userId` is there deliberately: it's the hook for personalization (recent searches, account context) layered on top of the global popularity ranking, without which every user would see identical suggestions regardless of context.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s05",
+      "order": 5,
+      "sectionTitle": "Data model: trie of prefixes vs a generic inverted index",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Trie / FST with precomputed top-K | Generic inverted index |\n|---|---|---|\n| What it stores | Each prefix node caches its own top-K completions | Term → list of documents containing it |\n| Query shape | Direct O(prefix length) lookup, no ranking at query time | Would need to scan and rank matching documents live |\n| Built for | Exactly this problem — prefix completion | Full-text relevance search, not prefix completion |\n| Update cost | Precomputed offline, cheap to serve, costlier to refresh | Naturally incremental as documents are indexed |\n\n**How to decide:** a trie (or its compressed form, an FST) with precomputed top-K at each node is purpose-built for typeahead's exact access pattern; a generic inverted index is the right tool for full-text search, not for this.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: trie with precomputed top-K at each node",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Trie nodes for \"c\", \"ca\", \"cat\" each with their own precomputed top-K completion list attached](assets/trie-topk-nodes.svg)\n\nThe key design move: ranking happens **once, offline**, not on every request — a query at serve time is just \"walk to this node, return its cached list.\"",
+      "assets": [
+        {
+          "alt": "Trie nodes for \"c\", \"ca\", \"cat\" each with their own precomputed top-K completion list attached",
+          "path": "assets/trie-topk-nodes.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s07",
+      "order": 7,
+      "sectionTitle": "Ranking suggestions: popularity, recency, personalization",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The default ranking signal is **historical popularity** — how often this completion has been searched, aggregated over some recent window (last 7-30 days, not all-time, so old fads fade out). Layered on top: **recency** boosts queries trending right now, and **personalization** re-orders or injects results based on the specific user's own recent searches.\n\nThe combination matters more than any single signal: pure historical popularity alone would never surface a brand-new trending term (it has no history yet), and pure recency alone would flood results with noise from one-off searches that never repeat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s08",
+      "order": 8,
+      "sectionTitle": "Keeping trending queries fresh without rebuilding the whole trie",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rebuilding the entire trie from scratch every time a query trends would be far too slow and expensive to run continuously. Instead, systems run a **fast, narrow update path** for trending signals — a lightweight counter service tracking query frequency in near-real-time, consulted alongside (or blended into) the trie's precomputed rankings — separate from the trie's own slower, full rebuild cycle.\n\nThis two-speed design is the same pattern as hot/cold storage tiers elsewhere in system design: a small, fast-moving layer handles what needs freshness now, while the large, precomputed structure handles the steady-state bulk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-search-typeahead-system-s08-q1"
+      ]
+    },
+    {
+      "id": "design-search-typeahead-system-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: offline aggregation refreshing the trie",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Query logs feed offline aggregation which produces a new trie snapshot swapped into the serving fleet, alongside a real-time trending counter that boosts it directly](assets/trie-refresh-pipeline.svg)\n\nThe serving trie is a **snapshot**, rebuilt on a cycle (hourly, say) — it's never mutated in place by live traffic, which is what keeps read latency predictable.",
+      "assets": [
+        {
+          "alt": "Query logs feed offline aggregation which produces a new trie snapshot swapped into the serving fleet, alongside a real-time trending counter that boosts it directly",
+          "path": "assets/trie-refresh-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: serving latency if the trie doesn't fit in memory",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The trie must live **entirely in memory** on the serving node — a single disk seek per keystroke, multiplied across 2 million requests/sec, blows the 100ms budget many times over. For a large query vocabulary, the full trie can exceed one machine's RAM.\n\nThe fix is sharding by prefix range (all prefixes starting 'a'-'f' on one shard, 'g'-'m' on another, and so on) so each shard holds a fraction of the trie in memory, with a thin routing layer directing each request to the shard owning that prefix range.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-search-typeahead-system-s11",
+      "order": 11,
+      "sectionTitle": "Compare: precomputed trie vs querying the full-text index live",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Precomputed trie | Live full-text index query |\n|---|---|---|\n| Latency | O(prefix length), consistently fast | Depends on index scan cost, generally much slower |\n| Freshness | Only as fresh as the last rebuild (plus a trending fast-path) | Always reflects the current index |\n| Cost per request | Cheap — just a traversal | Expensive — search + rank per keystroke |\n| Fit for typeahead's 2M req/sec | Purpose-built for it | Would need enormous over-provisioning |\n\n**How to decide:** the precomputed trie wins decisively for the typeahead access pattern; querying the live search index per keystroke is the kind of shortcut that looks simpler in a whiteboard sketch but collapses the moment real request volume is counted.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-search-typeahead-system-s11-q1"
+      ]
+    },
+    {
+      "id": "design-search-typeahead-system-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: ranking by raw frequency, surfacing stale queries",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Rank completions by how many times they were ever searched — the all-time top count is the best signal.\"\n\n**Why it's wrong:** all-time counts never decay, so a query that was enormously popular two years ago (an old meme, a since-resolved news event) keeps outranking genuinely current, relevant completions indefinitely — the suggestions calcify around whatever was popular whenever the system launched.\n\n**Correct model:** rank on a **recent, decaying window** (e.g. weighted by searches in the last 30 days, with older activity contributing less), so the suggestion list actually tracks what people are searching for now, not what they searched for once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

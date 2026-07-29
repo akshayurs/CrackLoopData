@@ -1,0 +1,178 @@
+{
+  "id": "iv-design-scheduler-cron-abstraction",
+  "title": "Design a Scheduler/Cron Abstraction",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 13,
+  "slug": "iv-design-scheduler-cron-abstraction",
+  "summary": "Class scope: an in-process schedule(task, trigger) API — not a distributed job scheduler. Scored on the internal mechanism for finding what's next without scanning every task.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a scheduler/cron abstraction** — but scoped to a single process: an in-process `schedule(task, trigger)` API, not a distributed job scheduler coordinating across a fleet. The scoring signal is the internal mechanism: how do you efficiently know which task fires next without polling every task on every tick.\n\nThe 10-minute bar: the API, a priority queue ordered by next-fire-time, a worker loop, and an answer for a task that runs longer than its own interval.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: fixed-interval tasks, cron-expression tasks, or both?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether the scheduler needs to support **fixed-interval** tasks only — \"run every 30 seconds\" — or full **cron-expression** tasks — \"run at 2am on the first Monday of the month.\" Fixed-interval is a simple addition — next fire time is just the last fire time plus the interval. Cron expressions need a parser and a \"compute the next fire time from now\" function that understands the expression's semantics, a materially bigger scope.\n\nDefault to fixed-interval unless told otherwise, and name cron parsing as a pluggable `Trigger` implementation you'd add if it's actually needed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: schedule(task, trigger), a priority queue, a worker loop",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape: a `schedule(task, trigger)` API where `Trigger` computes the next fire time given the current time, decoupling *what* runs from *when*. Internally, a **min-heap priority queue** ordered by next-fire-time holds every scheduled task — the task due soonest is always at the top, so finding \"what's next\" is O(1) instead of scanning every task.\n\nA single **worker loop** thread sleeps until the top task's fire time, wakes, runs it, computes its next fire time via its `Trigger`, and reinserts it into the heap — repeat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-scheduler-cron-abstraction-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s04",
+      "order": 4,
+      "sectionTitle": "Code: a Scheduler interface — schedule and cancel",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface Scheduler {\n    Handle schedule(Runnable task, Trigger trigger);\n    void cancel(Handle handle);\n}\n\npublic interface Trigger {\n    Instant nextFireTime(Instant now);\n}\n```\n\nSeparating `Trigger` from the task itself means the same `Scheduler` and worker loop support fixed intervals, cron expressions, or one-off delayed execution — they're all just different `Trigger` implementations.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s05",
+      "order": 5,
+      "sectionTitle": "Code: a min-heap of next-fire-times, a single loop thread",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class SimpleScheduler implements Scheduler {\n    private final PriorityQueue<ScheduledTask> heap =\n        new PriorityQueue<>(Comparator.comparing(ScheduledTask::nextFireTime));\n\n    void loop() {\n        while (running) {\n            ScheduledTask next = heap.peek();\n            sleepUntil(next.nextFireTime());\n            heap.poll();\n            runAsync(next.task());\n            reschedule(next);\n        }\n    }\n}\n```\n\nThe loop only ever sleeps until the single soonest deadline in the entire heap — adding the thousandth scheduled task doesn't slow down finding what's next, since the heap keeps the minimum at the top in logarithmic time per insert.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the priority queue reordering as tasks fire",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Min-heap of scheduled tasks by next-fire-time, showing the soonest task popped, run, and reinserted with a later fire-time as the heap reshapes](assets/scheduler-min-heap.svg)\n\nEach cycle removes exactly the soonest task, runs it, computes its new next-fire-time, and reinserts — the heap's shape changes each cycle as that task's new position depends on where its next deadline falls relative to everything else still waiting.",
+      "assets": [{"alt": "Min-heap of scheduled tasks by next-fire-time, showing the soonest task popped, run, and reinserted with a later fire-time as the heap reshapes", "path": "assets/scheduler-min-heap.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s07",
+      "order": 7,
+      "sectionTitle": "Code: handling a task that outruns its own interval",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nvoid reschedule(ScheduledTask t) {\n    Instant next = t.trigger().nextFireTime(clock.now());\n    if (next.isBefore(clock.now())) {\n        next = policy == OverrunPolicy.SKIP\n            ? clock.now().plus(t.interval())\n            : clock.now();\n    }\n    heap.add(t.withNextFireTime(next));\n}\n```\n\nA task that takes 90 seconds on a 60-second interval will have already missed its next scheduled tick by the time it finishes — the policy decides whether to skip straight to the *next* interval boundary or fire again immediately to catch up, both legitimate, explicit choices rather than an accident of the reschedule math.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-design-scheduler-cron-abstraction-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what if the process was down when a scheduled time passed?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd ask this rather than assume, since both are defensible depending on the task. **Catch-up**: on restart, compute what was missed while down and run the task once for the backlog — right for something like a daily report that must eventually run.\n\n**Skip**: on restart, just compute the *next* fire time from now and forget any missed occurrences entirely — right for something like a health-check ping, where a missed occurrence has no lasting value and catching up serves no purpose. I'd name which one a given task needs rather than picking one default for every task type.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how do you make one misbehaving task not block every other task?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the worker loop runs each task synchronously on the same single thread, one long-running or hung task blocks the loop from ever reaching the next scheduled task, no matter how soon it's due — the entire scheduler effectively stalls behind one bad actor.\n\nThe fix is running each task's actual execution on a separate thread pool while the loop thread itself only ever does two things: wait for the next deadline, and hand the due task off to the pool. That keeps the scheduling decision — what's next, and when — completely decoupled from how long any individual task takes to run.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-design-scheduler-cron-abstraction-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: a Thread.sleep() loop per task",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** spawning one thread per scheduled task, each running its own loop that sleeps for its interval and then executes.\n\n**Why it's wrong:** this doesn't scale — a thousand scheduled tasks means a thousand sleeping threads, a real resource cost even while idle, and there's no shared, centralized way to answer \"what runs next\" without checking every thread's individual state.\n\n**Correct model:** one shared data structure — the min-heap — and one, or a small pool of, loop thread, so the scheduler's own overhead doesn't scale linearly with the number of scheduled tasks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: running every task on the same single thread with no isolation",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just run each due task directly on the scheduler's own loop thread — simplest possible implementation.\"\n\n**Why it's wrong:** any task that runs long, hangs, or throws an unhandled exception blocks or kills the one thread responsible for scheduling every other task too — a single slow task degrades the entire scheduler, not just itself.\n\n**Correct model:** the loop thread only decides *when*; actual task execution happens on a separate worker pool, isolated from the scheduling logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-design-scheduler-cron-abstraction-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**API** — `schedule(task, trigger)`, with `Trigger` deciding *when*, decoupled from *what*. **Structure** — a min-heap ordered by next-fire-time; the loop always sleeps until exactly the soonest deadline. **Overrun** — an explicit policy, skip-ahead or catch-up, for a task that outruns its own interval, not an accident of the math. **Isolation** — execution happens on a separate worker pool; the loop thread never runs a task itself. **Close** by naming that missed time during downtime is a per-task policy decision, not a global default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

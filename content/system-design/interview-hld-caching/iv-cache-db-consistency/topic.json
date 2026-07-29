@@ -1,0 +1,167 @@
+{
+  "id": "iv-cache-db-consistency",
+  "title": "How do you keep the cache consistent with the database?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 7,
+  "slug": "iv-cache-db-consistency",
+  "summary": "Tests whether you can reason about the actual race conditions in cache-aside vs write-through patterns, not just name the pattern.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-cache-db-consistency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Under the surface, this question is really asking about a **write-then-read race**: a write updates the database, something updates or invalidates the cache, and a read lands in between — can it see a stale value, and if so, exactly how? Naming the pattern (\"cache-aside\") is table stakes; walking the actual race window it leaves open is what separates a strong answer.\n\nThe interviewer wants the specific interleaving, not the pattern's name.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-db-consistency-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **which pattern is already in play — cache-aside, write-through, or write-behind?** Each has a completely different consistency story. Cache-aside (the app reads through the cache and invalidates on write) leaves the widest race window. Write-through (every write goes through the cache synchronously) closes most of it, at a latency cost. Write-behind (the cache is written first, the database catches up later) is fastest but risks losing data on a crash.\n\nDon't propose a fix for a race that a different pattern already avoids.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-db-consistency-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the pattern, then walk the specific race window it leaves open — don't stop at the name. For **cache-aside**: a write deletes the cache key, but before the database write's effects are visible everywhere, a concurrent read can miss the cache, fetch a value that's about to be overwritten, and repopulate the cache with it — leaving a stale value sitting in the cache indefinitely, until the next write comes along.\n\nSaying \"we invalidate on write\" without describing this exact interleaving is the answer that sounds right but doesn't show you've actually reasoned through it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-cache-db-consistency-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-db-consistency-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: cache-aside's classic race",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline of the cache-aside race: a concurrent read repopulates the cache with a stale value before the write commits](assets/cache-aside-race.svg)\n\nThe race in one sentence: the cache delete happens, but a concurrent read can slip in between the delete and the write's commit, reading the old value and writing it right back into the now-empty cache slot — so the cache ends up holding stale data even though it was \"correctly\" invalidated.\n\nThis is why invalidating on write doesn't automatically mean consistent — the timing of the read relative to the write's commit is what actually decides the outcome.",
+      "assets": [
+        {"alt": "Timeline of the cache-aside race: a concurrent read repopulates the cache with a stale value before the write commits", "path": "assets/cache-aside-race.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-db-consistency-s05",
+      "order": 5,
+      "sectionTitle": "The fix: delayed delete or versioned entries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two concrete fixes narrow this race. **Delete-after-write with a short delay**: instead of deleting the cache key immediately, delete it again a few hundred milliseconds after the write commits, catching and clearing out any stale value a racing read managed to repopulate in between. **Versioned cache entries**: tag each cached value with the database row's version (or updated-at timestamp), and have the cache reject a repopulation attempt carrying an older version than what's already there — a race can't overwrite a newer value with an older one.\n\nNeither is perfect, but both meaningfully shrink the window where stale data survives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-db-consistency-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: the exact interleaving",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The race step by step, between a writer thread and a reader thread:\n\n```\n# t0: Writer deletes cache key \"user:42\"\ncache.delete(\"user:42\")\n\n# t1: Reader misses cache, reads OLD value from DB\n#     (Writer's DB update hasn't committed yet)\nold_value = db.read(\"user:42\")          # still the pre-write value\n\n# t2: Writer's DB write commits\ndb.update(\"user:42\", new_value)\n\n# t3: Reader repopulates cache with the OLD value it read at t1\ncache.set(\"user:42\", old_value)\n\n# Result: DB has new_value, cache has old_value -- stale until next write\n```\n\nThe stale entry survives until something else touches this key again — there's no self-correcting mechanism without one of the fixes above.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-cache-db-consistency-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-db-consistency-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| No delay | Delayed second delete |\n|---|---|\n| Simple, one delete per write | Two deletes per write, small extra load |\n| Race window is the full time between delete and commit | Race window shrinks to whatever's left after the delayed delete catches it |\n| Can leave stale data indefinitely | Almost always catches the race, but a delay long enough to guarantee it isn't free either |\n\n**How to decide:** delaying the delete narrows the race window but never fully closes it — there's no delay length that's mathematically guaranteed against every possible timing, so perfect cache-DB consistency isn't actually free, even with this fix in place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-db-consistency-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how would you detect this drift is actually happening?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "You can't eliminate the race entirely, so detection matters as much as prevention. A concrete approach: **periodically sample cached keys and compare them against the database**, logging a metric for how often they disagree. A rising disagreement rate under load is a direct signal the race is happening in production, not just in theory — and it gives you a number to react to if the rate ever spikes after a traffic or deploy change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-cache-db-consistency-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-db-consistency-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"does write-through avoid this race entirely?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Yes, largely — in **write-through**, the write updates the cache and the database as one synchronous operation, so there's no window where the cache is empty and a concurrent read can repopulate it with a stale value; by the time the write returns, both are already consistent.\n\nThe cost: **write latency now includes the cache write**, on every single write, not just occasionally when a race happens to occur. You're trading a probabilistic consistency bug for a guaranteed, permanent latency cost — worth it for data where correctness matters more than write speed, not worth it for a write-heavy path that can tolerate the occasional race.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-db-consistency-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming cache-aside is automatically consistent",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We invalidate the cache on every write, so cache-aside is consistent with the database.\"\n\n**Why it's wrong:** invalidating on write only closes the race if nothing can read and repopulate the cache in the gap between the delete and the write's commit — and under real concurrent load, something usually can. \"We invalidate on write\" describes the intent, not a guarantee.\n\n**Correct model:** cache-aside is *eventually* consistent at best, with a real, describable race window — say so explicitly, and pair it with a delayed second delete, versioning, or drift detection rather than claiming the race doesn't exist.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-db-consistency-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-db-consistency-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the pattern in play, then walk its specific race window — for cache-aside, a concurrent read can repopulate the cache with a stale value in the gap between delete and commit. Narrow it with a delayed second delete or versioned entries, but know neither fully closes it. Write-through avoids the race by folding the cache write into the same synchronous operation as the DB write, at the cost of added latency on every write. Detect residual drift by periodically sampling cached values against the database.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

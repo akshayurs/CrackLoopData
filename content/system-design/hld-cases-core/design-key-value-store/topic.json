@@ -1,0 +1,180 @@
+{
+  "id": "design-key-value-store",
+  "title": "Design a Key-Value Store",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 4,
+  "slug": "design-key-value-store",
+  "summary": "Building a Dynamo-style key-value store itself — partitioning, replication, and tunable consistency, not just using one off the shelf.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-key-value-store-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Build the store, not the client of one: `put(key, value)` and `get(key)` at massive scale with high availability, in the spirit of Amazon's Dynamo. Unlike prior topics in this group, there's no single owning shard by default — every key's replicas are spread across a ring, and availability is treated as more important than always reading the absolute latest write.\n\nThis topic is where partitioning, replication, and consistency stop being separate concerns and start trading off directly against each other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** `put(key, value)`, `get(key)`, `delete(key)` — a minimal API, deliberately simple compared to a relational store.\n\n**Non-functional:** durability (a written value must survive node failures), high availability (the store should keep serving reads and writes even during network partitions or node loss), and a tunable point on the availability-vs-consistency spectrum rather than one fixed guarantee.\n\nThat last point is the defining requirement: this system explicitly chooses to let callers trade consistency for availability, rather than picking one globally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: keyspace, request rate, and the replication multiplier",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Assume 1B keys averaging 1KB each — 1TB of logical data. With a replication factor of 3 (standard for durability against node loss), actual stored data is 3TB across the cluster, not 1TB — every capacity estimate for a replicated store must account for this multiplier up front.\n\nAt 100,000 requests/sec platform-wide, each physical node in a reasonably-sized cluster (say 100 nodes) sees roughly 1,000 requests/sec for its owned partitions plus replica traffic for partitions it replicates — the replication factor inflates both storage and per-node request load, not just storage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-key-value-store-s03-q1"
+      ]
+    },
+    {
+      "id": "design-key-value-store-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`put(key, value)` → writes a new version of the value. `get(key)` → returns the value, or in some designs a small set of conflicting versions if replicas disagree (see conflict resolution ahead). `delete(key)` → typically a tombstone write, not an immediate physical delete, so the delete itself can replicate correctly.\n\nA versioned value carries a vector clock or timestamp alongside the raw bytes — callers need that metadata to resolve conflicts, so it isn't hidden from the API even though it complicates it slightly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s05",
+      "order": 5,
+      "sectionTitle": "Data model: consistent hashing ring for partitioning",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Keys are hashed onto a **consistent hashing ring** — a circular hash space where each node owns the arc of the ring between itself and its predecessor. A key belongs to whichever node's position it lands at or just after, walking clockwise.\n\nThe payoff over plain modulo-hashing (`hash(key) % N`) shows up when the cluster resizes: adding or removing a node only reassigns the keys in its immediate arc, not a near-total reshuffle of every key in the cluster — the property that makes this ring approach the default for scalable stores.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the hash ring with virtual nodes",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Hash ring with physical nodes A/B/C each mapped to several virtual node positions](assets/kv-hash-ring-vnodes.svg)\n\nA physical node is placed at many points on the ring (**virtual nodes**), not just one, so that when it fails or a new node joins, the affected keyspace is spread evenly across many other nodes instead of dumping the whole load onto one neighbor.\n\nVirtual nodes also smooth out load distribution — with only one point per physical node, an unlucky hash placement could leave one node with a disproportionately large arc.",
+      "assets": [{"alt": "Hash ring with physical nodes A/B/C each mapped to several virtual node positions", "path": "assets/kv-hash-ring-vnodes.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": [
+        "design-key-value-store-s06-q1"
+      ]
+    },
+    {
+      "id": "design-key-value-store-s07",
+      "order": 7,
+      "sectionTitle": "Replication: writing to N replicas, reading from R with quorum",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each key is replicated to **N** nodes (the next N distinct physical nodes clockwise from its ring position). A write is considered successful once **W** of those N replicas acknowledge it; a read queries **R** replicas and reconciles their responses.\n\nSetting `W + R > N` guarantees every read overlaps with the most recent successful write on at least one replica — the mathematical basis for **quorum** consistency, covered in depth on the next slides.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: a write's path across the ring",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Sequence diagram: coordinator forwards a write to N replicas and returns success after W acks](assets/kv-write-quorum-sequence.svg)\n\nAny node can act as the **coordinator** for a given request — it doesn't need to own the key itself, just forward to the replicas that do and collect their acks.\n\nThe coordinator returns success to the client as soon as W acks arrive, not waiting for all N — the remaining replicas apply the write asynchronously, which is what keeps write latency bounded by the fastest W nodes, not the slowest.",
+      "assets": [{"alt": "Sequence diagram: coordinator forwards a write to N replicas and returns success after W acks", "path": "assets/kv-write-quorum-sequence.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s09",
+      "order": 9,
+      "sectionTitle": "Tunable consistency: the R/W/N knobs",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Setting | Behavior | Trade-off |\n|---|---|---|\n| W = N | Every replica must ack before success | Strong durability, but a single slow/down replica blocks writes |\n| R = 1, W = 1 | Fastest possible, minimal quorum | Eventual consistency — a read may miss the latest write |\n| R + W > N | Read always overlaps the latest write | Strong (quorum) read-your-writes, at some latency cost |\n| R = 1, W = N | Fast reads, slower writes | Good for read-heavy workloads tolerating slower writes |\n\n**How to decide:** pick per-workload, not once globally — a shopping cart might want `R+W>N` for read-your-writes correctness, while a low-stakes view counter might run `R=1,W=1` for speed and tolerate rare staleness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-key-value-store-s09-q1"
+      ]
+    },
+    {
+      "id": "design-key-value-store-s10",
+      "order": 10,
+      "sectionTitle": "Conflict resolution when replicas diverge: vector clocks vs last-write-wins",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Vector clocks | Last-write-wins (LWW) |\n|---|---|---|\n| Detects concurrent writes | Yes — distinguishes \"conflicting\" from \"one supersedes the other\" | No — always picks one, even if both were legitimately concurrent |\n| Data loss risk | None — conflicting versions are surfaced, not silently dropped | Real — one concurrent write is silently discarded |\n| Complexity | Higher — client or store must merge conflicting versions | Lower — just compare timestamps |\n| Clock dependency | None | Requires reasonably synced clocks |\n\n**How to decide:** LWW is simpler and fine when losing a rare concurrent write is acceptable (e.g. a \"last viewed\" timestamp); vector clocks are worth the complexity when silently dropping a legitimate concurrent update is unacceptable (e.g. a shopping cart merge).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-key-value-store-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: hot partitions from skewed key access",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Consistent hashing distributes keys evenly by hash value, but real traffic isn't evenly distributed by *access frequency* — a celebrity's profile key gets vastly more reads than an average user's, even though both hash to similarly-sized ring arcs.\n\nThis produces a hot partition: the node(s) owning that key's replicas see disproportionate load regardless of how well the ring is balanced by key count. Mitigations include splitting a known-hot key across additional replicas beyond the normal N, or adding a request-level cache in front of the store for the hottest keys — the ring balances storage, not access skew.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-key-value-store-s11-q1"
+      ]
+    },
+    {
+      "id": "design-key-value-store-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: rebalancing the ring naively",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"When a node joins or leaves, just recompute `hash(key) % N` for every key and move whatever needs to move.\"\n\n**Why it's wrong:** modulo-based rebalancing reshuffles the ownership of nearly every key in the cluster on any membership change — a mass migration that saturates network and disk I/O across the whole cluster for a single node joining or leaving, exactly the problem consistent hashing exists to avoid.\n\n**Correct model:** with a proper consistent-hashing ring and virtual nodes, a membership change only reassigns the keys in the affected node's arcs — a small, bounded fraction of the total keyspace, not a cluster-wide reshuffle.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-key-value-store-s12-q1"
+      ]
+    }
+  ]
+}

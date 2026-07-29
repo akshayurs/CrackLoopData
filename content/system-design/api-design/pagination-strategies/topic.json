@@ -1,0 +1,131 @@
+{
+  "id": "pagination-strategies",
+  "title": "Pagination Strategies",
+  "area": "system-design",
+  "group": "api-design",
+  "order": 3,
+  "slug": "pagination-strategies",
+  "summary": "Offset, cursor, and keyset pagination — and why offset-based paging silently skips or duplicates rows the moment writes happen concurrently.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "pagination-strategies-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Any endpoint that returns a list eventually needs pagination — you can't return 2 million rows in one response. The obvious approach, `?page=3&limit=20`, works fine in a demo and quietly breaks in production the moment rows are being inserted or deleted while someone pages through.\n\nThis topic covers three approaches — offset, cursor, and keyset — and the concurrency problem that pushes serious APIs away from the simplest one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "pagination-strategies-s02",
+      "order": 2,
+      "sectionTitle": "Offset/limit pagination: simple, and where it falls apart",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Offset/limit** pagination asks the database to skip `offset` rows and return the next `limit`: `SELECT * FROM posts ORDER BY created_at DESC LIMIT 20 OFFSET 40` for page 3. It's the easiest to implement and the easiest to reason about — page number times page size.\n\nIt falls apart under **concurrent writes**. If a new row is inserted at the top of the sort order while a user is on page 2, every row after it shifts down by one position — the row that was at offset 40 is now at offset 41. The user's next request for offset 40 either re-shows a row they already saw (duplicate) or skips one entirely, depending on whether the insert or delete happened above or below their current position.\n\nFor a feed that rarely changes, this is invisible. For a live feed with constant writes, it's a real, user-visible bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "pagination-strategies-s02-q1"
+      ]
+    },
+    {
+      "id": "pagination-strategies-s03",
+      "order": 3,
+      "sectionTitle": "Cursor-based pagination: stable pages under concurrent writes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cursor-based pagination** replaces \"skip N rows\" with \"give me rows after this specific point.\" The server returns an opaque `cursor` (often an encoded ID or timestamp) alongside each page; the next request sends that cursor back: `GET /posts?after=eyJpZCI6NDJ9&limit=20`.\n\nBecause the cursor anchors to an actual row rather than a position count, inserts and deletes elsewhere in the list don't shift what \"after this cursor\" means — the next page is defined relative to a real row, not a row count that drifts as the table changes.\n\nThe tradeoff: cursors don't support \"jump to page 7\" the way offset does, since there's no page-number math — only forward (and sometimes backward) traversal from a point.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "pagination-strategies-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: offset pagination skipping/duplicating rows during inserts",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Offset pagination duplicating a row after an insert, vs cursor pagination avoiding it](assets/offset-vs-cursor.svg)\n\nWith offset pagination, an insert above the user's current position shifts every row below it down by one — so the row that was about to appear on the next page (offset 40) has already appeared, and the row now at offset 40 is a repeat of what they just saw.\n\nWith cursor pagination, the next page is defined as \"rows after row ID 42,\" regardless of how many rows were inserted or deleted elsewhere — the anchor point doesn't move.",
+      "assets": [
+        {
+          "alt": "Offset pagination duplicating a row after an insert, vs cursor pagination avoiding it",
+          "path": "assets/offset-vs-cursor.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "pagination-strategies-s05",
+      "order": 5,
+      "sectionTitle": "Keyset pagination: cursors built from the last row's sort key",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Keyset pagination** (sometimes called \"seek method\") is a specific, high-performance implementation of the cursor idea: the cursor is literally the sort key values of the last row on the current page, plain and readable rather than an opaque token. If you're sorting by `(created_at, id)`, the cursor is just that pair from the last row shown.\n\nThe next page's query becomes a direct `WHERE` condition: `WHERE (created_at, id) < (last_created_at, last_id) ORDER BY created_at DESC, id DESC LIMIT 20`. Because this only requires an index seek to the right starting point — not a scan through skipped rows — it stays fast at row 10 or row 10 million.\n\nThe `id` tiebreaker matters: sorting by `created_at` alone breaks if two rows share a timestamp, since the database can't tell which one comes \"after\" the other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "pagination-strategies-s05-q1"
+      ]
+    },
+    {
+      "id": "pagination-strategies-s06",
+      "order": 6,
+      "sectionTitle": "Compare: offset vs cursor vs keyset on performance and consistency",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Offset/limit | Cursor (opaque) | Keyset |\n|---|---|---|---|\n| Consistency under writes | Breaks — skips/duplicates | Stable — anchored to a row | Stable — anchored to a row |\n| Performance at deep pages | Degrades — scans+discards skipped rows | Stays fast | Stays fast — index seek |\n| Jump to arbitrary page N | Yes | No — forward/backward only | No — forward/backward only |\n| Implementation cost | Trivial | Low-medium (token encode/decode) | Low, but needs a stable sort key with a tiebreaker |\n\n**How to decide:** offset is fine for small, rarely-written tables where \"jump to page 7\" genuinely matters (e.g. an admin table). For anything large or write-heavy — feeds, activity logs, search results — keyset (or cursor) is the default choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "pagination-strategies-s06-q1"
+      ]
+    },
+    {
+      "id": "pagination-strategies-s07",
+      "order": 7,
+      "sectionTitle": "Code: a keyset-paginated query",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\n-- First page\nSELECT id, created_at, title\nFROM posts\nORDER BY created_at DESC, id DESC\nLIMIT 20;\n\n-- Next page, using the last row's (created_at, id) as the cursor\nSELECT id, created_at, title\nFROM posts\nWHERE (created_at, id) < ('2026-07-28 10:15:00', 8842)\nORDER BY created_at DESC, id DESC\nLIMIT 20;\n```\n\nThe `WHERE (created_at, id) < (...)` tuple comparison seeks directly to the right spot via the index on `(created_at, id)` — no rows before that point are ever touched, unlike `OFFSET` which must count past them.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "pagination-strategies-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: deep offset pagination scanning millions of skipped rows",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"OFFSET is just a number, so page 50,000 should cost about the same as page 1.\"\n\n**Why it's wrong:** most databases implement `OFFSET` by scanning and discarding every skipped row before returning the requested slice. `OFFSET 1000000 LIMIT 20` still has to walk through a million rows internally — the query gets slower and slower the deeper a client pages, even though the response size never changes.\n\n**Correct model:** offset pagination's cost scales with how deep you page, not just the page size. If deep pagination is a real use case (crawlers, exports, infinite scroll that never stops), keyset pagination avoids the scan entirely because it seeks to a row via an index instead of counting past discarded ones.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "pagination-strategies-s08-q1"
+      ]
+    }
+  ]
+}

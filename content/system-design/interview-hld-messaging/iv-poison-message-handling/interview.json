@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-poison-message-handling",
+  "interviewQuestions": [
+    {
+      "id": "iv-poison-message-handling-iq1",
+      "question": "A message keeps failing and blocking the queue — how do you handle it?",
+      "answerMarkdown": "I'd say infinite retry is the failure mode here, not a safety net. My answer: retry with backoff up to a bounded limit, then move the message to a dead-letter queue for triage instead of retrying forever.\n\nConcretely, a max-retry count of 5 with exponential backoff, then a DLQ with an alert (CloudWatch, Datadog, PagerDuty) firing the moment anything lands in it, so triage starts within minutes. The scenario this solves: a malformed JSON payload from a buggy upstream client fails deserialization every time. Without a limit, on a FIFO queue it retries forever and blocks every message behind it — one bad message stalls the whole partition. With the cap and DLQ, it's isolated within seconds and everything else keeps moving.\n\nI'd close by naming the tuning trade-off: a low retry limit isolates fast but risks DLQ-ing a message that would've succeeded on a later try during a longer blip — I'd size the limit and backoff to the failure patterns actually observed, not a guess.\n\n**Testing:** whether you know retry-with-limit plus a DLQ, not just 'retry until it works.'",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core poison-message question"
+    },
+    {
+      "id": "iv-poison-message-handling-iq2",
+      "question": "The dead-letter queue is filling up — how do you decide what to do with those messages?",
+      "answerMarkdown": "I wouldn't triage them one at a time as if each were a unique mystery — I'd bucket them by failure reason first, since each bucket usually has a genuinely different fix. Schema errors, downstream timeouts, and unknown message types are three different problems with three different owners and three different remediations.\n\nConcretely, if 200 messages are all failing the same schema validation error, that's a five-minute fix once identified and applied via a corrected replay — but triaged individually, it looks like 200 separate incidents and burns hours of on-call time for nothing. Bucketing surfaces that pattern immediately.\n\nOnce bucketed, I'd handle each group differently: schema errors might get a bulk-fix-and-replay, downstream timeouts might just need a longer backoff and reprocessing once the dependency recovers, and truly malformed or unrecoverable messages get documented and discarded rather than left sitting indefinitely.\n\n**Testing:** whether you can scale triage to a backlog instead of treating every DLQ message as an isolated case.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Triaging a growing DLQ backlog"
+    },
+    {
+      "id": "iv-poison-message-handling-iq3",
+      "question": "Can you automate any of the dead-letter queue triage instead of having a human look at every message?",
+      "answerMarkdown": "Yes, for known failure signatures — but I'd be specific about the boundary. If a failure matches a pattern the team has already seen and classified, like a known-transient downstream error code, I'd auto-republish it without waiting for a human, since the fix is already understood and repeatable.\n\nA genuinely novel failure reason — one that doesn't match any known signature — should still page a human the first time it's seen. Auto-handling an unclassified failure risks silently doing the wrong thing (like auto-discarding something that actually mattered) precisely because nobody's judged it safe yet.\n\nI'd describe the practical setup: a classifier checks incoming DLQ messages against a table of known error signatures and their approved actions; anything that doesn't match goes to a human queue with full context, and once a human classifies a new pattern, it gets added to the automated table for next time. This keeps the system getting smarter without ever auto-handling the truly unknown.\n\n**Testing:** whether you can automate the routine cases without silently automating away judgment on the ones that still need it.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Automating known-pattern DLQ triage"
+    }
+  ]
+}

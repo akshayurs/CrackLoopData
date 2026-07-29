@@ -1,0 +1,126 @@
+{
+  "id": "hedged-requests",
+  "title": "Hedged Requests",
+  "area": "system-design",
+  "group": "resilience",
+  "order": 7,
+  "slug": "hedged-requests",
+  "summary": "Cutting tail latency by firing a duplicate request to a second replica when the first is running late, instead of waiting it out — the trick behind Google's \"Tail at Scale\" numbers.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "hedged-requests-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "At high fan-out, someone's slow p99 response becomes your overall p50 — a request touching 100 backends is only as fast as its slowest one. A **hedged request** attacks this proactively: if the first replica hasn't answered by a short threshold, fire a duplicate to a second replica and take whichever answers first.\n\nThis is the mechanism behind Google's well-known \"[Tail at Scale](https://research.google/pubs/pub40801/)\" latency results. This topic covers hedging, the delay-tuning trade-off, tied requests as a stronger variant, and why hedging a write needs real care.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "hedged-requests-s02",
+      "order": 2,
+      "sectionTitle": "The problem: at high fan-out, someone's p99 becomes your p50",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If any single backend call has a p99 latency of 100ms (1% of calls are slow), a request that fans out to just one such call is slow 1% of the time. But a request that fans out to 100 parallel calls — a search page assembling results from 100 shards, say — is slow whenever *any one* of those 100 is slow. With independent 1% tail probabilities, the chance at least one of 100 calls hits its p99 is roughly 63%.\n\nSo the aggregate request's p50 latency ends up dominated by the tail latency of its individual dependencies, not their typical latency. This is why tail latency, not average latency, is the thing to obsess over once fan-out gets large — see [latency vs throughput](latency-vs-throughput) for the base vocabulary.\n\nThe practical consequence: shaving a dependency's p99 by even a little has an outsized effect on your own aggregate latency once fan-out is high enough.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "hedged-requests-s02-q1"
+      ]
+    },
+    {
+      "id": "hedged-requests-s03",
+      "order": 3,
+      "sectionTitle": "Hedged requests: send a duplicate request to a second replica if the first hasn't returned by a threshold, take whichever answers first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hedged request** sends the original request to one replica as normal, but starts a timer; if no response arrives within a short threshold (say, the 95th-percentile expected latency), it fires a second, identical request to a *different* replica of the same data. Whichever response arrives first is used, and the other is cancelled or ignored.\n\nThis is different from a [retry](retries-timeouts-and-backoff): a retry happens *after* a failure, sequentially, adding its full latency on top. Hedging happens speculatively, in parallel, specifically to catch cases where the first replica is merely *slow*, not failed — turning a tail-latency wait into a race that only the slower path pays for.\n\nHedging only makes sense when the call is safe to duplicate (see the pitfall slide) and when multiple interchangeable replicas of the same data actually exist to hedge against.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "hedged-requests-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a hedged request racing the original after a short delay, first response wins",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline of a hedged request: Replica A, then Replica B fires and wins](assets/hedged-requests-timeline.svg)\n\nThe 10ms delay before hedging isn't wasted — it's the window where most requests would've already returned from Replica A alone, so hedging only kicks in for the minority that are running unusually late.\n\nOnly one response is ever used; the other is discarded the moment a winner arrives, which is why the underlying call needs to tolerate being started and then abandoned.",
+      "assets": [{"alt": "Timeline of a hedged request: Replica A, then Replica B fires and wins", "path": "assets/hedged-requests-timeline.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "hedged-requests-s05",
+      "order": 5,
+      "sectionTitle": "Setting the hedging delay: too short wastes capacity, too long doesn't help tail latency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The hedging delay is the one number that decides whether this technique helps or hurts. Set it **too short** (hedge immediately, or after a few milliseconds) and most requests trigger a duplicate even though the first would've returned fine shortly after — you've roughly doubled total request volume for little latency benefit. Set it **too long** (close to the full timeout) and by the time hedging fires, the damage to tail latency is already done — the hedge barely helps.\n\nA common starting point: set the delay near the 95th- or 98th-percentile observed latency for that call, so hedging only fires for requests already in the slow tail, not the typical case.\n\nThis needs monitoring, not a one-time guess — if the underlying latency distribution shifts (a dependency gets generally slower), a delay tuned for the old distribution will hedge either far too often or far too rarely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "hedged-requests-s05-q1"
+      ]
+    },
+    {
+      "id": "hedged-requests-s06",
+      "order": 6,
+      "sectionTitle": "Tied requests: a stronger variant where both replicas know about each other and one cancels the other",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Plain hedging sends the duplicate blind — replica B doesn't know replica A is also working on the same request, so both may do the full work even after one has already answered. **Tied requests** improve on this: both replicas are told about each other at dispatch time, and whichever one starts executing first immediately notifies the other to cancel — avoiding wasted work on the loser entirely, not just wasted network response.\n\nThis needs replicas that support the tie-and-cancel protocol, so it's a heavier integration than plain hedging, which works against any replica that just serves a normal request.\n\nThe trade-off: tied requests waste less backend compute at the cost of needing purpose-built support in the serving layer, versus hedging's simplicity of \"just send it twice.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "hedged-requests-s07",
+      "order": 7,
+      "sectionTitle": "Compare: hedged requests vs plain retries — proactive duplication vs reactive retry-on-failure",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Hedged requests | Plain retries |\n|---|---|---|\n| Trigger | A short delay, whether or not the first call has failed | An actual failure or timeout of the first call |\n| Timing | Parallel — fires while the first call is still in flight | Sequential — happens after the first call ends |\n| Adds latency when unnecessary? | Extra load, but not extra latency for the fast path | Full retry latency stacks on top of the original wait |\n| Targets | Tail-latency (slow-but-working) replicas | Failed or errored calls |\n\n**How to decide:** hedging targets the \"working but slow\" case and retries target the \"failed\" case — they solve different problems and are often used together: hedge for tail latency against a healthy replica set, retry (with backoff) once a call has genuinely failed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "hedged-requests-s07-q1"
+      ]
+    },
+    {
+      "id": "hedged-requests-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: hedging a non-idempotent write and getting it applied twice",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Hedging just means sending the same request twice and using the faster response — it's safe for any call.\"\n\n**Why it's wrong:** for a [non-idempotent write](idempotency-and-exactly-once) — \"increment this counter,\" \"append this event\" — both the original and the hedge may actually execute, not just one of them, because hedging doesn't guarantee the first attempt gets cancelled before it completes. That means the write can be applied twice, exactly the double-execution risk a naive retry has.\n\n**Correct model:** hedge freely for reads and other naturally idempotent calls; for writes, only hedge if the write itself is idempotent (an idempotency key the server deduplicates on) or use tied requests with true cancellation support — never hedge a plain non-idempotent write blindly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "hedged-requests-s08-q1"
+      ]
+    }
+  ]
+}

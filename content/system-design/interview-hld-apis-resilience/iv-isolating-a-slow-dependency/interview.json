@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-isolating-a-slow-dependency",
+  "interviewQuestions": [
+    {
+      "id": "iv-isolating-a-slow-dependency-iq1",
+      "question": "One slow dependency is eating your whole thread pool — how do you stop it from taking everything else down?",
+      "answerMarkdown": "I'd name the bulkhead pattern: give each dependency its own bounded resource pool — threads, connections, or a semaphore — instead of letting them all share one pool. That way a dependency running slow can only exhaust its own allocation, never the shared pool other dependencies rely on.\n\nConcretely, if a service shares a 100-thread pool between a fast internal cache and a slow third-party enrichment API, and the enrichment API degrades from 200ms to 30 seconds per call, all 100 threads can fill up waiting on it — even unrelated cache calls start failing because there are no free threads left. Carving out a dedicated 15-thread bulkhead for the enrichment API means at most 15 threads get stuck; the other 85 keep serving everything else normally.\n\nI'd note this applies below the thread level too — separate database connection pools per query pattern prevent the same starvation at that layer.\n\n**Testing:** whether you know a circuit breaker alone doesn't stop in-flight calls from exhausting a shared pool.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Isolating a slow dependency"
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-iq2",
+      "question": "How do you size each dependency's bulkhead pool?",
+      "answerMarkdown": "I'd size it from the dependency's normal concurrency needs plus enough headroom for expected load spikes, not an even split across every dependency regardless of traffic. A high-traffic dependency legitimately needs a bigger allocation than a low-traffic one, and giving them equal shares wastes exactly the capacity bulkheads are meant to protect.\n\nConcretely, I'd look at observed peak concurrent calls to that dependency over a representative period, add a margin — maybe 20-30% — to absorb normal spikes without needing a resize, and set that as the pool size. I'd revisit it periodically as traffic patterns change, since a bulkhead sized for last year's load can become either wastefully large or dangerously tight.\n\nI'd also flag that this needs monitoring — if a bulkhead is consistently saturated even when the dependency is healthy, that's a sizing problem, not a resilience one.\n\n**Testing:** whether you size resilience infrastructure from real usage data instead of a rule of thumb.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Sizing a bulkhead pool"
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-iq3",
+      "question": "Does a bulkhead replace the need for a circuit breaker on the same dependency?",
+      "answerMarkdown": "No — they solve different halves of the same problem, and I'd want both. The bulkhead caps the damage from calls already in flight when a dependency starts failing, bounding how many threads or connections it can consume. The circuit breaker stops new calls once the dependency is clearly failing, so requests don't even attempt to use the bulkhead's capacity in the first place.\n\nWithout the breaker, every new call still tries the slow dependency and occupies a bulkhead slot until it times out, even though you already know it's failing — wasteful but bounded. Without the bulkhead, a circuit breaker does nothing about the calls that are already in flight when it trips; they can still hold onto a shared pool until they individually time out.\n\nUsing both together means the bulkhead limits the worst case while the breaker actively reduces how often you hit that worst case.\n\n**Testing:** whether you understand these as complementary layers, not competing solutions to the same failure.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Bulkhead vs circuit breaker"
+    }
+  ]
+}

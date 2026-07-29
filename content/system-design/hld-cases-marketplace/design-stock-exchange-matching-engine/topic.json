@@ -1,0 +1,186 @@
+{
+  "id": "design-stock-exchange-matching-engine",
+  "title": "Design a Stock Exchange Matching Engine",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 8,
+  "slug": "design-stock-exchange-matching-engine",
+  "summary": "Match buy and sell orders fairly, deterministically, and at microsecond latency — a single-threaded correctness core that is the opposite of \"scale by adding nodes.\"",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-stock-exchange-matching-engine-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: match buy and sell orders for a stock fairly and deterministically, at extreme speed — microseconds, not milliseconds.\n\nEvery other design in this group scales by adding nodes and spreading contention across them. This one is the deliberate exception: the matching core for a single symbol is **single-threaded by design**, because fairness and auditability require a strict, reproducible order of operations that concurrency would break.\n\nTreat this as a lesson in when *not* to reach for horizontal scaling as the default answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** accept buy/sell orders for a symbol, match compatible orders, publish trades and market data, support order cancellation.\n\n**Non-functional:** **fairness** — orders are matched by strict price-time priority, so no participant can be favored regardless of who they are; **determinism** — given the same sequence of inputs, the engine always produces the exact same sequence of trades, replayable byte-for-byte; **microsecond-level latency** — the gap between an order arriving and a match being decided is measured in millionths of a second, since high-frequency trading firms compete on exactly this margin.\n\nNotice fairness and determinism aren't just nice properties — they're regulatory requirements an exchange must be able to prove after the fact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: orders/sec vs the latency budget",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A heavily-traded symbol can see hundreds of thousands of orders and cancellations per second during volatile periods. With a latency budget of low single-digit microseconds per match decision, the engine has only a few thousand CPU cycles to decide each match — not enough time for a network hop, a database query, or even a cache miss to main memory without blowing the budget.\n\nThis number is what rules out almost every \"normal\" system-design tool: no calling out to another service mid-match, no synchronous database write per order — the entire hot path has to live in-memory, in a single process, doing the minimum possible work per order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-stock-exchange-matching-engine-s03-q1"
+      ]
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- `submitOrder(symbol, side, price, qty)` — enters a new buy or sell order into that symbol's book.\n- `cancelOrder(orderId)` — removes a resting (unmatched) order from the book.\n- A **market data feed** — a continuous, low-latency broadcast of book changes and executed trades, consumed by every participant watching that symbol.\n\nAll three are thin envelopes around the same underlying structure: the order book. `submitOrder` and `cancelOrder` mutate it, and the market data feed is essentially a stream of every mutation, published the instant it happens.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s05",
+      "order": 5,
+      "sectionTitle": "Data model: the order book, not a generic table",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **order book** for one symbol is two price-ordered structures: resting **bids** (buy orders, best price highest) and resting **asks** (sell orders, best price lowest), each ordered first by price and then by arrival time within the same price level.\n\nThis is not a row in a relational table — it's an in-memory structure (commonly a price-indexed tree or sorted array of price levels, each holding a time-ordered queue of orders) built specifically to answer \"what's the best bid/ask right now\" and \"who's next in line at this price\" in constant or near-constant time. A generic database table with a `SELECT ... ORDER BY` query is orders of magnitude too slow for a microsecond budget.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-stock-exchange-matching-engine-s05-q1"
+      ]
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the order book",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Order book for one symbol: price-ordered bid and ask queues with the best bid and best ask highlighted](assets/order-book.svg)\n\nThe best bid and best ask sit at the top of their respective sides — the only two prices where a new order can immediately match against something resting in the book.\n\nEverything below the top is simply waiting, ordered so that when it does become the best price, who gets matched first is unambiguous.",
+      "assets": [
+        {"alt": "Order book for one symbol: price-ordered bid and ask queues with the best bid and best ask highlighted", "path": "assets/order-book.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s07",
+      "order": 7,
+      "sectionTitle": "Why the core is single-threaded per symbol",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It's tempting to think multiple threads processing incoming orders in parallel would help throughput — but for a single symbol's book, that would mean two orders arriving nearly simultaneously could be matched in a different relative order depending on thread scheduling, which is nondeterministic. Two replays of the exact same order sequence could then produce different trades.\n\nThat's unacceptable here: fairness (price-time priority) is a promise about relative order, and regulatory replay requires that the exact sequence of trades be reproducible from the exact sequence of inputs. A single-threaded core per symbol makes the order of operations a plain fact, not an emergent property of scheduling — the same discipline as [time and ordering](time-and-ordering) in distributed systems, applied by simply removing the concurrency that creates ambiguity in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-stock-exchange-matching-engine-s07-q1"
+      ]
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s08",
+      "order": 8,
+      "sectionTitle": "Compare: symbol-sharding vs parallelizing one order book",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Symbol-sharding | Parallelizing one order book |\n|---|---|---|\n| Unit of parallelism | One thread/core per symbol — many symbols run truly independently | Multiple threads on the same symbol's book |\n| Determinism | Preserved — each symbol's sequence is still single-threaded internally | Broken — concurrent access to one book reintroduces ordering ambiguity |\n| Scaling ceiling | Total symbols traded, limited only by available cores | None safely available — this path is generally avoided, not tuned |\n| Practical use | The standard approach — thousands of symbols, each pinned to its own core/thread | Not used in practice for the reasons above |\n\n**How to decide:** this isn't really a close call — sharding by symbol gets you real parallelism (most exchanges trade thousands of symbols) without touching the one property that can't be compromised, so it's the only path seriously considered; trying to parallelize inside one book trades away correctness for a scaling benefit you can get safely elsewhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-stock-exchange-matching-engine-s08-q1"
+      ]
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: the matching loop",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Matching loop: an incoming order either crosses the best opposite price and emits a trade, or rests in the book](assets/matching-loop.svg)\n\nA match only happens when prices \"cross\" — a buy order willing to pay at least the best ask price, or a sell order willing to accept at most the best bid price. Otherwise the order simply joins the book, waiting its turn.\n\nThe loop is intentionally simple: check best opposite price, match or rest, repeat — complexity here is the enemy of the microsecond budget.",
+      "assets": [
+        {"alt": "Matching loop: an incoming order either crosses the best opposite price and emits a trade, or rests in the book", "path": "assets/matching-loop.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s10",
+      "order": 10,
+      "sectionTitle": "Sequencing and audit logging for regulatory replay",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every order, cancellation, and trade is assigned a strict, monotonically increasing sequence number the instant it's processed, and appended to an immutable audit log before (or atomically with) being applied to the book. This sequence *is* the definition of \"what happened, in what order\" — it's what a regulator or an internal audit replays to verify the engine behaved correctly.\n\nThe log has to be write-fast enough to never become the bottleneck ahead of the matching logic itself, which usually means an append-only, sequential-write log rather than a general-purpose database — the same shape of trade-off seen in write-heavy logging systems elsewhere, just with a much tighter latency budget.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: a single hot symbol exceeding one core's throughput",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Symbol-sharding solves scaling across many symbols, but it doesn't help if one extremely liquid symbol (think a major index stock during a volatile session) generates more order/cancel volume than a single CPU core can process within the latency budget — there's no second thread to hand overflow work to without reintroducing the nondeterminism this whole design avoids.\n\nThis is a genuinely hard physical limit, not a software design gap: the fix space is narrow — faster single-core performance (careful cache-friendly data structures, avoiding memory allocation on the hot path), not more cores. It's a sharp illustration of [physical and cost constraints](physical-and-cost-constraints) showing up as a real ceiling rather than an abstract concern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-stock-exchange-matching-engine-s11-q1"
+      ]
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: introducing any nondeterminism into matching",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Multi-threading the matching logic for one symbol would obviously improve throughput — more cores, more speed.\"\n\n**Why it's wrong:** any source of nondeterminism in the matching path — multiple threads racing on the same book, a system clock read at slightly different times across replays, a hash-based iteration order that isn't guaranteed stable — breaks the ability to replay the exact same input sequence and get the exact same trades out. That replay guarantee isn't a nice-to-have; it's what regulators, dispute resolution, and internal debugging all depend on.\n\n**Correct model:** treat determinism as a hard constraint that throughput optimizations must work within, not something traded away for speed — symbol-sharding (§8) is how you get real parallelism without ever touching this constraint.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-stock-exchange-matching-engine-s12-q1"
+      ]
+    }
+  ]
+}

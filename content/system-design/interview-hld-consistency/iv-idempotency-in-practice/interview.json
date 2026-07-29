@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-idempotency-in-practice",
+  "interviewQuestions": [
+    {
+      "id": "iv-idempotency-in-practice-iq1",
+      "question": "How would you make this API endpoint safe to retry?",
+      "answerMarkdown": "I'd back \"make it idempotent\" with an actual mechanism: the client generates an idempotency key — a UUID — once per logical request, and sends it with every retry of that same attempt. The server checks a dedup store for that key before doing any side-effecting work; if it's already there, it returns the stored result instead of reprocessing.\n\nFor a payment endpoint specifically, that means checking the dedup store, and only calling the payment gateway if the key hasn't been seen — the second retry of the same charge attempt gets back the original result, not a second charge. The dedup store needs a unique constraint, so two near-simultaneous retries can't both slip past the check, and a TTL so it doesn't grow forever.\n\nI'd also handle the in-flight case: mark the key as in-progress the moment processing starts, so a retry that arrives mid-processing waits or gets a clear \"still processing\" response instead of running concurrently.\n\n**Testing:** whether you can describe the actual mechanism, not just the property.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Building a retry-safe endpoint"
+    },
+    {
+      "id": "iv-idempotency-in-practice-iq2",
+      "question": "What if the first request is still in flight when the retry arrives?",
+      "answerMarkdown": "If I only check \"has this key been fully processed,\" a retry that arrives while the first attempt is still running would see \"not found\" and start processing again — exactly the race the idempotency key was supposed to prevent.\n\nThe fix is to mark the key's status as in-progress atomically the instant processing starts, using the same unique constraint that prevents two writes from claiming the same key. A retry that finds the key already in-progress should either wait briefly and re-check, or return a clear \"still processing, try again shortly\" response rather than proceeding as if it were a fresh request.\n\nI'd call this out unprompted, since it's the exact detail that separates a correct implementation from one that looks correct until you actually hit the race in production.\n\n**Testing:** whether you understand idempotency keys need to handle in-flight state, not just completed results.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Handling a retry mid-processing"
+    },
+    {
+      "id": "iv-idempotency-in-practice-iq3",
+      "question": "The client never sent an idempotency key at all — can you make the endpoint safe anyway?",
+      "answerMarkdown": "Sometimes, yes, without touching the client at all — if the operation can be expressed as an upsert keyed on a natural identifier already in the request. \"Set this user's profile picture to X\" is naturally idempotent this way: retrying it just sets the same value again, with no duplicate side effect.\n\n\"Append a new order\" isn't naturally idempotent unless the request itself carries a natural dedup key, like a cart checkout ID the client already sends for other reasons — in that case I'd dedupe on that field instead of a purpose-built idempotency key.\n\nWhere no natural key exists and the client genuinely can't be changed, I'd be honest that I can only offer best-effort deduplication — for example, a short window keyed on request contents — rather than claim a guarantee I can't actually deliver.\n\n**Testing:** whether you can find a real fallback instead of declaring the endpoint unfixable.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Idempotency without a client-sent key"
+    }
+  ]
+}

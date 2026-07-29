@@ -1,0 +1,178 @@
+{
+  "id": "iv-protecting-a-downstream-dependency",
+  "title": "How do you protect a downstream service you don't own from being overwhelmed by your own calls?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 6,
+  "slug": "iv-protecting-a-downstream-dependency",
+  "summary": "The mirror image of protecting yourself from a failing dependency: outbound-side protections like client-side rate limiting and bulkheads that protect a dependency from you.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-protecting-a-downstream-dependency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: the mirror-image question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is the mirror image of the more commonly asked \"protect yourself from a failing dependency\" question. Here the direction is reversed: **you** are the risk, and a dependency you don't own needs protection from **your own calls**.\n\nThe strong answer names outbound-side protections — client-side rate limiting, isolation of that traffic — rather than defaulting to circuit-breaker language, which solves the opposite problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: is this dependency a **partner API with a contractual rate limit**, or an **internal service** you could in principle ask to scale? The answer changes your leverage — you can't ask a partner to just add capacity, but you might be able to ask an internal team.\n\nAlso ask: **what happens to them** if you send more than they can handle? A partner's API might just reject you; an internal service might degrade for every other team relying on it, which raises the stakes considerably.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Rate-limit your own outbound calls** to a level the dependency has told you it can sustain, enforced on your side before requests ever leave. Then **isolate that traffic** so a burst from one internal caller of yours can't consume the whole shared outbound budget meant for everyone.\n\nBoth halves matter: the outbound limit protects the dependency; the isolation protects your other callers from each other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-protecting-a-downstream-dependency-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a partner shipping-rate API capped at 50 req/sec",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A worked example: a partner shipping-rate API caps you at **50 req/sec** in its contract. A client-side token-bucket limiter enforces that ceiling before requests ever leave your service:\n\n```\nlimiter = TokenBucket(rate=50, capacity=60)  // small burst allowance\n\nfunc callShippingApi(req):\n    if not limiter.tryAcquire():\n        enqueue(req)   // defer rather than exceed the cap\n        return\n    send(req)\n```\n\nEnforcing the ceiling yourself, rather than relying on the partner to reject excess requests, means you never actually breach the contract — you defer or queue instead of finding out the hard way that you've been throttled.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: an internal batch job at 10x normal rate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete scenario: a batch job inside your own company starts calling a shared internal geocoding service at **10x its normal rate** during a one-time data backfill, degrading it for every other team relying on it — including teams with no idea a backfill is even running.\n\nA per-caller quota on the geocoding service, or a bulkhead limiting how much of your own outbound budget the batch job can use, prevents one internal user from starving the rest. The fix can live on either side — the dependency enforcing per-caller quotas, or the caller self-limiting its own batch traffic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-protecting-a-downstream-dependency-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: what happens without this protection",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Without outbound protection, you get **rate-limited or blocked by the partner entirely** — the same partner enforcing their own ceiling on their side, except now reactively instead of by your own design.\n\nThe painful part: this now looks **identical to the partner being down**, from the perspective of anyone debugging your service, even though you caused it. Diagnosing \"why is the shipping API failing\" takes much longer when the real cause is your own uncontrolled outbound traffic, not their outage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: outbound limiter with a queue absorbing excess",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Outbound rate limiter with queue](assets/outbound-rate-limiter-queue.svg)\n\nRequests that exceed the outbound cap don't get dropped — they land in a **queue** and drain at the rate the dependency can sustain, spreading a burst out over time instead of firing it all at once and tripping the partner's own limit.",
+      "assets": [{"alt": "Outbound rate limiter with queue", "path": "assets/outbound-rate-limiter-queue.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-protecting-a-downstream-dependency-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s08",
+      "order": 8,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Self-imposed outbound limits mean you sometimes **queue or defer your own work even when you have spare capacity** to send more — the limiter enforces the dependency's stated ceiling regardless of how much headroom you personally have.\n\nYou're trading maximum short-term throughput for **protecting the relationship with the dependency** — a partner that trusts you to respect their limits is easier to negotiate a higher cap with later than one you've repeatedly overwhelmed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: your queued outbound work is backing up",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"your queued outbound work is backing up behind the rate cap — is that itself a problem?\"** Yes — it becomes a **backpressure problem on your own side**: the queue grows, memory or storage for it grows, and whatever originally triggered the outbound calls (a user request, an upstream event) is now waiting longer too.\n\nThis is why outbound rate limiting pairs directly with a **backpressure or shedding strategy** for the work waiting to go out — you need a plan for what happens if the queue itself grows unbounded, not just a plan for the outbound cap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s10",
+      "order": 10,
+      "sectionTitle": "Follow-up: how is this different from a circuit breaker?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"how is this different from a circuit breaker?\"** A **circuit breaker reacts** to the dependency already failing — it trips after errors or latency cross a threshold. A **client-side limiter proactively prevents** you from ever sending more than agreed in the first place, so the dependency doesn't fail because of you at all.\n\nThey're complementary, not redundant: the limiter prevents a self-inflicted overload; the breaker still protects you if the dependency fails for reasons entirely outside your control.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-protecting-a-downstream-dependency-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: assuming rate limiting only flows toward you",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Rate limiting is something we receive from others — it's not something we owe a dependency we call.\"\n\n**Why it's wrong:** it ignores that your own calls can overwhelm something you depend on, especially an internal shared service with no rate limiting of its own — the failure you cause looks exactly like the dependency being unreliable, and it's your own uncontrolled traffic underneath it.\n\n**Correct model:** treat outbound rate limiting as a responsibility toward every dependency you call, proportional to what that dependency has told you (explicitly or implicitly) it can sustain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-protecting-a-downstream-dependency-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rate-limit your own outbound calls to whatever the dependency can sustain, enforced client-side before requests leave, and isolate per-caller traffic so one internal caller can't exhaust the shared budget. Queue excess rather than firing it all at once, but plan for backpressure if that queue grows. This is proactive and complements, rather than replaces, a circuit breaker.\n\nFor isolating traffic per caller, see [Bulkheads and Isolation](bulkheads-and-isolation).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "id": "replication-strategies",
+  "title": "Replication Strategies",
+  "area": "system-design",
+  "group": "consistency-replication",
+  "order": 2,
+  "slug": "replication-strategies",
+  "summary": "Single-leader, multi-leader, and leaderless replication — and the conflicts each one signs you up for.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "replication-strategies-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Replication** means keeping copies of the same data on multiple machines. Every strategy answers the same two questions differently: who is allowed to accept a write, and what happens when two writes could conflict.\n\nThink of it like a shared team document: if only one person can type at a time (single-leader), it's simple but they're a bottleneck. If everyone can type at once (leaderless/multi-leader), it's fast but someone has to reconcile conflicting edits. This topic covers the three main strategies and the trade-off each one locks in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-strategies-s02",
+      "order": 2,
+      "sectionTitle": "Why replication exists: durability and read scaling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Replication solves two separate problems that happen to share a mechanism. **Durability**: if data lives on only one machine, a single disk failure loses it — copies on other nodes mean the data survives any one node dying. **Read scaling**: one machine has a ceiling on how many reads per second it can serve; spreading copies across several lets reads fan out across all of them.\n\nNotice these two goals pull in the same direction (more copies), which is why replication is close to universal in production databases — even a system with modest traffic usually replicates for durability alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-strategies-s03",
+      "order": 3,
+      "sectionTitle": "Single-leader replication: simple, with a clear bottleneck",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In **single-leader replication**, one node (the leader) accepts all writes and streams them to the other nodes (followers), which serve reads. Because only one node ever accepts writes, there's never a question of two conflicting writes racing each other — ordering is trivial.\n\nThe cost is exactly what you'd expect from routing everything through one node: write throughput is capped at what the leader can handle, and if the leader goes down, writes stop until a follower is promoted (a failover that takes real time and can lose the most recent writes).\n\nThis is the default choice for most relational databases — Postgres and MySQL both replicate this way out of the box.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "replication-strategies-s03-q1"
+      ]
+    },
+    {
+      "id": "replication-strategies-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: single-leader with followers serving reads",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![One leader receiving all writes, fanning out to three followers that serve reads](assets/leader-follower-topology.svg)\n\nAll writes funnel through the leader, which then replicates the change to every follower. Clients can read from any follower, spreading read load across the fleet, but every client must send writes to the same single leader — there's no way around that funnel in this model.",
+      "assets": [
+        {
+          "alt": "One leader receiving all writes, fanning out to three followers that serve reads",
+          "path": "assets/leader-follower-topology.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-strategies-s05",
+      "order": 5,
+      "sectionTitle": "Multi-leader replication: writes anywhere, conflicts everywhere",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Multi-leader replication** lets more than one node accept writes — typically one leader per data center, each replicating to the others. This removes the single-leader bottleneck and lets each region write locally with low latency instead of crossing the network to a single leader.\n\nThe price is that two leaders can accept conflicting writes to the same record at nearly the same time — a customer updates their address in the US data center while support updates it in the EU data center — and the system must detect and resolve that conflict after the fact, since there was no single point that could have prevented it.\n\nThis trade-off makes multi-leader replication a genuine commitment, not a free upgrade over single-leader.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "replication-strategies-s05-q1"
+      ]
+    },
+    {
+      "id": "replication-strategies-s06",
+      "order": 6,
+      "sectionTitle": "Leaderless replication (Dynamo-style): writes to any replica, quorum reads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Leaderless replication** drops the concept of a leader entirely: a client writes directly to several replicas at once (not just one), and reads similarly query several replicas and reconcile the answers. Amazon's Dynamo popularized this model, and Cassandra and Riak both use it.\n\nBecause there's no leader to go down, leaderless systems are naturally tolerant of individual node failures — the client just needs enough replicas to respond, not a specific one. The trade is that consistency becomes a per-request tuning knob (how many replicas must acknowledge a write, how many must agree on a read) rather than a property of the architecture itself.\n\nThis tunability is exactly what the next topic, quorum systems, formalizes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-strategies-s07",
+      "order": 7,
+      "sectionTitle": "Compare: single-leader vs multi-leader vs leaderless",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single-leader | Multi-leader | Leaderless |\n|---|---|---|---|\n| Who accepts writes | One node | Several (usually one per region) | Any replica |\n| Conflict handling | None needed — one writer | Required — concurrent writes across leaders | Required — concurrent writes across replicas |\n| Write availability during a node failure | Blocked until failover completes | Other leaders keep accepting writes | Keeps accepting as long as enough replicas respond |\n| Typical use | Most relational databases (Postgres, MySQL) | Multi-region apps needing local writes | Cassandra, DynamoDB, Riak |\n\n**How to decide:** start single-leader unless you have a specific reason not to — multi-leader and leaderless both trade simplicity for availability, and that trade only pays off once you actually need writes to survive a leader or region going down.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "replication-strategies-s07-q1"
+      ]
+    },
+    {
+      "id": "replication-strategies-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: multi-leader replication without a conflict resolution plan",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just add a second leader in our other region for lower write latency — replication will sort itself out.\"\n\n**Why it's wrong:** the moment two leaders can accept writes to the same record independently, conflicts are not an edge case — they're a certainty at any real scale. Without an explicit resolution strategy, most systems default to something crude like last-write-wins, which silently discards one of the two updates with no warning to either user.\n\n**Correct model:** decide the conflict resolution strategy (last-write-wins, vector clocks, application-level merge, or a CRDT) *before* adopting multi-leader replication, not after the first support ticket about a vanished update. If you can't answer \"what happens when two regions edit the same row,\" you're not ready for multi-leader.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "replication-strategies-s08-q1"
+      ]
+    }
+  ]
+}

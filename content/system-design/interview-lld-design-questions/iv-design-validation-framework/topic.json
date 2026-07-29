@@ -1,0 +1,165 @@
+{
+  "id": "iv-design-validation-framework",
+  "title": "Design a Validation Framework",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 7,
+  "slug": "iv-design-validation-framework",
+  "summary": "Composability is the point: rules combine cleanly, errors aggregate across a single pass, and nothing throws on the first miss.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-design-validation-framework-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a validation framework** — a set of composable rules that check an object and report every problem, not just the first one. The scoring signal is **composability**: can rules combine cleanly, and do errors aggregate instead of short-circuiting on the first failure?\n\nA weak answer throws an exception on the first failed rule, which works for a single check but falls apart the moment a form needs to show a user five validation errors at once instead of one at a time.\n\nThe 10-minute bar: a `Rule<T>` interface, a composite validator that runs everything and collects results, and a cross-field rule that needs more than one field.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-validation-framework-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: field-level validation, or cross-field rules too?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether validation is purely **field-level** (this string is non-empty, this number is positive) or needs **cross-field rules** (start date must be before end date — needs two fields at once).\n\nField-level-only validation can run rule-per-field independently, in any order, in parallel even. Cross-field rules need access to the whole object, which changes the shape of your `Rule` interface — it has to accept the entire target, not just one field's value. Ask this before committing to an interface signature.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-validation-framework-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: composed rules, errors collected not thrown",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape: a `Rule<T>` interface with one method — check the whole object, return zero or more violations. A composite validator holds a list of rules, runs every one against the target, and **collects** all violations into a single result rather than throwing on the first failure.\n\nThis \"run everything, collect everything\" shape is what makes rules composable — you can add or remove a `Rule<T>` from the list without any rule needing to know about the others, and the caller always gets the complete picture in one pass.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-validation-framework-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-validation-framework-s04",
+      "order": 4,
+      "sectionTitle": "Code: ValidationRule<T> and a composite validator that aggregates",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface ValidationRule<T> {\n    List<String> check(T target);\n}\n\npublic class CompositeValidator<T> implements ValidationRule<T> {\n    private final List<ValidationRule<T>> rules;\n\n    public List<String> check(T target) {\n        List<String> errors = new ArrayList<>();\n        for (ValidationRule<T> rule : rules) errors.addAll(rule.check(target));\n        return errors;\n    }\n}\n```\n\nReturning a list of messages — or better, a list of structured error objects, per [designing errors](designing-errors) — rather than throwing on the first violation is the whole design: a caller gets every problem in one call, which is what a form UI actually needs.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-validation-framework-s05",
+      "order": 5,
+      "sectionTitle": "Code: a cross-field rule needing the whole object",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class DateRangeRule implements ValidationRule<Booking> {\n    public List<String> check(Booking b) {\n        if (b.startDate().isAfter(b.endDate())) {\n            return List.of(\"startDate must be before endDate\");\n        }\n        return List.of();\n    }\n}\n```\n\nThis rule couldn't exist if `Rule<T>` only received one field's value — it needs both `startDate` and `endDate` from the same `Booking` at once. Designing the interface around the whole target object, not a single field, is what makes this rule possible without a special case.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-design-validation-framework-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-design-validation-framework-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: how do you support rules that depend on more than one field?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Since `Rule<T>` already takes the whole target object, a cross-field rule is just... a rule. No special interface, no separate \"cross-field rule\" type — `DateRangeRule` and a simple non-empty check for one field both implement the exact same `ValidationRule<T>`.\n\nThe only design choice worth naming: whether a cross-field rule's error message should attribute the problem to one field, both fields, or the object as a whole. I'd default to reporting it against the object, or listing both field names in the message, since blaming a single field for a two-field problem is often misleading in the UI.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-validation-framework-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-validation-framework-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: should validation throw or return a result?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd return a result object — a list of violations, empty if valid — rather than throw. Throwing forces the caller into try/catch for what's often a completely expected outcome (a user typed something invalid), and it only ever surfaces one problem before unwinding the stack, defeating the aggregation this framework exists to provide.\n\nI'd reserve exceptions for genuinely exceptional cases — a rule itself failing to execute due to a bug or an unexpected null — keeping validation *failures* (the expected case) and validation *errors* (the unexpected case) as separate channels.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-validation-framework-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you localize or template a validation error message?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd have each rule return a structured violation — a message **key** plus the parameters needed to fill it in (\"date.range.invalid\", with start and end values) — rather than a hardcoded English string. A separate rendering layer looks up the key in a locale-specific message bundle and interpolates the parameters.\n\nThis decouples validation logic — does the rule pass or fail, and what data is relevant — from presentation — what exact sentence the user sees in their language — which a hardcoded string baked into the rule can't support without duplicating rules per locale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-validation-framework-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: throwing on the first failed rule",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** run rules one at a time in a loop, and throw as soon as any single rule fails.\n\n**Why it's wrong:** a user fixing a form one error at a time, resubmitting, and getting hit with a *different* single error each time is a poor experience — and it misses the point of \"composability\" the question is testing, since throw-on-first behaves the same whether you have one rule or fifty.\n\n**Correct model:** run every rule, collect every violation, return them together in one pass.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-validation-framework-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: mixing validation into the domain object's constructor",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just validate inside the `Booking` constructor and throw if anything's wrong — keeps validation close to the data.\"\n\n**Why it's wrong:** this couples validation rules to object construction, so you can't reuse the same rules for a partial update, can't validate a batch and collect all errors before rejecting anything, and can't add or remove a rule without touching the domain class itself.\n\n**Correct model:** keep validation as a separate, composable set of `ValidationRule<T>` objects that operate *on* a constructed object, not baked into its constructor.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-validation-framework-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-validation-framework-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Rule** — `Rule<T>` takes the whole object, returns a list of violations, empty means valid. **Composition** — a composite validator runs every rule and aggregates results, never throws on the first miss. **Cross-field** — free once the rule receives the whole object, no special type needed. **Messages** — return structured keys, not hardcoded strings, so localization is a rendering concern. **Close** by flagging that baking validation into a constructor kills reuse and aggregation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

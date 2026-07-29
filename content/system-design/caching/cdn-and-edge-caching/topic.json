@@ -1,0 +1,118 @@
+{
+  "id": "cdn-and-edge-caching",
+  "title": "CDN & Edge Caching",
+  "area": "system-design",
+  "group": "caching",
+  "order": 6,
+  "slug": "cdn-and-edge-caching",
+  "summary": "Caching at the network edge — what a CDN actually caches, how freshness gets decided without a round trip to origin, and where personalized content breaks the model.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "cdn-and-edge-caching-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "So far, every cache in this group has lived close to your servers. A **CDN** (Content Delivery Network) flips that — it caches data close to the *user*, at edge locations spread around the world, so a request for a static image in Tokyo never has to travel to an origin server in Virginia.\n\nThis topic covers what a CDN typically caches, how it decides whether a cached copy is still fresh (`Cache-Control`, `ETag`), and the sharp edge where personalizing a response collides with caching it at a shared location.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "cdn-and-edge-caching-s02",
+      "order": 2,
+      "sectionTitle": "What a CDN caches and why it sits at the edge",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **CDN** is a network of servers (**edge nodes** or **PoPs** — points of presence) distributed geographically, positioned close to end users rather than close to your origin server. Its core job: serve a cached copy of a response from the nearest edge node instead of making every user's request travel all the way to your origin.\n\nThe win is physics, not cleverness — light (and therefore network signals) takes time to travel. A user in Singapore fetching an asset from a US-only origin might see 200ms of pure network latency before any processing even starts; the same asset served from a Singapore edge node might take 10ms.\n\nCDNs classically cache static assets (images, CSS, JS, video), but modern CDNs increasingly cache dynamic and API responses too, which is where the freshness rules on the next slides start to matter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cdn-and-edge-caching-s02-q1"
+      ]
+    },
+    {
+      "id": "cdn-and-edge-caching-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: request flow with a CDN in front of origin",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![CDN edge node serving a cache hit and fetching on a miss](assets/cdn-edge-flow.svg)\n\nOn a hit, the origin server never even learns the request happened — the edge node answers alone, and the user gets it at edge-to-user latency, not edge-to-origin-and-back latency.\n\nOn a miss, the edge node does a round trip to origin, caches what it gets back, then serves it — meaning the *first* user to request something from a given edge location pays the full latency, and every subsequent nearby user gets the fast path.",
+      "assets": [
+        {
+          "alt": "CDN edge node serving a cache hit and fetching on a miss",
+          "path": "assets/cdn-edge-flow.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "cdn-and-edge-caching-s04",
+      "order": 4,
+      "sectionTitle": "Cache-Control, ETag, and how the client/CDN decide freshness",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The origin server tells caches how to behave via HTTP headers. **`Cache-Control: max-age=3600`** says \"treat this as fresh for one hour, no need to re-check.\" **`ETag`** is a fingerprint of the response body; when a cached copy's max-age has passed, the cache can send a conditional request with `If-None-Match: <etag>` — if the content hasn't actually changed, the origin replies `304 Not Modified` with no body, confirming the cache can keep serving its copy without re-downloading anything.\n\nThis combination lets a CDN avoid two failure modes: serving stale content forever (max-age bounds it), and re-downloading unchanged content on every expiry (ETag validation avoids that when nothing actually changed).\n\nGetting these headers wrong at the origin is one of the most common real-world CDN bugs — a missing or overly short `Cache-Control` silently defeats most of the CDN's benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cdn-and-edge-caching-s04-q1"
+      ]
+    },
+    {
+      "id": "cdn-and-edge-caching-s05",
+      "order": 5,
+      "sectionTitle": "Compare: caching static assets vs caching dynamic/API responses",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Static assets (images, CSS, JS) | Dynamic/API responses |\n|---|---|---|\n| Change frequency | Rare — often only on deploy | Frequent — can change per request |\n| Cache duration | Long (hours to \"forever\" with versioned filenames) | Short (seconds) or not cached at all |\n| Per-user variation | None — identical for everyone | Often yes — personalized or authenticated |\n| Typical header | Long `max-age`, often `immutable` | Short `max-age`, or `Cache-Control: private`/`no-store` |\n\n**How to decide:** cache static assets aggressively and rely on versioned filenames (from [cache invalidation](cache-invalidation)) to bust old copies on deploy; treat dynamic responses as cacheable only when you can prove they're genuinely identical across users, and use short TTLs even then.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "cdn-and-edge-caching-s05-q1"
+      ]
+    },
+    {
+      "id": "cdn-and-edge-caching-s06",
+      "order": 6,
+      "sectionTitle": "Cache purging/invalidation across CDN edge nodes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When origin content changes before a cached copy's `max-age` expires, someone has to actively **purge** the stale copy from every edge node that might hold it — potentially hundreds of locations worldwide. Most CDN providers expose a purge API for exactly this: purge by exact URL, by a wildcard path pattern, or by a cache tag attached at write time.\n\nPurging at global scale isn't instant — it typically takes anywhere from under a second to a couple of minutes to fully propagate, depending on the provider, so there's a brief window where some edge locations still serve the old content after a purge is triggered.\n\nThe more scalable pattern for content that changes often is to avoid purging altogether: use short TTLs plus versioned URLs, so old content simply expires on its own instead of needing an explicit, propagating purge.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "cdn-and-edge-caching-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: caching a personalized/authenticated response at a shared edge node",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This API response is served from the same URL for every user, so it's safe to cache it at the CDN.\"\n\n**Why it's wrong:** the same URL can return *different* content per user — an account dashboard, a personalized recommendation feed, a page rendered with an auth cookie. A shared edge node caching that response means the **first** user to hit it determines what every subsequent user at that edge location sees, potentially leaking one user's private data to another.\n\n**Correct model:** mark personalized or authenticated responses `Cache-Control: private` (cacheable only in the requester's own browser, never at a shared edge node) or `no-store` (not cached anywhere). Only cache a URL at a shared CDN edge if you can prove the response is genuinely identical for every requester.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cdn-and-edge-caching-s07-q1"
+      ]
+    }
+  ]
+}

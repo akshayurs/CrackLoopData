@@ -1,0 +1,128 @@
+{
+  "id": "geo-routing-and-failover",
+  "title": "Routing Users to a Region",
+  "area": "system-design",
+  "group": "geo-distribution",
+  "order": 3,
+  "slug": "geo-routing-and-failover",
+  "summary": "GeoDNS, latency-based routing, and anycast get a request to the right region day-to-day — but DNS TTLs and sticky client caches are exactly what quietly breaks the moment a region fails over.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "geo-routing-and-failover-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Having multiple regions only helps if requests actually reach the right one — and \"right\" changes the instant a region goes down. **Routing** is the layer that decides which region serves a given request, both in steady state and during failover.\n\nThis topic covers the two dominant approaches — **DNS-based routing** (GeoDNS, latency-based) and **anycast** — and, just as important, what quietly breaks during failover: stale DNS caches, sticky clients, and in-flight connections that don't know their region just died.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "geo-routing-and-failover-s02",
+      "order": 2,
+      "sectionTitle": "GeoDNS and latency-based routing: sending users to their nearest healthy region",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**GeoDNS** answers a DNS query based on the requester's geographic location — a resolver in Tokyo gets the IP of your Asia region, a resolver in Frankfurt gets Europe. **Latency-based routing** goes a step further and answers based on measured or estimated network latency rather than raw geography, since the geographically nearest region isn't always the fastest to reach.\n\nBoth work at the DNS layer: the client's resolver asks \"what's the IP for `api.example.com`,\" and the answer differs depending on where that query came from. This is the same mechanism covered in [DNS-based and global load balancing](dns-based-and-global-load-balancing), just applied across regions instead of instances within one.\n\nThe practical benefit: no client-side logic needed — ordinary DNS resolution sends each user toward a sensible region automatically.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "geo-routing-and-failover-s02-q1"
+      ]
+    },
+    {
+      "id": "geo-routing-and-failover-s03",
+      "order": 3,
+      "sectionTitle": "Anycast: one IP, many regions, routing decided by the network layer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Anycast** takes a different approach entirely: the same IP address is announced from multiple regions at the network routing layer (BGP), and the internet's own routing infrastructure delivers each packet to whichever announcing location is topologically nearest at that moment — no DNS lookup differentiation involved.\n\nBecause routing happens per-packet at the network layer rather than being cached in a DNS answer, anycast reacts to a region disappearing almost immediately: if one location stops announcing the route, traffic simply flows to the next-nearest announcing location within the time it takes routing tables to converge, typically seconds.\n\nThe cost is operational: anycast requires control over BGP announcements, which most teams don't manage directly — it's typically something you get from a CDN or specialized network provider, not something you configure at the application layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "geo-routing-and-failover-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a request's routing path under normal operation",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A client resolves a DNS query through a resolver to authoritative GeoDNS, then sends its request directly to the returned region's load balancer](assets/geodns-routing-path.svg)\n\nThe DNS step and the actual request are two separate network trips: first the client resolves a name to an IP (consulting GeoDNS or an anycast address), then it sends the real request to whatever IP it got back.\n\nThat separation is exactly where staleness enters the system — the resolved IP can outlive its usefulness if the region it points to goes down before the client resolves again.",
+      "assets": [
+        {"alt": "A client resolves a DNS query through a resolver to authoritative GeoDNS, then sends its request directly to the returned region's load balancer", "path": "assets/geodns-routing-path.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "geo-routing-and-failover-s05",
+      "order": 5,
+      "sectionTitle": "What breaks on failover: DNS TTLs, sticky caches, in-flight connections",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three things quietly undermine a failover that looks clean on paper. **DNS TTLs**: a resolved IP is cached by the client's resolver for the TTL duration — even a modest TTL means some fraction of clients keep hitting the dead region until their cache expires. **Sticky client caches**: many resolvers and browsers cache DNS answers longer than the TTL actually specifies, ignoring it outright. **In-flight connections**: a request already in progress to the failed region doesn't get rerouted mid-flight — it simply times out and the client has to retry from scratch.\n\nNone of these are edge cases — they affect a real, sometimes large, percentage of traffic during every failover, which is why \"we updated DNS\" is not the same claim as \"traffic has moved.\"\n\nThe fix is layered: keep TTLs low deliberately, pair DNS routing with health checks that pull a dying region out before full failure, and design clients to retry against a fresh resolution rather than reusing a cached connection indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "geo-routing-and-failover-s05-q1"
+      ]
+    },
+    {
+      "id": "geo-routing-and-failover-s06",
+      "order": 6,
+      "sectionTitle": "Health-based routing: pulling a region out of rotation before users notice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Health-based routing** layers active health checks on top of GeoDNS or anycast: an external monitor continuously probes each region, and the moment a region fails its health check, DNS answers (or anycast announcements) stop including that region — new lookups route around it automatically.\n\nThis converts failover from a manual \"someone notices the outage and updates config\" process into an automatic one, bounded by how fast the health check detects failure and how fast that change propagates through TTLs or route convergence. A health check running every 10 seconds with a 30-second TTL bounds worst-case exposure to well under a minute for new lookups — though clients still holding a stale cached answer are a separate problem.\n\nThe key design choice is the health check itself: checking that a load balancer responds is not the same as checking that the region can actually serve real traffic end to end.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "geo-routing-and-failover-s07",
+      "order": 7,
+      "sectionTitle": "Compare: DNS-based failover vs anycast failover",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | DNS-based failover | Anycast failover |\n|---|---|---|\n| Detection-to-reroute speed | Bounded by TTL + resolver caching behavior — seconds to minutes | Bounded by BGP route convergence — typically seconds |\n| New vs in-flight connections | Only affects clients that re-resolve; stale caches keep hitting the dead region | Can reroute new packets fast; existing TCP connections still drop |\n| Operational control | Configurable by any team with a DNS provider | Requires BGP-level control, usually via a CDN or specialized network provider |\n| Failure blast radius during transition | Uneven — depends on each client's cache state | More uniform — network-layer routing applies to all traffic together |\n\n**How to decide:** if you don't control BGP or don't need sub-minute failover, DNS-based routing with low TTLs and health checks is sufficient and far cheaper to operate; reach for anycast when failover speed and uniformity matter enough to justify network-layer control, typically through a CDN that already provides it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "geo-routing-and-failover-s07-q1"
+      ]
+    },
+    {
+      "id": "geo-routing-and-failover-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a 60-second TTL that becomes a 10-minute outage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our DNS TTL is 60 seconds, so failover completes within a minute.\"\n\n**Why it's wrong:** the TTL you set is a suggestion, not a guarantee — many public resolvers and client operating systems cache answers well past the stated TTL, and some corporate or ISP resolvers cache for far longer regardless of what you specify. A 60-second TTL on paper can mean 10 minutes or more of real clients still resolving to the dead region, because the actual cache duration is decided by resolvers you don't control.\n\n**Correct model:** treat TTL as a lower bound on failover time for well-behaved clients, not an upper bound for all of them. Pair low TTLs with health-based routing to stop new lookups from returning the dead region as early as possible, and accept that some fraction of already-cached clients will keep failing until their cache independently expires — design retries and client-side fallback logic around that reality instead of assuming DNS alone will cut over cleanly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "geo-routing-and-failover-s08-q1"
+      ]
+    }
+  ]
+}

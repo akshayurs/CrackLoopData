@@ -1,0 +1,178 @@
+{
+  "id": "iv-singleton-problems-and-thread-safety",
+  "title": "What's wrong with Singleton, and how do you make it thread-safe?",
+  "area": "system-design",
+  "group": "interview-lld-patterns",
+  "order": 4,
+  "slug": "iv-singleton-problems-and-thread-safety",
+  "summary": "One of the most-asked pattern questions in LLD rounds — name the design smell first, then fix the classic race condition.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Singleton questions show up constantly because Singleton is the pattern most candidates reach for reflexively, and most implementations of it that candidates write live are subtly broken under concurrency. The interviewer usually wants two things in one answer: name the design smells Singleton carries, then fix the thread-safety bug in the naive implementation.\n\nAnswering only the mechanics (\"here's double-checked locking\") without naming the smell misses half the question; answering only the smell without a working fix misses the other half.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: are they asking about the pattern's design smell, or the thread-safety mechanics?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It's worth asking which half they want first, since the two require different depth. \"Are you looking for why Singleton is considered an anti-pattern in some contexts, or specifically how to make the lazy-initialization race condition safe?\" This single question shows you know the topic has two distinct, commonly-tested layers, and lets you lead with whichever one earns credit fastest.\n\nMost interviewers actually want both eventually — the clarifying question just controls the order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name the smells (hidden dependency, untestable, global state), then the thread-safety fix",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the smells first: a [Singleton](singleton-pattern) is a hidden global dependency (any code can reach it without it appearing in a constructor signature), it's hard to unit test (you can't easily substitute a fake), and it's global mutable state if it holds anything beyond read-only config.\n\nThen the mechanics: a naive lazy-initialized Singleton has a real race condition when two threads call `getInstance()` at the same time before the first call finishes constructing it — the fix is double-checked locking, an eager holder class, or (simplest) an enum.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "iv-singleton-problems-and-thread-safety-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s04",
+      "order": 4,
+      "sectionTitle": "Code: a naive singleton race condition under concurrent first access",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Config {\n    private static Config instance;\n    static Config getInstance() {\n        if (instance == null) {\n            instance = new Config(); // not atomic — two threads can both pass the null check\n        }\n        return instance;\n    }\n}\n```\n\nUnder concurrent first access, two threads can both see `instance == null`, both construct a `Config`, and one of them silently discards its work — or worse, callers on different threads end up holding two different \"singleton\" instances.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-singleton-problems-and-thread-safety-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s05",
+      "order": 5,
+      "sectionTitle": "Code: the fixed version — double-checked locking or an eager holder class",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "**Double-checked locking** (needs `volatile`):\n\n```java\nclass Config {\n    private static volatile Config instance;\n    static Config getInstance() {\n        if (instance == null) {\n            synchronized (Config.class) {\n                if (instance == null) instance = new Config();\n            }\n        }\n        return instance;\n    }\n}\n```\n\n**The simpler eager-holder alternative**, using the JVM's own class-loading guarantee instead of manual [locking](synchronization-techniques-in-oo-design):\n\n```java\nclass Config {\n    private static class Holder { static final Config INSTANCE = new Config(); }\n    static Config getInstance() { return Holder.INSTANCE; }\n}\n```\n\nThe holder class is only loaded (and `INSTANCE` constructed) on first access to `getInstance()`, and the JVM guarantees class initialization itself is thread-safe — no explicit lock needed.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s06",
+      "order": 6,
+      "sectionTitle": "Code: the enum-based singleton — the idiomatic fix that sidesteps the whole race entirely",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nenum Config {\n    INSTANCE;\n    void doSomething() { /* ... */ }\n}\n```\n\nJava guarantees enum constants are constructed exactly once, thread-safely, by the JVM itself — this sidesteps the whole race condition category rather than fixing it with locks. It's also serialization-safe by default, which the other two approaches need extra code to get right. The tradeoff: it reads unusually to developers unfamiliar with the idiom, so naming *why* it works is worth doing out loud.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"how do you unit test code that depends on a singleton?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the smell coming back to bite you concretely. Code that calls `Config.getInstance()` directly can't substitute a test double, because the dependency is hidden inside the method body rather than passed in. The fix is [dependency injection](dependency-injection-and-testability): pass the `Config` instance (or an interface it implements) into the constructor of whatever needs it, and let a real singleton — or a test fake — be supplied from outside.\n\nSaying \"this is exactly why Singleton is hard to test, and here's the DI fix\" turns the smell you named earlier into a concrete, testable improvement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-singleton-problems-and-thread-safety-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"what does a DI container replace this with?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A DI container replaces manual `getInstance()` calls with **scope management**: you register `Config` as a singleton-scoped bean, and the container hands the same instance to every class that declares a dependency on it — but through constructor injection, not a static method call.\n\nThe result keeps the *one instance* property Singleton wanted, while removing the hidden-dependency and untestability problems, since the container can hand out a fake implementation during tests without any production code changing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"construction is now thread-safe — what still breaks if the singleton holds mutable state accessed by multiple threads later?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Construction being thread-safe doesn't make the singleton thread-safe overall. If `Config` holds a mutable field — a cache `Map`, a counter — that multiple threads read and write after construction, you now have classic shared-mutable-state races: lost updates, torn reads, visibility bugs, none of which the construction fix touches.\n\nThe correct answer names this explicitly: use a thread-safe collection (`ConcurrentHashMap`), synchronize the mutating methods, or make the singleton's state immutable and swap the whole reference instead of mutating in place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: fixing thread safety but never addressing why Singleton is a smell in the first place",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak belief:** demonstrating double-checked locking correctly and stopping there.\n\n**Why it's weak:** the question is testing two things, and fixing only the mechanics answers half of it — an interviewer who then asks \"but is Singleton even a good idea here?\" is checking whether you noticed the smell at all.\n\n**Correct model:** always volunteer the design-smell half unprompted — hidden dependency, poor testability, global mutable state — even when the question sounds like it's only asking for the thread-safety fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 47,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: \"just make every field volatile\" as a substitute for actually protecting the invariant",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just mark every field `volatile` and the singleton is thread-safe.\"\n\n**Why it's wrong:** `volatile` only guarantees visibility of a single variable's latest write across threads — it does nothing for compound operations like \"read the counter, increment it, write it back,\" which still race even with `volatile` on the field.\n\n**Correct model:** protect the actual invariant (e.g. an atomic increment via `AtomicInteger`, or a `synchronized` block around the whole read-modify-write) rather than sprinkling `volatile` as a substitute for real synchronization.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-singleton-problems-and-thread-safety-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-singleton-problems-and-thread-safety-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the smell first — hidden dependency, poor testability, global mutable state — then the mechanics: naive lazy init races under concurrent first access; fix it with double-checked locking, an eager holder class, or (simplest) an enum. Note that construction safety doesn't cover mutable state added later — that needs its own protection.\n\nClose with the DI angle: a container gives you the one-instance property without the hidden-dependency problem, by injecting rather than statically fetching.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

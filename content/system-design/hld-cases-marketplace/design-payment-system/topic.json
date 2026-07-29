@@ -1,0 +1,186 @@
+{
+  "id": "design-payment-system",
+  "title": "Design a Payment System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 6,
+  "slug": "design-payment-system",
+  "summary": "Move money exactly once and be able to prove it afterward — ledger correctness and reconciliation matter more here than raw throughput.",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-payment-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: charge a customer, pay out a merchant, and never lose or duplicate a single unit of money — even across network failures, retries, and an external processor you don't control.\n\nThis is [checkout's](design-ecommerce-checkout-system) payment step, zoomed all the way in. Where checkout treats \"charge payment\" as one saga step, this topic is about what has to be true *inside* that step for it to be trustworthy: every movement of money recorded so it can be audited, replayed, and reconciled after the fact.\n\nThroughput is rarely the hard constraint here — correctness and provability are.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-payment-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** charge a customer's payment method, refund a charge, pay out a merchant, and expose a queryable, trustworthy transaction history.\n\n**Non-functional:** **exactly-once** semantics on every money-moving operation (not \"probably once\" — a retry must never move money twice); full **auditability** — every balance must be explainable as a sum of discrete, traceable entries; **regulatory retention** — financial records typically must be kept for years, immutably.\n\nThe framing: most systems trade some correctness for speed under load. A payment system doesn't get to make that trade — the bar is exactly-once and provable, full stop, and everything else is designed around meeting that bar without becoming unusably slow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-payment-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: transactions/sec vs the correctness bar",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A large payment platform might process a few thousand transactions per second at peak — high, but far below the hundreds of thousands of requests/sec typical read-heavy systems handle. The number that actually matters isn't throughput; it's the **cost of getting one transaction wrong**.\n\nA social feed serving a stale post for a few seconds is invisible to the user. A payment system double-charging one customer in a million, at a few thousand transactions/sec, is thousands of real, well-documented incidents a day at scale — each with a real customer, a real dispute, and a real regulator watching. Design for correctness first; the throughput numbers here are comfortably achievable once correctness isn't being sacrificed for speed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-payment-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-payment-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface: charge() and why the idempotency key isn't optional",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- `charge(idempotencyKey, customerId, amount, paymentMethod)` — moves money from customer to platform.\n- `refund(chargeId, amount)` — reverses some or all of a prior charge.\n- `payout(merchantId, amount)` — moves money from platform to merchant.\n\nEvery money-moving call takes an `idempotencyKey`, and here it's not a nice-to-have retry-safety measure — it's the entire mechanism by which \"exactly-once\" is achievable at all over an unreliable network. Without it, there is no way to distinguish \"the client is retrying a request that already succeeded\" from \"the client wants a second, separate charge\" — and guessing wrong in either direction is a real-money mistake.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-payment-system-s05",
+      "order": 5,
+      "sectionTitle": "Data model: a double-entry ledger, not a balance column",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The tempting shortcut is a `balance` column per account, incremented and decremented as money moves. It's also how you lose the ability to explain *how* a balance got to be what it is — a single number has no memory of the transactions that produced it.\n\nThe correct model, borrowed straight from accounting, is a **double-entry ledger**: every transaction writes *two* balanced entries — a debit on one account and a credit on another, always summing to zero across the pair. A $50 charge isn't \"add $50 to platform balance\"; it's \"debit customer-owed $50, credit platform-revenue $50.\" An account's balance becomes a derived value — the sum of its ledger entries — not a mutable field that can silently drift from reality.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-payment-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-payment-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: a charge as a ledger entry pair",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A $50 charge as two immutable, linked ledger entries, versus a single mutable balance field](assets/ledger-entry-pair.svg)\n\nBoth entries are written together, atomically, and never edited afterward — a correction is a *new* pair of entries reversing the old ones, not an edit to history.\n\nThis immutability is what makes the ledger auditable: you can always reconstruct exactly how a balance came to be, transaction by transaction.",
+      "assets": [
+        {"alt": "A $50 charge as two immutable, linked ledger entries, versus a single mutable balance field", "path": "assets/ledger-entry-pair.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-payment-system-s07",
+      "order": 7,
+      "sectionTitle": "Idempotency keys against double-charging",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A card network round-trip can time out from the client's perspective even though the charge actually succeeded — the client genuinely cannot tell the difference between \"it failed\" and \"it succeeded but the response was lost.\" Retrying blindly risks a second real charge against a real card.\n\nThe fix mirrors [idempotency and exactly-once](idempotency-and-exactly-once) generally: the server records the outcome of a `charge` call keyed by the client's `idempotencyKey` *before* returning, and any retry with that same key gets the stored outcome replayed rather than a new charge attempt. The subtlety unique to payments: this record must be written durably before the response is sent, or a crash between \"processor confirmed\" and \"we recorded it\" recreates the exact ambiguity idempotency was meant to remove.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-payment-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-payment-system-s08",
+      "order": 8,
+      "sectionTitle": "Reconciliation: matching your ledger against the processor",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Even a well-built idempotent system can drift from the external processor's own records — a webhook you never received, a charge the processor logged that your service crashed before recording. **Reconciliation** is the periodic (often daily) job that pulls the processor's authoritative transaction report and diffs it against your ledger, flagging any mismatch.\n\nThis isn't a backup plan for a broken system — it's a standing, expected part of the design: any system integrating with an external processor over a network will accumulate small discrepancies, and reconciliation is how they get caught and corrected before they compound into real financial or audit problems.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-payment-system-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: end-to-end flow with async reconciliation",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Synchronous charge path from client to ledger, with an async reconciliation job diffing the processor's report separately](assets/payment-flow.svg)\n\nThe customer-facing path is synchronous and as short as possible — client to processor to ledger — while reconciliation runs entirely out of band, on its own schedule, never blocking a live charge.\n\nThat separation is deliberate: reconciliation's job is to catch rare drift after the fact, not to gate every transaction on a slow batch process.",
+      "assets": [
+        {"alt": "Synchronous charge path from client to ledger, with an async reconciliation job diffing the processor's report separately", "path": "assets/payment-flow.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-payment-system-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: the synchronous call to an external processor",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The slowest, least controllable part of a charge is the network round-trip to the card network or processor — often 200ms-2s, entirely outside your infrastructure, and subject to the processor's own load and outages. Every charge on the critical checkout path waits on this call.\n\nYou can't optimize away a dependency you don't own, so the design response is defensive: strict timeouts with a clear, recorded outcome either way (never leave a charge in permanent limbo), and treating \"processor is slow\" as an expected, monitored condition rather than an exceptional one — including surfacing it to checkout so it can decide whether to retry, fail, or queue the order for later confirmation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-payment-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-payment-system-s11",
+      "order": 11,
+      "sectionTitle": "Compare: strong consistency on the ledger vs eventual consistency on balance views",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Ledger writes | Account-balance views |\n|---|---|---|\n| Consistency need | Strong — every entry must be durable and correctly ordered before being considered committed | Can tolerate a short lag — a dashboard balance being a few seconds stale rarely matters |\n| Why | The ledger is the source of truth for audits and disputes; an inconsistency there is a real financial error | It's a derived, read-optimized aggregate of ledger entries, recomputed or cached periodically |\n| Cost of getting it wrong | High — money is provably lost, duplicated, or misattributed | Low — a stale balance shown for a few seconds and then corrected |\n\n**How to decide:** never relax consistency on the ledger writes themselves, but freely cache or lag the read-side balance views computed from it — the two have completely different failure costs, so they can and should have different consistency guarantees.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-payment-system-s11-q1"
+      ]
+    },
+    {
+      "id": "design-payment-system-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: a single balance column instead of an immutable ledger",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A balance column is simpler, and I can always add a transaction log alongside it later if I need history.\"\n\n**Why it's wrong:** a mutable balance field has no built-in guarantee that it matches the sum of what actually happened — a bug, a race condition, or a bad migration can silently desync the balance from reality, and without an immutable record of every movement, there's nothing to reconcile against to even detect the drift, let alone fix it.\n\n**Correct model:** the ledger of immutable entries is the source of truth from day one; any balance shown to a user or used in business logic is *computed from* the ledger, never stored as an independently-mutable value. Retrofitting this after launch means reconstructing history you may no longer have.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-payment-system-s12-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "id": "iv-replication-lag-impact",
+  "title": "Replication lag just spiked — what breaks, and how do you defend against it?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 2,
+  "slug": "iv-replication-lag-impact",
+  "summary": "Tests whether you can name concrete failure symptoms of replication lag and a real mitigation, not just repeat that replicas can lag.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-replication-lag-impact-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Replicas can be stale\" is the vague, ungraded version of this answer. The interviewer wants the concrete version: which symptom shows up first, where it surfaces, and what you'd actually build to catch it before users complain.\n\nThis topic gives you that path — from the abstract fact that replication has lag, to a specific number, a specific user-visible failure, and a specific mitigation you can defend.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-replication-lag-impact-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask where reads actually go: if every read hits the primary, replication lag is invisible to users no matter how large it gets — it only matters once **reads are routed to replicas** for scale. That single question reframes the whole answer.\n\nAlso ask whether this is a single-region setup with millisecond replication, or cross-region with tens or hundreds of milliseconds baseline lag — the failure mode and the fix both change with that number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-replication-lag-impact-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: symptom, then mitigation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Structure the answer as **symptom → mitigation**, not \"lag exists.\" Symptom: a user's own write disappears on refresh, or two users see contradictory states of the same object. Mitigation: read-after-write routing to the primary for a short window, lag monitoring with an alert threshold, and replica health checks that pull a lagging node out of rotation.\n\nNaming the mitigation before being asked is the difference between describing a problem and designing a system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-replication-lag-impact-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-replication-lag-impact-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a comment disappears on refresh",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Replication lag makes a fresh write vanish](assets/replication-lag-sequence.svg)\n\nA user posts a comment, the write lands on the primary, and their very next request — a page refresh — gets routed by the load balancer to a replica that hasn't caught up yet. The comment they just wrote is simply absent from the response.\n\nThis is the single most common way replication lag becomes a support ticket: not \"data is eventually consistent\" in the abstract, but \"my own action just got undone,\" which reads as a bug even when the system is working exactly as designed.",
+      "assets": [{"alt": "Replication lag makes a fresh write vanish", "path": "assets/replication-lag-sequence.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-replication-lag-impact-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: lag jumping from 50ms to 8 seconds",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A concrete worked number: replication lag normally sits around 50ms, then a bulk write job (a nightly import, a backfill migration) saturates the primary's write throughput and the replication stream falls behind — lag jumps to 8 seconds.\n\n```\nlag_ms = replica.applied_offset_lag(primary.wal_position)\n# normal:   lag_ms ≈ 50\n# incident: lag_ms ≈ 8000   during the bulk job window\n```\n\nAt 50ms, almost no read-after-write case notices. At 8 seconds, any user who acts and then reads within that window — which is most users — sees stale or missing data. The failure isn't replication itself; it's the bulk job's write volume overwhelming the replication pipeline's normal capacity.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-replication-lag-impact-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-replication-lag-impact-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a lag-monitoring alert before users complain",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Naming the proactive piece matters as much as the reactive fix: an alert fires the moment replication lag on any replica crosses a stated threshold — say, 2 seconds — well before enough users hit the read-after-write window to start filing tickets.\n\nThe threshold itself should be a product decision, not an arbitrary engineering number: pick it based on how long after writing a typical user is likely to read their own data again, then alert comfortably below that.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-replication-lag-impact-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Routing more reads to the primary to dodge lag protects correctness but removes the scaling benefit replicas exist for.** Replicas exist specifically to take read load off the primary — sending reads back to it defeats that purpose for the traffic you route back.\n\n| Choice | You pay in | You gain |\n|---|---|---|\n| Route all reads to primary | Primary becomes the bottleneck again | Zero staleness |\n| Route reads to replicas | Replicas can serve stale data during lag spikes | Real horizontal read scaling |\n| Route only the writer's own reads to primary | A short window of extra primary load, per writer | Read-your-writes without losing general scaling |\n\nThe third row is usually the answer worth defending — it targets the fix at exactly the users who'd notice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-replication-lag-impact-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-replication-lag-impact-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how would you even detect lag has grown?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the concrete signal: every replica can report how far behind the primary's write position it is — a log sequence number or WAL offset gap, converted to a time estimate. Emit that as a metric per replica, graph it, and alert on it crossing a threshold.\n\nDon't rely on user complaints as your detection mechanism — by the time someone reports stale data, the lag has likely been elevated for a while. A dashboard showing lag per replica, refreshed every few seconds, is the concrete artifact to name here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-replication-lag-impact-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: fix the symptom or the root cause?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the bulk write job is the actual cause, routing reads around lag treats the symptom, not the disease — the right long-term fix is throttling or rescheduling the bulk job (running it at low-traffic hours, rate-limiting its write rate, or running it against a dedicated replica that read traffic never touches).\n\nSay both: a short-term mitigation to stop the bleeding now, and a root-cause fix so the same incident doesn't recur next time the job runs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-replication-lag-impact-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming lag is always milliseconds",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Replication lag is a few milliseconds, so it's not worth designing around.\"\n\n**Why it's wrong:** lag is only milliseconds under normal load. A bulk job, a network blip, or a replica falling behind on disk I/O can push it to seconds and, in genuinely bad cases, minutes — and that's exactly when the largest number of users are reading data they (or someone else) just wrote.\n\n**Correct model:** budget for a multi-second lag spike as a normal operating condition, not an outage, and design the read path (monitoring, routing, alerting) around that assumption from the start.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-replication-lag-impact-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-replication-lag-impact-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Replication lag isn't abstract — it shows up as a user's own write vanishing on refresh, or two readers seeing contradictory state. I'd name the concrete symptom, then the mitigation: read-after-write routing for the writer's own reads, a lag-monitoring alert well below the threshold where users would notice, and health checks that pull a badly lagging replica out of rotation. I'd also chase the root cause — often a bulk job saturating the replication stream — rather than only routing around the symptom.\"\n\nSee [synchronous-vs-asynchronous-replication](synchronous-vs-asynchronous-replication) for why this lag exists in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

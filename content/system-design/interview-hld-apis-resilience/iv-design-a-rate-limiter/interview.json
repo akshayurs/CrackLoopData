@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-a-rate-limiter",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-a-rate-limiter-iq1",
+      "question": "Design a rate limiter for this API.",
+      "answerMarkdown": "I'd start by asking whether the limit is per-user, per-IP, or per-API-key, and whether the client's traffic is bursty or expected to be smooth — that decides my algorithm. For bursty traffic, like a mobile client that batches requests, I'd use a token bucket sized to absorb a realistic burst; for a hard, smooth limit, I'd use a sliding window instead of a fixed window, since fixed windows can allow up to 2x the limit right at a window boundary.\n\nFor the mechanics: I'd centralize the counter in Redis using an atomic INCR-plus-EXPIRE or a Lua script for token-bucket math, so all app servers agree on the count instead of each keeping an inconsistent local counter. I'd scope limits per tenant so one heavy caller can't exhaust the budget for everyone else.\n\nI'd close with the failure mode: if Redis itself goes down, I'd fail open rather than fail closed, since an outage in the safety net shouldn't take down the whole API.\n\n**Testing:** whether you can defend both the algorithm choice and the distributed-counter mechanics, not just recite \"we'd use a token bucket.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing a rate limiter"
+    },
+    {
+      "id": "iv-design-a-rate-limiter-iq2",
+      "question": "Redis is now a single point of failure for every API call because your rate limiter depends on it — how do you protect against that?",
+      "answerMarkdown": "I'd fail open rather than fail closed: if the rate limiter can't reach Redis, let requests through unlimited for that brief window instead of rejecting every request outright.\n\nThe reasoning is about relative cost — the rate limiter exists to protect the API from overload, but if checking the limiter itself becomes a hard dependency for every request, a Redis blip turns into a full outage of the product it was meant to protect. Briefly unlimited traffic during a rare, short Redis outage is a much smaller cost than the API being completely unreachable.\n\nI'd pair this with monitoring on the fail-open rate itself, so a prolonged Redis outage that leaves the API genuinely unprotected gets escalated quickly, and I'd make sure the failure detection has a tight timeout so a slow Redis doesn't add much latency before falling back.\n\n**Testing:** whether you know a safety mechanism shouldn't become a harder dependency than what it protects.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Rate limiter's own dependency failing"
+    },
+    {
+      "id": "iv-design-a-rate-limiter-iq3",
+      "question": "How do you rate-limit fairly when one tenant sends 1000x the traffic of everyone else?",
+      "answerMarkdown": "I'd scope the rate limit per tenant or API key rather than using one global counter shared across every caller. Each tenant gets its own budget, so a tenant sending 1000x normal traffic only ever exhausts its own allocation, never the shared headroom every other tenant depends on.\n\nConcretely, that means the counter key in Redis includes the tenant or API-key identifier, not just the endpoint — `ratelimit:orders:tenant_42` instead of `ratelimit:orders`. I'd also consider tiered limits, where a tenant on a higher plan gets a proportionally larger budget, so \"fair\" reflects the actual business relationship, not a flat per-tenant cap.\n\nI'd flag that this doesn't fully solve capacity planning — if every tenant simultaneously used their max budget, the backend still needs to handle that aggregate load, which is a separate capacity conversation.\n\n**Testing:** whether you think about fairness at the level of isolation between callers, not just a single aggregate limit.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Per-tenant fairness in rate limiting"
+    }
+  ]
+}

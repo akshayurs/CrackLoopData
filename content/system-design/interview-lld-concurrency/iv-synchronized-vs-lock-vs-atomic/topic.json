@@ -1,0 +1,165 @@
+{
+  "id": "iv-synchronized-vs-lock-vs-atomic",
+  "title": "synchronized vs Lock vs atomic — how do you choose?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 2,
+  "slug": "iv-synchronized-vs-lock-vs-atomic",
+  "summary": "A decision table, not a preference: pick by what's actually shared, then defend the two tools you didn't pick.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This question tests judgment, not memorized keywords: interviewers rarely want a lecture on Java's concurrency primitives — they want you to pick one for a specific shared-state problem and defend why the other two are worse fits here.\n\nTreat it as a decision table, not a preference ranking. The three tools are `synchronized`, an explicit `Lock`, and atomic types — each earns its place for a different shape of shared state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: single variable, or multiple fields that must change together?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The first fork: are you protecting a **single variable**, or **multiple fields that must change together**? A plain `AtomicInteger` or `AtomicReference` only guarantees atomicity for one variable's read-modify-write; the moment two or more fields must move as a unit, no single atomic type covers it and you need a lock instead.\n\nAsk this before naming a tool — it eliminates one of the three options immediately in most versions of this question, and shows you're diagnosing rather than reciting.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-synchronized-vs-lock-vs-atomic-s02-q1"
+      ]
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: atomic for a single variable, synchronized for simple mutual exclusion, explicit Lock for advanced control",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pick by what's actually shared. **Atomic** for a single variable under a simple update — counters, flags, references swapped whole. **`synchronized`** for straightforward mutual exclusion over a few fields, when you need nothing fancier than \"one thread at a time.\" An explicit **`Lock`** (`ReentrantLock`) when you need something `synchronized` can't give you — a timeout via `tryLock`, interruptibility, fairness ordering, or multiple condition variables on one lock.\n\nNaming criteria, not folklore (\"`Lock` is newer\"), is what separates a real answer from a memorized one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s04",
+      "order": 4,
+      "sectionTitle": "Code: the same increment problem solved three ways",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\n// synchronized\nclass SyncCounter {\n    private int count = 0;\n    public synchronized void increment() { count++; }\n    public synchronized int get() { return count; }\n}\n\n// explicit Lock\nclass LockCounter {\n    private int count = 0;\n    private final Lock lock = new ReentrantLock();\n    public void increment() {\n        lock.lock();\n        try { count++; } finally { lock.unlock(); }\n    }\n}\n\n// atomic\nclass AtomicCounter {\n    private final AtomicInteger count = new AtomicInteger(0);\n    public void increment() { count.incrementAndGet(); }\n}\n```\n\nSame invariant, three implementations. Note the `Lock` version's `try`/`finally` — unlocking must happen even if the body throws, or the lock leaks forever. The atomic version needs no explicit locking code; the safety lives inside the class.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-synchronized-vs-lock-vs-atomic-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s05",
+      "order": 5,
+      "sectionTitle": "Compare: synchronized vs Lock vs atomic — fairness, interruptibility, composability",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | `synchronized` | `Lock` (`ReentrantLock`) | Atomic types |\n|---|---|---|---|\n| Fairness | No control | Optional fair-mode constructor | N/A — no queuing |\n| Interruptible wait | No — blocks until acquired | Yes, via `lockInterruptibly()` | N/A |\n| Timeout | No | Yes, via `tryLock(timeout)` | N/A |\n| Composability | One critical section per block | Multiple locks/conditions composable | Only single-variable ops compose |\n\n**How to decide:** need a timeout, interruptibility, or more than one condition variable? Reach for `Lock`. Protecting one variable with a simple update? Reach for an atomic. Otherwise `synchronized` is simpler and just as correct. For the design-level theory behind this choice, see [synchronization techniques in OO design](synchronization-techniques-in-oo-design).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s06",
+      "order": 6,
+      "sectionTitle": "Code: a case where none of the three alone is enough — a compound check-and-update across two atomics that still needs a lock",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Even the right individual tool isn't automatically enough. Two independent atomics don't protect an invariant spanning both:\n\n```java\nclass Account {\n    private final AtomicInteger balance = new AtomicInteger(100);\n    private final AtomicInteger pending = new AtomicInteger(0);\n\n    // BROKEN: each atomic op is safe alone, the pair isn't\n    boolean withdraw(int amount) {\n        if (balance.get() - pending.get() >= amount) {\n            pending.addAndGet(amount);      // gap — another thread can slip in here\n            balance.addAndGet(-amount);\n            return true;\n        }\n        return false;\n    }\n}\n```\n\nThe check and the two updates aren't one atomic operation, so two threads can both pass the check before either updates — overdrawing the account. The fix is a `synchronized` block (or a single `Lock`) around the whole check-and-update, not more atomics.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-synchronized-vs-lock-vs-atomic-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"when would you need tryLock or a timeout?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Anywhere blocking forever is worse than failing fast — a request-handling thread that should return an error rather than hang if a lock is held unusually long, or a deadlock-avoidance strategy where a thread backs off and retries instead of waiting indefinitely for a lock while holding a different one.\n\n`tryLock(timeout, unit)` returns `false` instead of blocking past the deadline, letting you decide what to do next — retry, fail fast, or fall back to a default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"what does 'composability' actually mean here — why can't you compose two atomic ops into one atomic op?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each atomic operation is guaranteed atomic *on its own*, but running two of them back to back gives no guarantee about what happens between them — another thread can act in that gap, as s06 showed. A `Lock` composes because you can wrap arbitrarily many statements, including calls to other atomics, inside one acquire/release pair, making the whole sequence a single unit.\n\nAtomics don't compose because there's no equivalent of \"acquire the atomic, do several things, release it\" — each call is already its own complete, sealed unit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: picking one tool for everything without naming the trade-off",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** naming one of the three tools as your default for every concurrency question, without checking what's actually shared.\n\n**Why it's wrong:** a `synchronized`-everywhere answer misses cases where an atomic would be simpler and faster; an atomics-everywhere answer breaks the moment two fields must move together; a `Lock`-everywhere answer adds `try`/`finally` boilerplate for problems `synchronized` already solves cleanly.\n\n**Correct model:** name what's shared, count how many fields must move together, and only then pick — the tool follows the problem, not the other way around.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: replacing a synchronized block with a Lock for no reason other than \"Lock is newer\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** rewriting a working `synchronized` block as a `ReentrantLock` because \"`Lock` is the modern API,\" without using `tryLock`, fairness, or interruptibility.\n\n**Why it's wrong:** `Lock` adds real cost here — you must remember `unlock()` in a `finally` block yourself, where `synchronized` releases automatically even on an exception. Swapping tools without using any of `Lock`'s actual advantages just adds a way to leak a lock.\n\n**Correct model:** reach for `Lock` only when you need something it uniquely offers; otherwise `synchronized` is simpler and equally correct.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-synchronized-vs-lock-vs-atomic-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-synchronized-vs-lock-vs-atomic-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd first ask whether this protects a single variable or several fields that must move together — that alone often narrows it to one tool. For a single variable with a simple update, I'd use an atomic type; it's lock-free and usually fastest. For several fields under straightforward mutual exclusion, `synchronized` — no boilerplate, and it releases automatically on an exception. I'd reach for an explicit `Lock` only if I need a timeout, interruptibility, or more than one condition variable — things `synchronized` can't give me.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

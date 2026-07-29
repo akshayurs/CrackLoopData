@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-setting-timeout-budgets",
+  "interviewQuestions": [
+    {
+      "id": "iv-setting-timeout-budgets-iq1",
+      "question": "How do you set timeouts across a call chain so they actually add up?",
+      "answerMarkdown": "I'd start from the end-to-end SLA at the entry point and allocate a total timeout budget from there, then divide it down the chain so each hop gets strictly less time than its caller — never the same number repeated at every layer, since identical timeouts compound instead of capping total latency.\n\nFor a 4-hop chain — gateway, API, service, DB — I'd size it something like 5000ms at the gateway, 4000ms at the API after its own overhead, 2500ms at the service, and 1000ms at the DB call, each hop aware it's spending from a shared, shrinking budget rather than picking a number in isolation.\n\nTo make this actually enforceable rather than hopeful, I'd propagate the remaining deadline explicitly in the request context, so each hop can check how much time it genuinely has left before even starting work. I'd flag the trade-off: this only works if every service in the chain cooperates and respects the incoming deadline.\n\n**Testing:** whether you understand timeouts as a shared budget across a chain, not an independent setting per service.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Setting timeout budgets across a call chain"
+    },
+    {
+      "id": "iv-setting-timeout-budgets-iq2",
+      "question": "Hop 3 in the chain times out, but hop 1's own timeout hasn't expired yet — what does the caller at the top see?",
+      "answerMarkdown": "I'd design hop 1 to propagate the failure immediately once it learns a required downstream call has failed, rather than waiting out the rest of its own configured timeout for no reason. If hop 3 fails and that failure is fatal to hop 2's response, there's no value in hop 2 or hop 1 continuing to wait — the answer is already known to be a failure.\n\nConcretely, this means the failure needs to propagate back up the call chain as soon as it's detected, not be masked until each layer's own timer independently expires. Otherwise the caller experiences unnecessary added latency — waiting out hop 1's full timeout window even though the actual answer was determined much earlier.\n\nI'd also note this interacts with the deadline-propagation approach: if hop 1 already knows its remaining budget is nearly exhausted from the downstream failure, it should fail fast rather than retry into a budget it doesn't have.\n\n**Testing:** whether you think about propagating known failures immediately, not just about setting numeric timeout values.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fast failure propagation up the chain"
+    },
+    {
+      "id": "iv-setting-timeout-budgets-iq3",
+      "question": "How do you enforce that every service actually respects its allotted timeout slice, instead of just hoping they configured it correctly?",
+      "answerMarkdown": "I'd pass the remaining deadline explicitly in the request — a header or context field carrying either an absolute deadline timestamp or a remaining-time value — so each hop can check for itself whether it even has enough time left to attempt the work, rather than relying on every team's local timeout configuration being correct and consistent.\n\nThis turns an organizational hope — \"every team configured their timeout to leave room for downstream calls\" — into something a service can verify and act on independently: if a service receives a request with only 50ms of budget left and it knows it needs at least 200ms to do its job, it can fail fast immediately instead of attempting work it can't finish in time.\n\nI'd note the limitation: this still requires every service to actually read and honor the deadline field — it's a convention, not something a language runtime enforces automatically, so it needs to be part of the shared service framework everyone builds on.\n\n**Testing:** whether you can turn a coordination problem across teams into something individually verifiable at each hop.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Enforcing deadline propagation"
+    }
+  ]
+}

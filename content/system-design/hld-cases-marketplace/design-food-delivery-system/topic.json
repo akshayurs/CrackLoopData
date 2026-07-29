@@ -1,0 +1,171 @@
+{
+  "id": "design-food-delivery-system",
+  "title": "Design a Food Delivery System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 3,
+  "slug": "design-food-delivery-system",
+  "summary": "A three-sided marketplace of customer, restaurant, and courier, held together by one order record and a real-time state machine — batching orders onto one courier trip is the twist ride-hailing doesn't have.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-food-delivery-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: a customer orders from a restaurant, a courier picks it up and delivers it, and all three parties — customer, restaurant, courier — see accurate, live status the whole way through.\n\nUnlike [ride-hailing](design-ride-hailing-system), which matches two sides point-to-point, this is a **three-sided marketplace**: the restaurant has to accept and prepare the order before a courier assignment even makes sense, and a courier is often juggling more than one order at once.\n\nThe interesting design decisions live in that three-way handoff and in batching — not in a point-to-point match.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-food-delivery-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** browse a restaurant's menu, place an order, get a prep-time estimate, get assigned a courier, track live status until delivery.\n\n**Non-functional:** courier assignment latency low enough that food doesn't sit cold waiting for pickup; order accuracy (right items, right restaurant, right address) since errors here can't be silently retried like a failed API call; prep-time estimates accurate enough that a courier doesn't arrive 15 minutes before or after the food is ready.\n\nThe tension to name: batching orders onto one courier trip improves courier efficiency and pay-per-trip economics, but it can add delay to any single order in the batch — that trade-off is the crux of this design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-food-delivery-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: orders, couriers, and batching windows",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mid-size city might have 5,000 concurrent orders in flight during a lunch peak, served by maybe 2,000 couriers online in that area — roughly 2.5 orders per courier if perfectly load-balanced, though real distribution is lumpy (some zones are far busier than others).\n\nA batching window of even 60-90 seconds, applied to orders from restaurants close to each other, can turn what would be 2 separate courier trips into 1 — at city scale during peak hours, that's a meaningful multiplier on effective courier capacity without adding a single courier. The batching window is the key lever, and it's a scheduling problem, not a raw-throughput one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-food-delivery-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-food-delivery-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three calls anchor the three-sided flow:\n\n- `placeOrder(customerId, restaurantId, items)` — creates the order and starts the state machine.\n- `updateOrderStatus(orderId, status)` — called by the restaurant (accepted, preparing, ready) and the courier (picked up, delivered); every party reads from the same order record rather than each side maintaining its own copy.\n- `assignCourier(orderId)` — internal call the assignment engine makes once an order is ready or near-ready, optionally batching it with a nearby order.\n\nThe shared design point: there's exactly one order record all three parties read and write against — no independent per-party copies to keep in sync.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-food-delivery-system-s05",
+      "order": 5,
+      "sectionTitle": "Data model: the order state machine",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An order moves through a strict sequence: `placed → accepted → preparing → ready for pickup → picked up → delivered` (with `cancelled` reachable from most early states). Modeling this as an explicit state machine — not a free-text status column — means every transition can be validated: a restaurant can't mark an order `delivered`, and a courier can't `pick up` an order that isn't `ready`.\n\nThis matters because three different actors are writing to the same record; without enforced transitions, a race (courier marks picked-up while the restaurant is simultaneously marking cancelled) can leave the order in a nonsensical or ambiguous state that support teams then have to untangle by hand.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-food-delivery-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-food-delivery-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: three-sided data flow",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![One shared order record with two-way arrows to customer, restaurant, and courier apps — a star, not a triangle](assets/order-star-topology.svg)\n\nCustomer, restaurant, and courier apps never talk to each other directly — each only reads and writes the shared order record, and each is pushed updates whenever it changes.\n\nThis star topology (not a triangle of direct connections) is what keeps the three views consistent: there's one source of truth, not three copies that could drift apart.",
+      "assets": [
+        {"alt": "One shared order record with two-way arrows to customer, restaurant, and courier apps — a star, not a triangle", "path": "assets/order-star-topology.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-food-delivery-system-s07",
+      "order": 7,
+      "sectionTitle": "Compare: per-order assignment vs batched courier routes",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Assign per order | Batch multiple orders per courier |\n|---|---|---|\n| Courier efficiency | One trip per order — lower orders-per-hour per courier | One trip covers 2-3 orders from nearby restaurants — higher courier throughput |\n| Delivery speed for one order | Fastest possible for that single order | Can add a few minutes if it's not first in the batch's route |\n| Complexity | Simple: assign nearest available courier | Needs a routing decision — which orders batch well together (nearby restaurants, compatible ready-times) |\n| Best fit | Low order density, or premium/fast-delivery tiers | Dense urban areas with many concurrent orders from clustered restaurants |\n\n**How to decide:** batch when order density in an area is high enough that nearby restaurants' ready-times overlap — batching a courier across two orders that are nowhere near each other just adds delay for no efficiency gain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-food-delivery-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-food-delivery-system-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: batching two nearby orders",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![One courier route batching two nearby orders in a single trip, versus two separate unbatched courier trips](assets/order-batching.svg)\n\nBatching only pays off when the ready-times and locations of two orders overlap enough that one courier's route barely lengthens by taking both.\n\nA batching engine that ignores this and forces together orders from restaurants ten minutes apart just delays both without any of the efficiency benefit.",
+      "assets": [
+        {"alt": "One courier route batching two nearby orders in a single trip, versus two separate unbatched courier trips", "path": "assets/order-batching.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "design-food-delivery-system-s09",
+      "order": 9,
+      "sectionTitle": "ETA prediction feeding both the customer and the assignment engine",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "ETA prediction serves two consumers with different needs. The **customer app** shows a single friendly countdown — it can afford some slack, since a slightly conservative estimate is better than one that's frequently wrong.\n\nThe **assignment engine** uses a sharper version of the same prediction to decide, in real time, whether an order is close enough to ready to start looking for a courier now, and whether a second order's ready-time is close enough to the first to justify batching them. An assignment decision made on a stale or overly-rounded ETA either sends a courier too early (they wait at the restaurant) or too late (food sits cold).\n\nThe takeaway: the same underlying prediction model can feed two different precision requirements — don't build two separate systems for it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-food-delivery-system-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: restaurant-side acceptance lag at lunch",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "During a lunch-hour spike, a single busy restaurant can receive far more simultaneous orders than its kitchen or staff can immediately acknowledge — even though the platform's own infrastructure has no trouble accepting the orders. The order sits in `placed` while a human at the restaurant is buried, and every downstream step (prep-time estimate, courier assignment) is blocked behind that acceptance.\n\nThis is a bottleneck the system can't purely engineer away — the fix is product-level: surfacing restaurant-side order-volume limits (so a slammed restaurant can temporarily throttle new orders) and giving restaurants a fast, low-friction accept action, rather than trying to force faster acceptance through backend tuning alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-food-delivery-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-food-delivery-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: syncing status via client polling",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Each app can just poll the order status every few seconds — simple and good enough.\"\n\n**Why it's wrong:** polling means every client is showing a status that's stale by up to the polling interval, and at scale, three apps (customer, restaurant, courier) polling for every in-flight order multiplies into enormous read load for information that's mostly unchanged between polls — most of that load is wasted work.\n\n**Correct model:** push status changes to subscribed clients the moment they happen — a WebSocket connection or push-notification channel per active order — so status is accurate in near real time and read load scales with actual state changes, not with a fixed polling interval times every client.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-food-delivery-system-s11-q1"
+      ]
+    }
+  ]
+}

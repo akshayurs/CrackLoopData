@@ -1,0 +1,165 @@
+{
+  "id": "iv-retry-storm",
+  "title": "Everyone's retrying at once and now the downstream service is dead — what happened, and how do you prevent it?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 10,
+  "slug": "iv-retry-storm",
+  "summary": "Retry storms are self-reinforcing — retries add load to an already-struggling service — and jittered backoff plus a circuit breaker is the fix.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-retry-storm-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: the feedback loop this question describes",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Everyone's retrying at once\" describes a **self-reinforcing feedback loop**: a struggling service gets slower, calls fail or time out, clients retry, and those retries add load to a service that was already struggling — making it fail more, triggering more retries.\n\nThe strong answer names this loop explicitly, then fixes it with **jittered backoff** and a **circuit breaker**, not just \"add retries with a delay.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-retry-storm-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: are clients retrying with **no backoff, fixed backoff, or already jittered**? The fix is different depending on how far along the client-side behavior already is.\n\nAlso ask: are all clients retrying on the **same schedule** — for example, all timing out at exactly 5 seconds and retrying at the same instant? Synchronized retries are what actually turn a blip into a storm; unsynchronized ones spread naturally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-retry-storm-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the **feedback loop** first: failure causes retries, retries cause more failure, more failure causes more retries. Then apply the fix: **exponential backoff with jitter** so retries spread out instead of synchronizing, plus a **circuit breaker** to cut off retries entirely once failure is clearly sustained rather than transient.\n\nNaming the loop before the fix shows you understand why the fix works, not just that it exists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-retry-storm-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-retry-storm-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the retry storm feedback loop",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Retry storm feedback loop](assets/retry-storm-loop.svg)\n\nThe loop: **failure causes retries, retries cause more failure, more failure causes more retries.** Each pass through the loop adds load rather than removing it — the exact opposite of what a healthy recovery needs, which is *less* load while the dependency catches up.",
+      "assets": [{"alt": "Retry storm feedback loop", "path": "assets/retry-storm-loop.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-retry-storm-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: 10,000 clients, one synchronized retry",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete scenario: **10,000 clients** all set a fixed 5-second timeout and retry immediately on failure. When the dependency has a **2-second blip**, all 10,000 requests fail at once — and all 10,000 retry at the same instant, multiplying the load exactly when the dependency is most fragile and least able to absorb it.\n\nA blip that would have resolved on its own in 2 seconds instead gets hit with a synchronized wave of retries right as it's trying to recover, likely extending the outage well past the original 2 seconds.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-retry-storm-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-retry-storm-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: how jitter breaks the synchronization",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Jitter breaks the synchronization by randomizing exactly when each client retries, instead of every client retrying at exactly the same offset:\n\n```\n// without jitter — every client retries at exactly t+5s\nretry_at = failure_time + 5s\n\n// with jitter — each client retries at a randomized point in a window\nretry_at = failure_time + random(3s, 8s)\n```\n\nWith jitter, the same 10,000 clients spread their retries across a 5-second window instead of firing them all in the same instant — the dependency sees a manageable trickle instead of a synchronized spike.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-retry-storm-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Backoff-with-jitter and circuit breakers **add latency to the failing request path** — you wait longer before retrying, and sometimes fail fast instead of eventually succeeding once the breaker opens.\n\nThat cost is worth paying in exchange for **not making a partial outage into a total one** — a slower, more deliberate recovery path is far better than a synchronized retry wave that turns a 2-second blip into a sustained outage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-retry-storm-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-retry-storm-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: clients are fixed but deployed slowly",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"you fix the clients, but they're deployed slowly — what protects you in the meantime?\"** **Server-side load shedding** on the dependency itself — rejecting excess requests before they cause more damage — **independent of whether clients behave**.\n\nThis matters because a client-side fix (jitter, backoff) can take weeks to roll out across every caller; server-side protection works immediately regardless of which clients have or haven't been updated yet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-retry-storm-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: should every client retry the same number of times?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"should every client retry the same number of times?\"** No — retries should **decrease or stop for lower-priority callers first** (load shedding by priority), so critical traffic gets whatever retry budget remains during a partial outage.\n\nA background sync job and a checkout request hitting the same dependency shouldn't compete equally for retry attempts — the checkout request matters more, and the system should reflect that under pressure rather than treating all retries as equal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-retry-storm-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-retry-storm-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: retries without backoff or jitter",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Adding retries makes the system more resilient — more attempts means more chances to succeed.\"\n\n**Why it's wrong:** retries added **without backoff or jitter** turn a brief 2-second blip into a **sustained outage**, because every failed request immediately retries, synchronized with every other failed request, multiplying load on a dependency that was already struggling.\n\n**Correct model:** retries only add resilience when they're spaced out (backoff) and desynchronized (jitter) — naive immediate retries are a liability, not a safety net, under any real load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-retry-storm-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the loop: failure causes retries, retries cause more failure. Fix with exponential backoff plus jitter to desynchronize retries, and a circuit breaker to cut them off once failure is sustained. Server-side load shedding protects you while client fixes roll out slowly. Retry budget should shrink for lower-priority callers first during a partial outage.\n\nFor backoff and retry mechanics in depth, see [Retries, Timeouts, and Backoff](retries-timeouts-and-backoff).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

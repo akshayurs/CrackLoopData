@@ -1,0 +1,170 @@
+{
+  "id": "iv-what-breaks-first-at-scale",
+  "title": "What's the First Thing That Breaks at Scale?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 3,
+  "slug": "iv-what-breaks-first-at-scale",
+  "summary": "An open-ended probe for scaling instincts — the bar is naming the specific first bottleneck with a mechanism, not answering \"everything.\"",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-what-breaks-first-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "The question, and what it's probing",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is deliberately open-ended — there's no single \"right\" system in mind. The interviewer is probing scaling instincts: can you name the *specific* first bottleneck for a given architecture, with a mechanism, rather than shrugging \"everything breaks eventually\"?\n\nA sharp answer picks one concrete failure and explains why it's first, not last.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: scale in what dimension?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Scale in what dimension — traffic, data volume, or team size?\" is worth asking, because the first thing to break is different for each. More QPS breaks connection pools and CPU-bound hot paths first. More data breaks indexes and single-machine storage first. More engineers breaks deploy coordination and code ownership first, long before any server falls over.\n\nMost interviewers mean traffic by default, but naming the ambiguity is itself a signal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name the category, then the failure mode",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For traffic scale, the honest default answer is the **database** — specifically, it runs out of connections or CPU long before a stateless app tier does, because app servers clone trivially and the database doesn't.\n\nThe skeleton: name the bottleneck category (the database), then the *specific* failure mode (connection-pool exhaustion, not \"it gets slow\"). A fixed-size connection pool caps concurrent queries; past that cap, requests queue, then time out, and the failure looks like a cascading outage even though the root cause is one saturated resource.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-what-breaks-first-at-scale-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: one database saturating as QPS grows",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A load balancer fans requests out across ten stateless app servers, all pointed at one database. As QPS climbs, the app servers stay comfortably under CPU limits — but every one of them opens connections to the same database, and that connection count hits its ceiling well before any app server does.\n\n![A load balancer fanning out to ten app servers all connecting to a single database, with app server CPU low but the database connection count pinned at its max](assets/db-connection-bottleneck.svg)",
+      "assets": [
+        {
+          "alt": "A load balancer fanning out to ten app servers all connecting to a single database, with app server CPU low but the database connection count pinned at its max",
+          "path": "assets/db-connection-bottleneck.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "Code: the symptom engineers actually see first",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```\nFATAL: remaining connection slots are reserved for non-replication superuser connections\nORM error: QueuePool limit of size 20 overflow 10 reached, connection timed out\n```\nThis is what shows up in logs before anyone says the word \"bottleneck\" — a pool-exhaustion error, not a slow-query alert. It's the concrete, nameable symptom that makes \"the database\" a specific answer instead of a guess.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: what breaks next?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"What's the very next thing that breaks after you fix that one?\" Suppose you add read replicas to relieve connection pressure. The next bottleneck is usually **replication lag** — reads on replicas start returning stale data under heavier write volume, and if the app didn't already handle staleness, that surfaces as a new class of bug.\n\nAfter that, it's typically the **primary's write throughput** itself, since replicas don't help writes at all — that's when sharding enters the conversation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-what-breaks-first-at-scale-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: finding this before production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"How do you find this before it breaks in production?\" Load testing at multiples of current peak (2x, 5x, 10x) against a realistic connection-pool configuration surfaces the ceiling directly. Capacity planning — tracking connection-count and CPU trends over time against traffic growth — gives you the warning weeks before the load test would.\n\nThe answer that lands: name both a reactive tool (load test) and a proactive one (capacity planning), not just one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: does write-heavy vs read-heavy change the answer?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Does the answer change if the bottleneck is write-heavy vs read-heavy traffic?\" Yes, and saying so shows depth. Read-heavy traffic is solved by read replicas and caching — cheap, well-understood levers. Write-heavy traffic doesn't get help from replicas at all, since every write still has to land on the primary; the fix there is sharding or partitioning the write load, a much bigger architectural change.\n\nNaming which one you're facing changes the entire next move.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-what-breaks-first-at-scale-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: \"everything breaks at scale\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"Everything breaks at scale.\"\n\n**Why it's weak:** it's true and says nothing. The question is testing whether you can rank bottlenecks and name the first, specific one for a given architecture — a generic answer with no concrete failure mode named doesn't demonstrate that instinct at all.\n\n**Better:** commit to one answer (usually the database) and explain the specific mechanism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: \"add a cache\" without diagnosis",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** jumping straight to \"add a cache\" without first diagnosing whether the database is actually the bottleneck.\n\n**Why it's wrong:** a cache only helps if the bottleneck is *read* load on data that's cacheable and doesn't change too often. If the real problem is write throughput, or connection exhaustion from an app-tier bug (like leaked connections), a cache does nothing — and now you've added complexity without fixing anything.\n\n**Correct model:** measure first (which resource is saturated), then pick the matching fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-what-breaks-first-at-scale-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-what-breaks-first-at-scale-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"At traffic scale, the first thing to break is usually the database, since the app tier is stateless and clones cheaply while the database doesn't. Specifically, it's connection-pool exhaustion or CPU saturation — you'll see pool-timeout errors before anything else. After fixing that with read replicas, the next bottleneck is replication lag, then eventually the primary's write throughput, which is when sharding comes up. I'd find this ahead of time with load tests at multiples of peak traffic and ongoing capacity planning, and I'd check whether the load is read-heavy or write-heavy before proposing a fix, since they need completely different solutions.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

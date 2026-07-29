@@ -1,0 +1,144 @@
+{
+  "id": "partitioning-and-sharding",
+  "title": "Partitioning & Sharding",
+  "area": "system-design",
+  "group": "storage-scale",
+  "order": 3,
+  "slug": "partitioning-and-sharding",
+  "summary": "Splitting one database across many nodes, and the shard-key decision that's hard to undo.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "partitioning-and-sharding-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Partitioning** (or **sharding**) splits one database's data across many independent nodes, each owning a slice, so no single machine has to hold or serve all of it. It's how you scale past what one node's disk, memory, or write throughput can handle.\n\nThe mechanics — range, hash, or directory-based partitioning — matter less than one decision that's hard to reverse: the **shard key**. Get that wrong and every other partitioning choice inherits the problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-sharding-s02",
+      "order": 2,
+      "sectionTitle": "Why one database eventually must be split",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single database node has three hard limits: how much data fits on its disk, how much working set fits in memory before every query hits disk, and how many writes per second its CPU and I/O can absorb. Vertical scaling pushes all three limits out, but it doesn't remove them — there's always a biggest available machine.\n\nPartitioning removes the ceiling by splitting data across nodes instead of growing one node: each **shard** holds a slice of the total data and handles only the reads and writes for that slice. Ten shards each holding a tenth of the data gives you roughly ten times the write capacity of one — the core reason teams partition once vertical scaling and read replicas stop being enough.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-sharding-s03",
+      "order": 3,
+      "sectionTitle": "Range-based partitioning: simple, but hotspot-prone",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Range-based partitioning** assigns each shard a contiguous range of the key space — for example, users A-F on shard 1, G-M on shard 2, and so on. It's simple to reason about and supports efficient range queries (\"give me all users M-P\") since they land on one or a few adjacent shards.\n\nThe cost is hotspots: if new data is created with sequentially increasing keys — timestamps, auto-incrementing IDs — every new write lands on whichever shard owns the current end of the range, while every other shard sits idle. A time-series table partitioned by date, for instance, would pile all of today's writes onto a single \"today\" shard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "partitioning-and-sharding-s03-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-sharding-s04",
+      "order": 4,
+      "sectionTitle": "Hash-based partitioning: even spread, loses range queries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Hash-based partitioning** runs the shard key through a hash function and uses the result to pick a shard, so keys that are sequential or clustered in the original data end up scattered evenly across shards. This kills the hotspot problem from range partitioning almost by construction — a hash function has no notion of \"the newest key,\" so writes spread evenly regardless of insertion order.\n\nThe trade-off is that range queries stop being cheap: \"all users signed up this week\" no longer maps to one or two shards, since the hash scatters even adjacent signup dates across the cluster — answering it means querying every shard and merging results (a scatter-gather query).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "partitioning-and-sharding-s04-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-sharding-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: range vs hash partitioning side by side",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Range partitioning concentrates new sequential writes onto one hotspot shard; hash partitioning scatters the same keys evenly across all shards](assets/range-vs-hash-partitioning.svg)\n\nRange partitioning keeps related keys together, which is why it supports cheap range scans — but it's exactly that adjacency that concentrates new, sequential writes onto one shard. Hash partitioning breaks that adjacency deliberately, spreading writes evenly at the cost of range scans becoming a full-cluster scatter-gather.\n\nNeither is strictly better; the choice depends on whether your workload needs range queries or write-spread more.",
+      "assets": [
+        {
+          "alt": "Range partitioning concentrates new sequential writes onto one hotspot shard; hash partitioning scatters the same keys evenly across all shards",
+          "path": "assets/range-vs-hash-partitioning.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-sharding-s06",
+      "order": 6,
+      "sectionTitle": "Directory-based / lookup-service partitioning",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Directory-based partitioning** keeps an explicit mapping — a lookup table or service — from key (or key range) to the shard that owns it, instead of computing the shard from a formula. A request first asks the directory \"which shard owns this key?\" then routes there.\n\nThis buys flexibility a formula can't: you can move an individual key or range to a different shard by updating one directory entry, which is how you rebalance load without recomputing every client's routing logic. The cost is an extra hop (or a cached copy of the directory that can go stale) and the directory service itself becoming a critical piece of infrastructure that needs its own availability guarantees.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-sharding-s07",
+      "order": 7,
+      "sectionTitle": "Choosing a shard key: the decision that's hard to undo",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **shard key** decides which column (or columns) determine where a row lives, and it shapes every query's cost for the life of the system — changing it later means physically moving most of your data. A good shard key has high cardinality (many distinct values, so shards can be even), spreads write load evenly, and matches your most common query so that query hits one shard instead of every shard.\n\nA classic example: sharding an orders table by `customer_id` makes \"get this customer's orders\" a single-shard query, while sharding by `order_date` makes that same query a scatter-gather across every shard that has ever seen that customer order. There is rarely one perfect key — you're picking which query gets to be cheap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "partitioning-and-sharding-s07-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-sharding-s08",
+      "order": 8,
+      "sectionTitle": "Compare: partitioning strategies on rebalancing cost and query support",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Range | Hash | Directory-based |\n|---|---|---|\n| Range queries | Cheap — adjacent keys, same shard | Expensive — scatter-gather across shards | Depends on directory granularity |\n| Write spread | Hotspot-prone with sequential keys | Even by construction | Even, and adjustable |\n| Rebalancing | Requires re-splitting ranges | Requires rehashing (or consistent hashing) | Cheap — update directory entries |\n| Extra infrastructure | None | None | A directory/lookup service to run and keep available |\n\n**How to decide:** if range queries dominate your workload, accept range partitioning's hotspot risk and mitigate it (e.g. don't shard by raw timestamp); if even write spread matters more, go hash; if you expect to rebalance often or by hand, directory-based buys that flexibility at the cost of running another service.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-sharding-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a shard key that creates a hot shard (e.g. sharding by date)",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll shard by date — it's a natural, easy-to-understand key and our data is time-ordered anyway.\"\n\n**Why it's wrong:** every write for \"today\" lands on whichever shard owns today's range, so the newest (and usually busiest) shard absorbs 100% of current write traffic while every other shard sits idle serving only historical reads. The problem gets worse the more write-heavy the system is, since the hot shard is exactly the one under the most load.\n\n**Correct model:** if the query pattern genuinely needs date-range scans, combine date with a high-cardinality field (like a hashed user ID prefix) so writes spread across shards while range queries still narrow the search — or accept a hash-partitioned key and pay for scatter-gather on the occasional range query instead of a permanent hotspot on every write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "partitioning-and-sharding-s09-q1"
+      ]
+    }
+  ]
+}

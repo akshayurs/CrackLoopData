@@ -1,0 +1,165 @@
+{
+  "id": "iv-leader-failover-client-view",
+  "title": "Your leader/primary just failed over — what does the client experience?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 12,
+  "slug": "iv-leader-failover-client-view",
+  "summary": "Tests whether you can trace failover from the client's point of view — in-flight requests, reconnection, and the consistency gap — not just say 'a new leader gets elected.'",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-leader-failover-client-view-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"A new leader gets elected\" is the server-side half of the story and skips the part that actually determines whether users notice anything: what happens to the specific request that was in flight when the old leader died, and how the client finds its way to the new one.\n\nThis topic traces failover from the client's seat — the unacknowledged write, the discovery of the new leader, and why idempotency is what makes fast failover safe rather than dangerous.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-failover-client-view-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether the client is a stateless HTTP caller that reconnects fresh on every request, or one holding a **persistent connection** (a database driver's long-lived socket, a gRPC stream) to the old leader specifically. The persistent-connection case needs explicit handling the stateless case gets almost for free.\n\nThis single question splits the answer into two different failover stories, and naming it up front shows you're not going to give a one-size-fits-all answer to a question that genuinely has two cases.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-failover-client-view-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: in-flight request, discovery, next request",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Skeleton: name what happens to the **in-flight request** (it may have landed and not been acknowledged, or not landed at all — the client can't tell which), how the client **discovers the new leader**, and what it sees on its **next request** after discovery.\n\nThis ordering matches the client's actual lived experience, in sequence — which is exactly why it reads as a stronger answer than describing the server-side election mechanics first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-leader-failover-client-view-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-failover-client-view-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: an unacknowledged in-flight write",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Client retries after an unacknowledged failover write](assets/failover-retry-uncertainty.svg)\n\nThe hardest case: a client sends a write, the leader crashes right as it's processing it, and the client never gets an acknowledgment either way — it genuinely cannot tell whether the write landed and the ack was lost, or the write never landed at all.\n\nThe client's only safe move is to retry the exact same write against the new leader, which only works cleanly if that retry is idempotent — otherwise a write that actually did land the first time gets applied a second time.",
+      "assets": [{"alt": "Client retries after an unacknowledged failover write", "path": "assets/failover-retry-uncertainty.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-leader-failover-client-view-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-failover-client-view-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: how the client discovers the new leader",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A few concrete mechanisms, in rough order of how common they are: a **service registry** update that the client (or its load balancer) watches and reacts to, a **DNS record change** pointing at the new leader (slower, subject to DNS caching/TTL), or a **client-side retry-with-redirect**, where the old leader's replacement (or a proxy) responds to a request with \"not the leader, try this address instead.\"\n\nName which one applies to the system at hand — a service registry is fast and common in modern stacks; DNS is simpler but adds real caching delay to how quickly clients actually notice the change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-failover-client-view-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: an SDK's built-in retry-with-backoff",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Most production database and RPC clients already have this handling built in, which is worth naming explicitly rather than proposing to build it from scratch:\n\n```\ntry:\n    result = client.write(key, value, idempotency_key=req_id)\nexcept LeaderUnavailable:\n    # SDK internally: re-resolve leader via service registry,\n    # backoff, retry with the same idempotency_key\n    result = client.write(key, value, idempotency_key=req_id)  # succeeds against new leader\n```\n\nThe application code barely changes — the SDK absorbs leader discovery and retry logic, as long as the application supplies a stable idempotency key so a transparent retry can't double-apply the write.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-failover-client-view-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Fast failover minimizes client-visible downtime but raises the odds of a request being replayed against the new leader — idempotency is what makes fast failover safe.** Without idempotency, faster failover isn't a pure win; it's trading downtime for a higher chance of a double-applied write.\n\n| | Fast failover, no idempotency | Fast failover, with idempotency |\n|---|---|---|\n| Client-visible downtime | Low | Low |\n| Risk of a duplicated write | Real and likely under retry | Effectively eliminated |\n\nThe honest framing: failover speed and safety aren't in tension once idempotency is in place — without it, they are.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-leader-failover-client-view-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-failover-client-view-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how long is the client-visible blip?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the components that sum to the actual number: **detection time** (how long until the failure is noticed — typically bounded by a heartbeat timeout), plus **election time** (how long consensus takes to agree on a new leader), plus **client retry backoff** (how long the client waits before its next attempt after a failed one).\n\nGiving a rough number built from these three parts — \"maybe 2-5 seconds total, dominated by detection timeout\" — is a much stronger answer than a vague \"it should recover quickly.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-failover-client-view-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the client had a long-lived connection to the old leader",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A persistent connection doesn't reconnect on its own the way a fresh HTTP request would — it needs explicit handling: the client library must detect the connection drop (via a read/write error or a heartbeat on the connection itself), tear down the dead connection, re-resolve the current leader, and open a new connection before retrying whatever request was in flight.\n\nThis is meaningfully more work than the stateless case, and it's exactly why the clarifying question about connection type at the start of the answer matters — glossing over it would miss a real, non-trivial piece of the design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-failover-client-view-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: describing failover only from the server side",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A new leader gets elected via consensus, and that's the failover story.\"\n\n**Why it's wrong:** this describes what the cluster does internally and says nothing about what the caller experiences — whether its in-flight request is lost, duplicated, or safely retried, and how long it waits before things work again. The interviewer is asking about client-visible behavior specifically.\n\n**Correct model:** always close the loop back to the caller — the in-flight request's fate, the discovery mechanism, and the total client-visible blip — since that's the half of the answer that demonstrates you understand the failure from the user's actual vantage point.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-leader-failover-client-view-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-failover-client-view-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd trace it from the client's side: an in-flight write to the old leader may or may not have landed, and the client can't tell which — its only safe move is to retry it, which needs to be idempotent to be safe. The client discovers the new leader via a service registry, DNS change, or redirect, depending on the stack, and most production SDKs already handle this discovery and retry internally. I'd estimate the total client-visible blip as detection time plus election time plus retry backoff — a few seconds, typically. A persistent connection to the old leader needs explicit teardown-and-reconnect handling that a stateless HTTP client gets almost for free.\"\n\nSee [consensus-basics](consensus-basics) for the leader-election mechanics this client-side story builds on top of.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

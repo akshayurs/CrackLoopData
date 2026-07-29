@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-how-does-a-distributed-lock-fail",
+  "interviewQuestions": [
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-iq1",
+      "question": "How does a distributed lock actually fail in practice?",
+      "answerMarkdown": "I'd skip the happy-path description of acquiring a lock and go straight to the three failure modes. First, a client can pause — GC, scheduling, a slow disk — for longer than its lease TTL and resume with no idea it's lost the lock, still writing as if nothing happened. Second, a network partition can hide a live holder from the lock service, which then grants the lock to someone else while the original holder is still working. Third, even if both of those are handled, without a check at the resource itself, a stale writer's request still lands and causes damage.\n\nThe fix that actually closes the gap is a fencing token: the resource remembers the highest token it's seen and rejects anything lower, so a stale holder's write gets rejected regardless of what it believes about its own lock status.\n\n**Testing:** whether you go past \"use Redis/ZooKeeper\" to the actual failure modes and the mechanism that closes them.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The real failure modes of a distributed lock"
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-iq2",
+      "question": "Would increasing the lease TTL fix the pause-past-expiry problem with a distributed lock?",
+      "answerMarkdown": "No, and I'd explain why directly: a longer TTL just changes the size of the window, not whether the underlying race exists. Any pause longer than whatever TTL you choose reproduces the exact same bug — the client resumes unaware it's lost the lock. And there's a real cost to going too long: a genuinely crashed client's lock now takes longer to become available to anyone else, actively hurting availability.\n\nI'd say the actual fix is orthogonal to TTL length: fencing tokens at the resource, so that even a client that mistakenly still believes it holds the lock gets its write rejected the moment a newer holder has acted. TTL tuning is a knob for likelihood, not a fix for the possibility.\n\n**Testing:** whether you can tell apart \"makes it less likely\" from \"makes it impossible\" — a common trap in distributed-systems reasoning.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why a longer TTL doesn't fix the race"
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-iq3",
+      "question": "How does using a single Redis instance for a distributed lock differ from a Redlock-style multi-node approach?",
+      "answerMarkdown": "I'd frame this as addressing a different failure mode than pause-past-expiry or missing fencing. A single Redis node is itself a single point of failure for the lock: if it crashes, or fails over to a replica that hasn't caught up, two clients can end up believing they hold the same lock simultaneously.\n\nRedlock spreads the lock across multiple independent Redis nodes and requires a majority of them to agree on the grant, which reduces that specific risk — though I'd note it's been the subject of well-known critiques about timing assumptions it still relies on, so it's a mitigation, not a silver bullet. Either way, I'd be clear that Redlock doesn't address the pause-past-expiry problem or the missing-fencing problem at all — those need their own fixes regardless of how many Redis nodes back the lock.\n\n**Testing:** whether you understand these as separate, non-overlapping failure modes rather than one general \"is Redis reliable enough\" question.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Single Redis node vs Redlock"
+    }
+  ]
+}

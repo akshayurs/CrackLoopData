@@ -1,0 +1,131 @@
+{
+  "id": "long-running-and-async-apis",
+  "title": "Designing Long-Running & Async APIs",
+  "area": "system-design",
+  "group": "api-design",
+  "order": 9,
+  "slug": "long-running-and-async-apis",
+  "summary": "Some operations take minutes, not milliseconds — designing an API contract where the response is a \"started\" acknowledgment, not the actual result.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "long-running-and-async-apis-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A normal API call assumes the answer is ready within a second or two. But transcoding a video, generating a large report, or running a bulk import can take minutes to hours — holding a connection open that long isn't realistic for either side.\n\nThe fix is a contract shift: the API responds immediately with \"I started this,\" hands back a way to check on it later, and the client (or the server) follows up once the real result exists. This topic covers that pattern end to end.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "long-running-and-async-apis-s02",
+      "order": 2,
+      "sectionTitle": "Why a synchronous request/response contract breaks for operations that take minutes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A normal HTTP request assumes the server can produce a full response before the connection's timeout — usually seconds, sometimes up to a minute if you push it. An operation genuinely expected to take minutes or hours (video transcoding, a large data export, training a model) breaks that assumption entirely.\n\nHolding a connection open that long is expensive on both ends: the server ties up a worker/thread for the whole duration instead of freeing it to serve other requests, and the client has to keep a socket open and hope nothing in between — a load balancer, a proxy, a mobile network switch — kills it before completion.\n\nThe honest fix isn't a longer timeout; it's changing the API's shape so the response comes back fast, and the actual work happens out of band. That shift is effectively moving the operation onto a message-passing model internally — start it, then get notified or check separately — rather than treating it as one long-lived request.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "long-running-and-async-apis-s02-q1"
+      ]
+    },
+    {
+      "id": "long-running-and-async-apis-s03",
+      "order": 3,
+      "sectionTitle": "The 202-Accepted-plus-status pattern: return a job ID immediately, let the client check progress",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The standard pattern: `POST /reports` returns `202 Accepted` immediately, with a body containing a job ID and a `Location` header pointing at a status resource, e.g. `Location: /reports/jobs/9931`. The client hasn't gotten its result yet — it's gotten an acknowledgment that the work has started.\n\n`202` specifically communicates \"accepted for processing, not yet complete\" — distinct from `200`/`201`, which imply the operation already finished. This distinction matters to any client or tooling reading status codes generically.\n\nThe client (or another process on its behalf) then checks `GET /reports/jobs/9931` later to find out whether the job is still running, failed, or has a result ready — the next slides cover exactly what that status resource should look like.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "long-running-and-async-apis-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: client submits, gets a job ID, polls a status endpoint until done",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Sequence diagram of a client polling a job status endpoint from pending to done](assets/async-job-sequence.svg)\n\nThe client's first call returns almost instantly with just a job ID — no waiting. Every subsequent call to the status endpoint is cheap and fast, since it's just reading a job's current state, not doing the actual work. Once the state becomes `done`, the response includes where to fetch the real result.\n\nThe server-side work (the actual transcoding, report generation) happens entirely outside this request/response cycle, in a background worker the client never talks to directly.",
+      "assets": [
+        {
+          "alt": "Sequence diagram of a client polling a job status endpoint from pending to done",
+          "path": "assets/async-job-sequence.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "long-running-and-async-apis-s05",
+      "order": 5,
+      "sectionTitle": "Compare: polling vs webhook-on-completion vs a status stream for notifying the client",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Polling the status endpoint | Webhook on completion | Status stream (SSE/WebSocket) |\n|---|---|---|---|\n| Client complexity | Low — repeat a GET on a timer | Needs a reachable public endpoint (see [webhooks and callback APIs](webhooks-and-callback-apis)) | Needs a held-open connection |\n| Latency to notice completion | Depends on poll interval | Near-instant | Near-instant |\n| Wasted requests | Yes — most polls return \"still running\" | None — one call, when it matters | None, but the connection itself has a cost |\n| Best fit | Simple clients, no public endpoint available | Server-to-server integrations that can host a callback | A live, connected client (open browser tab, app in foreground) |\n\n**How to decide:** polling is the simplest default and fine for most cases if the job typically finishes in seconds-to-low-minutes. Reach for a webhook when the consumer is another backend system that can host a callback endpoint. Reach for a stream when there's already a live, connected client that would otherwise have to poll anyway.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "long-running-and-async-apis-s05-q1"
+      ]
+    },
+    {
+      "id": "long-running-and-async-apis-s06",
+      "order": 6,
+      "sectionTitle": "Designing the status resource: states, progress, and a result location once done",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A good status resource needs at minimum: a **state** from a small fixed set (`pending`, `running`, `done`, `failed`), and — once `done` — a **location** for the actual result, usually a URL rather than embedding a potentially huge payload directly in the status response.\n\nFor anything that takes more than a few seconds, a **progress** indicator (percent complete, or a step count like \"3 of 5\") meaningfully improves the experience over a bare \"still running,\" especially for anything a human is watching.\n\nOn failure, the state alone isn't enough — the response needs an error reason a client (or a support engineer) can act on, mirroring the same structured-error thinking used for synchronous failures: a machine-readable code plus a human-readable message, not just `\"failed\": true`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "long-running-and-async-apis-s06-q1"
+      ]
+    },
+    {
+      "id": "long-running-and-async-apis-s07",
+      "order": 7,
+      "sectionTitle": "Code: a job-status endpoint's response shape across pending/running/done/failed",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```json\n// GET /reports/jobs/9931 — running\n{ \"jobId\": \"9931\", \"state\": \"running\", \"progress\": 0.62, \"resultUrl\": null }\n\n// GET /reports/jobs/9931 — done\n{ \"jobId\": \"9931\", \"state\": \"done\", \"progress\": 1.0, \"resultUrl\": \"/reports/9931/download\" }\n\n// GET /reports/jobs/9931 — failed\n{\n  \"jobId\": \"9931\",\n  \"state\": \"failed\",\n  \"progress\": 0.4,\n  \"resultUrl\": null,\n  \"error\": { \"code\": \"SOURCE_FILE_CORRUPT\", \"message\": \"Input file could not be parsed\" }\n}\n```\n\nOne shape, three states — the client checks `state` first, and only reads `resultUrl`/`error` once it knows which branch it's in. `progress` stays present even on failure, showing how far it got before something went wrong.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "long-running-and-async-apis-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a \"long-running\" endpoint that's just a synchronous call with a very long timeout",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just set the client and server timeouts to 10 minutes instead of adding a whole job/status pattern — it's simpler.\"\n\n**Why it's wrong:** a held-open connection for 10 minutes ties up a server worker the entire time (multiplying by concurrent requests, this caps throughput hard), and it's fragile — any load balancer, proxy, or mobile network hiccup in between can silently kill a connection that long before it completes, and the client has no way to resume or check status afterward; it just has to retry the whole operation from scratch.\n\n**Correct model:** return fast with a job reference and let the client check back, even if it feels like \"more API surface\" than a single long call. The job/status pattern isn't extra complexity for its own sake — it's what makes the operation resumable and resilient to exactly the kind of mid-flight network failure a long synchronous call has no way to recover from.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "long-running-and-async-apis-s08-q1"
+      ]
+    }
+  ]
+}

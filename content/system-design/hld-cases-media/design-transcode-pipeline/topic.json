@@ -1,0 +1,175 @@
+{
+  "id": "design-transcode-pipeline",
+  "title": "Design a Media Transcode Pipeline",
+  "area": "system-design",
+  "group": "hld-cases-media",
+  "order": 7,
+  "slug": "design-transcode-pipeline",
+  "summary": "The general async job system behind 'process every uploaded photo or video into derivatives' — orchestration and idempotent retries are the lesson, not any one codec.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-transcode-pipeline-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The prompt: any uploaded media file needs one or more derivative jobs run on it — a thumbnail, a video rendition, an audio waveform preview — reliably, without losing or duplicating work.\n\nThis is the general-purpose async job system underneath specific pipelines like [design-video-streaming-platform](design-video-streaming-platform)'s rendition ladder or an image host's derivative generation. The lesson here is queueing, prioritization, and idempotent retries — not any particular codec or format.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s02",
+      "order": 2,
+      "sectionTitle": "Functional and non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** accept jobs of different **job types** (thumbnail, video rendition, waveform, document preview) against an uploaded media file, run them reliably, and notify the caller when done.\n\n**Non-functional:** a clear **priority** split between user-facing jobs (a viewer is waiting on this thumbnail right now) and batch jobs (a nightly re-encode nobody is staring at), plus a bounded **retry budget** — a job should retry transient failures a few times, then land in a dead state a human or alerting system can see, rather than retrying forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: uploads/sec vs worker throughput per job type",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At 50 uploads/sec, each triggering 3 job types (thumbnail, one video rendition, one waveform), that's 150 jobs/sec entering the system. If a single worker completes a thumbnail job in ~200ms but a video rendition job in ~8s, one worker pool sized only by job *count* badly under-provisions for rendition jobs and over-provisions for thumbnails.\n\nThe number that actually matters is throughput *per job type* — worker-seconds needed per job type per second of incoming load — which is why job types typically get separate queues and separate worker pools rather than one shared pool.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-transcode-pipeline-s03-q1"
+      ]
+    },
+    {
+      "id": "design-transcode-pipeline-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`submitJob(mediaId, jobType)` enqueues one unit of work and returns a job ID immediately — the caller never blocks waiting for the job to run. Completion is reported asynchronously via a **status callback or webhook**, since jobs can take anywhere from milliseconds (a thumbnail) to minutes (a large video rendition).\n\nA polling `getJobStatus(jobId)` endpoint is usually offered alongside the webhook, since webhooks can be missed (a receiver briefly down) and callers need a reliable way to reconcile state without depending on delivery guarantees they don't fully control.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s05",
+      "order": 5,
+      "sectionTitle": "Data model: a job queue plus a job-state table",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **queue** holds work waiting to run — typically one queue per job type or priority tier, so a backlog in one job type doesn't block another. The **job-state table**, keyed by `(mediaId, jobType)`, tracks status (`queued`, `running`, `succeeded`, `failed`, `dead`), attempt count, and a pointer to the output once produced.\n\nSeparating queue from state matters because the queue is transient and optimized for fast dequeue, while the state table is the durable record callers query and retries reference — a worker crash should never lose the state table's knowledge of how many attempts a job has already made.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the pipeline end to end",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Job pipeline from upload event through queue, workers, output storage, job state, to a status webhook](assets/transcode-job-pipeline.svg)\n\nEvery arrow after \"Queue\" can fail independently — a worker can crash mid-job, output storage can be briefly unavailable, the state update can fail after output succeeded — which is exactly why the next few slides focus on making retries safe rather than assuming the happy path.",
+      "assets": [
+        {
+          "alt": "Job pipeline from upload event through queue, workers, output storage, job state, to a status webhook",
+          "path": "assets/transcode-job-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s07",
+      "order": 7,
+      "sectionTitle": "Idempotent retries: a crash mid-job must not corrupt or duplicate output",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a worker crashes after writing output but before updating the job-state table, a naive retry mechanism re-runs the job — producing duplicate output, double-charging storage, or (worse) triggering a duplicate downstream notification to the caller. **Idempotency** means a retried job produces the exact same end state as if it had only run once.\n\nThe standard fix: give every job attempt a deterministic **idempotency key** (often `mediaId + jobType + version`), write output to a path derived from that key (so a re-run overwrites or no-ops instead of duplicating), and only mark the job complete in the state table after output is durably written — making the state-table update, not the output write, the single source of truth for \"did this succeed.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-transcode-pipeline-s07-q1"
+      ]
+    },
+    {
+      "id": "design-transcode-pipeline-s08",
+      "order": 8,
+      "sectionTitle": "Compare: a user waiting on a thumbnail vs a batch overnight re-encode",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | User-facing job (e.g. thumbnail) | Batch job (e.g. overnight re-encode) |\n|---|---|---|\n| Someone waiting | Yes — a viewer expects it within seconds | No — runs unattended |\n| Queue priority | High — should preempt batch work | Low — fills spare capacity |\n| Acceptable latency | Seconds | Hours, sometimes a full overnight window |\n| Failure visibility | Needs fast alerting — a user notices immediately | Can tolerate delayed alerting/retry the next run |\n\n**How to decide:** route by priority tier into separate queues so batch jobs can never starve user-facing ones, even during a batch backlog — a shared queue with only a priority *field* still risks a user-facing job sitting behind thousands of batch jobs if the worker pool processes strictly FIFO.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: worker pool autoscaling against queue depth",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Queue depth rising then falling, with the autoscaler adding then removing workers in response](assets/queue-depth-autoscale.svg)\n\nAutoscaling on queue depth (not on a fixed schedule or on CPU alone) means the worker pool grows exactly when there's a real backlog and shrinks once there isn't, regardless of whether the load spike was predictable.",
+      "assets": [
+        {
+          "alt": "Queue depth rising then falling, with the autoscaler adding then removing workers in response",
+          "path": "assets/queue-depth-autoscale.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "design-transcode-pipeline-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: one expensive job type starving the queue for cheap jobs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If thumbnails and 4K video transcodes share one queue and one worker pool, a burst of 4K jobs (each taking many seconds) can occupy every worker while a stack of near-instant thumbnail jobs sits waiting behind them — a user waiting a few hundred milliseconds for a thumbnail ends up waiting on someone else's multi-minute 4K job to finish first.\n\nThe fix is the same separation as prioritization: give expensive and cheap job types their own queues and worker pools (or at minimum reserve a slice of capacity per type), so one job type's cost profile can never block another's regardless of arrival order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-transcode-pipeline-s10-q1"
+      ]
+    },
+    {
+      "id": "design-transcode-pipeline-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: no idempotency key, so a retried job double-charges storage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If a job fails or times out, just retry it from scratch — worst case it runs twice, which is wasteful but harmless.\"\n\n**Why it's wrong:** without a deterministic idempotency key, a retry after a partial success writes output to a new, different path (or under a new generated ID), silently duplicating stored derivatives and potentially firing a second completion callback to the caller — \"wasteful but harmless\" quietly becomes duplicate storage bills and, worse, a downstream system processing the same event twice.\n\n**Correct model:** derive output paths and job identity from a stable key (`mediaId + jobType + version`), so a retry naturally overwrites or no-ops instead of duplicating, and only trust the job-state table's completion flag as the single source of truth.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-transcode-pipeline-s11-q1"
+      ]
+    }
+  ]
+}

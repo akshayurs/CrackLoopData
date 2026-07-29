@@ -1,0 +1,131 @@
+{
+  "id": "storage-engine-choice-as-a-design-decision",
+  "title": "Storage Engine Choice as a Design Decision",
+  "area": "system-design",
+  "group": "storage-scale",
+  "order": 7,
+  "slug": "storage-engine-choice-as-a-design-decision",
+  "summary": "B-tree vs LSM-tree isn't a database-internals footnote — it's a read/write amplification trade-off that should drive which storage system you pick for a given workload.",
+  "level": "expert",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Underneath every database sits a **storage engine** — the code that actually gets rows onto disk — and the two dominant designs, **B-tree** and **LSM-tree**, make opposite trade-offs between read speed, write speed, and space used. Picking a database by its query language or feature list while ignoring its storage engine is picking blind on the one property that decides whether it fits your workload.\n\nThis is a system-design decision, not a DBA footnote: a write-heavy ingestion pipeline and a read-heavy lookup service want different engines even if both happen to speak SQL.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s02",
+      "order": 2,
+      "sectionTitle": "Why storage engine choice belongs in a system design conversation, not just a DBA's job",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two databases can offer the same query language and the same consistency model, yet perform completely differently on the same hardware, because their **storage engines** — the layer that decides how data physically lands on disk — differ. MySQL's default InnoDB engine (B-tree) and Cassandra's engine (LSM-tree) are the clearest example: same relational-ish vocabulary in places, opposite performance profiles under write-heavy load.\n\nAt system-design scale, the storage engine determines real numbers: how many writes per second one node can sustain, how much extra disk I/O a write triggers, and how much space the data actually occupies versus its logical size. Ignoring the engine and picking by feature checklist alone is how a team ends up choosing a database that's technically capable but structurally wrong for their write pattern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s03",
+      "order": 3,
+      "sectionTitle": "B-tree engines: read-optimized, in-place updates, predictable point-lookup latency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **B-tree** storage engine keeps data sorted in a tree structure on disk, and updates a row **in place** — find the page the row lives on, modify it, write that page back. This gives predictable, fast point lookups: reading one row means one tree traversal, roughly the same cost every time regardless of how much data has been written before or since.\n\nThe cost shows up on writes: updating even one row means reading its whole disk page, modifying it, and writing the whole page back — and if the tree needs rebalancing, that cascades to neighboring pages too. Postgres and MySQL/InnoDB both default to B-tree-family engines, which is why they excel at mixed read/write OLTP workloads with moderate write volume but strain under very high, sustained write throughput.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "storage-engine-choice-as-a-design-decision-s03-q1"
+      ]
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s04",
+      "order": 4,
+      "sectionTitle": "LSM-tree engines: write-optimized, append-then-compact, better write throughput at a compaction cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **LSM-tree** (Log-Structured Merge-tree) engine never modifies data in place — every write is appended sequentially to an in-memory buffer, which periodically flushes to disk as a new immutable file. Reads may need to check several of these files before finding the newest version of a row, but writes are about as fast as disk allows, since sequential appends avoid the read-modify-write cost a B-tree pays on every update.\n\nThe cost is deferred to a background process called **compaction**, which merges and rewrites files to remove stale versions and keep read costs bounded — without it, a row's history would pile up across ever more files, slowing every read. Cassandra, RocksDB, and HBase are built on LSM-trees, which is why they're the default choice for write-heavy event ingestion and time-series data (see time-series-storage-at-scale for how this plays out at the data-model level).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "storage-engine-choice-as-a-design-decision-s04-q1"
+      ]
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the write path and read path shapes for a B-tree engine vs an LSM engine",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![B-tree writes loop in place on a disk page for one-hop reads; LSM-tree writes go to an in-memory buffer flushed as sequential files, with reads fanning out and compaction merging them](assets/btree-vs-lsm-write-path.svg)\n\nThe B-tree side is one small in-place loop per write and a single-hop read. The LSM-tree side is sequential writes with no in-place modification, reads that may check several files, and background compaction keeping that file count bounded.\n\nThis is the whole trade-off in one picture: B-tree pays its cost per write; LSM-tree defers its cost to reads and compaction.",
+      "assets": [
+        {
+          "alt": "B-tree writes loop in place on a disk page for one-hop reads; LSM-tree writes go to an in-memory buffer flushed as sequential files, with reads fanning out and compaction merging them",
+          "path": "assets/btree-vs-lsm-write-path.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s06",
+      "order": 6,
+      "sectionTitle": "Compare: B-tree vs LSM by write amplification, read amplification, and space amplification",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | B-tree | LSM-tree |\n|---|---|---|\n| Write amplification | Higher per single-row update (read-modify-write a whole page) | Lower on the write path itself; shifted into background compaction |\n| Read amplification | Low and predictable — one tree traversal | Higher — may check multiple files before compaction catches up |\n| Space amplification | Low — one copy per row, updated in place | Higher until compacted — stale versions linger across files |\n| Sustained write throughput | Lower ceiling | Higher ceiling |\n\n**How to decide:** if reads dominate and writes are moderate, a B-tree engine's predictable point-lookup cost wins; if writes are the dominant, sustained load — ingestion pipelines, event streams — an LSM-tree's higher write ceiling is worth its read and space amplification, especially if compaction can run without starving foreground traffic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "storage-engine-choice-as-a-design-decision-s06-q1"
+      ]
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s07",
+      "order": 7,
+      "sectionTitle": "Matching engine choice to workload: write-heavy ingestion vs read-heavy lookup services",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A write-heavy event-ingestion pipeline — logs, metrics, clickstream events arriving continuously — wants an LSM-tree engine: the workload is almost all appends, reads are comparatively rare (occasional queries over recent data), and the higher write ceiling matters more than read amplification. A read-heavy lookup service — a user-profile store hit by point lookups on every request, with occasional updates — wants a B-tree engine: predictable, low-latency reads matter more than squeezing out extra write throughput it doesn't need.\n\nThe mismatch case is instructive: putting a B-tree-based database under sustained heavy write load means every write pays the full read-modify-write page cost, and throughput plateaus well below what the hardware could otherwise sustain — the database isn't broken, it's just running the wrong engine shape for the job.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-engine-choice-as-a-design-decision-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: picking a database for its feature set while ignoring that its engine is wrong for your write pattern",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This database has the query language, replication features, and ecosystem support we want — the storage engine is an implementation detail we don't need to think about.\"\n\n**Why it's wrong:** the storage engine sets the ceiling on write throughput and the shape of read latency, independent of every other feature. A B-tree-based database with a great feature set still hits its per-write page-modification cost under sustained high write volume — no amount of connection pooling, caching, or replication changes that underlying physics.\n\n**Correct model:** name your dominant access pattern (read-heavy point lookups vs write-heavy ingestion) before comparing feature lists, and filter candidate databases by storage engine fit first. A database with fewer features but the right engine shape will outperform a feature-rich one running the wrong engine for your workload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "storage-engine-choice-as-a-design-decision-s08-q1"
+      ]
+    }
+  ]
+}

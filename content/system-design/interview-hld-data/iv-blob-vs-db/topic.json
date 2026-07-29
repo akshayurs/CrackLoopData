@@ -1,0 +1,165 @@
+{
+  "id": "iv-blob-vs-db",
+  "title": "Where do you draw the line between storing something in the DB vs blob storage?",
+  "area": "system-design",
+  "group": "interview-hld-data",
+  "order": 7,
+  "slug": "iv-blob-vs-db",
+  "summary": "Large binary objects don't belong in a relational row. Learn the reference-plus-blob pattern and the write-path details that make it work.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-blob-vs-db-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just put it in a column\" is the mistake this question checks for. A relational database is built to store and index small, structured, frequently-queried data — not multi-megabyte binary blobs that bloat rows, slow backups, and rarely benefit from being queryable at the byte level.\n\nThe fix is a split: store the object's bytes in dedicated **blob storage** (S3, GCS-style object stores), and keep only a small reference — a URL or key — plus queryable metadata in the database row. This topic walks that pattern and its failure modes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-blob-vs-db-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions before you answer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **what's the size and access pattern of this object?** Small, structured, and frequently queried by its own fields (a user's display name, a product's price) points to the database. Large, binary, and rarely if ever queried by its internal content (an image, a video, a PDF) points to blob storage.\n\nAlso ask whether the object needs to be served directly to end users — if so, blob storage's ability to hand out direct, cacheable URLs matters even more, since routing large files through the application tier wastes compute for no benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-blob-vs-db-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Structure it as: **structured, queryable, and small → the database; large, binary, and rarely queried by content → blob storage with a database reference.** The database row keeps metadata you actually need to query — upload date, file size, owner — and a pointer to where the bytes live.\n\n\"This is a user-uploaded video, so I'd store the file in object storage and keep only its URL, duration, and upload timestamp in the database row — the database never touches the video bytes themselves.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-blob-vs-db-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-blob-vs-db-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: an avatar's URL vs its bytes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete split: the user's row in the database stores an `avatarUrl` column pointing at `https://cdn.example.com/avatars/u42.jpg` — a short string, easily indexed, cheap to include in every query that fetches a user profile.\n\nThe actual image bytes live in an S3-style object store, entirely separate from the database. The database never has to read, write, or back up megabytes of image data; it only ever touches a short reference string, which is exactly the kind of small, structured value relational storage is built for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-blob-vs-db-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: the write path in the right order",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Order matters: upload to blob storage first, and only write the reference to the database once that upload succeeds.\n\n```\n1. client uploads bytes -> object store (e.g. S3 PutObject)\n2. object store returns success + object key\n3. app writes { avatarUrl: key } -> database row\n```\n\nIf you wrote the database reference first and the blob upload failed afterward, every reader of that row would get a broken link to bytes that don't exist. Uploading first means the worst case is bytes sitting in blob storage with no database reference yet — orphaned, but never a dangling pointer a user actually hits.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-blob-vs-db-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-blob-vs-db-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: signed URLs to skip the app tier",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Routing every upload and download through your application servers wastes their compute on moving bytes they don't need to touch. A **pre-signed URL** — a short-lived, cryptographically-signed link the object store issues — lets clients upload or download directly:\n\n```\n1. client asks app: \"I want to upload a file\"\n2. app asks object store for a signed PUT URL (no bytes touch the app)\n3. app returns the signed URL to the client\n4. client PUTs the file bytes directly to that URL\n```\n\nThe app tier only ever handles small requests for permission — never the file bytes themselves — keeping it stateless and cheap regardless of file size.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-blob-vs-db-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Say this explicitly: **blob storage is far cheaper per gigabyte than a database, but it adds an extra network hop and a two-system consistency problem** — the reference in the database and the bytes in blob storage can now disagree, something that couldn't happen inside a single system.\n\nThat consistency problem is real, not hypothetical: an upload can fail after the database write, or vice versa, leaving a reference with no matching object or an orphaned object with no reference. Naming this explicitly, and how you handle it, is what separates a complete answer from \"just use S3.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-blob-vs-db-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-blob-vs-db-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what if you need to query metadata about the blob?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This doesn't change the split — it reinforces it. Metadata like upload date, file size, content type, or owner belongs in the database as regular indexed columns, since those are exactly the small, structured, queryable values the database is built for. The blob store never needs to answer \"which files were uploaded last week\" — the database does, from its metadata columns.\n\nThe rule stays the same: anything you need to filter, sort, or join on goes in the database; the bytes themselves, which you never query by content, stay in blob storage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-blob-vs-db-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the DB write succeeds but the blob upload fails",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If you followed the upload-first ordering, this specific failure shouldn't happen — the database write only happens after the blob upload is confirmed. But ask what state exists if something bypasses that order, or if the blob upload succeeds and the *subsequent* database write fails instead: now you have an orphaned object with no reference pointing at it.\n\nThe practical mitigation is a periodic cleanup job that scans blob storage for objects with no corresponding database reference older than some grace period, and removes them — treating orphaned objects as an expected, self-healing edge case rather than something to prevent perfectly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-blob-vs-db-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: storing images or PDFs as BLOBs in the row",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll store the image bytes directly in a BLOB column — it's simpler, one system, one write.\"\n\n**Why it's wrong:** every backup, replication event, and full-table scan now has to move megabytes of binary data per row, bloating storage costs and I/O for operations that don't even need the image content. It also removes the ability to serve the file directly and cacheably from a CDN, since it's now locked behind the database.\n\n**Correct model:** keep the bytes in dedicated blob storage built for this, and store only a small reference plus queryable metadata in the database row.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-blob-vs-db-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-blob-vs-db-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd keep small, structured, queryable data in the database and large binary objects in dedicated blob storage, with just a reference and queryable metadata in the row. I'd upload to blob storage first and only write the database reference once that succeeds, so readers never hit a dangling pointer. For uploads and downloads, I'd use pre-signed URLs so clients talk to the object store directly, not through my application tier. And I'd name the trade-off: blob storage is far cheaper per gigabyte, but it's a second system that can now disagree with the database — I'd handle that with strict write ordering plus a periodic cleanup job for orphans.\"\n\nThe underlying storage model this rests on is covered in [object and blob storage](object-and-blob-storage).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    }
+  ]
+}

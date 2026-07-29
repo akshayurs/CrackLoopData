@@ -1,0 +1,178 @@
+{
+  "id": "iv-avoiding-blocking-in-a-hot-path",
+  "title": "How do you avoid blocking in a hot path?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 12,
+  "slug": "iv-avoiding-blocking-in-a-hot-path",
+  "summary": "Contention on a hot path — the senior answer is redesign, not \"use a faster lock.\"",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A hot path under heavy lock contention rarely has \"use a faster lock\" as the real answer — the senior move is redesigning what's shared and how, not swapping one synchronization primitive for another.\n\nExpect a scenario like a single counter or cache hammered by hundreds of threads, and a request for how you'd redesign it, not just re-implement the same lock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: is the bottleneck lock contention, I/O, or CPU work under the lock?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **is the actual bottleneck threads waiting for the lock, I/O happening while the lock is held, or genuine CPU work inside the critical section?** These need entirely different fixes. Pure lock contention on cheap work is fixed by redesigning the locking strategy itself (sharding, lock-free structures). Slow I/O under a lock is fixed by moving the I/O outside the critical section, not by touching the lock at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name 2-3 redesign options — sharding the lock, lock-free structures, moving work off the hot path",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name 2-3 real options rather than one reflex fix. **Sharding the lock** — split one shared state into N independently-locked slices, so unrelated threads no longer contend with each other. **Lock-free structures** — replace the lock with an atomic type and a compare-and-swap loop, removing blocking entirely for simple operations. **Moving work off the hot path** — if the critical section does more than the bare minimum (I/O, logging, computation that doesn't need the lock), move everything non-essential outside it first, before touching the locking strategy at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-avoiding-blocking-in-a-hot-path-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s04",
+      "order": 4,
+      "sectionTitle": "Code: a single global lock around a counter/cache under heavy contention",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass GlobalCounter {\n    private final int[] counts = new int[16];\n    private final Object lock = new Object();\n\n    void increment(long key) {\n        synchronized (lock) {\n            counts[(int) (Math.abs(key) % counts.length)]++;\n        }\n    }\n}\n```\n\nEvery thread, regardless of which slot its key maps to, contends for the exact same lock. Under heavy concurrent load, threads spend most of their time waiting rather than doing the trivial work of incrementing one integer — the lock, not the work, is the bottleneck.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s05",
+      "order": 5,
+      "sectionTitle": "Code: the sharded version — striped locks, each protecting a slice of the state",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass StripedCounter {\n    private final int[] counts;\n    private final Object[] locks;\n\n    StripedCounter(int stripes) {\n        counts = new int[stripes];\n        locks = new Object[stripes];\n        for (int i = 0; i < stripes; i++) locks[i] = new Object();\n    }\n\n    void increment(long key) {\n        int i = (int) (Math.abs(key) % locks.length);\n        synchronized (locks[i]) {\n            counts[i]++;\n        }\n    }\n}\n```\n\nEach slot has its own lock. Two threads whose keys hash to different stripes never contend at all — only threads landing on the *same* stripe serialize against each other, cutting contention roughly in proportion to the number of stripes.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-avoiding-blocking-in-a-hot-path-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: one lock serializing every thread vs N shards letting most threads proceed in parallel",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Eight threads queued behind one lock versus the same eight threads spread across four lock stripes proceeding in pairs](assets/lock-striping.svg)\n\nSharding doesn't remove contention entirely — two threads can still land on the same stripe — but it turns one serialization point into several smaller ones, so most threads proceed without waiting most of the time.",
+      "assets": [{"alt": "Eight threads queued behind one lock versus the same eight threads spread across four lock stripes proceeding in pairs", "path": "assets/lock-striping.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s07",
+      "order": 7,
+      "sectionTitle": "Code: the lock-free version using a compare-and-swap loop instead of a lock",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass LockFreeCounter {\n    private final AtomicLongArray counts;\n\n    LockFreeCounter(int slots) {\n        counts = new AtomicLongArray(slots);\n    }\n\n    void increment(long key) {\n        int i = (int) (Math.abs(key) % counts.length());\n        counts.incrementAndGet(i);   // hardware CAS loop, no blocking at all\n    }\n}\n```\n\n`incrementAndGet` never blocks a thread — it reads the current value, computes the new one, and retries the compare-and-swap only if another thread updated the slot first. Under contention on the *same* slot, threads still compete, but they burn CPU cycles retrying rather than sleeping while blocked. See [lock-free and atomic object design](lock-free-and-atomic-object-design) for how far this approach extends beyond a simple counter.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"when is a lock-free structure actually worth the complexity over sharding?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sharding alone often gets most of the throughput win with far less complexity — pick it first. Lock-free structures earn their extra complexity when even a striped lock's brief hold time is too much: extremely high-frequency operations (millions per second per core) where even uncontended lock acquisition overhead is measurable, or when you specifically need to guarantee no thread ever blocks, such as code that must never be paused inside a signal handler or a real-time constraint.\n\nFor most application-level hot paths, sharding is the better cost/benefit trade; reach for lock-free only once you have evidence sharding isn't enough.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"what if the slow part is I/O, not the lock itself?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Neither sharding nor lock-free structures help if the critical section itself is slow — say, a network call or file write happening while a lock is held. The fix there is unrelated to the locking strategy: move the I/O outside the critical section entirely, holding the lock only for the brief in-memory update, and perform the I/O before acquiring the lock or after releasing it (buffering, queuing the write, or using a separate async path).\n\nDiagnosing which case you're in — contention on cheap work versus a genuinely slow critical section — has to come before picking a fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-avoiding-blocking-in-a-hot-path-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: \"just make the critical section shorter\" with no concrete technique for how",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"just make the critical section shorter\" as the entire answer, with no concrete technique for actually achieving it.\n\n**Why it's wrong:** it's true but empty — it doesn't show whether you know sharding, lock-free structures, or moving I/O out of the lock as actual, nameable techniques for shrinking or removing contention.\n\n**Correct model:** name at least one specific redesign technique and explain which part of the bottleneck it addresses, not just the goal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: reaching for a lock-free CAS loop before checking whether the critical section could simply be made smaller or sharded",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** jumping straight to a lock-free CAS-loop redesign as the first move, without checking whether the critical section could simply be shrunk or sharded first.\n\n**Why it's wrong:** lock-free code is genuinely harder to write correctly and to reason about than a striped lock, and sharding often removes most of the contention with far less risk. Reaching for the most sophisticated tool first, rather than the simplest one that solves the actual bottleneck, reads as chasing complexity rather than solving the problem.\n\n**Correct model:** shrink and shard first; reach for lock-free only once you have specific evidence that's still not enough.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-avoiding-blocking-in-a-hot-path-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd first ask whether the bottleneck is lock contention on cheap work, or a genuinely slow critical section — those need different fixes. For pure contention, I'd shard the lock into stripes first, since it removes most contention with the least complexity, and only reach for a lock-free compare-and-swap structure if I have evidence sharding isn't enough. If the critical section is slow because of I/O, I'd move that I/O outside the lock entirely instead of touching the locking strategy at all.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

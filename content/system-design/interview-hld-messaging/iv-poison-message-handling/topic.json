@@ -1,0 +1,167 @@
+{
+  "id": "iv-poison-message-handling",
+  "title": "A message keeps failing and blocking the queue — how do you handle it?",
+  "area": "system-design",
+  "group": "interview-hld-messaging",
+  "order": 13,
+  "slug": "iv-poison-message-handling",
+  "summary": "The classic poison-message question — tests whether you know retry-with-limit plus a dead-letter queue, not just \"retry until it works.\"",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-poison-message-handling-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Infinite retry isn't a safety net here — it's the failure mode itself. A message that can never succeed will retry forever unless something stops it, consuming resources and, on an ordered queue, blocking every message behind it.\n\nThe answer the interviewer wants: retry with a limit, then isolate the message in a dead-letter queue instead of retrying it forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-poison-message-handling-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **is the failure transient** (a downstream blip that'll clear on its own) **or permanent** (a malformed message that will never succeed)? And: **is this message blocking others behind it, or processing independently?**\n\nThe retry-and-DLQ pattern is the same either way, but the urgency changes — a message stalling an ordered partition needs faster isolation than one processing independently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-poison-message-handling-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Retry with backoff up to a limit**, then **move it to a dead-letter queue** for manual or automated triage instead of retrying forever. The limit is what turns an unbounded failure into a bounded, contained one.\n\nThis is the single mechanism that answers both the transient case (a few retries clear it) and the permanent case (it exhausts retries and gets isolated).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-poison-message-handling-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-poison-message-handling-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a max-retry config with an alert on the DLQ",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A consumer configured with a bounded retry policy and an alert on the dead-letter queue:\n\n```yaml\nconsumer:\n  max_retries: 5\n  backoff: exponential   # 1s, 2s, 4s, 8s, 16s\n  on_exhausted: dead_letter_queue\n\nalerting:\n  dlq_depth_gt: 0\n  notify: pagerduty:oncall-messaging\n```\n\nA max-retry count of 5 with exponential backoff, then a DLQ with a CloudWatch/Datadog-style alert firing the moment anything lands in it — so triage starts within minutes, not whenever someone happens to check.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-poison-message-handling-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a concrete scenario",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A malformed JSON payload from a buggy upstream client fails deserialization every single time. Without a retry limit, it retries forever and, on a FIFO/ordered queue, blocks every message behind it. With a 5-retry cap and a DLQ, it's isolated within seconds and the queue keeps moving.\n\nThe blast radius difference is the entire point: unbounded retry turns one bad message into a total outage for that partition; bounded retry contains it to one message.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-poison-message-handling-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-poison-message-handling-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the on-call triage runbook",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![DLQ triage runbook: alert, inspect, then fix-and-replay or discard](assets/dlq-triage-runbook.svg)\n\n\"Triage\" isn't vague here — it's a concrete branch: either the message gets corrected and replayed, or someone documents why dropping it is safe, so nothing sits in the DLQ unaddressed indefinitely.",
+      "assets": [
+        {"alt": "DLQ triage runbook: alert, inspect, then fix-and-replay or discard", "path": "assets/dlq-triage-runbook.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-poison-message-handling-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A low retry limit isolates poison messages fast but risks DLQ-ing a message that would have succeeded on, say, the 6th try during a longer transient blip. A high limit rides out longer blips but lets a truly poisoned message block its partition for longer before isolation.\n\nTune the limit and backoff to the failure patterns you actually observe, not a guess — if downstream outages typically clear within 30 seconds, size the retry window around that instead of an arbitrary count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-poison-message-handling-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: the DLQ is filling up — how do you decide what to do?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Bucket by failure reason** — schema error, downstream timeout, unknown message type — since each bucket has a genuinely different fix, rather than triaging one message at a time as if each were unique.\n\nA DLQ with 200 messages that are all the same schema error is a five-minute fix once identified; triaged one-by-one, it looks like 200 separate incidents.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-poison-message-handling-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: can any of the DLQ triage be automated?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Yes, for **known failure signatures** — auto-republish on a known-transient error code, for instance — but a **novel failure reason should still page a human** the first time it's seen, rather than silently auto-handling something nobody's classified yet.\n\nAutomation for the recognized cases frees people to focus on the genuinely new ones, which is where judgment still matters.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-poison-message-handling-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-poison-message-handling-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: retrying forever and blocking everything behind it",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"just keep retrying until it eventually works — giving up feels like losing the message.\"\n\n**Why it's wrong:** on an ordered queue or partition, one bad message that never succeeds blocks every message behind it indefinitely — the queue doesn't just fail to process the bad message, it stalls entirely.\n\n**Correct model:** a bounded retry limit plus a dead-letter queue doesn't lose the message — it's still there, isolated for triage — it just stops that one message from taking the whole partition down with it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-poison-message-handling-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-poison-message-handling-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Retry with backoff up to a bounded limit, then move the message to a dead-letter queue instead of retrying forever. Alert immediately on anything landing in the DLQ, bucket failures by reason rather than triaging one-by-one, and automate the known-signature cases while still paging a human on novel failures.\n\nThe broader vocabulary for backpressure and dead-letter design this sits inside is covered in [backpressure and dead-letter handling](backpressure-and-dead-letter-handling).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    }
+  ]
+}

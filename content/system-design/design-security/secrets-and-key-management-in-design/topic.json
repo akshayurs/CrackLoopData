@@ -1,0 +1,102 @@
+{
+  "id": "secrets-and-key-management-in-design",
+  "title": "Secrets, Keys & Encryption as Design Decisions",
+  "area": "system-design",
+  "group": "design-security",
+  "order": 4,
+  "slug": "secrets-and-key-management-in-design",
+  "summary": "Where secrets and encryption keys live in an architecture and who is allowed to touch them — the design question, not the cipher.",
+  "level": "advanced",
+  "slideCount": 6,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "secrets-and-key-management-in-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every system holds secrets — database passwords, API keys, encryption keys — and the design question is never *which cipher*, it's **where these live, how services get them, and who can touch them**. Get that wrong and it doesn't matter how strong the underlying cryptography is.\n\nThis topic covers secrets as an architectural concern: why they don't belong baked into code or images, how a key-management service issues and rotates keys instead of hardcoding them, and the blast radius a design has to plan for the day a credential leaks anyway.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "secrets-and-key-management-in-design-s02",
+      "order": 2,
+      "sectionTitle": "Why credentials don't belong in config files or environment images",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A database password committed into a config file or baked into a container image feels convenient — it's right there, versioned, no extra moving parts. It's also now everywhere that file or image goes: every developer's laptop with repo access, every CI log that might echo it, every old image tag still sitting in a registry.\n\nThe design fix is a **secrets manager** — a dedicated service (Vault, AWS Secrets Manager, GCP Secret Manager) that stores the actual secret value, and hands it to a service only at runtime, over an authenticated channel, never committed to source control or baked into an artifact.\n\nThis changes what \"the secret leaked\" even means: instead of every copy of a repo or image being a liability forever, only the secrets manager's access logs and the running process's memory matter — a far smaller, auditable surface.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "secrets-and-key-management-in-design-s02-q1"
+      ]
+    },
+    {
+      "id": "secrets-and-key-management-in-design-s03",
+      "order": 3,
+      "sectionTitle": "Key management as a service: issuing and rotating instead of hardcoding",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Encryption keys have the same problem as passwords, plus one more: they need to change periodically without breaking data encrypted under the old key. A **key management service (KMS)** — cloud-provider-managed or self-hosted — generates keys, controls who can use them, and rotates them on a schedule, so no application code ever hardcodes a raw key.\n\nServices ask the KMS to encrypt or decrypt data using a named key reference, rather than holding the key material themselves. This means access can be revoked centrally — cut off a service's permission to call the KMS and it immediately loses the ability to decrypt, without touching the data or redeploying anything.\n\nRotation becomes routine instead of a fire drill: the KMS can keep old key versions around just long enough to decrypt data written under them, while all new writes use the current version.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "secrets-and-key-management-in-design-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: fetching a secret from a vault at boot vs baking it into the image",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Two very different startup sequences. **Baked-in**: the secret is embedded in the image at build time — the service starts instantly with it present, but the secret now lives permanently in every layer of every image ever pushed, including old tags nobody uses anymore.\n\n**Fetched at boot**: the image contains no secret. On startup, the service authenticates to a vault using its own identity (an IAM role, a service account), requests the secret it needs, and holds it only in memory for the process's life. Rotating means updating it once in the vault — no rebuild, no redeploy.\n\n![Two sequence diagrams side by side: baked-in embeds a secret in the image at build time, fetched-at-boot authenticates to a vault at startup and holds the secret only in memory](assets/baked-in-vs-fetched-boot.svg)",
+      "assets": [
+        {"alt": "Two sequence diagrams side by side: baked-in embeds a secret in the image at build time, fetched-at-boot authenticates to a vault at startup and holds the secret only in memory", "path": "assets/baked-in-vs-fetched-boot.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "secrets-and-key-management-in-design-s04-q1"
+      ]
+    },
+    {
+      "id": "secrets-and-key-management-in-design-s05",
+      "order": 5,
+      "sectionTitle": "Compare: encryption at rest vs in transit as separate design decisions",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "These protect against different threats, and treating them as one decision is a common gap.\n\n| | Encryption at rest | Encryption in transit |\n|---|---|---|\n| Protects against | Someone accessing the physical disk, a stolen backup, a compromised storage layer | Someone intercepting network traffic between services |\n| Typical mechanism | Disk or database-level encryption using a KMS-managed key | TLS between every hop — client-to-gateway and service-to-service |\n| What it does NOT protect against | A live application process that already has decrypted access to the data | A service that receives cleartext data legitimately and mishandles it afterward |\n\n**How to decide:** treat these as two independent checkboxes, not one — a system with perfect TLS everywhere but an unencrypted disk is still exposed to a stolen drive, and vice versa. Cross-reference: the handshake mechanics behind in-transit encryption belong to network security, not this design layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "secrets-and-key-management-in-design-s05-q1"
+      ]
+    },
+    {
+      "id": "secrets-and-key-management-in-design-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: one shared master key protecting every tenant's data",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We encrypt everything with one master key, so all our data is protected.\"\n\n**Why it's wrong:** encryption with one shared key means that key's compromise decrypts *everyone's* data at once — every tenant, every record, in one blast radius. It also means you can't revoke or rotate access for a single tenant or record without re-encrypting the entire dataset.\n\n**Correct model:** use **key hierarchies** — a master key (held in a KMS, rarely used directly) that encrypts per-tenant or per-record data keys, which in turn encrypt the actual data. Compromising one data key exposes one tenant's data, not everyone's, and rotating a single tenant's key doesn't touch anyone else's.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "secrets-and-key-management-in-design-s06-q1"
+      ]
+    }
+  ]
+}

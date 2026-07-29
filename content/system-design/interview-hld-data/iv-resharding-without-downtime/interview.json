@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-resharding-without-downtime",
+  "interviewQuestions": [
+    {
+      "id": "iv-resharding-without-downtime-iq1",
+      "question": "How would you reshard this database as it grows, without downtime?",
+      "answerMarkdown": "I'd use the dual-write, backfill, verify, cutover sequence rather than a maintenance-window migration. Every new write during the migration goes to both the old and new shard layout, so nothing written mid-migration is ever lost. In parallel, a throttled background job backfills existing rows from the old layout into the new one, backing off during peak traffic so it doesn't compete with production load.\n\nI'd only cut reads over to the new layout once the backfill's lag — the gap between what it's copied and the current live state — sustains at zero, and checksums between the two layouts agree. Dual-writing keeps running even after cutover for a safety window, so if verification later reveals a problem, I can flip reads back to the old layout instantly since it's still current.\n\nOnly once the new layout has proven correct under real traffic would I stop dual-writing and retire the old layout.\n\n**Testing:** whether you know the actual mechanics of live resharding, not just that it's generally hard.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The resharding sequence"
+    },
+    {
+      "id": "iv-resharding-without-downtime-iq2",
+      "question": "How do you verify the new shard layout is correct before cutting over?",
+      "answerMarkdown": "I'd automate continuous comparison during the backfill, not a single check right before cutover. Concretely: row counts per shard range compared between old and new layouts, checksums or hashes over ranges of rows to catch content mismatches cheaply, and periodic spot-checks of individual records field-by-field for the checks that a checksum alone might miss.\n\nFor a sensitive dataset, I'd add a shadow-read period: keep serving real reads from the old layout as the source of truth, but also query the new layout in parallel and compare results silently, logging any mismatch without it ever reaching a user. That surfaces edge cases the backfill logic missed before cutover, not after.\n\nI'd treat verification as passing only once these checks are clean and stable, not just clean once.\n\n**Testing:** whether you can name concrete verification techniques instead of a vague 'we test it thoroughly.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Verifying before cutover"
+    },
+    {
+      "id": "iv-resharding-without-downtime-iq3",
+      "question": "The cutover reveals a data mismatch — do you roll back, or fix forward?",
+      "answerMarkdown": "Roll back first, then fix forward — the two aren't mutually exclusive, and the order matters. Because dual-writing kept the old layout current throughout the migration, I can flip reads back to it immediately without any data loss, buying time to investigate without customer impact.\n\nOnce rolled back, I'd find the specific cause of the divergence — often a race condition in the dual-write path, or an edge case the backfill logic didn't handle — patch it, and re-run the verification checks against the corrected new layout. I would not force cutover through a known, unexplained mismatch just because of schedule pressure; that risks serving wrong data to real users.\n\nI'd only attempt cutover again once the mismatch is understood and re-verified as fixed.\n\n**Testing:** whether you treat cutover as reversible and investigate before forcing it through, rather than pushing ahead under pressure.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Handling a cutover mismatch"
+    }
+  ]
+}

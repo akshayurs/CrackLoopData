@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-webhook-delivery-design",
+  "interviewQuestions": [
+    {
+      "id": "iv-webhook-delivery-design-iq1",
+      "question": "How would you design reliable webhook delivery to a client's endpoint?",
+      "answerMarkdown": "I'd treat webhooks as harder than the inbound API they complement, since delivery now depends on a client endpoint I don't control. My design rests on three mechanics: retry failed deliveries with exponential backoff up to a bounded window, like 1 minute, 5 minutes, 15 minutes, up to 24 hours; sign every payload with an HMAC over the body and a timestamp so the client can verify authenticity and reject replayed requests; and attach an idempotency key to every event so a retried delivery is safe for the client to process twice.\n\nI'd also address ordering — because retries can cause a later event to arrive before an earlier one that needed a retry, I'd give each event a sequence number or timestamp so the client can detect and handle out-of-order delivery.\n\nFor an endpoint that stays down the whole retry window, I'd land the event in a dead-letter state the client can see and manually replay, and I'd expose a polling API as a fallback so webhooks are a convenience layer, not the only path to the truth.\n\n**Testing:** whether you name the concrete mechanics, not just \"we'd POST to their URL.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing reliable webhook delivery"
+    },
+    {
+      "id": "iv-webhook-delivery-design-iq2",
+      "question": "The client's endpoint has been down for the entire 24-hour retry window — what happens to that event?",
+      "answerMarkdown": "It shouldn't just vanish. Once the retry window is exhausted, I'd move the event into a dead-letter state that's visible to the client — for example, surfaced in a developer dashboard — rather than silently dropping it the moment retries stop.\n\nFrom there, the client can manually trigger a replay once their endpoint is confirmed healthy again, without needing to contact support or lose the event entirely. I'd also proactively notify them, if I have a working communication channel like email, that an event exhausted its retries and needs manual attention, rather than relying on them to notice a gap themselves.\n\nI'd design the dead-letter record to keep the original payload and signature valid for replay, so the client's existing webhook handler doesn't need any special-case code to process a delayed, manually-triggered delivery differently from a normal one.\n\n**Testing:** whether you have a recovery path for the worst case, not just a retry policy that eventually gives up silently.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Handling exhausted retries"
+    },
+    {
+      "id": "iv-webhook-delivery-design-iq3",
+      "question": "How does the client know a webhook update didn't just fail silently on their end?",
+      "answerMarkdown": "Honestly, they don't — not from the webhook system alone. Once my delivery system gets a 2xx response, I've done my job from the sender's side, but I have no visibility into whether the client's own handler actually processed the event correctly afterward; a bug in their code could accept the request and then silently fail internally.\n\nI'd address this by exposing a polling or list API — `GET /events?since=...` — as an independent source of truth the client can reconcile against, so webhooks become a convenience layer for low-latency notification, not the only way to learn current state. If a client suspects they missed something, they can pull the authoritative list directly instead of being stuck.\n\nI'd recommend clients build periodic reconciliation against this API as a standard practice, not just a break-glass tool for suspected failures.\n\n**Testing:** whether you recognize a webhook's blind spot and design a fallback instead of assuming push delivery alone is sufficient.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Reconciling against a fallback source of truth"
+    }
+  ]
+}

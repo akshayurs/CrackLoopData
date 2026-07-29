@@ -1,0 +1,178 @@
+{
+  "id": "iv-spot-the-race-condition",
+  "title": "Spot the race condition in this code",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 9,
+  "slug": "iv-spot-the-race-condition",
+  "summary": "The \"spot it\" skill, distinct from \"make it thread-safe\" — name the exact interleaving before touching a fix.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-spot-the-race-condition-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A different skill from \"make this thread-safe\": here you're handed working-looking code and asked to find the bug before writing any fix. Vague pattern-matching (\"looks racy\") doesn't score — naming the precise interleaving does.\n\nExpect a short method or two, and a request to say exactly what goes wrong and when.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: a specific interleaving they want traced, or general hardening?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **are you looking for one specific bug, or a general hardening review of everything shared here?** A single targeted bug usually has one exact interleaving worth narrating precisely. A general review means scanning every shared field for the same two patterns — check-then-act and read-modify-write — rather than fixating on the first one you spot.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: find the shared mutable state, find the check-then-act or read-modify-write gap, narrate the exact interleaving",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three steps. **Find the shared mutable state** — which fields more than one thread can touch. **Find the gap** — a check-then-act (\"if not present, then create\") or read-modify-write (read a value, compute from it, write back) where another thread can act between the two halves. **Narrate the exact interleaving** — thread A does X, thread B does Y before A finishes, thread A then acts on now-stale information.\n\nThat narration is the actual answer; naming \"there's a race\" without it is an incomplete one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-spot-the-race-condition-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-spot-the-race-condition-s04",
+      "order": 4,
+      "sectionTitle": "Code: a hasNext()/next()-style check-then-act race between two threads",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass SharedQueue {\n    private final Deque<Task> items = new ArrayDeque<>();\n\n    boolean hasNext() {\n        return !items.isEmpty();\n    }\n\n    Task next() {\n        return items.removeFirst();   // throws if empty!\n    }\n}\n\n// caller:\nif (queue.hasNext()) {\n    Task t = queue.next();   // another thread can drain the queue in between\n}\n```\n\nThe caller's `if (hasNext())` and `next()` are two separate calls, not one atomic step. If a second thread calls `next()` on the last remaining item between this thread's check and its own `next()` call, `removeFirst()` throws `NoSuchElementException` on an empty deque — the exact gap between check and act.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: an interleaving timeline — thread A checks, thread B acts, thread A then acts on stale information",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A two-lane timeline: Thread A sees hasNext true, Thread B drains the last item, then Thread A's next call hits an empty deque](assets/check-then-act-race.svg)\n\nThe timeline makes the bug undeniable: at the moment thread A checked, its answer was correct — the queue really wasn't empty. The problem is entirely in the gap between the check completing and the act starting, where thread B's action is free to run.",
+      "assets": [{"alt": "A two-lane timeline: Thread A sees hasNext true, Thread B drains the last item, then Thread A's next call hits an empty deque", "path": "assets/check-then-act-race.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s06",
+      "order": 6,
+      "sectionTitle": "Code: a lazy-initialization race — two threads both see null and both construct",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Cache {\n    private Map<String, Data> data;\n\n    Map<String, Data> get() {\n        if (data == null) {\n            data = loadFromDisk();   // two threads can both pass the null check\n        }\n        return data;\n    }\n}\n```\n\nTwo threads calling `get()` for the first time can both see `data == null`, both call `loadFromDisk()`, and both assign the result — one construction is wasted, and worse, if `loadFromDisk()` has side effects (like acquiring a resource), those side effects happen twice. The read-modify-write here is the check-then-construct-then-assign sequence, not a single field access.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-spot-the-race-condition-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-spot-the-race-condition-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"how do you reproduce this race reliably enough to write a test for it?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Races rarely fail on demand, so a naive test that calls the racy method twice sequentially proves nothing. The practical approach: spin up N threads all hitting the racy path simultaneously, using a `CountDownLatch` to force them to start at the same instant rather than staggered, and run it hundreds or thousands of times in a loop — this maximizes the chance of hitting the narrow interleaving window without guaranteeing it.\n\nBe honest that this only raises the odds of catching the bug; a passing stress test is evidence, not proof.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"does adding synchronized to just one of the two methods fix it?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "No — both sides of a race need protection under the *same* lock, or neither is actually protected. Synchronizing only `hasNext()` still lets an unsynchronized `next()` run concurrently with it; synchronizing only `next()` doesn't stop `hasNext()` from returning a stale answer.\n\nThe fix has to cover the entire check-then-act sequence as one critical section — usually by merging the check and the act into a single synchronized method, not synchronizing each call independently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-spot-the-race-condition-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-spot-the-race-condition-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"what tools would flag this automatically — a race detector, a linter?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Static analysis tools like Error Prone or SpotBugs' concurrency checks can flag some check-then-act patterns on known non-thread-safe collections, though they miss custom logic like the lazy-initialization example. Dynamic race detectors (like the JVM's `-Xcheck` options or dedicated tools in other ecosystems, such as Go's `-race` or ThreadSanitizer for native code) instrument actual execution and can catch real races that occurred during a specific test run, at a real performance cost.\n\nNeither is a substitute for the manual trace from s03 — they help you find candidates faster, not replace the reasoning.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: saying \"there's a race condition\" without naming which two operations interleave",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** saying \"there's a race condition\" or \"this isn't thread-safe\" and stopping there.\n\n**Why it's wrong:** it doesn't demonstrate you found the actual bug — an interviewer can't tell if you spotted the real gap or are guessing based on the code merely touching shared state.\n\n**Correct model:** name the exact two operations, the exact gap between them, and a concrete interleaving of two threads that breaks the invariant — that specificity is the entire signal being graded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-spot-the-race-condition-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: fixing only the read path with a lock, leaving the write path unprotected",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** synchronizing only the method that reads the shared field (or only `hasNext()`), leaving the method that writes it (`next()`, or the constructor call) unsynchronized.\n\n**Why it's wrong:** a lock only protects against other threads that also try to acquire the same lock — an unsynchronized writer can still run concurrently with a synchronized reader, defeating the fix entirely while looking superficially correct.\n\n**Correct model:** every method touching the shared state involved in the race must synchronize on the same lock, both readers and writers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-spot-the-race-condition-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-spot-the-race-condition-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd look for shared mutable state first, then check for a check-then-act or read-modify-write gap in how it's accessed. I'd narrate the exact interleaving — which thread does what, and in what order — rather than just saying 'this isn't thread-safe.' I'd confirm any fix protects every method touching that state under the same lock, since fixing only the read or only the write side leaves the race intact. And I'd mention that a stress test with threads started simultaneously raises confidence but never proves the race is gone.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

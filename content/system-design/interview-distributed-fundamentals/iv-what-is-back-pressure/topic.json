@@ -1,0 +1,183 @@
+{
+  "id": "iv-what-is-back-pressure",
+  "title": "What Is Back-Pressure?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 13,
+  "slug": "iv-what-is-back-pressure",
+  "summary": "The mechanism, not just the word — how a system signals \"slow down\" to a sender instead of silently queuing until it falls over.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-what-is-back-pressure-s01",
+      "order": 1,
+      "sectionTitle": "The question, and why \"overloaded\" is too vague",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"It's when a system is overloaded\" describes a symptom, not the mechanism, and it's too vague to pass this question. Back-pressure is a specific technique: a receiver explicitly signaling its capacity back to a sender, so the sender can slow down or shed load *before* the receiver collapses.\n\nThe strong answer names the signal and what the sender does with it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: in-process or across a network boundary?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Back-pressure between two in-process components, or across a network boundary?\" In-process back-pressure is simpler — a bounded queue or a blocking call between two threads is enough. Across a network boundary, the signal itself has to be communicated explicitly (a protocol-level mechanism, a rejected request, an explicit \"slow down\" message), since the sender and receiver don't share memory to observe each other's state directly. See [back-pressure and dead-letter handling](backpressure-and-dead-letter-handling) for the messaging-specific mechanics.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: signal capacity, slow down or shed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Back-pressure**: the receiver signals its current capacity back to the sender, and the sender responds by slowing down or shedding load — instead of the receiver's internal queue growing without bound until it runs out of memory or falls over.\n\nThe key shift in framing: without back-pressure, a slow consumer's problem becomes an ever-growing queue somewhere upstream, hidden until it suddenly isn't. With back-pressure, the slowness becomes visible immediately, at the point where load is actually being generated, so it can be dealt with deliberately (queue, reject, scale up) rather than accidentally (silent unbounded growth).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-what-is-back-pressure-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-back-pressure-s04",
+      "order": 4,
+      "sectionTitle": "Code: an unbounded queue growing until it OOMs",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nqueue = collections.deque()   # unbounded\n\ndef producer():\n    while True:\n        queue.append(next_item())   # never blocks, never checks size\n\ndef consumer():\n    while True:\n        process(queue.popleft())    # slower than the producer\n```\nIf the consumer is even slightly slower than the producer, `queue` grows forever — there's no signal anywhere in this code telling the producer to slow down, so it never will, right up until the process runs out of memory.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s05",
+      "order": 5,
+      "sectionTitle": "Code: the fix — a bounded queue that propagates the signal",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nqueue = queue.Queue(maxsize=1000)   # bounded\n\ndef producer():\n    while True:\n        queue.put(next_item(), block=True)   # blocks once full — this IS the back-pressure\n\ndef consumer():\n    while True:\n        process(queue.get())\n```\nOnce `queue` hits 1000 items, `put()` blocks until the consumer catches up — the producer is now forced to slow down to match consumption speed. That blocking call is the entire back-pressure mechanism in this simple case.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: back-pressure propagating up a chain",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Service C is slow. Its bounded input queue fills up, so it stops accepting new requests from Service B. Service B's own queue to C now fills up too, so it slows its acceptance of requests from Service A. The slowdown propagates backward, one hop at a time, until it reaches whoever is generating the load in the first place.\n\n![Three services A, B, C in a chain, with C's queue full and the resulting slowdown propagating backward through B to A](assets/backpressure-chain.svg)",
+      "assets": [
+        {
+          "alt": "Three services A, B, C in a chain, with C's queue full and the resulting slowdown propagating backward through B to A",
+          "path": "assets/backpressure-chain.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 27,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: back-pressure vs rate limiting",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"What's the difference between back-pressure and just rate limiting?\" Rate limiting enforces a fixed cap regardless of the receiver's actual, current capacity — it's a policy decision, often set in advance and independent of real-time load. Back-pressure is reactive and based on actual observed capacity right now — it slows the sender exactly as much as the receiver currently needs, no more, no less, and adapts automatically as conditions change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-what-is-back-pressure-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-back-pressure-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what happens at the very first hop?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"What should happen when back-pressure reaches the very first hop — the end user's request?\" It should surface as an explicit, clear rejection or a visible \"try again shortly\" — a `429 Too Many Requests` or a graceful error message — not a silently dropped request or an indefinitely hanging one. Back-pressure has to eventually become visible to a human or a calling system somewhere; the goal is making that boundary explicit and honest rather than surprising.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: reactive-streams APIs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"How does this show up in a reactive-streams API specifically?\" Reactive Streams (used by Project Reactor, RxJava, Akka Streams) makes back-pressure a first-class part of the protocol: a subscriber explicitly calls `request(n)` to tell the publisher \"I can handle n more items,\" and the publisher is contractually required not to send more than that. It's back-pressure made explicit and enforced at the API level, rather than something you have to build yourself with a bounded queue.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-what-is-back-pressure-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-back-pressure-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: \"the system is slow\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"Back-pressure means the system is slow.\"\n\n**Why it's weak:** it describes what you'd observe from the outside, not the mechanism that causes it — slowness on its own could come from a hundred unrelated causes. Back-pressure is a specific, deliberate design where the receiver's capacity signal actively controls the sender's rate.\n\n**Better:** name the signal and what the sender does in response to it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-back-pressure-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: an unbounded buffer as the fix",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** \"solving\" overload by adding an unbounded buffer between producer and consumer.\n\n**Why it's wrong:** an unbounded buffer doesn't remove the mismatch between production and consumption rates, it just delays when the crash happens — and often makes it worse, since by the time memory runs out you're now also carrying a huge backlog of stale, no-longer-useful work.\n\n**Correct model:** a *bounded* buffer, sized deliberately, that actively pushes back once full — the boundedness is the entire point.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-what-is-back-pressure-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-back-pressure-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Back-pressure is a receiver signaling its current capacity back to a sender, so the sender slows down or sheds load instead of the receiver's queue growing unboundedly. A bounded queue with a blocking put is the simplest version; reactive-streams APIs make it explicit with a subscriber requesting exactly how many items it can handle. It differs from rate limiting by being reactive to real-time capacity rather than a fixed policy. When back-pressure reaches the very first hop — the end user — it should surface as a clear rejection, not a silent drop. An unbounded buffer is a common wrong fix — it delays the crash instead of preventing it.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "design-unique-id-generator",
+  "interviewQuestions": [
+    {
+      "id": "design-unique-id-generator-iq1",
+      "question": "Design a unique ID generator for a distributed system, like Twitter's Snowflake?",
+      "answerMarkdown": "I'd start from the requirement that actually drives the design: no central coordination on the hot path, since a platform-wide ID rate can easily exceed what any single counter can sustain.\n\nI'd propose a 64-bit Snowflake-style ID: a timestamp for rough ordering, a machine ID so two nodes never collide, and a per-millisecond sequence so one machine can burst past one ID per millisecond. I'd size the bit allocation against real numbers — how many machines, what peak per-instance rate — rather than assuming the textbook 41/10/12 split is automatically right for this system.\n\nI'd flag the two failure modes upfront before being asked: machine-ID collisions from bad assignment, and clock rollback from NTP corrections, since those are what actually break this design in production, not the happy path.\n\n**Testing:** whether you can derive the Snowflake structure from the requirement (no coordination) rather than reciting it from memory, and whether you preempt the follow-ups that are coming.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core Snowflake design"
+    },
+    {
+      "id": "design-unique-id-generator-iq2",
+      "question": "Why not just use a database auto-increment sequence, and when are plain UUIDs actually fine?",
+      "answerMarkdown": "A DB sequence is the simplest possible answer and I'd say so — but it puts every ID-generation call through one database, which caps throughput at whatever that one instance can sustain (tens of thousands per second) and makes the generator a single point of failure for every write in the system that depends on it.\n\nUUIDs are genuinely fine when you don't need sortability or dense index locality — a one-off object ID in a document store, a session token, an idempotency key. They're fully decentralized and collision-proof by construction; the cost (random insert pattern hurting a B-tree index, no time ordering) only matters when the ID becomes a clustered primary key on a high-write relational table.\n\nI'd frame the decision as: DB sequence for low-throughput single-node systems, UUID when sortability doesn't matter, Snowflake when both scale and rough ordering matter.\n\n**Testing:** whether you can justify the more complex design against its simpler alternatives instead of defaulting to Snowflake everywhere.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Sequence and UUID alternatives"
+    },
+    {
+      "id": "design-unique-id-generator-iq3",
+      "question": "How do you keep IDs k-sortable across a multi-region deployment?",
+      "answerMarkdown": "Within one machine, k-sortability comes for free from the embedded timestamp. Across regions, the risk is clock skew between regions being large enough that an ID generated slightly later in wall-clock time in Region A embeds an earlier timestamp than one generated in Region B — breaking the \"roughly sortable\" guarantee across the two.\n\nI'd address this with NTP-synced clocks across all regions (keeping skew to single-digit milliseconds) and, if strict cross-region ordering ever matters for a specific use case, accept that \"roughly sortable\" only holds within a tolerance band and design consumers not to depend on strict cross-region order at millisecond granularity. I'd also make sure machine-ID ranges are partitioned per region so two regions never hand out overlapping IDs.\n\n**Testing:** whether you understand that \"roughly sortable\" is a tolerance, not a guarantee, and that multi-region deployment stresses exactly that tolerance.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Multi-region k-sortability"
+    }
+  ]
+}

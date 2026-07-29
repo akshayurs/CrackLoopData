@@ -1,0 +1,133 @@
+{
+  "id": "distributed-caching",
+  "title": "Distributed Caching",
+  "area": "system-design",
+  "group": "caching",
+  "order": 5,
+  "slug": "distributed-caching",
+  "summary": "Sharding a cache cluster across many nodes and surviving the failure mode unique to caches at scale — the stampede that hits your database the moment a hot key disappears.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "distributed-caching-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A single cache node — one Redis instance — runs out of both memory and throughput once a system gets big enough. **Distributed caching** spreads the cache's data and load across many nodes, extending the single-cache ideas from [caching fundamentals](caching-fundamentals) to a cluster.\n\nThis topic covers how a cache cluster is sharded with consistent hashing, and the failure mode that's uniquely dangerous for caches: a **stampede**, where losing a hot cache entry sends a wall of traffic straight at the database all at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-caching-s02",
+      "order": 2,
+      "sectionTitle": "Why a single cache node stops being enough",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single cache node has two hard ceilings: **memory** (it can only hold as much data as the machine's RAM allows) and **throughput** (a single Redis instance tops out around a few hundred thousand ops/sec, no matter how fast the network is).\n\nOnce a working set exceeds either ceiling, one node can't help no matter how it's tuned — the fix isn't a bigger cache node, it's *more* cache nodes sharing the load. This mirrors the horizontal-scaling story for application servers, but for a stateful component instead of a stateless one.\n\nThe complication a cache adds that a stateless app server doesn't have: each node holds *different* data, so a request has to be routed to the *right* node, not just any node.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "distributed-caching-s02-q1"
+      ]
+    },
+    {
+      "id": "distributed-caching-s03",
+      "order": 3,
+      "sectionTitle": "Sharding a cache cluster with consistent hashing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The naive way to pick a node for a key is `hash(key) % number_of_nodes` — simple, but it falls apart the moment a node is added or removed: almost every key's target node changes, meaning almost the entire cache is instantly cold and every request becomes a miss.\n\n**Consistent hashing** fixes this by mapping both nodes and keys onto a conceptual ring (a circular hash space); a key belongs to the next node clockwise from its hash position. Adding or removing a node only reshuffles the keys between it and its neighbors on the ring — typically a small fraction of the total, not nearly all of it.\n\nThis is the same technique used for sharding databases and content-delivery routing — it's a general answer to \"how do I add/remove nodes without a full reshuffle,\" not something specific to caching.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-caching-s03-q1"
+      ]
+    },
+    {
+      "id": "distributed-caching-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: cache cluster with consistent hashing and replica nodes",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Hash ring of cache nodes with a replica for redundancy](assets/distributed-cache-ring.svg)\n\nEach node owns the arc of the ring between itself and the previous node. A key hashes to a point on the ring and is served by whichever node owns that arc — no central lookup table to keep in sync.\n\nReplica nodes (shown paired with a primary) protect against losing an entire arc of keys if one node fails — without a replica, a node's failure means every key in its arc becomes an instant, simultaneous miss, which is exactly the stampede risk covered next.",
+      "assets": [
+        {
+          "alt": "Hash ring of cache nodes with a replica for redundancy",
+          "path": "assets/distributed-cache-ring.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-caching-s05",
+      "order": 5,
+      "sectionTitle": "Cache stampede / thundering herd: when everyone misses at once",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **cache stampede** (or thundering herd) happens when a single hot key expires or is evicted, and a large number of concurrent requests all miss on it at the same instant — every one of them independently falls through to the database to recompute the same value, at the same time.\n\nThe danger is proportional to how hot the key was: a rarely-requested key stampeding is a non-event, but a key backing a homepage or a viral post can see thousands of simultaneous misses turn into thousands of identical, redundant database queries landing in the same millisecond — often enough to take the database down entirely.\n\nThis is a caching-specific failure mode: the cache isn't just failing to help, its own expiry mechanism is *causing* the exact overload it exists to prevent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-caching-s05-q1"
+      ]
+    },
+    {
+      "id": "distributed-caching-s06",
+      "order": 6,
+      "sectionTitle": "Mitigations: request coalescing, jittered TTLs, early recompute",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three practical defenses. **Request coalescing** (a.k.a. single-flight): when many requests miss on the same key simultaneously, only the *first* is allowed to hit the database — the rest wait for that one result and share it, instead of each running their own identical query. **Jittered TTLs** add a small random offset to each entry's expiry, so keys that were all set at once don't all expire at exactly the same instant. **Probabilistic early recompute** refreshes a key slightly *before* its TTL, with a small, increasing probability as expiry approaches, so a background refresh usually beats the crowd to it.\n\nNone of these are mutually exclusive — production systems commonly run jittered TTLs as a baseline and add request coalescing for the hottest keys specifically.\n\nThe shared idea across all three: prevent many callers from redundantly redoing the same expensive work at the same moment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-caching-s07",
+      "order": 7,
+      "sectionTitle": "Compare: client-side sharding vs proxy-based cache clusters",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Two ways to route requests to the right cache node. **Client-side sharding**: the application itself runs the consistent-hashing logic and talks directly to the correct node — no extra hop, but every client needs to agree on the same hashing scheme and node list. **Proxy-based clustering** (e.g. Twemproxy, or Redis Cluster's own routing layer): clients talk to a proxy, which does the routing — clients stay simple, but the proxy is an extra hop and a potential bottleneck or single point of failure of its own.\n\n| | Client-side sharding | Proxy-based clustering |\n|---|---|---|\n| Extra network hop | No | Yes (through the proxy) |\n| Client complexity | Higher — clients embed the hashing logic | Lower — clients just talk to the proxy |\n| Node changes | Every client must learn about them | Only the proxy needs to know |\n\n**How to decide:** client-side sharding suits a small number of trusted, tightly-coupled services; a proxy suits many heterogeneous clients that shouldn't each reimplement routing logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "distributed-caching-s07-q1"
+      ]
+    },
+    {
+      "id": "distributed-caching-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a cold cache after deploy causing a stampede on the DB",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Deploying a fresh cache cluster (or restarting one) is safe — the cache will just naturally fill back up as requests come in.\"\n\n**Why it's wrong:** \"filling back up\" means every single request in that window is a miss, because the cache is entirely empty. For a high-traffic service, that's not a gentle warm-up — it's the full, unmitigated production load hitting the database all at once, which is often exactly the load the cache existed to absorb in the first place.\n\n**Correct model:** treat cache warm-up as a deployment step, not an assumption. Pre-populate the most critical keys before routing traffic to a fresh cache, or roll the cluster node-by-node so only a fraction of keys go cold at once, keeping the database's load increase bounded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "distributed-caching-s08-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "design-ticket-booking-system",
+  "interviewQuestions": [
+    {
+      "id": "design-ticket-booking-system-iq1",
+      "question": "Design a ticket booking system that never double-sells a seat, even during a flash on-sale?",
+      "answerMarkdown": "I'd start from the one hard guarantee — no two buyers ever both end up holding the same seat — and design backward from it. Model inventory as one row per seat, not a counter, with a status column (`available/held/sold`) so a conditional write (`WHERE status='available'`) lets the database itself arbitrate concurrent claims: exactly one of two racing requests wins.\n\nThen I'd add a time-boxed hold — mark the row `held` with an expiry, so a buyer gets a few minutes to pay, but an abandoned checkout self-heals back to available via a sweeper rather than leaking inventory forever. For the on-sale spike itself, I'd put a virtual waiting room in front, admitting requests at a rate the backend can actually process instead of letting the full stampede hit the seat table at once.\n\nI'd close on `confirmBooking` needing an idempotency key, since a client retry after a timeout is the easiest way to accidentally double-charge or double-book.\n\n**Testing:** whether you identify the one correctness invariant first and design every other piece to protect it, rather than starting from architecture diagrams.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The full design, end to end"
+    },
+    {
+      "id": "design-ticket-booking-system-iq2",
+      "question": "How would you make the virtual waiting room fair — FIFO versus random admission?",
+      "answerMarkdown": "I'd separate two different notions of fairness the interviewer is probing for. Strict FIFO (first to join the queue, first admitted) feels intuitively fair, but it rewards whoever has the fastest script or refresh reflexes at the exact on-sale second — which isn't really \"fair\" to a human clicking a button versus a bot hammering the endpoint.\n\nI'd propose a short randomized admission window instead: everyone who arrives within, say, the first 2 seconds of on-sale gets shuffled into a random order before FIFO applies past that point. This flattens the advantage of network latency or automation without abandoning ordering entirely — arrive an hour early and you still don't jump ahead of people who showed up on time.\n\nI'd also flag bot mitigation (rate limits, CAPTCHAs at queue entry) as a complementary control, not a replacement for the fairness policy itself.\n\n**Testing:** whether you can reason about fairness as a product/policy decision, not just a technical queue implementation detail.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Waiting-room fairness: FIFO vs random"
+    },
+    {
+      "id": "design-ticket-booking-system-iq3",
+      "question": "A user's payment fails after their seat hold was taken. How do you avoid leaking that seat?",
+      "answerMarkdown": "I'd point out this is exactly what the hold's expiry is for — the seat was never permanently committed, so a failed payment just means the hold runs out and the sweeper (or the next `holdSeat` attempt on that row) flips it back to available, same as if the user had abandoned checkout voluntarily.\n\nThe subtlety I'd raise is timing: if the hold window is long (say 10 minutes) but payment fails almost instantly, waiting the full window before re-releasing the seat wastes inventory during a hot on-sale. I'd handle the fast-failure path explicitly — on a definitive payment decline, release the hold immediately rather than waiting for expiry, while still keeping the expiry as the backstop for the ambiguous cases (payment provider timeout, no response at all) where you genuinely don't know the outcome yet.\n\n**Testing:** whether you distinguish a definitive failure (release now) from an ambiguous one (rely on expiry) instead of treating every payment failure identically.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Payment failure after a hold"
+    }
+  ]
+}

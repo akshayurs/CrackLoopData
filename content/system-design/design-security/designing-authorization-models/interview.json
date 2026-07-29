@@ -1,0 +1,29 @@
+{
+  "topicId": "designing-authorization-models",
+  "interviewQuestions": [
+    {
+      "id": "designing-authorization-models-iq1",
+      "question": "Design the permission system for a Google-Docs-style sharing model.",
+      "answerMarkdown": "I'd start by naming why this doesn't fit RBAC cleanly: access here isn't a fixed role, it's a chain of relationships — a user can see a document because they own it, were directly shared on it, or belong to a group shared on its parent folder. That points straight at ReBAC: model users and resources as nodes, and ownership/sharing/membership as edges, so \"can X open Y\" becomes a graph traversal instead of a table lookup.\n\nFor the runtime path, I'd put one policy decision point behind that graph and have every enforcement point — the API layer, the search indexer, the offline-sync worker — call it with the same allow/deny question, instead of each reimplementing the traversal.\n\nThe hard part is scale: recomputing this graph traversal on every single document open is expensive, so I'd cache resolved access sets per document with a short TTL and invalidate on share/unshare events, accepting a brief staleness window in exchange for speed.\n\n**Testing:** whether you recognize a relationship-graph problem instead of forcing it into RBAC, and whether you think about the read-path cost of graph traversal at scale.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Google-Docs-style sharing permissions"
+    },
+    {
+      "id": "designing-authorization-models-iq2",
+      "question": "How would you design a permission check that has to run in single-digit milliseconds at real scale?",
+      "answerMarkdown": "I'd first make sure the decision logic itself isn't a network hop away from the request path — a policy engine embedded as a library in each service, fed by centrally-managed rules, avoids paying a round trip to a separate service on every single check.\n\nThen I'd add caching for the actual permission decisions, not just raw data — cache \"can user X do Y on Z\" with a TTL sized to how much staleness the feature can tolerate. I'd draw a hard line between paths: high-stakes actions like deleting an account or moving funds skip the cache and pay full latency, while low-stakes reads like viewing a page happily accept a few seconds of staleness for speed.\n\nI'd also flag that this only holds if the underlying rule set is simple enough to evaluate fast — a ReBAC graph traversal at scale needs its own pre-computation or indexing strategy, not just a cache in front of it.\n\n**Testing:** whether you treat latency as a first-class design constraint on authorization, not an afterthought bolted on once it's already slow.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Sub-10ms permission checks at scale"
+    },
+    {
+      "id": "designing-authorization-models-iq3",
+      "question": "Walk me through RBAC, ABAC, and ReBAC — when would you actually pick each one?",
+      "answerMarkdown": "I'd frame the choice around what the permission rule actually depends on. RBAC fits stable, coarse-grained access — \"admins can delete any ticket\" — where permissions map cleanly onto a small set of roles; it breaks down once you need fine-grained or conditional rules, because you end up creating a new role for every combination.\n\nABAC fits when the decision is a function of multiple attributes — user department, resource sensitivity, time of day — like \"engineers can view billing data only from their own region.\" The cost is that attribute rules multiply into a hard-to-audit tangle as the system grows.\n\nReBAC fits sharing-heavy systems where access follows relationships rather than fixed rules — documents, folders, social graphs — where \"can X see Y\" really means \"is there a path from X to Y in the sharing graph.\"\n\nI'd close by noting real systems often combine these: RBAC for coarse admin tiers, ReBAC for user-level sharing on top.\n\n**Testing:** whether you can match a model to a concrete requirement instead of picking one as a default and forcing every case into it.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "RBAC vs ABAC vs ReBAC, when to use each"
+    }
+  ]
+}

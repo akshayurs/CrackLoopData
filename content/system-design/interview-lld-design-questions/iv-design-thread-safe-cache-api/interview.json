@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-thread-safe-cache-api",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-thread-safe-cache-api-iq1",
+      "question": "Design a thread-safe cache with get, put, and remove.",
+      "answerMarkdown": "Start by locking the interface before anything else: `get(key)`, `put(key, value)`, `remove(key)` — plain and boring, with no eviction or locking details leaked into it. Say this out loud so the interviewer knows you're not skipping the API to jump to internals.\n\nThen name the concurrency approach: back the cache with a concurrent hash map so reads never block each other, and only take a lock around eviction bookkeeping — a compound operation like \"check size, then evict\" needs one. This is the same discipline as any thread-safe class: protect the smallest critical section, not the whole object.\n\nI'd close by naming the gap most candidates miss: concurrent misses on the same cold key can trigger duplicate expensive loads, so I'd use a coordinated load (like `computeIfAbsent`) rather than a naive check-then-load.\n\n**Testing:** whether you separate API design from concurrency mechanics, and whether you spot the thundering-herd gap before being asked.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-iq2",
+      "question": "How do you avoid a thundering herd on a cache miss?",
+      "answerMarkdown": "I'd name the failure mode precisely: when a key isn't cached, several concurrent callers can all detect the miss and all call the same expensive loader — a database query or downstream API — multiplying load by however many threads collided.\n\nThe fix is to make loading a single, coordinated operation per key instead of per caller. On a JVM, `ConcurrentHashMap.computeIfAbsent` does exactly this — only the first caller runs the loader, everyone else blocks briefly and receives the same result. Without a built-in primitive like that, I'd reach for a per-key lock, created lazily, so only one thread loads a given key at a time.\n\nI'd flag one trade-off: this makes a slow loader block every concurrent caller for that key, so I'd pair it with a timeout so one bad backend call doesn't hang the whole herd.\n\n**Testing:** whether you can name a concrete concurrency primitive, not just the concept of avoiding duplicate work.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Thundering-herd follow-up"
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-iq3",
+      "question": "Should get() block on a cache miss, or return a future?",
+      "answerMarkdown": "I'd present it as a genuine trade-off rather than picking one blindly. A blocking `get` is simple: the caller gets a value back synchronously, and the code reads like a normal method call — fine when the loader is fast, like a local DB lookup.\n\nA future-returning `get` lets the caller compose it into a non-blocking pipeline and frees the calling thread while the load happens, which matters when the loader is slow or the caller runs on a thread pool that shouldn't be blocked.\n\nI'd default to blocking unless the prompt signals high concurrency or a slow, external loader, then offer the future-based signature as the natural evolution — often exposing both, with the blocking version implemented as a wait on the future internally.\n\n**Testing:** whether you can reason about caller-side concurrency implications, not just the cache's internal locking.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Blocking vs future-based get"
+    }
+  ]
+}

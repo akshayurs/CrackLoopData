@@ -1,0 +1,133 @@
+{
+  "id": "cache-invalidation",
+  "title": "Cache Invalidation",
+  "area": "system-design",
+  "group": "caching",
+  "order": 4,
+  "slug": "cache-invalidation",
+  "summary": "One of the two hard problems in computer science — keeping a cache from confidently lying about the current state of the data it's caching.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "cache-invalidation-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Storing data in a cache is easy. Knowing *when it's no longer true* is the hard part — that's **cache invalidation**. A cache that never invalidates isn't fast, it's a system that eventually serves confidently wrong answers.\n\nThis topic covers why invalidation is famously difficult, the two main strategies (TTL expiry vs explicit invalidation), and the race conditions that show up the moment a cache spans more than one node.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "cache-invalidation-s02",
+      "order": 2,
+      "sectionTitle": "Why invalidation is one of the two hard problems in CS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The joke — \"there are only two hard problems in computer science: cache invalidation and naming things\" — is a joke because it's true. The difficulty isn't storing a copy of data; it's knowing the *exact moment* that copy stops matching reality, across every place it might have been copied to.\n\nThe hard part is scope: a single database row can be cached in a CDN edge node, an application cache, and a client's local storage simultaneously. A write to that row needs to somehow reach all three, or at least make them stop being trusted, and any one that's missed silently serves wrong data with full confidence.\n\nThis is why invalidation bugs are so common in practice: they don't crash anything, they just quietly serve the wrong answer, and often only surface when a user reports something that \"should have changed already.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cache-invalidation-s02-q1"
+      ]
+    },
+    {
+      "id": "cache-invalidation-s03",
+      "order": 3,
+      "sectionTitle": "TTL expiry vs explicit invalidation: the trade-off",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "There are two fundamentally different ways to stop trusting a cache entry. **TTL expiry** sets a fixed lifetime up front and lets the entry go stale automatically — simple, requires no coordination, but guarantees a window where the data can be wrong. **Explicit invalidation** actively deletes or updates the entry the moment the underlying data changes — no staleness window, but it requires every writer to remember to do it, everywhere the data might be cached.\n\n| | TTL expiry | Explicit invalidation |\n|---|---|---|\n| Staleness window | Guaranteed (up to the TTL) | None, if done correctly |\n| Coordination needed | None | Every write path must trigger it |\n| Failure mode | Predictable — bounded by TTL | Silent — a missed invalidation is a stale entry forever |\n| Typical use | Data that's fine slightly stale | Data that must reflect writes immediately |\n\n**How to decide:** use TTL as a baseline safety net everywhere, and layer explicit invalidation on top for data where even a short staleness window is unacceptable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "cache-invalidation-s03-q1"
+      ]
+    },
+    {
+      "id": "cache-invalidation-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a stale read after an underlying write",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline showing a stale cache read after a database write](assets/cache-invalidation-timeline.svg)\n\nThe sequence is simple and that's what makes it dangerous: the database is updated correctly, but nothing has told the cache yet. Any read that lands between the write and the (eventual) invalidation gets a confidently wrong answer — the system isn't broken, it's just temporarily lying.\n\nThe gap between \"database updated\" and \"cache knows about it\" is exactly what invalidation strategy is trying to close, and every strategy trades off how small that gap gets against how much coordination it costs.",
+      "assets": [
+        {
+          "alt": "Timeline showing a stale cache read after a database write",
+          "path": "assets/cache-invalidation-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "cache-invalidation-s05",
+      "order": 5,
+      "sectionTitle": "Write-through invalidation vs cache-busting on write",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two concrete ways to invalidate on a write. **Write-through invalidation** updates the cache with the new value at write time, so the next read is already a hit with fresh data. **Cache-busting on write** instead simply deletes the cache entry, forcing the next read to miss and re-fetch from the database (this pairs naturally with cache-aside, covered in [cache read/write patterns](cache-read-write-patterns)).\n\nDeletion is usually the safer default: it avoids a race where the cache is *updated* with a value that's already stale by the time the update lands (say, from a second concurrent write), because the next reader is forced back to the actual source of truth instead of trusting whatever the cache last computed.\n\nThe cost of delete-based invalidation is a guaranteed miss on the very next read — a small, predictable price for correctness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "cache-invalidation-s06",
+      "order": 6,
+      "sectionTitle": "Invalidating across a cache cluster: fan-out and races",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single cache node makes invalidation straightforward — one delete call. A **cache cluster** with many nodes (see [distributed caching](distributed-caching)) makes it a fan-out problem: the invalidation has to reach every node that might hold a copy of that key, and it has to do so before another read on any of those nodes serves the stale value.\n\nIf invalidation is broadcast asynchronously, there's a window where some nodes have already invalidated and others haven't — two users hitting different nodes can legitimately see different answers for the same key at the same moment.\n\nCommon fixes: a pub/sub invalidation channel all nodes subscribe to, or routing all writes for a key through a single node so at least that node's view is authoritative while others catch up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cache-invalidation-s06-q1"
+      ]
+    },
+    {
+      "id": "cache-invalidation-s07",
+      "order": 7,
+      "sectionTitle": "Versioned keys / cache-busting as an alternative to deletion",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Instead of deleting or updating an entry in place, **versioned keys** embed a version (or content hash) directly into the cache key itself — `product:42:v3` instead of `product:42`. When the underlying data changes, the application simply starts writing and reading under `v4`; the old `v3` entry is left alone and quietly expires or gets evicted on its own.\n\nThis sidesteps invalidation races entirely, since there's never a moment where a stale value is served under the *current* key — old and new versions simply coexist under different keys until the old one ages out.\n\nThe classic example is a static asset like `app.a1b2c3.js`: the filename changes when the content changes, so a CDN can cache each version forever without ever needing to invalidate anything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "cache-invalidation-s07-q1"
+      ]
+    },
+    {
+      "id": "cache-invalidation-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: invalidating the cache before the DB write commits (race)",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Invalidate the cache first, then write the database — that way there's no moment where the cache holds stale data.\"\n\n**Why it's wrong:** between the invalidation and the database write actually committing, a concurrent reader can miss the (now-empty) cache, read the *old* value straight from the database (since the write hasn't landed yet), and repopulate the cache with that stale value — which then sits there, uninvalidated, until its TTL expires.\n\n**Correct model:** invalidate *after* the database write commits, not before. This doesn't eliminate every race (a read between the DB commit and the invalidation can still see the old cache entry briefly), but it closes the far worse race where a stale value gets *written back* into the cache and persists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "cache-invalidation-s08-q1"
+      ]
+    }
+  ]
+}

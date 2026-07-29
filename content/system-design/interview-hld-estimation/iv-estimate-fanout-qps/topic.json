@@ -1,0 +1,167 @@
+{
+  "id": "iv-estimate-fanout-qps",
+  "title": "How would you estimate the QPS hitting one specific downstream dependency?",
+  "area": "system-design",
+  "group": "interview-hld-estimation",
+  "order": 12,
+  "slug": "iv-estimate-fanout-qps",
+  "summary": "Tests whether you can reason past the front-door QPS to what a single internal service actually receives once fan-out multiplies it — the number that decides if that dependency needs its own scaling plan.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-estimate-fanout-qps-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The QPS number you compute at the front door is not the number any single internal service actually receives — a service architecture where one incoming request triggers several downstream calls means internal QPS is a **multiple** of front-door QPS, sometimes a large one.\n\nThe strong answer names the fan-out factor explicitly and multiplies it through, rather than assuming every tier in the system sees the same traffic the edge does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **how many downstream calls does one incoming request trigger**, and **are any of them cached or batched**? The first number sets the raw multiplier; the second determines how much of that multiplied load actually reaches the dependency versus getting absorbed before it does.\n\nWithout both answers, a fan-out estimate is either wildly overstated (ignoring caching) or dangerously understated (ignoring the multiplier entirely).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The formula: **downstream QPS = incoming QPS × fan-out factor per request**, then **subtract what caching absorbs** before that traffic reaches the dependency's actual origin.\n\nSay both steps out loud in order — the raw multiplied figure first, then the caching-adjusted real figure — since the gap between the two is usually the most useful part of the answer, not just the final number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-estimate-fanout-qps-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: raw fan-out before caching",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A news-feed page load triggers 5 backend calls (posts, comments, likes, ads, recommendations), at 10,000 incoming QPS:\n\n```\n10,000 incoming QPS x 5 backend calls/request = 50,000 QPS (raw, before caching)\n```\n\nThat's already 5x the front-door figure landing on that tier of backend services **before** accounting for anything that gets served from a cache — the multiplier alone is often the biggest surprise in this estimate.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: applying the cache hit rate",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "If those backend calls are 80% served from cache (a realistic figure for hot, read-heavy data), only the 20% miss rate actually reaches the dependency:\n\n```\n50,000 QPS x (1 - 0.80) = 50,000 x 0.20 = 10,000 QPS (real downstream load)\n```\n\n**10,000 QPS** is the real number the dependency needs to be sized for — coincidentally equal to the original front-door QPS here, which is exactly why naming both the raw multiplier and the caching adjustment matters: skip either step and you land on the wrong number, even if it happens to look plausible.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-estimate-fanout-qps-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: fan-out to a poorly-decomposed set of microservices",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Now the more painful case: the same 10,000 incoming QPS fanning out to 20 separate microservices, one call each, because the system was decomposed too finely:\n\n```\n10,000 incoming QPS x 20 downstream calls = 200,000 total calls/sec, system-wide\n```\n\nNo single service is necessarily overloaded — each might only get 10,000 QPS — but **200,000 total RPCs/sec** across the system is itself a real cost: connection overhead, serialization, network hops, and operational complexity, all multiplying with every extra service in the fan-out. That total is the number that argues for consolidating some of those services, independent of any one service's individual load.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-estimate-fanout-qps-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s07",
+      "order": 7,
+      "sectionTitle": "Compare: batching fan-out calls vs added latency",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Batching** several fan-out calls into one request (fetching posts, comments, and likes in a single downstream call instead of three) directly cuts downstream QPS — fewer round trips for the same data. **Not batching** keeps each call simple and independent, but leaves the multiplied QPS fully exposed to every downstream service.\n\nThe cost of batching: it adds latency to the front-door request, since it now has to wait for a combined response instead of firing calls independently, and it couples services that were previously separable. Name both sides — batching is a QPS-for-latency-and-coupling trade, not a pure win.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-estimate-fanout-qps-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: one downstream call is much slower than the others",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"One of the five downstream calls is much slower than the others — does fan-out QPS even matter more than fan-out latency here?\" In that case, latency, not QPS, becomes the binding concern: if a page load waits on all 5 calls (a fan-out-and-wait pattern), the whole request is only as fast as the slowest one, regardless of how well-provisioned every service's QPS capacity is.\n\nThe fix is architectural, not capacity-based — make the slow call non-blocking (fire-and-forget, or render its data asynchronously once ready) rather than trying to make its QPS handling faster.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the dependency's capacity is smaller than the estimate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"The dependency's own capacity is smaller than your 10,000 QPS estimate — what do you change, the fan-out or the dependency?\" Both are legitimate levers, and naming which one fits the situation is the actual answer: if the dependency is a shared, hard-to-scale legacy system, reduce the fan-out (more aggressive caching, batching, or removing an unnecessary call). If the dependency is one you own and can scale, add capacity there instead.\n\nThe wrong answer is picking one lever reflexively — the right one depends on which side of the relationship is actually cheaper and safer to change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: sizing a downstream service using front-door QPS",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** if the front door handles 10,000 QPS, every internal service behind it should be sized for roughly 10,000 QPS too.\n\n**Why it's wrong:** any service that gets called more than once per incoming request receives a multiple of front-door QPS, not the same figure — a service in a 5-way fan-out could see 50,000 QPS before caching, 5x the naive assumption, and provisioning it for 10,000 leaves it badly undersized.\n\n**Correct model:** always multiply front-door QPS by the fan-out factor for the specific service in question, then subtract what caching absorbs — never assume uniform load across tiers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-estimate-fanout-qps-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-fanout-qps-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Compressed script: \"At 10,000 incoming QPS and a 5-call fan-out per request, that's 50,000 QPS hitting that backend tier before caching. With an 80% cache hit rate, real downstream load drops to about 10,000 QPS. If this were 20 microservices instead of 5, that's 200,000 total calls/sec system-wide — a real argument for consolidation even if no single service is individually overloaded.\"\n\nPractice naming the raw multiplied figure before the caching-adjusted one — skipping the raw number hides how big the multiplier really is.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-exactly-once-in-practice",
+  "interviewQuestions": [
+    {
+      "id": "iv-exactly-once-in-practice-iq1",
+      "question": "How would you actually achieve exactly-once processing here?",
+      "answerMarkdown": "I'd correct the premise first: no broker gives you exactly-once delivery for free over a real network — retries and redeliveries happen. What you can build is at-least-once delivery plus an idempotent consumer, which together behave as exactly-once from the outside.\n\nConcretely, I'd attach a dedup key to each message — a client-generated idempotency key if the caller provides one, otherwise a stable hash of business-meaningful fields, never the broker's own offset. The consumer checks that key against a store inside the same transaction as the side effect: for a payment consumer, that's a unique constraint on `payment_intent_id`, checked and inserted before the charge fires. A redelivered message finds the row already there and short-circuits.\n\nI'd close by naming the cost — a dedup store and a lookup per message — and note it's worth paying for a payment or inventory decrement, but probably not for a low-stakes view-count event.\n\n**Testing:** whether you know exactly-once is engineered at the consumer, not granted by a broker setting.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core exactly-once question"
+    },
+    {
+      "id": "iv-exactly-once-in-practice-iq2",
+      "question": "What happens if the dedup store itself is unavailable when a message arrives?",
+      "answerMarkdown": "I'd fail closed: don't process the message, let it retry once the store is back, rather than failing open and risking a duplicate side effect. Whether that's the right call depends on how costly a duplicate actually is — for a payment, failing closed is clearly correct even if it adds latency; for a low-stakes counter increment, failing open and tolerating an occasional double-count might be a reasonable trade instead.\n\nI'd walk through the failure mode concretely: if the dedup store (say a Postgres table or a Redis cluster) is down and the consumer processes anyway, a redelivered message it can't check against would sail through and charge twice. Failing closed converts that into \"the message waits a bit longer,\" which is almost always the safer default for anything with a real cost attached.\n\nI'd also flag that this decision should be made explicit and documented per consumer, not left as an accidental default of whatever the client library does.\n\n**Testing:** whether you can reason about the fail-open-vs-fail-closed trade-off under a dependency outage, not just the happy path.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Dedup store outage: fail open or closed"
+    },
+    {
+      "id": "iv-exactly-once-in-practice-iq3",
+      "question": "A team enabled Kafka's idempotent producer and transactions and now believes duplicate processing is impossible. Are they right?",
+      "answerMarkdown": "No, and I'd walk through exactly why. Kafka's idempotent producer plus transactional writes solve one specific problem: they stop the *producer* from writing the same message twice, for instance after a retry caused by a dropped ack. That's a real and useful guarantee, but it's scoped to the write path.\n\nIt says nothing about the consumer side. A consumer can still process a message, crash before acking it, and have the broker redeliver that same message on restart — which is duplicate *processing*, not duplicate *writing*, and the producer-side setting has no visibility into it at all.\n\nSo I'd tell the team: keep the producer config, it's good hygiene, but you still need a consumer-side idempotency mechanism — a dedup key checked in the same transaction as the side effect — to actually close the gap they think they've closed.\n\n**Testing:** whether you can distinguish producer-side and consumer-side duplicate risk instead of treating one broker setting as the whole solution.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "The broker-config-is-enough misconception"
+    }
+  ]
+}

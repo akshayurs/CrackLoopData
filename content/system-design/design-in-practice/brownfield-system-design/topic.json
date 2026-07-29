@@ -1,0 +1,143 @@
+{
+  "id": "brownfield-system-design",
+  "title": "Brownfield System Design",
+  "area": "system-design",
+  "group": "design-in-practice",
+  "order": 2,
+  "slug": "brownfield-system-design",
+  "summary": "Designing changes inside a live system you can't rewrite — mapping blast radius, keeping backwards compatibility, and executing dual-writes and backfills without breaking things mid-flight.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "brownfield-system-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Brownfield** design means changing a system that's already live, already has real users, and can't be paused for a rewrite. Almost all real system-design work is brownfield — greenfield projects are rare once you're past the first year of a company's life.\n\nThe skill isn't picking the right end-state architecture (that part's often obvious); it's executing the *path* from here to there without an outage, a data-consistency bug, or a migration that quietly never finishes. This topic is the practitioner's playbook for that path — the pattern catalog itself lives elsewhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "brownfield-system-design-s02",
+      "order": 2,
+      "sectionTitle": "Greenfield vs brownfield: why \"just redesign it\" is rarely the real option",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **greenfield** design starts from nothing — no existing data, no existing callers, no traffic to protect. A **brownfield** design starts from a live system: real data that must stay correct, real callers you may not even have a full list of, and traffic that can't stop while you work.\n\n\"Just redesign it properly\" sounds appealing in a meeting, but it quietly assumes you can freeze the old system, migrate everything, and cut over atomically — which is almost never true at any real scale. The old and new systems will coexist for weeks or months, and most of the actual design work is in that coexistence period, not in the target architecture.\n\nInterview signal: when asked to redesign something, explicitly say whether you're treating it as greenfield or brownfield — the two produce very different answers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "brownfield-system-design-s02-q1"
+      ]
+    },
+    {
+      "id": "brownfield-system-design-s03",
+      "order": 3,
+      "sectionTitle": "Mapping the blast radius: who and what depends on the thing you're changing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Blast radius** is the full set of callers, jobs, and downstream systems that would break if your change went wrong. Before touching a live system, you map it: who calls this API, who reads this table directly (not just through the service), which batch jobs assume today's schema, which dashboards or alerts key off the old shape.\n\nThe direct callers are usually easy to find. The dangerous ones are the indirect dependents — an analytics pipeline reading the table straight from the warehouse, a second team's service that was never registered as a consumer. These don't show up in your service's own logs.\n\nA blast-radius map isn't a formality; it's what tells you whether \"just add a column\" is actually safe or secretly a breaking change for three teams you've never talked to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "brownfield-system-design-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: an expand-contract migration in stages",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Expand-contract migration timeline: Expand, Migrate, Contract, Done, with caller status annotated at each stage](assets/expand-contract.svg)\n\nThe **expand-contract** pattern is the default shape for a safe brownfield change: **expand** by adding the new shape alongside the old without removing anything, **migrate** callers over one at a time while both shapes are kept in sync, then **contract** by deleting the old shape only once nothing depends on it anymore.\n\nThe critical property: at every point in this timeline, the system is in a valid, working state — you can pause for a week between any two stages and nothing is broken.",
+      "assets": [
+        {"alt": "Expand-contract migration timeline: Expand, Migrate, Contract, Done, with caller status annotated at each stage", "path": "assets/expand-contract.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "brownfield-system-design-s04-q1"
+      ]
+    },
+    {
+      "id": "brownfield-system-design-s05",
+      "order": 5,
+      "sectionTitle": "Backwards compatibility: versioning the contract while the old caller still exists",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Backwards compatibility** means old callers keep working unmodified while you change the contract underneath them. In practice this means additive changes only during the coexistence period: add a new field instead of renaming one, add a new endpoint version instead of changing the old one's response shape, make new required fields optional with a sensible default.\n\nThe rule of thumb: a caller you haven't heard from since the change shipped should still be working, not silently broken. If you must make a breaking change, it goes through an explicit deprecation window — announce it, give a timeline, monitor who's still calling the old shape, and only remove it once that count is zero.\n\nThis is why blast-radius mapping (previous slide) comes first: you can't know what \"backwards compatible\" needs to cover until you know who's actually depending on the current shape.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "brownfield-system-design-s06",
+      "order": 6,
+      "sectionTitle": "Dual-writes: keeping two systems consistent during a cutover, and where they drift",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **dual-write** means every write goes to both the old and new data store during a migration, so the new store stays current while you're still validating it and the old store stays authoritative as a fallback. It sounds safe, but it's one of the most common sources of subtle data-consistency bugs in a migration.\n\nThe failure mode: the two writes aren't atomic. If the write to the old store succeeds and the write to the new store fails — a timeout, a transient error, a partial deploy — the two stores now disagree, and nothing detects it unless you built reconciliation to catch it. This drift compounds silently; by cutover day the new store can be wrong in ways nobody noticed.\n\nMitigation: treat dual-writes as inherently lossy and add a reconciliation job that diffs the two stores on a schedule, not just a one-time backfill — the dual-write phase is exactly where you should expect divergence, not be surprised by it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "brownfield-system-design-s06-q1"
+      ]
+    },
+    {
+      "id": "brownfield-system-design-s07",
+      "order": 7,
+      "sectionTitle": "Backfills: safely rewriting historical data without an outage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **backfill** rewrites existing historical data into a new shape — populating a new column for old rows, moving old records into a new store. Done carelessly, it's a self-inflicted outage: a single unbatched `UPDATE` across a billion-row table locks it and takes production down.\n\nThe safe pattern: batch it (thousands of rows per transaction, not millions), throttle it (add a deliberate delay between batches so it doesn't compete with live traffic for I/O), and make it resumable (track a checkpoint so a failure mid-run restarts from where it stopped, not from row one).\n\nAlso verify as you go, not just at the end — sample-check a percentage of backfilled rows against the source so a systematic bug in the backfill logic is caught at 5% done, not after the whole table is silently wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "brownfield-system-design-s08",
+      "order": 8,
+      "sectionTitle": "Compare: big-bang cutover vs incremental migration — when each is actually right",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Big-bang cutover | Incremental migration |\n|---|---|---|\n| Mechanism | Switch all traffic to the new system at once | Move callers or data over in stages (expand-contract) |\n| Blast radius if wrong | Everything, all at once | Bounded to whatever moved in that stage |\n| Rollback | All-or-nothing, often under time pressure | Roll back just the last stage |\n| Calendar cost | Fast to execute, once ready | Slower — weeks to months of coexistence |\n| Fits best | Small systems, low traffic, or a hard deadline (e.g. vendor contract ending) with tight testing | Anything at real scale, or where a bad cutover is costly |\n\n**How to decide:** default to incremental for anything with real production traffic; reach for big-bang only when the system is genuinely small or coexistence is impossible (e.g. a hard cutoff date) and you can fully test the new path beforehand.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "brownfield-system-design-s08-q1"
+      ]
+    },
+    {
+      "id": "brownfield-system-design-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: the migration with no way to tell if it's actually done",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We finished the migration — the new system is live and taking traffic.\"\n\n**Why it's wrong:** \"live\" isn't the same as \"done.\" Without an explicit completion signal — zero remaining calls to the old endpoint, zero writes still landing in the old table, an alert if either happens — the old path often keeps getting a trickle of traffic indefinitely: a forgotten cron job, a mobile client on an old app version, a partner integration nobody notified. The migration limps on half-finished for months, with both systems needing to be kept correct.\n\n**Correct model:** define \"done\" before you start — a measurable, monitored condition like \"old table has received zero writes for 30 consecutive days\" — and only contract (remove the old path) once that condition holds, not once the new path merely works.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "brownfield-system-design-s09-q1"
+      ]
+    }
+  ]
+}

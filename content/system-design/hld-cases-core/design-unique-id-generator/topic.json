@@ -1,0 +1,232 @@
+{
+  "id": "design-unique-id-generator",
+  "title": "Design a Unique ID Generator",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 3,
+  "slug": "design-unique-id-generator",
+  "summary": "Generating unique, roughly-sortable IDs across many machines without a central bottleneck — clock drift and worker-ID assignment are where this actually breaks.",
+  "level": "intermediate",
+  "slideCount": 16,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "design-unique-id-generator-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Generate unique IDs across many machines, with no central bottleneck, and roughly time-sortable so newer IDs sort after older ones. Think of it like assigning locker numbers at hundreds of gyms simultaneously — each gym needs numbers nobody else's gym is handing out, without calling a central office for every single locker.\n\nThe classic answer is a Snowflake-style ID: pack a timestamp, a machine identifier, and a per-machine sequence number into one integer. Almost every real interview follow-up here is about what breaks that packing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** every generated ID must be globally unique; IDs should be roughly time-sortable (newer IDs generally compare greater than older ones); each node must sustain a high generation rate without coordinating with other nodes per call.\n\n**Non-functional:** low latency (generation is on nearly every write path in the system that uses it), high availability (if the generator is down, nothing that depends on it can write), and no single point of coordination.\n\n**Explicit non-goal:** strict global ordering. \"Roughly sortable\" is the actual requirement — two IDs generated in the same millisecond on different machines don't need a defined relative order, only IDs generated further apart in time do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: platform-wide throughput vs one counter's ceiling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A platform with 1,000 app servers each generating 1,000 IDs/sec needs 1M IDs/sec in aggregate. A single database sequence, even a fast one, tops out somewhere around 10,000-50,000 increments/sec once you account for round-trip latency and lock contention — nowhere close.\n\nThe gap between \"what one centralized counter can do\" and \"what the platform needs\" is the entire reason this is a distributed-systems problem rather than a one-line `AUTO_INCREMENT`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The interface is deliberately tiny: `generateId()` → a 64-bit integer, called locally on each machine with no network round-trip in the common case.\n\nWhat a caller can rely on: the returned ID is unique across the entire fleet, and IDs generated later in wall-clock time will *generally* be numerically larger. What a caller cannot rely on: that ID N was generated before ID N+1 if they came from different machines in the same millisecond, or that IDs have no gaps.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s05",
+      "order": 5,
+      "sectionTitle": "Compare: UUID vs DB auto-increment vs Snowflake-style IDs",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | UUID (v4) | DB auto-increment | Snowflake-style |\n|---|---|---|---|\n| Coordination needed | None — generated locally | Central sequence on one DB | None — generated locally |\n| Size | 128 bits | Typically 32-64 bits | 64 bits |\n| Sortable by time | No — random | Yes — strictly sequential | Roughly — by embedded timestamp |\n| Index locality | Poor — random values scatter B-tree inserts | Excellent — always appends | Good — mostly increasing |\n\n**How to decide:** DB auto-increment doesn't scale past one database. UUIDs scale infinitely but hurt index performance (random inserts fragment a B-tree) and carry no time information. Snowflake-style IDs get the scaling of UUIDs with most of the index-friendliness and sortability of auto-increment — the reason it's the default answer for high-throughput distributed systems.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-unique-id-generator-s05-q1"
+      ]
+    },
+    {
+      "id": "design-unique-id-generator-s06",
+      "order": 6,
+      "sectionTitle": "Snowflake-style anatomy: timestamp + machine ID + sequence",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A 64-bit Snowflake ID is a bit-packed struct, typically: 1 unused sign bit, 41 bits of milliseconds since a custom epoch (~69 years of range), 10 bits of machine ID (1,024 machines), and 12 bits of per-millisecond sequence (4,096 IDs per machine per millisecond).\n\nEach field solves one part of the problem: the timestamp gives rough global ordering, the machine ID guarantees two machines never collide, and the sequence lets one machine issue multiple IDs within the same millisecond without waiting for the clock to tick.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: anatomy of a 64-bit Snowflake ID",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![64-bit Snowflake ID bit layout: sign, timestamp, machine ID, sequence, with ranges](assets/snowflake-bit-layout.svg)\n\nThe bit allocation is a trade-off you can tune: more machine-ID bits support more machines but shrink the per-millisecond sequence space (or the timestamp range); more sequence bits support higher per-machine throughput but shrink the others.\n\nMost implementations pick 41/10/12 because it comfortably covers decades of timestamps and thousands of machines — but the split itself is a design decision worth stating out loud, not a fixed constant.",
+      "assets": [{"alt": "64-bit Snowflake ID bit layout: sign, timestamp, machine ID, sequence, with ranges", "path": "assets/snowflake-bit-layout.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s08",
+      "order": 8,
+      "sectionTitle": "Worker-ID assignment: static config vs a coordination service",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every machine generating IDs needs its own machine ID, and two machines sharing one silently produces colliding IDs. Static assignment (bake the ID into each server's config at deploy time) is simple but fragile in autoscaling or containerized environments where machines come and go.\n\nA coordination service (ZooKeeper, etcd, or a simple DB-backed lease table) hands out an unused machine ID to each instance on startup and reclaims it on graceful shutdown — a small extra dependency, but one that removes an entire class of manual-configuration mistakes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s09",
+      "order": 9,
+      "sectionTitle": "Compare: centralized ID-allocation service vs fully decentralized generation",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Centralized allocation service | Fully decentralized generation |\n|---|---|---|\n| Machine-ID assignment | A service hands out IDs, avoiding collisions automatically | Manual/static config — must be managed carefully |\n| Availability | New instances can't start generating IDs if the service is down | Every machine can generate IDs independently, always |\n| Operational complexity | One more service to run and keep healthy | None — no extra moving parts |\n\n**How to decide:** the ID *generation* path should always stay fully decentralized (that's the whole point of this design) — the trade-off here is only about machine-ID *assignment*, which happens rarely (on startup) compared to ID generation (constant). A brief coordination-service dependency at startup is usually worth it to eliminate collision risk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-unique-id-generator-s09-q1"
+      ]
+    },
+    {
+      "id": "design-unique-id-generator-s10",
+      "order": 10,
+      "sectionTitle": "Clock drift and NTP skew: what happens when a clock jumps backward",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Snowflake-style IDs embed the machine's local clock reading directly. If NTP corrects that clock backward (a real, if uncommon, occurrence — a few milliseconds, occasionally more), the machine's next \"current time\" is earlier than the last one it already used to generate an ID.\n\nGenerating an ID with that rolled-back timestamp would produce an ID that sorts *before* IDs already issued moments earlier — silently violating the one ordering guarantee the whole scheme exists to provide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s11",
+      "order": 11,
+      "sectionTitle": "Handling clock rollback: refuse to generate, or wait it out",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The safe response when a machine detects `now < last_timestamp_used` is to either refuse to generate new IDs until the clock catches back up past the last used timestamp, or block briefly and retry.\n\nEither beats the tempting shortcut of reusing the last known-good timestamp for new IDs: that would silently produce duplicate timestamp fields, which — combined with sequence rollover — can produce genuinely duplicate IDs, not just out-of-order ones. A short generation pause is a far cheaper failure mode than a duplicate ID reaching storage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-unique-id-generator-s11-q1"
+      ]
+    },
+    {
+      "id": "design-unique-id-generator-s12",
+      "order": 12,
+      "sectionTitle": "Code: a simplified Snowflake ID generator",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal single-machine generator, showing the sequence rollover within one millisecond:\n\n```python\nclass SnowflakeGenerator:\n    def __init__(self, machine_id, epoch_ms):\n        self.machine_id = machine_id      # 10 bits, assigned at startup\n        self.epoch_ms = epoch_ms\n        self.last_ts = -1\n        self.seq = 0\n\n    def next_id(self):\n        ts = current_time_ms()\n        if ts < self.last_ts:\n            raise ClockRolledBackError(self.last_ts - ts)\n        if ts == self.last_ts:\n            self.seq = (self.seq + 1) & 0xFFF   # 12-bit sequence\n            if self.seq == 0:\n                ts = wait_next_millis(self.last_ts)  # sequence exhausted\n        else:\n            self.seq = 0\n        self.last_ts = ts\n        return ((ts - self.epoch_ms) << 22) | (self.machine_id << 12) | self.seq\n```\n\nThe rollover check (`seq == 0` after wrapping) is the part interviewers probe: if a machine issues more than 4,096 IDs in one millisecond, it must block until the next millisecond rather than silently reusing a sequence value.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s13",
+      "order": 13,
+      "sectionTitle": "The bottleneck: the sequence-bits ceiling per machine",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "With 12 sequence bits, one machine can issue at most 4,096 IDs per millisecond — about 4.1M IDs/sec. That's a generous ceiling for almost any single service instance, but it is a hard one: exceed it and the generator must stall until the next millisecond tick.\n\nScaling past that ceiling means either adding more machine-ID bits (more parallel machines, each with their own 4,096/ms budget) or, if machine count is already maxed, widening the sequence field at the cost of the timestamp or machine-ID range. This is a capacity-planning knob, not a fixed limit — set it against your actual peak per-instance throughput.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-unique-id-generator-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: two machines assigned the same machine ID",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just hardcode machine IDs 0-999 across our fleet config and never think about it again.\"\n\n**Why it's wrong:** static config drifts — a copy-pasted deployment template, a misconfigured autoscaling group, or a manual fix under pressure can easily assign the same machine ID to two running instances. Both then generate IDs that look structurally valid but silently collide, since uniqueness depends entirely on the machine-ID field being unique.\n\n**Correct model:** treat machine-ID assignment as a real allocation problem with a source of truth (a coordination service or a leased-ID table), not a one-time config value nobody revisits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-unique-id-generator-s14-q1"
+      ]
+    },
+    {
+      "id": "design-unique-id-generator-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: reusing a timestamp after a clock rollback",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If the clock jumps backward, just keep using the last known-good timestamp so generation never has to pause.\"\n\n**Why it's wrong:** freezing the timestamp field means every ID generated during the rollback window carries the identical timestamp bits, relying entirely on the sequence counter for uniqueness — and if that sequence also happens to wrap during the same window, two IDs can end up with an identical timestamp *and* sequence value: a genuine duplicate, not just an ordering glitch.\n\n**Correct model:** refuse to generate (or block) until the clock passes the last used timestamp. A brief generation stall is recoverable; a duplicate ID that reaches a primary key constraint downstream is a production incident.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-unique-id-generator-s15-q1"
+      ]
+    },
+    {
+      "id": "design-unique-id-generator-s16",
+      "order": 16,
+      "sectionTitle": "Summary: timestamp for order, machine ID for uniqueness, sequence for burst",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A Snowflake-style generator packs three guarantees into one integer: the timestamp gives rough ordering, the machine ID guarantees cross-machine uniqueness, and the sequence absorbs burst throughput within a millisecond — all generated locally, with zero per-call coordination.\n\nEvery interesting failure mode traces back to one of those three fields breaking its assumption: a shared machine ID, a rolled-back clock, or a sequence that overflows its budget.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

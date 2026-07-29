@@ -1,0 +1,126 @@
+{
+  "id": "circuit-breakers",
+  "title": "Circuit Breakers",
+  "area": "system-design",
+  "group": "resilience",
+  "order": 3,
+  "slug": "circuit-breakers",
+  "summary": "Stopping calls to an already-broken dependency instead of piling more failing requests onto it — the closed/open/half-open state machine and how to tune it.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "circuit-breakers-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "When a downstream dependency is failing, calling it again and again doesn't help — it just adds more failing requests, more waiting threads, and more load onto something already struggling. A **circuit breaker** watches for repeated failures and, once tripped, stops calling the dependency entirely for a while, failing fast instead.\n\nLike an electrical circuit breaker, it trips to prevent a local problem from becoming a fire. This topic covers the closed/open/half-open state machine, how to tune when it trips and recovers, and how it differs from plain retries.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "circuit-breakers-s02",
+      "order": 2,
+      "sectionTitle": "The circuit breaker analogy: stop calling something that's already broken",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Without a circuit breaker, a caller keeps sending requests to a failing dependency at full rate, indefinitely. Each request still costs a connection, a thread, and time waiting for a timeout — resources the caller needs for everything else it's doing. Under load, this can tip the *caller* into failure too, even though the caller's own code is fine.\n\nA circuit breaker wraps the call: it tracks recent failure rate, and once that rate crosses a threshold, it stops making the call at all — returning an error (or a fallback) immediately instead of waiting on a doomed request.\n\nThe mental shift: a circuit breaker isn't trying to make the failing dependency recover faster; it's protecting the caller from wasting resources on calls it already knows are likely to fail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "circuit-breakers-s02-q1"
+      ]
+    },
+    {
+      "id": "circuit-breakers-s03",
+      "order": 3,
+      "sectionTitle": "Closed, open, half-open: the state machine",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A circuit breaker has three states. **Closed** — normal operation, requests pass through, failures are counted. Enough failures trip it to **Open** — requests fail immediately without calling the dependency at all, for a configured cooldown period. After the cooldown, it moves to **Half-open** — a small number of trial requests are let through to check if the dependency has recovered; if they succeed, the breaker closes again, and if they fail, it reopens for another cooldown.\n\nThe half-open state is what makes this self-healing rather than a one-way kill switch: the breaker keeps probing for recovery instead of needing a human to reset it.\n\nName all three states in an interview, not just \"open/closed\" — half-open is usually the part people forget, and it's the mechanism that makes recovery automatic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "circuit-breakers-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: circuit breaker state transitions over time",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Circuit breaker state machine: Closed, Open, Half-Open transitions](assets/circuit-breaker-states.svg)\n\nThe cycle only has one entry point back to full traffic: Half-Open succeeding. Every other path either stays in the current state or moves toward Open, which is deliberate — recovery has to be verified with real trial requests, not assumed after a timer.\n\nNotice there's no direct Open-to-Closed arrow: the breaker always re-checks reality via Half-Open before trusting the dependency again.",
+      "assets": [{"alt": "Circuit breaker state machine: Closed, Open, Half-Open transitions", "path": "assets/circuit-breaker-states.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": [
+        "circuit-breakers-s04-q1"
+      ]
+    },
+    {
+      "id": "circuit-breakers-s05",
+      "order": 5,
+      "sectionTitle": "Choosing trip thresholds and recovery timing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two numbers decide how a breaker behaves, and both need real justification, not defaults copied from a library. **Trip threshold** — how many failures (or what failure percentage over a rolling window) before opening. Too sensitive and transient blips trip it needlessly; too lenient and it lets real outages pile up failing requests for too long before acting.\n\n**Cooldown / recovery timing** — how long to stay open before trying half-open probes. Too short and it hammers a still-recovering dependency with retries; too long and it stays unnecessarily unavailable after the dependency has actually recovered.\n\nBoth numbers should be set from the dependency's real failure and recovery behavior — a database that takes 30 seconds to recover from a restart needs a longer cooldown than a stateless service that restarts in 2.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "circuit-breakers-s06",
+      "order": 6,
+      "sectionTitle": "Compare: circuit breaker vs plain retries — different failure modes they solve",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Circuit breaker | Plain retries |\n|---|---|---|\n| Assumes | The dependency is currently broken and will keep failing | This one request had a transient blip |\n| Behavior | Stops calling entirely for a cooldown period | Calls again, same dependency, same request |\n| Best for | Sustained outages, overloaded dependencies | Brief network blips, single dropped packets |\n| Risk if misused | Fails fast even during a brief blip that would've self-corrected | Amplifies load on an already-struggling dependency |\n\n**How to decide:** they're complementary, not competing — retry a few times for genuine blips, but wrap the whole call in a circuit breaker so *sustained* failure trips a fast-fail instead of retries compounding an outage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "circuit-breakers-s06-q1"
+      ]
+    },
+    {
+      "id": "circuit-breakers-s07",
+      "order": 7,
+      "sectionTitle": "Code: a simple circuit breaker wrapping a client call",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal breaker tracking consecutive failures, with the three-state transition made explicit:\n\n```python\nclass CircuitBreaker:\n    def __init__(self, fail_threshold=5, cooldown_seconds=30):\n        self.fail_threshold = fail_threshold\n        self.cooldown = cooldown_seconds\n        self.state = \"closed\"\n        self.failures = 0\n        self.opened_at = None\n\n    def call(self, fn):\n        if self.state == \"open\":\n            if time.monotonic() - self.opened_at < self.cooldown:\n                raise CircuitOpenError()\n            self.state = \"half_open\"\n        try:\n            result = fn()\n        except Exception:\n            self.failures += 1\n            if self.state == \"half_open\" or self.failures >= self.fail_threshold:\n                self.state = \"open\"\n                self.opened_at = time.monotonic()\n            raise\n        self.failures = 0\n        self.state = \"closed\"\n        return result\n```\n\nA half-open trial that fails reopens immediately (no second chance), which is why the loop above checks `self.state == \"half_open\"` before checking the threshold — one failure during probing is enough to reopen.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "circuit-breakers-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a circuit breaker that flips open/closed rapidly (\"flapping\")",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our breaker trips and recovers quickly, so it's working as intended.\"\n\n**Why it's wrong:** rapid open-close-open cycling (\"flapping\") usually means the trip threshold is too sensitive relative to normal noise, or the cooldown is too short to let a genuinely struggling dependency actually recover before being hit with probes again — each half-open probe adds load right as it's most fragile, keeping it from stabilizing.\n\n**Correct model:** widen the failure window or raise the threshold to ignore normal noise, and lengthen the cooldown so probes only happen once real recovery is plausible. A breaker that trips occasionally and stays in one state for a while is healthy; one that flips every few seconds is actively making the outage worse.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "circuit-breakers-s08-q1"
+      ]
+    }
+  ]
+}

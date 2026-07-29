@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-partition-count-and-consumer-scaling",
+  "interviewQuestions": [
+    {
+      "id": "iv-partition-count-and-consumer-scaling-iq1",
+      "question": "How many partitions would you use, and how do you scale consumers as load grows?",
+      "answerMarkdown": "I'd size partition count from target throughput divided by per-partition capacity, with headroom for growth — never a round number picked without math, because partitions can't shrink later and growing them is a real migration, not a config change.\n\nConcretely: a topic needing 50,000 msg/sec, with each partition sustaining about 5,000 msg/sec for this message size, needs a minimum of 10 partitions. I'd pick something like 24 instead, so consumers can scale out to 24 without a repartition, even though today's load only strictly requires 10.\n\nThe hard constraint I'd name explicitly: one partition can only be read by one consumer at a time within a consumer group, so partition count is the ceiling on consumer parallelism, full stop. If a team scales a consumer group from 10 to 30 pods on a 10-partition topic, the extra 20 sit idle — they're paying for compute they can't use.\n\n**Testing:** whether you understand partition count as a hard, hard-to-change ceiling and can size it from real projected load.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core partition-sizing question"
+    },
+    {
+      "id": "iv-partition-count-and-consumer-scaling-iq2",
+      "question": "You're at your partition ceiling and still need more throughput — what now?",
+      "answerMarkdown": "I'd name two real options rather than defaulting to one. First, repartition — but I'd be explicit that this is a genuine, planned migration with a consumer-side cutover plan, not something you flip live and hope holds together, since the hash-to-partition mapping typically changes and can scatter in-flight keys.\n\nSecond, reduce the cost of processing each message so the existing partitions do more effective work in the same window — batching multiple records per write, shrinking payload size, or speeding up the per-message processing logic itself. This buys headroom without touching partition count at all, and it's often cheaper to try first.\n\nI'd close by saying the right choice depends on how much more throughput is actually needed: a modest gap might be closable by optimizing message cost; a sustained 5x growth probably needs the repartition regardless, and I'd rather plan that migration deliberately than be forced into it during an incident.\n\n**Testing:** whether you have more than one lever in mind, and can reason about which fits the size of the gap.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "At the partition ceiling, still need throughput"
+    },
+    {
+      "id": "iv-partition-count-and-consumer-scaling-iq3",
+      "question": "If you repartition an existing topic to add capacity, does ordering survive for keys already in flight?",
+      "answerMarkdown": "Not automatically, and I'd flag this clearly rather than assume it's safe. Repartitioning typically rehashes the key-to-partition mapping to the new partition count, so a given key's future messages can land on a different partition than its past messages did — right at the transition point, which is exactly when you'd notice an ordering break.\n\nI'd propose handling it deliberately: drain in-flight events for each key before the new partition count takes effect, so there's no window where a key straddles old and new mappings, or adopt a partitioning scheme designed to stay stable across resizes so keys move predictably rather than scattering.\n\nI'd connect this back to the sizing conversation — this is exactly why getting partition count right upfront, with headroom for growth, is worth the modest over-provisioning cost: it avoids ever needing this risky transition in the first place.\n\n**Testing:** whether you understand that ordering is a property of a stable key-to-partition mapping, which a resize does not preserve for free.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Ordering across a repartition"
+    }
+  ]
+}

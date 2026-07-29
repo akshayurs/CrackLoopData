@@ -1,0 +1,133 @@
+{
+  "id": "time-series-storage-at-scale",
+  "title": "Time-Series Data at Scale",
+  "area": "system-design",
+  "group": "storage-scale",
+  "order": 8,
+  "slug": "time-series-storage-at-scale",
+  "summary": "Why metrics, logs, and sensor data get their own storage engine instead of living in a general-purpose database — write-heavy, append-mostly, and queried by time range.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "time-series-storage-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Time-series data** — metrics, logs, sensor readings — shares a shape regardless of source: it's written far more than it's updated, it arrives roughly in time order, and it's almost always queried by a time range. That shape is different enough from a typical transactional workload that purpose-built time-series databases exist, built on the LSM-tree engines covered in storage-engine-choice-as-a-design-decision.\n\nThe design questions here are about downsampling, retention, and cardinality — the levers that keep a system ingesting millions of points per second from also costing millions to store.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "time-series-storage-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "What makes time-series data different: mostly-append writes, queries almost always scoped by time range",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Time-series data has a distinctive access pattern: writes are almost entirely new appends (a metric value at a new timestamp), essentially never updates to old values; and reads almost always filter by a time window — \"CPU usage for this host over the last hour,\" not \"CPU usage at some arbitrary point looked up by ID.\" That combination means the storage layer can make assumptions a general-purpose database can't: data can be physically laid out in time order, old data almost never needs random-access updates, and a query planner can assume the time filter will do most of the narrowing.\n\nA general-purpose relational database *can* store this data, but it isn't shaped to exploit any of that — it treats a metric row the same as any other row, missing the optimizations a purpose-built engine gets almost for free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "time-series-storage-at-scale-s02-q1"
+      ]
+    },
+    {
+      "id": "time-series-storage-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: a time-series write path — batched, ordered by time, and downsampled on the way in",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Time-series write path: points batch into a write buffer, flush into time-ordered raw blocks, get downsampled into rollup blocks, while old raw blocks expire](assets/write-path-pipeline.svg)\n\nPoints arrive continuously and get batched before hitting disk, since writing one point at a time would be far less efficient than writing a time-ordered block of many. A downsampling process runs alongside, producing coarser rollups from the raw data — so a query asking for a year's trend can read the small rollup blocks instead of scanning every raw point.\n\nThe fading raw blocks on the right show retention doing its job: raw detail expires on a schedule once it's no longer needed at full resolution.",
+      "assets": [
+        {
+          "alt": "Time-series write path: points batch into a write buffer, flush into time-ordered raw blocks, get downsampled into rollup blocks, while old raw blocks expire",
+          "path": "assets/write-path-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "time-series-storage-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "Downsampling and rollups: keeping fine-grained recent data, coarse-grained old data",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Downsampling** reduces resolution over time: raw per-second metrics might get rolled up into 1-minute averages after a day, then 1-hour averages after a month, since nobody queries per-second CPU usage from six months ago — they want the trend. A **rollup** is the pre-computed coarser aggregate (average, max, count) stored alongside the raw data, so a long-range query reads far fewer, far smaller data points instead of scanning and aggregating raw data on every request.\n\nThis trades a small amount of precision on old data for a large reduction in both storage cost and query cost — the query that would scan 30 million raw points to chart a month's trend instead scans a few thousand pre-aggregated ones.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "time-series-storage-at-scale-s04-q1"
+      ]
+    },
+    {
+      "id": "time-series-storage-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "Retention policies as a first-class schema decision, not an afterthought",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **retention policy** decides how long data is kept at a given resolution before it's rolled up further or deleted outright — for example, raw data for 7 days, 1-minute rollups for 90 days, 1-hour rollups forever. Treating this as a schema decision made up front, not a cleanup script bolted on later, matters because storage cost for time-series data grows linearly with ingestion rate and retention length — the two levers you control directly.\n\nMost time-series databases support retention policies natively, expiring old raw data automatically once it ages out, similar in spirit to the TTL and tiered-storage patterns covered generally in data-lifecycle-and-archival — but purpose-built here to work at the resolution/rollup level, not just whole-record deletion.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "time-series-storage-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "Compare: a general-purpose DB vs a purpose-built TSDB (columnar layout, time-partitioned storage)",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | General-purpose DB | Purpose-built TSDB |\n|---|---|---|\n| Storage layout | Row-oriented, generic | Often columnar and time-partitioned |\n| Write pattern fit | Optimized for mixed read/write, not pure append | Optimized for continuous, ordered appends |\n| Downsampling/rollups | Manual, application-built | Often built in as a first-class feature |\n| Retention | Manual delete jobs | Native retention policies at the resolution level |\n\n**How to decide:** if time-series data is a small, secondary part of your system, a general-purpose database with a hand-rolled downsampling job is fine; once ingestion volume or query patterns dominate (metrics/observability platforms, IoT fleets), a purpose-built TSDB's native rollups and retention earn back their operational cost quickly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "time-series-storage-at-scale-s06-q1"
+      ]
+    },
+    {
+      "id": "time-series-storage-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Cardinality: why one extra high-cardinality tag can blow up storage and query cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Time-series data is usually tagged — a CPU metric might carry `host`, `region`, `env` tags — and most TSDBs index every unique combination of tag values as a separate time series. **Cardinality** is the count of those unique combinations, and it multiplies fast: 1,000 hosts times 5 regions times 3 environments is 15,000 series, manageable; add a `request_id` tag with a new value on every request, and cardinality explodes into millions of series, each with its own storage and index overhead.\n\nThis matters enormously for cost and query latency at scale — this is exactly the trap cost-aware telemetry design has to watch for, since unbounded cardinality can make a metrics platform's storage and query bills scale with request volume, not with the actual number of things you're monitoring.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "time-series-storage-at-scale-s07-q1"
+      ]
+    },
+    {
+      "id": "time-series-storage-at-scale-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: modeling a metric's tags so freely that cardinality grows unbounded",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Let's add a `user_id` and `request_id` tag to this metric so we can slice by any dimension later — more tags means more flexibility.\"\n\n**Why it's wrong:** every unique combination of tag values creates a new time series to store and index. A `request_id` tag alone can generate a new series on every single request, meaning storage and query cost scale with traffic volume instead of with the number of distinct things actually being measured — often silently, until the metrics platform itself becomes a cost or performance problem.\n\n**Correct model:** reserve tags for dimensions with naturally bounded cardinality (host, region, status code), and push high-cardinality identifiers like `user_id` or `request_id` into logs or traces, which are built for high-cardinality, per-event data — not into a metric's tag set.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "time-series-storage-at-scale-s08-q1"
+      ]
+    }
+  ]
+}

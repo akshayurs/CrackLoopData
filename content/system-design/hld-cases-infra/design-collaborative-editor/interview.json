@@ -1,0 +1,29 @@
+{
+  "topicId": "design-collaborative-editor",
+  "interviewQuestions": [
+    {
+      "id": "design-collaborative-editor-iq1",
+      "question": "How would you implement undo/redo when multiple users are editing concurrently?",
+      "answerMarkdown": "I'd start from the fact that the document is stored as an op-log, not a flattened blob — that's what makes undo tractable. A naive \"pop the last op\" undo breaks the moment another user has edited since, because the last op in the shared log might not be this user's own last action.\n\nSo I'd scope undo **per user**: each client tracks its own local history of ops it personally submitted, and 'undo' generates a new **inverse op** (a delete for an insert, an insert for a delete) rather than deleting the original op from the shared log — the log only ever grows, it's never rewritten. That inverse op then goes through the same OT-transform-or-CRDT-merge pipeline as any other edit, so it correctly accounts for whatever anyone else did in the meantime.\n\nI'd flag the tricky edge case: undoing an insert that another user has since typed inside of — the inverse op still has to resolve sensibly against that interleaved edit, which is exactly the kind of case that makes OT's transform functions hard to get right.\n\n**Testing:** whether you see that undo is just another op through the same merge pipeline, not a special \"go back in time\" operation.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Undo/redo under concurrent edits"
+    },
+    {
+      "id": "design-collaborative-editor-iq2",
+      "question": "How would you scale one wildly popular shared document beyond what a single server can handle?",
+      "answerMarkdown": "I'd name the actual bottleneck first: for a given document, one server has to own the authoritative order of ops (for OT) or coordinate broadcast (for either approach) — that's inherently a per-document constraint, so adding more servers doesn't help *that one document* directly.\n\nThe practical fix is to make sure that constraint is the only thing that doesn't scale. I'd route all connections for a `docId` to the same server instance via consistent hashing, so different popular documents land on different servers and scale independently — the system scales by document count, not by making one document's ordering point faster.\n\nIf a single document is popular enough that even its own ordering point saturates one machine — thousands of simultaneous editors on one file — I'd look at whether CRDTs let me relax the single-ordering-point requirement, since CRDT merges don't need one authoritative sequencer the way OT does.\n\n**Testing:** whether you recognize a per-document bottleneck can't be fixed by scaling horizontally in the usual sense, and know the actual lever (sharding by docId, or changing the algorithm) instead.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Scaling one hot document"
+    },
+    {
+      "id": "design-collaborative-editor-iq3",
+      "question": "Design a real-time collaborative document editor like Google Docs.",
+      "answerMarkdown": "I'd frame the requirement precisely: multiple users edit the same document and must converge on identical state, with offline-edit support as an explicit non-functional requirement — and I'd exclude rich-text rendering itself from scope up front.\n\nThe core design decision is how concurrent edits merge: I'd pick between Operational Transformation (transform ops against each other, needs a central ordering authority) and CRDTs (merge by construction, no central authority needed, better offline story, at the cost of storage overhead per character). I'd justify the choice against the offline requirement — CRDTs fit better there.\n\nArchitecturally: clients hold a WebSocket to a sync server, which appends incoming ops to a per-document op-log and broadcasts them to other subscribers; the document itself is derived from replaying that log, not stored as a flat blob. I'd shard by `docId` so the per-document ordering constraint doesn't become a global bottleneck, and I'd flag naive last-write-wins on whole documents as the pitfall that silently loses edits.\n\n**Testing:** whether the merge algorithm choice is justified against the stated requirements rather than picked arbitrarily.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Full collaborative editor design walkthrough"
+    }
+  ]
+}

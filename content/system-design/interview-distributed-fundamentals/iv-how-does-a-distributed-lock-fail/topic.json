@@ -1,0 +1,183 @@
+{
+  "id": "iv-how-does-a-distributed-lock-fail",
+  "title": "How Does a Distributed Lock Actually Fail?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 12,
+  "slug": "iv-how-does-a-distributed-lock-fail",
+  "summary": "The failure modes beyond \"just use Redis or ZooKeeper\" — the actual traps that show up under pressure, not the happy-path description of acquiring a lock.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s01",
+      "order": 1,
+      "sectionTitle": "The question, and the natural follow-up it is",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is the natural follow-up to \"how would you implement a distributed lock,\" and it's where most candidates' answers fall apart — \"use Redis\" or \"use ZooKeeper\" describes the happy path, not the failure modes that actually show up under real conditions.\n\nThe strong answer names the specific ways a lock can silently stop protecting what it's supposed to protect. See [distributed coordination](distributed-coordination) for the underlying primitives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: failing to acquire, or failing after?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Failing to acquire, or failing after already acquiring?\" These are very different problems. Failure to acquire is usually just contention or an unreachable lock service — annoying, but safe; the caller simply doesn't get the lock. Failure *after* acquiring — still believing you hold it when you don't, or vice versa — is the dangerous case, because code proceeds as if it's protected when it isn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: three failure modes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three failure modes to name, in order of how often they get missed: **lease expiry while still working** — a client pauses (GC, scheduling, a slow disk) longer than its lease TTL and resumes unaware it lost the lock. **A partition hiding the holder** — the lock service can't reach the holder and grants the lock to someone else, even though the original holder is still alive and working. **No fencing on the resource** — even when the first two are handled correctly, without a check at the resource itself, a stale writer's request still lands and causes damage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-how-does-a-distributed-lock-fail-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s04",
+      "order": 4,
+      "sectionTitle": "Code: a paused client unaware it lost the lock",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nlock = acquire_lock(\"process-file\", ttl_seconds=10)\n# --- a 15-second GC pause happens right here ---\n# the lease has now expired, and another client may have acquired it\nwrite_to_shared_file(data)   # still executes: this process has no idea it lost the lock\nrelease_lock(lock)\n```\nThe GC pause happens *inside* the critical section, entirely outside the application's control. When execution resumes, the process has no signal that 15 seconds passed or that its lease expired — it just keeps going as if nothing happened.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the paused-client timeline",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Client A acquires the lock and pauses for longer than the lease TTL. The lease expires. Client B acquires the now-free lock and starts working. Client A resumes, still believing it holds the lock, and starts working too — two clients now both believe they're the sole holder, at the same time.\n\n![Timeline of Client A acquiring a lock, pausing past the lease TTL, Client B acquiring the expired lock, and both clients believing they hold it at the same time](assets/lock-lease-timeline.svg)",
+      "assets": [
+        {
+          "alt": "Timeline of Client A acquiring a lock, pausing past the lease TTL, Client B acquiring the expired lock, and both clients believing they hold it at the same time",
+          "path": "assets/lock-lease-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 27,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s06",
+      "order": 6,
+      "sectionTitle": "Code: the fencing-token fix at the resource",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\ndef write_to_shared_file(data, token, resource):\n    if token < resource.highest_token_seen:\n        raise StaleLockHolder(\"a newer lock holder already exists\")\n    resource.highest_token_seen = token\n    resource.data = data\n```\nEven though Client A in the previous scenario has no idea it lost the lock, its write now carries its old, smaller token — and the resource rejects it because Client B's write already raised the bar. See [fencing tokens](iv-what-is-a-fencing-token) for the full mechanism.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: does a longer lease TTL fix this?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Does a longer lease TTL fix this?\" No — it just changes the size of the window, not whether the bug exists. A longer TTL makes the pause-past-expiry scenario less *likely* for short pauses, but any pause longer than the TTL still triggers the exact same problem, and a longer TTL also means a genuinely dead client's lock takes longer to free up for someone else. It trades one risk for another; it doesn't eliminate the underlying race.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-how-does-a-distributed-lock-fail-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: single Redis node vs Redlock",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"How does this play out differently with a single Redis node vs a Redlock-style multi-node scheme?\" A single Redis node is a single point of failure for the lock itself — if it crashes or fails over with a slightly stale replica, two clients can believe they hold the same lock. Redlock spreads the lock across multiple independent Redis nodes and requires a majority to agree, reducing (but not eliminating, per well-known critiques of the algorithm) that specific failure — it doesn't remove the pause-past-expiry or missing-fencing problems at all, which are orthogonal issues.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-how-does-a-distributed-lock-fail-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the safest move when you're unsure",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"What's the safest thing to do if you're not sure whether you still hold the lock?\" Check before every risky operation, not just at acquisition — verify the lease is still valid (and, ideally, that your token is still the highest one accepted) immediately before the operation that matters, not just once at the start of a long critical section. If you can't verify, treat yourself as not holding the lock and abort, rather than assuming the best case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: \"use Redis with a TTL\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"Use Redis with a TTL\" as the complete answer, with no fencing and no pause-awareness.\n\n**Why it's weak:** it describes the happy-path mechanism without addressing either of the two things that actually break it — a client pausing past the TTL, or the resource having no way to reject a stale writer. Naming the tool isn't the same as naming how it fails.\n\n**Better:** pair the mechanism with its specific failure modes and the fencing fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: extending the lease without checking expiry",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** extending the lease from inside the critical section without first checking whether it already expired.\n\n**Why it's wrong:** if the lease already expired and someone else acquired the lock, a blind \"extend my lease\" call can either fail silently or, worse, incorrectly extend a lease that now belongs to a different holder, depending on the implementation — either way, the client proceeds with false confidence.\n\n**Correct model:** check-then-extend using the same token comparison the resource itself uses, so extension fails safely (visibly) the moment you're no longer the legitimate holder.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-how-does-a-distributed-lock-fail-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-how-does-a-distributed-lock-fail-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"A distributed lock fails in three ways: a client pauses past its lease TTL and resumes unaware it lost the lock, a partition hides a live holder causing the lock service to grant the lock elsewhere, or the resource itself has no check and accepts a stale writer's request. A longer TTL only shrinks the window for the first case, it doesn't close it. The real fix is fencing tokens — the resource rejects any write carrying an older token than one it's already seen, which protects it even when a client wrongly believes it still holds the lock. Redlock-style multi-node schemes address a different failure — the lock service itself being a single point of failure — and don't replace fencing.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

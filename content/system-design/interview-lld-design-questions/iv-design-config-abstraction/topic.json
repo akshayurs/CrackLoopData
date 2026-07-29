@@ -1,0 +1,165 @@
+{
+  "id": "iv-design-config-abstraction",
+  "title": "Design a Configuration Abstraction",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 5,
+  "slug": "iv-design-config-abstraction",
+  "summary": "The goal is 'callers never know the source' — a config value could come from a file, an env var, or a remote service, and the API should hide which.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-design-config-abstraction-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a configuration abstraction** — callers read config values without ever knowing whether the source is a file, an environment variable, or a remote config service. The design goal is right there in the name: **callers never know the source.**\n\nThe scoring signal is whether your `ConfigProvider` interface is genuinely source-agnostic, and whether you've thought about what happens when the source changes underneath a running process.\n\nThe 10-minute bar: a typed `get(key)` interface, at least two implementations behind it, and an answer for live reload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-config-abstraction-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: static config only, or live reload?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether config needs to **support live reload** while the app is running, or whether a restart to pick up changes is acceptable. Static-only config is simpler: read once at startup, cache in memory, done.\n\nLive reload is a materially different problem: you need a way to detect a change — polling, a push notification, a file watcher — and a story for what a caller sees mid-request if a value changes while it's in use. Naming this distinction upfront prevents you from over- or under-building the abstraction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-config-abstraction-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: a ConfigProvider callers never see through",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core idea: a single `ConfigProvider` interface that every part of the codebase depends on, with the actual source — a properties file, environment variables, a remote service — hidden behind it. This is [dependency inversion](dip-dependency-inversion) applied directly: application code depends on an abstraction, not on an environment-variable lookup or a specific file format.\n\nThe payoff shows up later: swapping from local config files to a remote config service becomes a new implementation of the same interface, with zero changes to any caller.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-config-abstraction-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-config-abstraction-s04",
+      "order": 4,
+      "sectionTitle": "Code: get(key) with a typed accessor, two implementations",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface ConfigProvider {\n    Optional<String> get(String key);\n    default int getInt(String key, int fallback) {\n        return get(key).map(Integer::parseInt).orElse(fallback);\n    }\n}\n\npublic class EnvConfigProvider implements ConfigProvider {\n    public Optional<String> get(String key) { return Optional.ofNullable(System.getenv(key)); }\n}\n\npublic class FileConfigProvider implements ConfigProvider {\n    private final Properties props;\n    public Optional<String> get(String key) { return Optional.ofNullable(props.getProperty(key)); }\n}\n```\n\n`get` returns an `Optional`, not a raw nullable string or a thrown exception — pushing the missing-key decision (default, error, or optional) to the caller rather than baking one choice into the provider.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-config-abstraction-s05",
+      "order": 5,
+      "sectionTitle": "Code: a live-reload implementation swapping the source",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class LiveConfigProvider implements ConfigProvider {\n    private volatile Map<String, String> current;\n\n    public LiveConfigProvider(ConfigSource source) {\n        this.current = source.load();\n        source.onChange(next -> this.current = next);\n    }\n\n    public Optional<String> get(String key) {\n        return Optional.ofNullable(current.get(key));\n    }\n}\n```\n\nThe `volatile` field is the whole trick: a background watcher swaps in a new immutable map atomically, and every `get` call simply reads whatever's current — callers never see a half-updated config, and never know a reload even happened.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-design-config-abstraction-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-design-config-abstraction-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: how do you handle a config value changing while the app is running?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd point to the `volatile` reference swap as the key mechanism: the config store is treated as an immutable snapshot, and a reload replaces the whole snapshot atomically rather than mutating individual keys in place. That avoids a caller reading one value from the old config and a related value from the new one mid-transition.\n\nFor callers that need to react to a change — not just read the new value next time — I'd add an optional change-listener hook on the provider, so components that need to, say, resize a connection pool when a limit changes can subscribe, while everyone else just calls `get` as normal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-config-abstraction-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-config-abstraction-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: how do you keep this testable without hitting a real config source?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Since everything depends on the `ConfigProvider` interface rather than a concrete source, testing is just supplying a fake implementation — an in-memory provider backed by a plain map the test populates directly. No file system, no environment variables, no network call to a config service.\n\nThis is the direct payoff of the abstraction: if application code called an environment lookup directly, tests would need to manipulate real environment variables, which is exactly the kind of test fragility the interface is designed to avoid.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-config-abstraction-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you handle a missing key?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd offer both, at different layers. The base `get(key)` returns an `Optional<String>` — no opinion baked in, so a caller can decide. For the common case, a typed convenience method like `getInt(key, fallback)` takes an explicit default, so most call sites read cleanly without unwrapping an `Optional` every time.\n\nI'd avoid throwing on a missing key by default — that turns every config read into a potential runtime exception for what's often a legitimate \"not configured, use the default\" case. Reserve exceptions for keys the caller has explicitly marked required.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-config-abstraction-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: reading environment variables directly everywhere",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** calling an environment-variable lookup directly from application code, scattered across dozens of files, instead of behind an abstraction.\n\n**Why it's wrong:** this defeats the entire premise of the question — callers now explicitly know the source is environment variables, and switching to a config service later means touching every call site instead of one implementation.\n\n**Correct model:** every read goes through `ConfigProvider.get(key)`; only the provider implementation itself knows it's reading from the environment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-config-abstraction-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: caching config values inside application code",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll cache the DB host value in a static field the first time I read it, so I don't call the provider repeatedly.\"\n\n**Why it's wrong:** this cache lives outside the provider's control, so when live reload swaps in a new config snapshot, this one caller silently keeps using the stale value forever — the exact bug live reload was built to prevent.\n\n**Correct model:** let the provider own any caching internally; callers always call `get()` and trust the provider to return the current value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-design-config-abstraction-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-config-abstraction-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Interface** — a `ConfigProvider.get(key)` returning `Optional`, with typed convenience accessors. **Implementations** — env, file, remote — all behind the same contract, swappable with zero caller changes. **Live reload** — an atomic snapshot swap behind a `volatile` reference, plus an optional change listener. **Testability** — a fake in-memory provider replaces the real source in tests for free. **Close** by flagging that caching outside the provider silently breaks live reload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

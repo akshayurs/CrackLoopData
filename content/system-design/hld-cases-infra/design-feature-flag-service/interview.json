@@ -1,0 +1,29 @@
+{
+  "topicId": "design-feature-flag-service",
+  "interviewQuestions": [
+    {
+      "id": "design-feature-flag-service-iq1",
+      "question": "Design a feature flag system used by every service at the company.",
+      "answerMarkdown": "I'd start from the requirement that eliminates the naive design: evaluation latency has to be near-zero, because a flag check happens on the hot path, often multiple times per request, fleet-wide. That rules out a synchronous call to a central service per check.\n\nSo the design splits into two paths. The **evaluation path** runs entirely locally: each service instance's SDK holds an in-memory cached copy of all flag configs, and `isEnabled(flagKey, userContext)` is a pure in-process computation — hash `userId + flagKey` into a stable bucket, compare against the rollout percentage. The **update path** is rare by comparison: an operator calls `updateFlag`, which a control plane propagates out to every SDK instance via streaming or polling.\n\nI'd flag the bottleneck this reintroduces: a global config push during peak traffic is itself a fan-out burst, which I'd mitigate the same way a CDN handles invalidation — push to regional relay nodes, which fan out locally, rather than one control plane holding a direct connection to every instance.\n\n**Testing:** whether you recognize the asymmetry between evaluation frequency and update frequency, and design each path for its actual load profile.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Full feature flag service design walkthrough"
+    },
+    {
+      "id": "design-feature-flag-service-iq2",
+      "question": "How would you make a flag rollout percentage change (e.g. 30% to 50%) not disrupt users already in the 30%?",
+      "answerMarkdown": "I'd rely on the stable-bucketing property directly: because each user's bucket comes from hashing `userId + flagKey` into a fixed range, and the rollout percentage is just a cutoff line on that same fixed range, raising the percentage only moves the cutoff — it never reassigns a user who was already inside the old cutoff to outside it.\n\nConcretely, if a user's hash lands in bucket 22 and the rollout was 30% (buckets 0-29), they were already 'in.' Raising the rollout to 50% just widens the included range to buckets 0-49 — bucket 22 stays in, and the newly-added users are only those in buckets 30-49, previously excluded. Nobody who saw the feature loses it, and nobody's experience flips back and forth as the percentage moves in either direction.\n\nI'd contrast this with a naive 'randomly pick X% of users each time you evaluate' approach, which would flicker a user in and out of the feature on every single page load — exactly the broken experience stable bucketing is designed to prevent.\n\n**Testing:** whether you understand why the hash-based approach is monotonic under a percentage increase, not just that it exists.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Rollout percentage changes without user flicker"
+    },
+    {
+      "id": "design-feature-flag-service-iq3",
+      "question": "How would you handle a service instance that's been running for hours with a stale flag config because it missed a propagation update?",
+      "answerMarkdown": "I'd first accept that some staleness window is inherent to this design — local caching trades perfect freshness for near-zero evaluation latency, and that's the deliberate trade the whole architecture is built on, not a bug to eliminate entirely.\n\nTo bound the staleness, I'd combine a push mechanism (streaming updates from the control plane, for fast-path propagation within roughly a second) with a fallback pull (each SDK periodically polls for the current config version even if it believes it's up to date, catching any missed push due to a dropped connection or restart). If an SDK's cached version number falls too far behind what it last confirmed, that's a clear signal to force a full config refetch rather than trusting the cache.\n\nI'd also flag monitoring as part of the fix, not an afterthought: the control plane should track which instances have acknowledged the latest config version, so a stuck instance is visible and alertable rather than silently serving stale flags indefinitely.\n\n**Testing:** whether you can reason about bounded staleness as an explicit design parameter rather than assuming push-based propagation is automatically reliable.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Bounding config propagation staleness"
+    }
+  ]
+}

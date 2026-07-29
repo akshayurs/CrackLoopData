@@ -1,0 +1,131 @@
+{
+  "id": "api-error-contract-design",
+  "title": "Designing API Error Contracts",
+  "area": "system-design",
+  "group": "api-design",
+  "order": 10,
+  "slug": "api-error-contract-design",
+  "summary": "A consistent, structured error format is a design decision on its own, not a leftover detail — it's what tells a caller whether to retry, fix their request, or give up.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "api-error-contract-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "It's tempting to treat error responses as an afterthought — return a status code and a message string, done. But a client's code has to *act* on an error: retry it, show a specific field-level validation message, or give up and alert someone. A vague error shape forces every one of those decisions into guesswork.\n\nThis topic treats the error response as a real design surface: what it must contain, how to keep it consistent across every endpoint, and the one detail (leaking internals) that turns a helpful error into a security problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "api-error-contract-design-s02",
+      "order": 2,
+      "sectionTitle": "Why \"just return a message string\" fails every client that needs to branch on the error",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A response like `{ \"error\": \"Invalid email address\" }` looks fine in a demo, but it forces client code into fragile string matching to figure out *what kind* of error this is — checking whether the message contains \"email\" to decide whether to highlight that form field, which breaks the moment the wording changes even slightly (a typo fix, a translation, a rephrase for clarity).\n\nA client genuinely needs to answer three separate questions from an error response: what category of failure is this (validation, auth, rate limit, server fault)? Which specific field or resource, if any? And is retrying worth trying? A single free-text string answers none of these reliably — it's meant for a human to read, not for code to branch on.\n\nThe fix, covered next, is separating the machine-readable signal from the human-readable one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "api-error-contract-design-s02-q1"
+      ]
+    },
+    {
+      "id": "api-error-contract-design-s03",
+      "order": 3,
+      "sectionTitle": "A structured error shape: machine-readable code, human message, and per-field validation detail",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A durable error shape separates three concerns. A **`code`** — a stable, documented string like `VALIDATION_FAILED` or `RATE_LIMITED` — is what client code actually checks with an `if`/`switch`; it should never change wording-wise since that would silently break every client's branching logic. A **`message`** is a human-readable explanation, free to be reworded, translated, or improved without breaking anyone, since no code should ever parse it. And **`details`** carries structured, per-field information for validation failures — which field, what was wrong with it — so a form can highlight the exact input.\n\nThe discipline that makes this work long-term: the `code` field is effectively part of the API's contract, versioned and stable, the same way a REST endpoint's URL is — changing an existing code's meaning is a breaking change, not a copy edit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "api-error-contract-design-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: one error response shape reused across a 400, a 404, and a 429",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![400, 404, and 429 responses sharing the identical error envelope shape](assets/error-envelope-consistency.svg)\n\nThe HTTP status code says which broad category of failure this is; the error envelope's shape stays identical regardless of which status it's attached to — only the `code` and `details` values change. A client's error-handling code can therefore parse the envelope once, generically, for every endpoint and every status code in the API.\n\nThis consistency is the entire point: without it, a client needs custom parsing logic per endpoint, which is exactly the fragility a shared contract is meant to eliminate.",
+      "assets": [
+        {
+          "alt": "400, 404, and 429 responses sharing the identical error envelope shape",
+          "path": "assets/error-envelope-consistency.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "api-error-contract-design-s05",
+      "order": 5,
+      "sectionTitle": "Retryable vs non-retryable errors: the one bit of information that matters most to a client",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Of everything an error response could tell a client, whether **retrying makes sense** is the single most consequential bit, because it changes what the client's code actually does next, automatically, without a human reading the message. A `429 Too Many Requests` or a `503 Service Unavailable` is typically retryable — often with a `Retry-After` header telling the client exactly how long to wait. A `400 Bad Request` or `404 Not Found` is not — the exact same request will fail again no matter how many times it's retried, since the problem is the request itself, not a transient condition.\n\nA good error contract makes this explicit rather than leaving the client to guess from the status code alone — some APIs include an explicit `retryable: true/false` field precisely because status codes alone can be ambiguous (a `409 Conflict` might be retryable after a delay, or might not, depending on what caused it).\n\nThis is related to the general idea covered elsewhere as retry/backoff design, but specifically from the error-contract side: the server has to actually tell the client which case it's in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "api-error-contract-design-s05-q1"
+      ]
+    },
+    {
+      "id": "api-error-contract-design-s06",
+      "order": 6,
+      "sectionTitle": "Compare: a flat error code enum vs a structured problem-details format",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Flat error code enum | Structured problem-details (RFC 7807-style) |\n|---|---|---|\n| Shape | `{ \"code\": \"NOT_FOUND\" }` — one flat string | `{ \"type\": \"...\", \"title\": \"...\", \"status\": 404, \"detail\": \"...\" }` — a small standardized set of fields |\n| Standardization | Fully custom per API | Follows a published spec (RFC 7807), some tooling understands it out of the box |\n| Extensibility | Add whatever custom fields you want, ad hoc | Spec explicitly allows extension members alongside the standard ones |\n| Learning curve | Trivial — just a code and a message | Slightly more upfront structure to learn |\n\n**How to decide:** a flat custom enum is fine for a smaller API where you fully control both client and server. A standardized format like RFC 7807 pays off more for a public API with many independent client implementations, since some HTTP client libraries and tooling already understand the format without custom integration work.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "api-error-contract-design-s06-q1"
+      ]
+    },
+    {
+      "id": "api-error-contract-design-s07",
+      "order": 7,
+      "sectionTitle": "Code: a shared error envelope reused across every endpoint in a service",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```json\n{\n  \"error\": {\n    \"code\": \"VALIDATION_FAILED\",\n    \"message\": \"One or more fields failed validation\",\n    \"retryable\": false,\n    \"details\": [\n      { \"field\": \"email\", \"issue\": \"must be a valid email address\" },\n      { \"field\": \"age\", \"issue\": \"must be a positive integer\" }\n    ]\n  }\n}\n```\n\nEvery endpoint in the service — regardless of team or which resource it's about — returns exactly this envelope shape on failure, with only `code`, `message`, `retryable`, and `details`'s contents varying. A shared middleware or error-handling layer, not each endpoint's own logic, is what typically enforces this consistently.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "api-error-contract-design-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: leaking an internal exception's message and stack trace into a public error response",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Returning the raw exception message helps developers debug faster, so let's just pass it straight through to the client.\"\n\n**Why it's wrong:** a raw stack trace or exception message can reveal internal file paths, library versions, database table/column names, or even fragments of a query — information an attacker can use to find and exploit vulnerabilities, and information that's simply unprofessional to expose in a public API regardless. It also isn't even that useful to the *client's* developer, since it describes your internals, not their mistake.\n\n**Correct model:** log the full internal exception and stack trace server-side, where your own team can see it, and return the client a generic, structured error (a stable `code`, a safe `message`) with no internal detail. Correlate the two with a request ID included in both the client-facing error and the server-side log line, so support can trace a specific complaint back to the full internal detail without ever exposing that detail publicly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "api-error-contract-design-s08-q1"
+      ]
+    }
+  ]
+}

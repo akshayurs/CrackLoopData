@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-zero-downtime-schema-migration",
+  "interviewQuestions": [
+    {
+      "id": "iv-zero-downtime-schema-migration-iq1",
+      "question": "How would you migrate this table's schema with zero downtime?",
+      "answerMarkdown": "I'd never do a single atomic cutover. I'd use expand-migrate-contract: expand by adding the new shape alongside the old one, deploy application code that writes both, migrate by backfilling existing rows into the new shape in small batches, and only contract — remove the old shape — once every deployed instance has been running the dual-write code and query logs show zero recent reads of the old column.\n\nFor a column rename specifically, that means adding the new column, writing to both from every code path, backfilling in batches rather than one giant transaction, and dropping the old column only at the very end. If the table is large enough that even the additive ALTER risks locking it, I'd use an online schema-change tool like gh-ost so the table is never fully locked for the bulk of the operation.\n\nI'd name the real trade-off: this is a slower migration stretched over days or weeks, not a faster one, in exchange for never taking writes offline.\n\n**Testing:** whether you know the expand-migrate-contract mechanics, not just that a migration means a maintenance window.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The zero-downtime migration pattern"
+    },
+    {
+      "id": "iv-zero-downtime-schema-migration-iq2",
+      "question": "The backfill is still running and a new deploy needs the new column NOT NULL — what do you do?",
+      "answerMarkdown": "I wouldn't add the NOT NULL constraint yet. Doing so before the backfill finishes will fail outright on rows it hasn't reached, or force the database to validate the constraint against the entire table immediately, which can block under load. I'd wait for backfill completion, confirmed by an explicit check — a count of remaining null values — not an assumption that it's probably done.\n\nIf the new code genuinely needs the non-null guarantee sooner than the backfill can finish, I'd enforce it at the application layer temporarily: validate non-null before every write, so new rows are always compliant, while the database-level constraint waits until the backfill is confirmed clean across the whole table.\n\nOnly once that check passes would I add the database constraint as the final, low-risk step.\n\n**Testing:** whether you'll sequence a real dependency correctly under schedule pressure instead of forcing a constraint prematurely.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "NOT NULL before backfill finishes"
+    },
+    {
+      "id": "iv-zero-downtime-schema-migration-iq3",
+      "question": "How do you know it's safe to finally drop the old column?",
+      "answerMarkdown": "I'd confirm two things concretely rather than assume the rollout is done. First, that every deployed application instance has been running code that reads and writes the new column for at least one full deploy cycle — checked against deployment logs or an explicit version marker, not just a belief that the rollout finished. Second, that query logs or application metrics show zero recent reads of the old column, confirming nothing is still depending on it.\n\nOnly with both confirmed would I consider the contract phase safe. Dropping the column while any instance might still reference it silently breaks that instance the moment the column disappears — often not caught until it's already causing errors in production.\n\nI'd treat this check as a required gate, not a formality, since it's the one step in the whole migration that isn't reversible.\n\n**Testing:** whether you verify safety with concrete evidence before an irreversible step, instead of assuming enough time has passed.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Confirming it's safe to drop"
+    }
+  ]
+}

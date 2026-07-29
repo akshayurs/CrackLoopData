@@ -1,0 +1,165 @@
+{
+  "id": "iv-pagination-strategy-choice",
+  "title": "How would you paginate this endpoint at scale?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 2,
+  "slug": "iv-pagination-strategy-choice",
+  "summary": "Why OFFSET pagination silently breaks under concurrent writes and slow deep pages, and how cursor-based pagination on a stable sort key fixes both.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-pagination-strategy-choice-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: the question and what it's checking",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This question checks whether you know **offset pagination breaks down at scale** — rows get skipped or duplicated under concurrent writes, and `OFFSET` scans get slower the deeper a user pages.\n\nThe strong answer names **cursor (keyset) pagination** as the fix and explains exactly which failure mode it solves, rather than just saying \"we'd paginate it.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: is the underlying data being **written to concurrently** while users page through it — a live feed, or a static export? And **how deep** do users typically page — a few pages, or thousands?\n\nBoth answers change the urgency. A read-only, shallow-paging report can live with `OFFSET` fine; a live feed with deep pagination is exactly where offset pagination fails visibly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For anything at scale: use **cursor (keyset) pagination on a stable sort key**, not `OFFSET`. Instead of asking for \"row 10,000 to 10,020,\" the client asks for \"the 20 rows after this specific row,\" identified by that row's sort-key values.\n\nThat single sentence — cursor, not offset, anchored to a specific row — is the core of the answer; everything else is defending why.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-pagination-strategy-choice-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a compound cursor of (created_at, id)",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A worked example: paginate by a compound cursor of `(created_at, id)` — `created_at` gives the sort order, `id` breaks ties when two rows share a timestamp. Encode the last row's values into an opaque token returned to the client:\n\n```\nGET /posts?limit=20\n-> returns 20 rows + cursor: \"eyJjcmVhdGVkX2F0IjoiMjAyNi0wNy0y...\"\n\nGET /posts?limit=20&cursor=eyJjcmVhdGVkX2F0Ijoi...\n-> decodes to (created_at=2026-07-20T10:00:00Z, id=48231)\n-> query: WHERE (created_at, id) > (?, ?) ORDER BY created_at, id LIMIT 20\n```\n\nThe client never parses the cursor itself — it just passes it back, which lets you change its internal shape later without breaking clients.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: 50 new rows/sec breaks OFFSET",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take a feed with **50 new rows/sec**. A user sitting on `OFFSET 10000` gets rows shifted underneath them by every insert ahead of their position — new rows pushed to the front mean the row that used to be at offset 10,000 is now at 10,050, so the next page's `OFFSET 10020` request silently skips or duplicates rows the user already saw or never saw.\n\nThe same feed with a `(created_at, id)` cursor is immune: the cursor is anchored to a specific row, not a shifting numeric position, so new inserts ahead of it don't change what \"the rows after this one\" means.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-pagination-strategy-choice-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: query cost of deep OFFSET vs keyset",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Offset scan versus keyset index seek](assets/offset-vs-keyset.svg)\n\nOn most engines, `OFFSET 100000 LIMIT 20` still has to scan and discard 100,000 rows before it can return the next 20 — the database does the work of counting past every skipped row. A keyset query `WHERE (created_at, id) > (?, ?) LIMIT 20` uses the index directly to seek to the right starting point, so its cost stays roughly constant regardless of how deep the page is.",
+      "assets": [{"alt": "Offset scan versus keyset index seek", "path": "assets/offset-vs-keyset.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Cursor pagination is strictly better for **infinite-scroll and feed** use cases — it's correct under concurrent writes and cheap at any depth. But it gives up **direct jump-to-page-N navigation**, which some UIs genuinely need (a paginated admin table with page numbers a user clicks between).\n\nName this trade-off explicitly: you're choosing correctness and performance at depth over a UI feature some products can't give up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-pagination-strategy-choice-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: can a user jump to page 50 directly?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"a user jumps to page 50 directly — does cursor pagination support that?\"** Not natively — a cursor only knows \"the rows after this one,\" not \"the rows at absolute position 1000.\"\n\nTwo real options: a **hybrid** approach (offset for shallow pages where the cost is negligible, cursor for deep infinite-scroll), or accepting an **approximate jump** (estimate a starting cursor from row counts, then correct once real data loads). Both are genuine product trade-offs worth surfacing, not silently picking one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: sorting by a non-unique field like likes_count",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"how do you paginate when the sort is by a field that isn't unique, like `likes_count`?\"** Append a **unique tiebreaker** — typically `id` — to the cursor, so ties don't produce ambiguous or repeated pages: `(likes_count, id)` instead of `likes_count` alone.\n\nWithout the tiebreaker, two rows with the same `likes_count` can both land on a page boundary and either repeat or vanish depending on how the database happens to order ties — the same silent correctness bug offset pagination has, reintroduced by a careless cursor design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-pagination-strategy-choice-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: OFFSET/LIMIT on a large, actively-written table",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Pagination is just `OFFSET`/`LIMIT` — it works in every ORM out of the box, so it's fine everywhere.\"\n\n**Why it's wrong:** on a large, actively-written table, `OFFSET`/`LIMIT` returns skipped or duplicate rows to the user whenever rows are inserted or deleted ahead of the current page, and the bug is silent — nothing errors, the response just quietly shows the wrong data.\n\n**Correct model:** default to `OFFSET`/`LIMIT` only for small, mostly-static tables or shallow pages; reach for cursor pagination the moment the table is large, actively written, or paged deeply.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-pagination-strategy-choice-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Offset pagination breaks two ways at scale: rows skip or duplicate under concurrent writes, and deep `OFFSET` scans get slower with depth. Fix: cursor/keyset pagination anchored to a stable, unique sort key, encoded as an opaque token. Trade-off: you lose direct jump-to-page-N; offer a hybrid or approximate jump if the product needs it.\n\nFor the full menu of pagination approaches and when each fits, see [Pagination Strategies](pagination-strategies).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    }
+  ]
+}

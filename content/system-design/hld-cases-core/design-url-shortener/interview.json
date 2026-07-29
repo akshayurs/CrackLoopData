@@ -1,0 +1,29 @@
+{
+  "topicId": "design-url-shortener",
+  "interviewQuestions": [
+    {
+      "id": "design-url-shortener-iq1",
+      "question": "Design a URL shortener like bit.ly — walk me through your approach?",
+      "answerMarkdown": "I'd start with the two operations that matter — shorten and redirect — and immediately call out the read:write skew: at roughly 100:1, the redirect path is what the whole design optimizes for.\n\nFor writes, I'd avoid computing a code on the fly and instead pull from a pre-generated pool of unique, shuffled codes — a Key Generation Service — so writes never need a collision check. I'd shard the mapping table by short code so lookups are single-shard, and put a cache-aside layer in front of it, since click popularity is heavily skewed and a small cache absorbs most reads.\n\nI'd close by naming what I deliberately left out of scope — a full analytics dashboard — and flag it as an async, off-critical-path concern fed by a queue.\n\n**Testing:** whether you can identify the dominant access pattern (reads vs writes) and let it drive every subsequent design choice, rather than treating every part of the system as equally important.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "The core design walkthrough"
+    },
+    {
+      "id": "design-url-shortener-iq2",
+      "question": "What follow-up questions come up after the core design, and how would you handle malicious URLs, link previews, and multi-region writes?",
+      "answerMarkdown": "For malicious URLs, I'd check destination URLs against a safe-browsing blocklist API at creation time, and again periodically post-creation since a benign site can later be compromised — rejecting or flagging on a hit either way.\n\nFor link previews (showing the destination's title/thumbnail before redirecting), I'd add an async job that fetches and caches page metadata after creation, rather than fetching it synchronously on every redirect — that would add latency and an external dependency to the hot path.\n\nFor multi-region writes, the KGS becomes the interesting piece: I'd partition its key ranges per region so two regions never hand out the same code, then replicate the mapping table asynchronously across regions, accepting a small propagation delay before a link created in one region is visible in another.\n\n**Testing:** whether you can extend the core design incrementally without breaking its latency or consistency guarantees, rather than bolting features on ad hoc.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Common follow-ups"
+    },
+    {
+      "id": "design-url-shortener-iq3",
+      "question": "One of your short links just went viral and is getting 50,000 clicks/second. What breaks, and how do you handle it?",
+      "answerMarkdown": "The first thing to check is whether that key's cache entry is still valid — if it expires under this load, every request that misses in that window piles onto the same DB row simultaneously, a cache-miss storm, not a gradual slowdown.\n\nI'd mitigate two ways: request coalescing at the cache layer, so concurrent misses for the same key trigger a single DB read instead of thousands, and proactive TTL refresh for keys under heavy read pressure so they never actually expire mid-storm. I'd also make sure this one hot key isn't colocated with unrelated keys on a single cache node in a way that starves them of capacity.\n\nI'd note this is the same hot-key shape that shows up in any cache-backed system — recognizing it here is the transferable skill, not the URL-shortener specifics.\n\n**Testing:** whether you can reason about a single system component being overwhelmed, distinct from general \"add more capacity\" scaling.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Handling a viral link"
+    }
+  ]
+}

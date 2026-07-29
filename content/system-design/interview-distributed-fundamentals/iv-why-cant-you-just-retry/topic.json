@@ -1,0 +1,170 @@
+{
+  "id": "iv-why-cant-you-just-retry",
+  "title": "Why Can't You Just Retry?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 10,
+  "slug": "iv-why-cant-you-just-retry",
+  "summary": "Pushes back on the naive instinct — a bare retry can duplicate effects, worsen an already-struggling system, and hide the failure that actually needs fixing.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-why-cant-you-just-retry-s01",
+      "order": 1,
+      "sectionTitle": "The question, and the instinct it's pushing back on",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just retry it\" is most engineers' first instinct when a request fails — and it's not wrong exactly, but it's dangerously incomplete on its own. A bare retry, with no other design around it, can duplicate side effects, pile more load onto an already-struggling service, and mask a failure that needed a completely different fix.\n\nThis question wants you to name what breaks if retrying is *all* you do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: retrying a read or a write?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Retrying a read, or a write with a side effect?\" matters a lot here. A read that failed and gets retried is almost always safe — reading twice doesn't change anything. A write with a side effect — charging a card, sending an email, decrementing inventory — is where a bare retry becomes dangerous, because you might be repeating an effect that already happened.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: three failure modes, three fixes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A bare retry introduces three distinct risks. **Duplicate effects**: retrying a write whose effect already landed repeats it — fixed with idempotency. **Retry storms**: many clients retrying in sync (often right after a shared timeout) can turn a brief blip into a sustained overload — fixed with backoff and jitter. **Masked failures**: retrying silently hides a failure that's actually persistent, delaying detection of a real outage — fixed by capping retries and surfacing the failure once the cap is hit, rather than retrying forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-why-cant-you-just-retry-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s04",
+      "order": 4,
+      "sectionTitle": "Code: a retry loop that double-submits a write",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nfor attempt in range(3):\n    try:\n        return requests.post(\"/orders\", json=order, timeout=2)\n    except Timeout:\n        continue   # the first attempt may have already succeeded server-side\n```\nThe request can time out on the *client* side after the server already processed it — the order was created, but the response never made it back before the timeout fired. This loop then submits the same order again, creating a duplicate, unless the endpoint itself is idempotent. See [idempotency and exactly-once](idempotency-and-exactly-once) for the fix.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a retry storm",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A service has a brief blip and every client's request times out at the same 2-second mark. All of them retry immediately, at the same moment, hammering the service just as it was starting to recover — turning a brief blip into a sustained outage.\n\n![Timeline of all client requests timing out at the same instant and retrying simultaneously, the spike hitting a service just as it was starting to recover](assets/retry-storm-timeline.svg)",
+      "assets": [
+        {
+          "alt": "Timeline of all client requests timing out at the same instant and retrying simultaneously, the spike hitting a service just as it was starting to recover",
+          "path": "assets/retry-storm-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 27,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: how jitter fixes the retry storm specifically",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"How does exponential backoff with jitter fix the retry-storm problem specifically?\" Backoff alone (wait 1s, then 2s, then 4s) still leaves every client synchronized — they all failed at the same moment, so they all retry at the same moment, just later. **Jitter** adds randomness to each wait (\"4 seconds, plus or minus up to 2\"), spreading the retries out over a window instead of a single instant, so the recovering service sees a smoothed-out trickle of retries instead of a synchronized spike.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-why-cant-you-just-retry-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: client-side vs proxy/gateway retries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"What's the difference between retrying at the client vs at a proxy/gateway layer?\" Client-side retries know the most about the specific call's semantics (is it idempotent? how many attempts make sense here?) but every client has to implement the logic correctly and consistently. A proxy or gateway layer centralizes the retry policy — one place to configure backoff, jitter, and caps for everyone — but it's further from the specific request's semantics and can retry things it shouldn't unless configured carefully per route.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: when to fail fast instead",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"When should you NOT retry at all — fail fast instead?\" When the failure is clearly not transient — a `400 Bad Request` for malformed input will fail identically every time, and retrying just wastes a round-trip. Also when downstream is already showing signs of sustained trouble: this is where a [circuit breaker](circuit-breakers) comes in, tripping after repeated failures so callers fail fast instead of continuing to add retry load onto a system that's clearly not recovering.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-why-cant-you-just-retry-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: \"just retry a few times with backoff\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"Just retry a few times with backoff,\" with no mention of idempotency.\n\n**Why it's weak:** backoff addresses the retry-storm risk but says nothing about the duplicate-effect risk — a well-spaced-out retry can still double-charge a card just as easily as an immediate one. Backoff and idempotency solve two different problems; naming only one suggests you haven't separated them.\n\n**Better:** name both risks and both fixes, explicitly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: retrying indefinitely with no cap",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** retrying indefinitely with no cap on attempts.\n\n**Why it's wrong:** unbounded retries turn a transient failure into an unbounded pile of in-flight requests, each holding a connection, a thread, or memory while it waits — this can exhaust the client's own resources and, at scale, keep hammering the struggling downstream service indefinitely, actively preventing its recovery.\n\n**Correct model:** cap the number of attempts, and once the cap is hit, surface the failure (an error, a dead-letter queue) instead of retrying forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-why-cant-you-just-retry-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-why-cant-you-just-retry-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Retrying alone introduces three risks: duplicate effects if the write already landed before the timeout, retry storms if every client retries at the same synchronized moment, and masked failures if you retry forever instead of surfacing a persistent problem. The fixes are idempotency for the first, exponential backoff with jitter for the second, and a capped retry count plus fail-fast behavior — often via a circuit breaker — for the third. I'd also only retry failures that are actually likely to be transient; a 400 for bad input will fail identically every time.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

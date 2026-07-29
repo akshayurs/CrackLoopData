@@ -1,0 +1,165 @@
+{
+  "id": "iv-design-event-bus",
+  "title": "Design an Event Bus",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 8,
+  "slug": "iv-design-event-bus",
+  "summary": "Observer at API-design scale: a publish/subscribe API that decouples publishers from subscribers, scored on whether one bad subscriber can corrupt or block delivery to the rest.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-design-event-bus-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design an event bus** — a publish/subscribe API that decouples publishers from subscribers inside a single process. It's essentially [Observer](observer-pattern) scaled up to an API-design problem: instead of one subject with a fixed list of observers, any component can publish any event type, and any component can subscribe to it, with neither side referencing the other directly.\n\nThe scoring signal is whether your API stays decoupled under failure — one bad subscriber shouldn't silently corrupt or block delivery to the others.\n\nThe 10-minute bar: a `publish`/`subscribe` API keyed by event type, a dispatch strategy, and an answer for a subscriber that throws or never unsubscribes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-event-bus-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: in-process only, or survive a restart?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether the bus is **in-process only** — events published and consumed within one running application — or needs to **survive a process restart**, meaning an event published just before a crash must still be delivered after recovery.\n\nAn in-process bus is a much smaller problem: hold subscribers in memory, dispatch synchronously or via a thread pool, done. Surviving a restart means the bus needs durable storage for undelivered events, which pushes you toward a real message queue rather than a simple bus — naming that boundary is a strong signal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-event-bus-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: publish/subscribe keyed by event type",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape: a `publish(event)` / `subscribe(eventType, handler)` API keyed by event **type**, rather than a single global list of listeners. Publishing an `OrderPlacedEvent` only notifies handlers registered for that specific type — this is the same decoupling idea as [Observer](observer-pattern), generalized so any component can be a publisher or subscriber for any event, not just one fixed subject.\n\nInternally, a map from event type to a list of registered handlers is enough — `publish` looks up the type, iterates its handlers, and calls each one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-event-bus-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-event-bus-s04",
+      "order": 4,
+      "sectionTitle": "Code: an EventBus interface and a simple in-memory implementation",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface EventBus {\n    <T> void publish(T event);\n    <T> void subscribe(Class<T> eventType, Consumer<T> handler);\n}\n\npublic class InMemoryEventBus implements EventBus {\n    private final Map<Class<?>, List<Consumer<?>>> handlers = new ConcurrentHashMap<>();\n\n    public <T> void subscribe(Class<T> type, Consumer<T> handler) {\n        handlers.computeIfAbsent(type, k -> new CopyOnWriteArrayList<>()).add(handler);\n    }\n\n    public <T> void publish(T event) {\n        for (Consumer<?> h : handlers.getOrDefault(event.getClass(), List.of())) {\n            ((Consumer<T>) h).accept(event);\n        }\n    }\n}\n```\n\nKeying by the event's class gives compile-time type safety on `subscribe` while keeping `publish` generic — a publisher never needs to know who, if anyone, is listening.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-event-bus-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: publishers and subscribers decoupled through the bus",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Publishers and subscribers connected only through a central event bus, with no direct references between either side](assets/pub-sub-decoupling.svg)\n\nThe defining property: a publisher calls `publish(event)` and is done — it has no reference to any subscriber, doesn't know how many exist, and doesn't know if any exist at all. A subscriber registers once and receives every matching event from then on, with no reference back to whoever published it.",
+      "assets": [{"alt": "Publishers and subscribers connected only through a central event bus, with no direct references between either side", "path": "assets/pub-sub-decoupling.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-event-bus-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: sync or async dispatch — what breaks if a handler throws?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd default to **synchronous** dispatch for simplicity, with one hard rule: wrap each handler call in its own try/catch, since one throwing handler shouldn't stop the loop from reaching the remaining subscribers or propagate back into the publisher's code, which has no idea the bus even has subscribers.\n\n**Async dispatch** — handing each event to a thread pool or queue per handler — decouples a slow subscriber's latency from the publisher's call, at the cost of losing strict ordering guarantees and needing to think about what happens if the process crashes with events still queued in memory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-event-bus-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-event-bus-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: how does this differ from a message queue?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An in-process event bus and a [message queue](queues-vs-pubsub) solve a similar decoupling problem at very different scales. The bus lives entirely in one process's memory — no persistence, no delivery guarantee across a crash, and it disappears the moment the process restarts. A queue is a separate, durable system: messages persist independently of any consumer, survive a consumer restart, and can be consumed by processes on different machines entirely.\n\nReach for the queue instead of the bus when delivery must survive a restart, multiple separate processes need to consume the same events, or you need back-pressure and replay — none of which an in-memory bus provides.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-event-bus-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-design-event-bus-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you avoid a memory leak from subscribers who never unsubscribe?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The classic leak: a subscriber registers a handler and is later discarded by the rest of the app, but the bus still holds a reference to its handler in the subscriber list, keeping the whole object alive indefinitely — the same root cause as the classic Observer-pattern memory leak.\n\nThe fix is symmetry: every `subscribe` should have a matching `unsubscribe`, called when the subscribing component is torn down. For components with a well-defined lifecycle — a request handler, a UI screen — tying unsubscribe to that lifecycle's teardown hook is more reliable than trusting every call site to remember it manually. Some frameworks use weak references to handlers as a defensive backstop, at the cost of unpredictable cleanup timing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-event-bus-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: one slow subscriber blocking every other subscriber",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** dispatch synchronously in a simple loop with no timeout or isolation, so one subscriber that makes a slow network call blocks every other subscriber's turn, and blocks the publisher from continuing.\n\n**Why it's wrong:** it turns an unrelated slow dependency in one subscriber into a latency problem for every publisher and every other subscriber on the bus, which defeats the decoupling the bus was supposed to provide.\n\n**Correct model:** run slow or unpredictable subscribers off the main dispatch path — a dedicated thread pool per handler, or a timeout wrapped around each call — so one subscriber's slowness stays contained.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-event-bus-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: the bus swallows handler exceptions silently",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll wrap each handler call in a try/catch and just swallow the exception — that way one broken handler can't crash the bus.\"\n\n**Why it's wrong:** isolating the failure is right, but silently swallowing it with no log or metric means a broken subscriber can fail every single event, forever, with nobody ever finding out — the isolation quietly becomes an invisibility cloak for a real bug.\n\n**Correct model:** isolate the failure *and* surface it — log it with enough context to debug, and emit a metric so a persistently failing handler gets noticed and fixed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-event-bus-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-event-bus-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**API** — `publish(event)` / `subscribe(type, handler)`, keyed by event type. **Decoupling** — publishers and subscribers never reference each other, only the bus. **Dispatch** — default synchronous with per-handler exception isolation; async trades ordering for not blocking the publisher on a slow subscriber. **Leaks** — unsubscribe must mirror subscribe, tied to the subscriber's own lifecycle. **Close** by naming when this stops being enough: a real message queue once delivery must survive a restart.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

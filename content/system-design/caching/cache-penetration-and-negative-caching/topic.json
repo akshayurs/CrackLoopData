@@ -1,0 +1,120 @@
+{
+  "id": "cache-penetration-and-negative-caching",
+  "title": "Cache Penetration & Negative Caching at Scale",
+  "area": "system-design",
+  "group": "caching",
+  "order": 7,
+  "slug": "cache-penetration-and-negative-caching",
+  "summary": "The traffic that never had a cache entry to miss in the first place, and the probabilistic techniques that keep a hot cache from collapsing at extreme fan-out.",
+  "level": "expert",
+  "slideCount": 7,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "cache-penetration-and-negative-caching-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Distributed caching](distributed-caching) covers the stampede that happens when a real, popular key disappears from the cache. This topic covers a related but different problem: what happens when the key was **never real in the first place** — a lookup for a user ID, product ID, or file that simply doesn't exist.\n\nThat traffic bypasses the cache on every single request, because there's nothing to cache a \"not found\" as. This topic covers **cache penetration**, the fix (**negative caching**), and the probabilistic techniques that keep an extremely hot cache from synchronizing all its misses at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "cache-penetration-and-negative-caching-s02",
+      "order": 2,
+      "sectionTitle": "Cache penetration: repeated lookups for keys that don't exist, bypassing the cache every time",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cache penetration** happens when requests repeatedly ask for a key that doesn't exist in the underlying data store. A normal cache-aside setup only caches *successful* lookups, so a query for a nonexistent user ID misses the cache, misses the database (correctly — it's not there), and returns \"not found\" — without ever populating anything, since there was no value to cache.\n\nThe danger is that this repeats on *every single request* for that key, forever, because the cache never learns \"this doesn't exist\" the way it learns \"this exists and equals X.\" A normal cache miss is at least a one-time cost until the value is cached; a penetrating miss is a permanent, recurring cost.\n\nThis is especially dangerous when it's exploited deliberately: an attacker who requests thousands of random, nonexistent IDs can force every one of those requests straight through to the database, completely bypassing the cache's protection.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "cache-penetration-and-negative-caching-s02-q1"
+      ]
+    },
+    {
+      "id": "cache-penetration-and-negative-caching-s03",
+      "order": 3,
+      "sectionTitle": "Negative caching: caching the \"not found\" result itself, with a short TTL",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Negative caching** closes the gap by caching the *absence* of a value, not just its presence. When a lookup for `user:99999` returns \"not found,\" the cache stores a small sentinel value (e.g. `NULL` or a `\"not-found\"` marker) under that key with a short TTL — a minute or two is common. The next request for that same nonexistent key gets a fast cache hit on \"this doesn't exist,\" without ever reaching the database.\n\nThe TTL matters more here than for normal caching: it needs to be short enough that if the record *is* later created, users see it show up reasonably quickly, but long enough to actually absorb repeated penetration traffic on the same missing key.\n\nThis single technique — cache the miss, not just the hit — is the standard, first-line defense against cache penetration in production systems.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cache-penetration-and-negative-caching-s03-q1"
+      ]
+    },
+    {
+      "id": "cache-penetration-and-negative-caching-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a penetration attack hammering the DB vs the same traffic absorbed by negative caching",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Requests for a missing key with and without negative caching](assets/negative-caching-comparison.svg)\n\nWithout negative caching, every request for a nonexistent key is indistinguishable from the first — none of them ever get cheaper, no matter how many times the same missing key is requested.\n\nWith negative caching, only the *first* request for a given missing key pays the database cost; every request after that, until the short TTL expires, is absorbed entirely at the cache layer.",
+      "assets": [
+        {
+          "alt": "Requests for a missing key with and without negative caching",
+          "path": "assets/negative-caching-comparison.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "cache-penetration-and-negative-caching-s05",
+      "order": 5,
+      "sectionTitle": "Probabilistic early expiration (XFetch-style): recomputing before expiry to avoid synchronized misses",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Negative caching (and TTL-based caching generally) still has a residual problem: many entries set at the same time expire at the same time, producing a smaller version of the [stampede](distributed-caching) covered earlier. **Probabilistic early expiration** (the technique behind Facebook's XFetch algorithm) addresses this directly: as an entry's TTL gets close to expiring, each request has a small, *increasing* probability of proactively recomputing the value early — in the background, before the real expiry — instead of every request just waiting for the hard deadline.\n\nThe effect is that recomputation gets spread out across time, rather than every request piling up at the exact expiry instant. Combined with request coalescing (only one recompute actually runs at a time), this makes synchronized mass-expiry far less likely to matter in practice.\n\nThis complements jittered TTLs rather than replacing them — jitter spreads *when* entries expire; early expiration spreads *when they get refreshed*.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "cache-penetration-and-negative-caching-s05-q1"
+      ]
+    },
+    {
+      "id": "cache-penetration-and-negative-caching-s06",
+      "order": 6,
+      "sectionTitle": "Compare: negative caching vs a bloom filter in front of the cache for existence checks",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Negative caching and a **Bloom filter** both defend against penetration, but at different points. A Bloom filter is a compact, probabilistic structure that answers \"is this key *definitely absent*, or *possibly present*?\" — checked *before* touching the cache, with no false negatives but occasional false positives.\n\n| | Negative caching | Bloom filter |\n|---|---|---|\n| Placement | Inside the cache, per missing key | In front of the cache, checked first |\n| What it needs | The key to have been requested once already | A pre-built filter over all valid keys |\n| Guarantee | Exact, but only after the first miss | Instant reject for truly-absent keys |\n| Good for | Sporadic, unpredictable misses | High-volume, adversarial nonexistent-key traffic |\n\n**How to decide:** negative caching alone is usually enough for organic traffic; add a Bloom filter in front when missing-key traffic is high-volume or looks adversarial.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cache-penetration-and-negative-caching-s06-q1"
+      ]
+    },
+    {
+      "id": "cache-penetration-and-negative-caching-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: negative-caching a transient error as if it were a permanent \"not found\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Any failed lookup can be negative-cached the same way — cache the failure, move on.\"\n\n**Why it's wrong:** a genuine \"not found\" (the record truly doesn't exist) and a **transient error** (the database timed out, a downstream service briefly failed) look identical from the caller's point of view, but they mean opposite things. Negative-caching a transient failure means that for the length of the TTL, every legitimate request for a record that *does* exist gets told it doesn't — turning a brief blip into an extended, self-inflicted outage for that key.\n\n**Correct model:** only negative-cache a confirmed, authoritative \"not found\" from the data store — never cache a timeout, a connection error, or any ambiguous failure as if it were a real absence. When in doubt about which case occurred, don't cache the negative result at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "cache-penetration-and-negative-caching-s07-q1"
+      ]
+    }
+  ]
+}

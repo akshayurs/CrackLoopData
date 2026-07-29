@@ -1,0 +1,29 @@
+{
+  "topicId": "distributed-tracing-design",
+  "interviewQuestions": [
+    {
+      "id": "distributed-tracing-design-iq1",
+      "question": "A request is slow somewhere across six services — how do you find where?",
+      "answerMarkdown": "I'd start from the trace, not the logs — pull up the trace for a slow request (or a sample of them) and look at the waterfall of spans. The parent-child nesting shows exactly how much of the total time each of the six services' hops consumed, so the slow one is usually visually obvious as the span that dominates the parent's width.\n\nOnce I've localized it to, say, the inventory service taking 1.7 of 2.1 seconds, I'd drop into that service's own logs and metrics for the specific request (using the trace ID as the correlation key) to find the actual cause — a slow query, a lock, a downstream call it makes that isn't itself traced.\n\nI'd also flag the failure mode up front: if the trace looks incomplete or breaks after one hop, the likely cause is a service not propagating the trace header, which is its own thing to check.\n\n**Testing:** whether you go straight to the tool built for this instead of manually correlating six sets of logs.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Localizing latency across services"
+    },
+    {
+      "id": "distributed-tracing-design-iq2",
+      "question": "What's the difference between head-based and tail-based sampling, and which would you use?",
+      "answerMarkdown": "I'd define the split by when the sampling decision happens: head-based decides at the start of a request, before anything is known about how it'll go — say, trace 1 in 100 requests. Tail-based waits until the request finishes and keeps it based on outcome, typically errors or high latency.\n\nFor which to use, I'd say it depends on what you're optimizing for: head-based is cheap and simple, good for general latency trend visibility, but can miss a rare failure entirely since it's a coin flip made before the failure happens. Tail-based reliably catches the incidents worth debugging, at the cost of buffering every span until a request completes, which needs more infrastructure.\n\nMy default recommendation is a low head-based rate for baseline visibility plus tail-based sampling specifically for errors and outliers, once volume justifies the extra infrastructure.\n\n**Testing:** whether you understand this as a cost-versus-completeness trade-off, not just two flavors of the same thing.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Head-based vs tail-based sampling"
+    },
+    {
+      "id": "distributed-tracing-design-iq3",
+      "question": "You add tracing to your services, but one request's trace shows only two services instead of the five it actually touched. What's going on?",
+      "answerMarkdown": "I'd name the likely cause directly: one of the services in the path isn't propagating the trace context — usually the `traceparent` header — to whatever it calls next. This doesn't produce an error; the trace just silently splits into two disconnected pieces at that exact hop, which is why it looks like tracing \"worked\" for two services and vanished for the rest.\n\nI'd walk through how I'd find the culprit: check each service's outbound calls for whether they use the tracing library's instrumented client versus a raw HTTP client, a custom internal SDK, or a queue publish that bypasses it — those are the usual places a header gets dropped.\n\nThe fix is to explicitly verify propagation per service rather than assume it from having a tracing library installed somewhere in the stack.\n\n**Testing:** whether you know context propagation is a per-hop discipline problem, not something a tracing library guarantees automatically everywhere.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a broken/split trace"
+    }
+  ]
+}

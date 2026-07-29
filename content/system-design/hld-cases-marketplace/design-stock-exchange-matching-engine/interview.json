@@ -1,0 +1,29 @@
+{
+  "topicId": "design-stock-exchange-matching-engine",
+  "interviewQuestions": [
+    {
+      "id": "design-stock-exchange-matching-engine-iq1",
+      "question": "Design a simplified stock exchange matching engine?",
+      "answerMarkdown": "I'd open by naming the constraint that shapes everything else: microsecond-level latency plus a hard requirement for deterministic, replayable output. That combination rules out most standard scaling tools — no network calls, no database queries, no synchronous I/O on the hot path — so the matching core for one symbol has to be a single-threaded, in-memory process working over a purpose-built order book: two price-ordered structures (bids, asks), each a time-ordered queue within every price level.\n\nI'd walk through the matching loop itself: an incoming order checks the best opposite price, matches and emits a trade if prices cross, otherwise rests in the book — kept deliberately simple to fit the latency budget. I'd explain why this core is single-threaded per symbol: any concurrency there makes match order depend on scheduling, breaking both price-time-priority fairness and the ability to replay a sequence of inputs and get the same trades out, which regulators and internal audits require.\n\nFor scaling across the whole exchange, I'd shard by symbol — one thread per symbol, thousands of symbols in parallel — rather than ever trying to parallelize inside one book.\n\n**Testing:** whether you recognize this as the rare design where determinism, not horizontal scaling, is the organizing constraint.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "The full matching engine design"
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-iq2",
+      "question": "Why can't you just add more threads to speed up matching for a single hot symbol?",
+      "answerMarkdown": "I'd walk through the concrete failure mode rather than just asserting it's forbidden: if two orders for the same symbol are processed on different threads, their relative match order can depend on which thread happened to run first — that's nondeterminism. Run the exact same sequence of input orders through the engine twice and you could get two different sets of trades.\n\nThat breaks two things simultaneously: price-time priority fairness (an order that should have been matched first, based on arrival time, might not be, purely due to scheduling luck) and regulatory replay (an exchange has to be able to reconstruct exactly what happened from the order log, and it can't if the original run itself wasn't deterministic). I'd contrast this with symbol-sharding, which gets genuine parallelism by keeping each symbol's matching single-threaded internally while running many symbols concurrently — the safe way to use more cores.\n\n**Testing:** whether you can explain a concrete correctness failure from concurrency, not just recite \"it needs to be single-threaded.\"",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Why not multi-thread one symbol"
+    },
+    {
+      "id": "design-stock-exchange-matching-engine-iq3",
+      "question": "How would you handle a single symbol whose order volume exceeds what one CPU core can process in time?",
+      "answerMarkdown": "I'd first acknowledge this is a genuinely hard case, since the usual scaling answer (add more threads or nodes) is exactly what breaks determinism here. I'd focus the response on getting more out of the single core rather than adding cores: profiling the hot path aggressively, using cache-friendly data structures for the order book (contiguous arrays over pointer-chasing trees where possible), avoiding memory allocation during matching (pre-allocated object pools), and stripping any unnecessary work out of the loop itself.\n\nI'd also mention this is partly a capacity-planning problem, not just an engineering one — if a specific symbol is known to be extremely liquid, that hardware should be provisioned with the fastest available single-core performance for that symbol specifically, rather than treated identically to a low-volume symbol. I'd be honest that there's a real ceiling here, and beyond it the trade-off becomes a business/regulatory conversation (e.g., trading halts), not purely a technical one.\n\n**Testing:** whether you recognize a genuine physical limit and reason about it honestly instead of hand-waving toward more parallelism.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "A single hot symbol exceeding core throughput"
+    }
+  ]
+}

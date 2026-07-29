@@ -1,0 +1,178 @@
+{
+  "id": "iv-deadlock-in-object-graph",
+  "title": "Walk me through a deadlock in this object graph",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 4,
+  "slug": "iv-deadlock-in-object-graph",
+  "summary": "The tracing skill this question actually tests: name the specific wait-for cycle in the graph you were handed, not the four conditions in the abstract.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-deadlock-in-object-graph-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This question tests a specific skill: tracing the actual wait-for cycle in the object graph you were handed, not reciting the four textbook deadlock conditions from memory.\n\nExpect a small class diagram — two or three objects, each locking another — and a request to find where it deadlocks and fix it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: two threads, two locks — or is this a bigger graph?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "First narrow the graph: **is this a simple two-threads-two-locks case, or a bigger graph with three or more objects each locking another?** The classic two-lock version has one obvious fix (consistent ordering). A larger graph might have a cycle spanning three or more locks that's easy to miss if you only check adjacent pairs — ask to see the whole graph before proposing a fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name the four deadlock conditions, then trace the specific cycle in this graph",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the four classic conditions once — mutual exclusion, hold-and-wait, no preemption, circular wait — then move past them to the actual graph: **trace the specific cycle**. Pick a thread, follow which lock it holds and which it's waiting for, follow that lock's holder to what *it's* waiting for, and keep going until you're back where you started.\n\nThat closed loop is the deadlock; the four conditions only explain why closed loops are possible at all, not which one exists here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-deadlock-in-object-graph-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: two threads acquiring two locks in opposite order — the wait-for cycle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The simplest deadlock: two threads, two locks, acquired in opposite order.\n\n![Thread 1 holds Lock A and waits for Lock B while Thread 2 holds Lock B and waits for Lock A, forming a closed wait-for cycle](assets/deadlock-wait-cycle.svg)\n\nThread 1 acquires lock A then waits on lock B; thread 2 has already acquired lock B and waits on lock A. Neither can proceed — that closed arrow loop, thread 1 waits-for thread 2 waits-for thread 1, is the entire bug. Once you can draw this loop for any given code, you can find any deadlock.",
+      "assets": [{"alt": "Thread 1 holds Lock A and waits for Lock B while Thread 2 holds Lock B and waits for Lock A, forming a closed wait-for cycle", "path": "assets/deadlock-wait-cycle.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s05",
+      "order": 5,
+      "sectionTitle": "Code: the deadlocking transfer-between-accounts example",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Account {\n    private int balance;\n    private final Object lock = new Object();\n\n    void transferTo(Account to, int amount) {\n        synchronized (this.lock) {\n            synchronized (to.lock) {\n                this.balance -= amount;\n                to.balance += amount;\n            }\n        }\n    }\n}\n\n// Thread 1: a.transferTo(b, 10);\n// Thread 2: b.transferTo(a, 20);\n```\n\nThread 1 locks `a` then waits for `b`. Thread 2 locks `b` then waits for `a` — the exact two-lock cycle from s04, hidden inside symmetric-looking method calls. Because `transferTo` always locks `this` first, the order two threads acquire locks in depends entirely on which account each call started from.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-deadlock-in-object-graph-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s06",
+      "order": 6,
+      "sectionTitle": "Code: the fix — a global lock ordering by account ID that removes the cycle",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Account {\n    private int balance;\n    private final Object lock = new Object();\n    private final int id;\n\n    void transferTo(Account to, int amount) {\n        Account first = this.id < to.id ? this : to;\n        Account second = this.id < to.id ? to : this;\n        synchronized (first.lock) {\n            synchronized (second.lock) {\n                this.balance -= amount;\n                to.balance += amount;\n            }\n        }\n    }\n}\n```\n\nEvery thread now locks accounts in the same order — lower ID first — regardless of which account's `transferTo` it called. There's no longer a way for two threads to each hold one lock while waiting on the other, which breaks circular wait and removes the cycle entirely.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"how do you prevent it — ordering, timeout, or a single lock?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three real strategies, ranked by preference. **Lock ordering** (s06) removes circular wait entirely and is usually the best fix when the objects have a natural total order like an ID. **Timeout** (`tryLock` with a deadline) doesn't prevent the deadlock but bounds how long a thread waits, letting it back off and retry instead of hanging forever. **A single coarser lock** avoids the cycle by removing the possibility of holding one lock while waiting for another, at the cost of serializing more work than necessary — a last resort, not a first answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how would you detect this happened in production?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **thread dump** (`jstack`, or a JVM's built-in deadlock detector) directly reports threads stuck in a cycle — the JVM can detect this exact pattern automatically and names the specific threads and locks involved.\n\nShort of a full deadlock, **lock-contention metrics** — time spent waiting to acquire a given lock, tracked per lock — surface a growing wait time that signals the system is trending toward one, before it fully locks up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-deadlock-in-object-graph-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"what's livelock, and how is it different from deadlock?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In deadlock, threads are blocked and make zero progress — they're just stuck waiting. In **livelock**, threads keep actively running and changing state, but never make real progress — the classic example is two threads that each detect a potential conflict and both back off and retry in a way that keeps re-colliding, forever.\n\nThe fix for livelock is usually adding randomized backoff or a priority tiebreaker so the two threads stop mirroring each other's retry timing exactly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: naming \"deadlock\" without tracing the actual cycle in the given graph",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** saying \"this deadlocks\" and naming the four textbook conditions, without ever tracing the specific wait-for cycle in the graph you were given.\n\n**Why it's wrong:** the four conditions explain why deadlock is *possible* in general; they don't identify which lock a thread is stuck on or which other thread holds it. An interviewer showing a specific object graph wants that graph traced, not a definition that applies to every deadlock ever written.\n\n**Correct model:** pick a thread, follow its held lock to its waiting lock to that lock's holder, and keep following until the loop closes — that trace is the actual answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: \"fixing\" it by wrapping everything in one giant lock, killing concurrency entirely",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** \"fixing\" the transfer deadlock by wrapping the entire `transferTo` method — or worse, the whole class — in one single global lock shared by every account.\n\n**Why it's wrong:** it does remove the deadlock, but it also serializes every transfer in the system through one lock regardless of which accounts are involved — two transfers between four unrelated accounts now block each other for no reason, destroying throughput to fix a narrow cycle.\n\n**Correct model:** the fix should be as narrow as the cycle — consistent ordering between the two specific locks involved, not a lock spanning the entire system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-deadlock-in-object-graph-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-deadlock-in-object-graph-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd trace the actual cycle in this graph rather than recite the four conditions: which lock does this thread hold, which is it waiting for, and who holds that one. Once I can draw the closed loop, I'd fix it with consistent lock ordering — always acquiring locks in the same relative order, using something like account ID as the tiebreaker — since that removes circular wait entirely. I'd mention `tryLock` with a timeout as a bounding strategy, not a fix, and flag that a single global lock 'fixes' it by destroying throughput instead.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

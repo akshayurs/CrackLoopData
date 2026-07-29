@@ -5268,7 +5268,7 @@ A DB-specific rerun of the server-count question — tests whether you reason se
 - Clarifying questions: what's the write QPS and the storage-per-shard limit you're targeting? (concept)
 - The answer skeleton: shard count from write throughput and data-size limits; replica count from read QPS and read:write ratio (concept)
 - Walking it: a worked example — 20k write QPS, 5k writes/sec per shard capacity → 4 shards minimum (code)
-- Walking it: layering read replicas on top — 100k read QPS, 10k reads/sec per replica → 10 replicas per shard (code)
+- Walking it: layering read replicas on top — 100k read QPS, 10k reads/sec per replica → 10 replicas total, distributed across the shards (code)
 - Walking it: why you round both numbers up, not to the nearest whole, and add one for failover (concept)
 - The trade-off to name out loud: more shards spread load but each cross-shard query gets more expensive — shard count isn't free even when writes justify it (compare)
 - Follow-up: "your data size triples next year — does your shard count still hold, or do you need to reshard?" (concept)

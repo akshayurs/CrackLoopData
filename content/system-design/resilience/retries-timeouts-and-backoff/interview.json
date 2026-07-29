@@ -1,0 +1,29 @@
+{
+  "topicId": "retries-timeouts-and-backoff",
+  "interviewQuestions": [
+    {
+      "id": "retries-timeouts-and-backoff-iq1",
+      "question": "Client requests are timing out — how should the client retry?",
+      "answerMarkdown": "I'd start by not retrying naively — immediate, unlimited retries are how a partial slowdown turns into a full outage, since every failing client adds retry load onto a dependency that's already struggling. So the first move is exponential backoff: wait 100ms, then 200ms, then 400ms, capped at some maximum, instead of retrying at a constant interval.\n\nNext I'd add jitter, because backoff alone still lets clients that failed together retry in lockstep — full jitter (a random wait between 0 and the backoff value) desynchronizes them so retries spread out instead of arriving as a spike.\n\nI'd cap total retries per request (2-3 attempts, not unlimited) and check idempotency before retrying any write — a non-idempotent write shouldn't be retried blindly on a timeout, since the original call might have already succeeded server-side. At the aggregate level I'd also mention a retry budget, capping total retry volume as a fraction of traffic so one bad deploy doesn't turn into an amplifying storm.\n\n**Testing:** whether you know backoff, jitter, and budgets are three separate mechanisms solving three separate parts of the problem, not one knob.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Designing a client retry policy"
+    },
+    {
+      "id": "retries-timeouts-and-backoff-iq2",
+      "question": "What is a retry storm, and how would you prevent one?",
+      "answerMarkdown": "A retry storm happens when a dependency starts failing under load, every client retries in response, and those retries add enough extra load to make the failure rate worse — which triggers even more retries. It's a positive feedback loop that can turn a moderate slowdown into a full outage, and it's one of the most common self-inflicted incident patterns.\n\nI'd prevent it with a few layered defenses: exponential backoff so retries don't arrive at a constant rate, jitter so retries from different clients don't stay synchronized into spikes, and a retry budget that caps total retry volume as a fraction of overall traffic — once exhausted, further failures surface immediately rather than retrying.\n\nI'd also pair this with a circuit breaker on the calling side, so once failures are clearly sustained rather than transient, the caller stops trying entirely for a cooldown period instead of continuing to retry at all.\n\n**Testing:** whether you can name the feedback-loop mechanism specifically, not just say \"add retries carefully.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Retry storms and how to avoid them"
+    },
+    {
+      "id": "retries-timeouts-and-backoff-iq3",
+      "question": "How do you set timeouts across a chain of services calling each other?",
+      "answerMarkdown": "I'd start from the outside in: decide the total end-to-end deadline the outermost caller (often the client-facing gateway) promises, then allocate slices of that budget to each hop down the chain, rather than letting each service pick its own timeout independently.\n\nConcretely, if the gateway promises 2 seconds, and it calls service A which calls service B, I'd make sure A's timeout to B plus A's own processing time fits inside what the gateway is waiting for A to return — otherwise A can still be waiting on B after the gateway has already given up on A.\n\nI'd also leave room in the budget for at least one retry at the lowest layer, since that's usually the cheapest place to absorb a transient blip, and I'd make sure each layer's timeout is a bit shorter than what it promises its own caller so there's slack for network overhead.\n\n**Testing:** whether you think about timeouts as a shared budget across a call chain instead of independent local settings.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Setting timeouts across a call chain"
+    }
+  ]
+}

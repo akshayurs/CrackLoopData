@@ -1,0 +1,176 @@
+{
+  "id": "iv-producer-consumer-design",
+  "title": "Design a producer-consumer setup",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 7,
+  "slug": "iv-producer-consumer-design",
+  "summary": "The bounded-buffer problem, solved with a tested primitive, not hand-rolled wait/notify with a spurious-wakeup bug waiting to happen.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-producer-consumer-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The bounded-buffer problem: one or more producers generate items, one or more consumers process them, and a shared queue between them must never lose an item, never let a consumer read from an empty queue, and never let a producer overflow a full one.\n\nThe graded skill is choosing a tested coordination primitive over hand-rolled `wait`/`notify`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: single or multiple producers/consumers? Bounded or unbounded queue?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **single or multiple producers/consumers? Bounded or unbounded queue?** Multiple producers or consumers change nothing about the queue's own correctness if you use a proper concurrent queue, but they do change how you reason about ordering and fairness.\n\nBounded vs unbounded changes the failure mode entirely: bounded means a full queue must block (or reject) producers; unbounded means memory growth becomes the real risk instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: a shared bounded queue, block-on-full and block-on-empty, the coordination primitive",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape: a **shared bounded queue** sits between producers and consumers. A producer **blocks on full** — waits if the queue has no room — and a consumer **blocks on empty** — waits if there's nothing to take.\n\nThe coordination primitive doing this waiting-and-waking is the actual design decision: a tested `BlockingQueue` implementation handles both conditions correctly out of the box, which is why it's almost always the right default over hand-rolling the same logic with `wait`/`notify`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s04",
+      "order": 4,
+      "sectionTitle": "Code: a producer-consumer with a blocking queue",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nBlockingQueue<Task> queue = new ArrayBlockingQueue<>(100);\n\n// producer\nvoid produce(Task t) throws InterruptedException {\n    queue.put(t);    // blocks if the queue is full\n}\n\n// consumer\nvoid consume() throws InterruptedException {\n    Task t = queue.take();   // blocks if the queue is empty\n    process(t);\n}\n```\n\n`ArrayBlockingQueue` handles both wait conditions internally: `put` blocks the calling thread if the queue is full, `take` blocks if it's empty, and both wake correctly the moment space or an item becomes available. No explicit lock, no `wait`/`notify` in your code at all.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the buffer with wait conditions on both ends",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A bounded queue between a producer and a consumer, blocking the producer when full and the consumer when empty](assets/bounded-queue-blocking.svg)\n\nThe queue has two wait conditions, one on each end: producers wait for 'not full,' consumers wait for 'not empty.' A correct blocking queue implementation tracks both conditions internally and only wakes a waiting thread once its specific condition is satisfied.",
+      "assets": [{"alt": "A bounded queue between a producer and a consumer, blocking the producer when full and the consumer when empty", "path": "assets/bounded-queue-blocking.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s06",
+      "order": 6,
+      "sectionTitle": "Code: what hand-rolled wait/notify looks like, and the spurious-wakeup bug when the guard is an if instead of a while",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\n// BROKEN: guard is an 'if', vulnerable to spurious wakeup\nsynchronized Task take() throws InterruptedException {\n    if (queue.isEmpty()) {\n        wait();      // can return even without a matching notify\n    }\n    return queue.poll();   // may run on an empty queue!\n}\n\n// FIXED: guard is a 'while', re-checks the condition after waking\nsynchronized Task take() throws InterruptedException {\n    while (queue.isEmpty()) {\n        wait();\n    }\n    return queue.poll();\n}\n```\n\n`wait()` can return without a corresponding `notify()` — a spurious wakeup, permitted by the JVM spec. An `if` guard re-checks the condition zero times after waking, so it proceeds even if the queue is still empty. The fix is always a `while` loop: re-check the condition every time you wake, spurious or not, before proceeding.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-producer-consumer-design-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-producer-consumer-design-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"what if you can't block — how do you handle backpressure instead?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Blocking works when producers can afford to wait, but not every producer can — a request-handling thread blocking on a full queue ties up a thread-pool slot and can cascade into unrelated timeouts.\n\nThe alternatives: reject new items immediately once the queue is full (fail fast), drop the oldest or lowest-priority item to make room, or propagate a signal upstream telling the producer to slow down. See [backpressure and dead-letter handling](backpressure-and-dead-letter-handling) for the fuller menu of strategies.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-producer-consumer-design-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-producer-consumer-design-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how would you scale this to multiple consumers safely?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A `BlockingQueue` already supports multiple consumers safely — each call to `take()` atomically removes one item, so two consumers can never take the same item.\n\nScaling is mostly a capacity question, not a correctness one: too few consumers and the queue backs up; too many and you pay context-switching overhead without matching throughput gains, since producers may not generate work fast enough to keep them all busy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"how do you size the bounded buffer — what happens if it's too small, or too large?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Too small, and producers block frequently even under normal, brief traffic spikes, adding latency for no throughput gain. Too large, and a genuine backlog hides behind a queue that looks fine on a simple 'is it full' check, while items sit stale for minutes before a consumer reaches them — bad for anything latency-sensitive.\n\nSize it from measured producer/consumer rate and the maximum staleness you can tolerate for a queued item, not from an arbitrary round number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: hand-rolling wait/notify incorrectly (missing the loop, spurious wakeup) instead of using a tested primitive",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** hand-rolling `wait`/`notify` with an `if` guard instead of a `while`, missing the spurious-wakeup case.\n\n**Why it's wrong:** the JVM specification explicitly permits `wait()` to return without a matching `notify()` — an `if` guard silently lets a thread proceed on a condition that's no longer true, producing an intermittent bug that's nearly impossible to reproduce reliably.\n\n**Correct model:** always re-check the wait condition in a `while` loop, and prefer a tested `BlockingQueue` over hand-rolled coordination whenever one is available.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-producer-consumer-design-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: using an unbounded queue \"to never block producers,\" trading a deadlock risk for an OOM risk",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** using an unbounded queue \"to never block producers,\" avoiding the whole question of what happens when it's full.\n\n**Why it's wrong:** it doesn't remove the risk, it relocates it — if consumers can't keep up, the queue grows without bound until the process runs out of memory, trading a visible, recoverable backpressure problem for an eventual, harder-to-diagnose out-of-memory crash.\n\n**Correct model:** a bounded queue with an explicit policy for what happens when it's full — block, reject, or drop — surfaces the backpressure decision instead of hiding it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-producer-consumer-design-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-producer-consumer-design-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd clarify the producer/consumer counts and whether the queue is bounded, then describe the shape: a shared queue where producers block on full and consumers block on empty. I'd use a tested `BlockingQueue` rather than hand-rolling `wait`/`notify`, since a hand-rolled version needs a `while` guard to survive spurious wakeups — an easy detail to get wrong. If producers genuinely can't block, I'd name backpressure alternatives — reject, drop, or signal upstream — instead of defaulting to an unbounded queue.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

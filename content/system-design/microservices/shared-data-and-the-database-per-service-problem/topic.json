@@ -1,0 +1,113 @@
+{
+  "id": "shared-data-and-the-database-per-service-problem",
+  "title": "Shared Data & the Database-per-Service Problem",
+  "area": "system-design",
+  "group": "microservices",
+  "order": 6,
+  "slug": "shared-data-and-the-database-per-service-problem",
+  "summary": "Why a shared database quietly defeats the point of microservices, and how to query and stay in sync across services once data is split.",
+  "level": "advanced",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The single most common way microservices quietly become a [service-decomposition](service-decomposition) failure — a distributed monolith — is a shared database. Splitting the code but not the data means every schema change still needs every team's sign-off.\n\n**Database-per-service** fixes that, but creates a new problem: once data lives in separate databases, you can no longer just `JOIN` across it. This topic covers both halves — why to split, and how to live with the split.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s02",
+      "order": 2,
+      "sectionTitle": "Database-per-service: why sharing one DB defeats the point of microservices",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If Orders, Inventory, and Payments all read and write the same database, they are not independent, no matter how separate their codebases and deployments look. Any team can change a column that another team's queries depend on, and no compiler or API contract will catch it — it breaks silently in production.\n\n**Database-per-service** means each service owns its schema exclusively; every other service reaches its data only through the owning service's API, never directly against its tables. This restores the two things microservices are supposed to buy: independent deployability (no cross-team schema coordination) and failure isolation (one service's database being slow doesn't directly slow a query running against another).\n\nThe cost is real too — you give up cheap, consistent cross-entity `JOIN`s, which is exactly what the rest of this topic addresses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "shared-data-and-the-database-per-service-problem-s02-q1"
+      ]
+    },
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: shared DB anti-pattern vs database-per-service",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Shared database anti-pattern vs database-per-service with API-only calls](assets/database-per-service.svg)\n\nIn the anti-pattern, every service can read and write every table, so a schema change anywhere risks breaking code everywhere. In database-per-service, the only sanctioned path between services' data is a call through the owning service's API.\n\nThat single rule — no direct cross-service table access, ever — is what the rest of this topic exists to help you keep without breaking your ability to query across services.",
+      "assets": [{"alt": "Shared database anti-pattern vs database-per-service with API-only calls", "path": "assets/database-per-service.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s04",
+      "order": 4,
+      "sectionTitle": "Querying across services once the data is split: API composition and CQRS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once data is split, \"show me all orders with the customer's name and current loyalty tier\" can no longer be one query. Two common answers.\n\n**API composition**: the caller (or a dedicated aggregator service) calls Orders for the order list, then calls Customers for each customer's name and tier, and stitches the results together in application code. Simple, but N+1 calls and multiple round trips can get slow for large result sets.\n\n**CQRS** (Command Query Responsibility Segregation): maintain a separate, denormalized read model — built ahead of time from events published by Orders and Customers — that already has order-plus-customer data joined and ready to query directly. Writes still go to each service's own database; reads hit the pre-built view.\n\nAPI composition is simpler and fine for low-volume, few-service queries; CQRS pays off once a query needs to be fast and spans data owned by many services.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "shared-data-and-the-database-per-service-problem-s04-q1"
+      ]
+    },
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s05",
+      "order": 5,
+      "sectionTitle": "Keeping data in sync across services: events and CDC",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A CQRS read model (or any service that keeps its own copy of another service's data) needs to stay updated when the source changes. Two common mechanisms. **Domain events**: the owning service explicitly publishes an event — `OrderPlaced`, `CustomerTierChanged` — whenever something relevant happens, and interested services subscribe and update their own copies.\n\n**Change Data Capture (CDC)**: instead of the service remembering to publish events, a tool (like Debezium) tails the source database's write-ahead log and turns every row change into an event automatically — useful when you can't easily add publish calls to existing code, but it couples a downstream consumer to the source's schema more tightly than a deliberate domain event would.\n\nEither way, the receiving side ends up **eventually consistent** with the source — there's a lag, usually milliseconds to seconds, during which the copy is stale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s06",
+      "order": 6,
+      "sectionTitle": "Compare: shared DB vs database-per-service on consistency and autonomy",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Shared database | Database-per-service |\n|---|---|---|\n| Cross-entity queries | Trivial — a single `JOIN` | Requires API composition or a CQRS read model |\n| Consistency | Strong — one transaction, one commit | Eventual — copies sync via events, with lag |\n| Team autonomy | Low — any schema change risks breaking another team's queries | High — each team owns and evolves its schema freely |\n| Failure isolation | Weak — one runaway query can slow every service | Strong — one database being slow doesn't touch another's |\n\n**How to decide:** if you need strong, immediate consistency across entities and only one team owns them all, a shared schema (even within one service) is fine; once multiple teams need independent schema evolution, pay the eventual-consistency cost of splitting the data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "shared-data-and-the-database-per-service-problem-s06-q1"
+      ]
+    },
+    {
+      "id": "shared-data-and-the-database-per-service-problem-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: two services silently sharing a table \"just for now\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll let the new Shipping service read directly from the Orders table temporarily, just to ship faster — we'll fix it later.\"\n\n**Why it's wrong:** \"temporarily\" rarely gets revisited once it works, and every day it exists, Orders can't change that table's schema without checking whether Shipping's queries still work — the exact cross-team coupling database-per-service was meant to eliminate. The workaround becomes permanent because removing it requires coordinated work with no urgent forcing function.\n\n**Correct model:** if Shipping needs order data, give it a real API call (or an event feed) from day one, even if it's slower to build than a direct query — the schema-coupling cost compounds silently, while the API's cost is paid once, up front.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "shared-data-and-the-database-per-service-problem-s07-q1"
+      ]
+    }
+  ]
+}

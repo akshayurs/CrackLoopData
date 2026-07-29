@@ -1,0 +1,165 @@
+{
+  "id": "iv-double-checked-locking-explained",
+  "title": "What is double-checked locking and why is it tricky?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 5,
+  "slug": "iv-double-checked-locking-explained",
+  "summary": "The historical reordering bug is the actual answer here, not just the shape of the pattern — and the fix is memory-model-specific, not universal.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-double-checked-locking-explained-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Double-checked locking (DCL) is a historically famous bug, not just a pattern — the interesting part of this question is the actual failure mode that made naive DCL broken for years, not just its shape.\n\nExpect to write the naive version, get asked why it's wrong, then fix it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: which language/memory model — this was a real bug pre-Java-5",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **which language and memory model this targets** — this was a real, well-documented bug in Java before JSR-133 changed the memory model in Java 5. Under the old model, the naive pattern could return a reference to a half-constructed object; under the current model (with `volatile`), it's correct.\n\nThe same pattern in a language with a weaker memory model, or without an equivalent to `volatile`, may still be broken today — don't assume the fix generalizes without checking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: the naive version, the subtle half-constructed-object bug, the fix",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Walk through three stages: **the naive version** — check the field, lock, check again, construct if still null. **The subtle bug** — object construction isn't guaranteed to complete before the reference becomes visible to another thread, so a second thread can see a non-null reference to a half-built object. **The fix** — mark the field `volatile`, which since Java 5 prevents the compiler and CPU from reordering the reference write ahead of the constructor's writes to the object's fields.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-double-checked-locking-explained-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s04",
+      "order": 4,
+      "sectionTitle": "Code: double-checked locking without volatile — the reordering hazard",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Singleton {\n    private static Singleton instance;   // NOT volatile — the bug\n\n    static Singleton getInstance() {\n        if (instance == null) {                 // first check, no lock\n            synchronized (Singleton.class) {\n                if (instance == null) {          // second check, locked\n                    instance = new Singleton();  // can be reordered!\n                }\n            }\n        }\n        return instance;\n    }\n}\n```\n\n`new Singleton()` is really three steps — allocate memory, run the constructor, assign the reference — and without `volatile`, the compiler or CPU is free to reorder the reference assignment ahead of the constructor finishing. A second thread's unlocked first check can then see a non-null `instance` pointing at a half-constructed object, and read fields that haven't been set yet.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-double-checked-locking-explained-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s05",
+      "order": 5,
+      "sectionTitle": "Code: the corrected version with volatile",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Singleton {\n    private static volatile Singleton instance;\n\n    static Singleton getInstance() {\n        if (instance == null) {\n            synchronized (Singleton.class) {\n                if (instance == null) {\n                    instance = new Singleton();\n                }\n            }\n        }\n        return instance;\n    }\n}\n```\n\nThe only change is `volatile` on the field. Since Java 5's memory model revision, a write to a volatile field cannot be reordered ahead of any write that happens before it in program order, and a read of that field is guaranteed to see all writes that happened before it — so a thread that sees a non-null `instance` is guaranteed to see a fully constructed object.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s06",
+      "order": 6,
+      "sectionTitle": "Code: the simpler eager-holder alternative that sidesteps the whole problem",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Singleton {\n    private static class Holder {\n        static final Singleton INSTANCE = new Singleton();\n    }\n    static Singleton getInstance() {\n        return Holder.INSTANCE;\n    }\n}\n```\n\nThis sidesteps the whole reordering question: the JVM guarantees a class is only initialized once, and that initialization happens-before any thread first accesses it — so `Holder.INSTANCE` is safely published with no explicit locking or `volatile` at all. Simpler and equally correct; see [thread-safe singleton implementation](iv-thread-safe-singleton-implementation) for the full comparison of approaches, including when you'd still choose DCL over this.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"why does volatile fix it — what does it actually guarantee?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`volatile` gives two guarantees together: **visibility** — a write to a volatile field is immediately visible to any thread that subsequently reads it, no stale caching — and **ordering** — no read or write that comes after the volatile write in program order can be reordered to happen before it, and vice versa for reads.\n\nFor DCL specifically, that ordering guarantee is the one that matters: it stops the reference assignment from becoming visible before the constructor's writes are visible, which was the entire bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"why did this only become reliably fixable in Java 5 — what changed in the memory model?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before JSR-133 (Java 5), the Java Memory Model didn't specify this ordering guarantee for `volatile` strongly enough — a volatile write could still be reordered relative to non-volatile writes on some JVMs and hardware, which is exactly what let the half-constructed object leak through.\n\nJSR-133 rewrote the memory model so a `volatile` write is a full happens-before edge: every write before it in program order is guaranteed visible to any thread that reads it afterward. That's a JVM-level fix — code targeting pre-5 semantics doesn't retroactively get it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-double-checked-locking-explained-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: describing the pattern's shape without explaining why it was ever broken",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** describing double-checked locking's shape — two null checks, one lock — without ever explaining why the naive version used to be broken.\n\n**Why it's wrong:** the pattern's shape alone doesn't tell an interviewer you understand memory visibility; it just shows you memorized a diagram. The actual content of this question is the reordering hazard and how `volatile` fixes it specifically.\n\n**Correct model:** always pair the pattern with the failure mode it fixes — a half-constructed object becoming visible through reference reordering — not just the control flow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: assuming double-checked locking is unnecessary \"in every language\" because Java fixed its memory model",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** assuming double-checked locking is unnecessary \"in every language\" because Java's memory model fixed it in Java 5.\n\n**Why it's wrong:** the fix is specific to Java's memory model and its `volatile` keyword's guarantees. Other runtimes — older C++ compilers without `std::atomic`, or languages with weaker or undefined memory models — can still have the exact same reordering bug, and their equivalent of `volatile` (if one exists) may not carry the same ordering guarantee.\n\n**Correct model:** the fix is per-language and per-memory-model; check what the target runtime actually guarantees before assuming safety.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-double-checked-locking-explained-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-double-checked-locking-explained-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd walk through the naive version, then explain the actual bug: without `volatile`, the reference to the new object can become visible to another thread before the constructor's writes are, so a thread can read a half-built object. Since Java 5, marking the field `volatile` fixes this by giving that write a proper happens-before ordering. I'd also mention the eager holder-class alternative as a simpler, equally-correct option, and flag that this fix is Java-memory-model-specific, not universal.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

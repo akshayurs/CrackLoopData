@@ -1,0 +1,170 @@
+{
+  "id": "iv-what-is-a-fencing-token",
+  "title": "What Is a Fencing Token and Why Do You Need One?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 6,
+  "slug": "iv-what-is-a-fencing-token",
+  "summary": "Built for the \"the old leader isn't really dead\" scenario — a lock timeout alone lets a paused client keep writing after it's lost its lease.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-what-is-a-fencing-token-s01",
+      "order": 1,
+      "sectionTitle": "The question, and the scenario it's built for",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This question is built for a specific, nasty scenario: a client holds a lock or lease, gets paused — a GC stall, a scheduling delay, a slow disk — for longer than its lease's TTL, and resumes running with no idea it's no longer the legitimate holder. It keeps writing as if nothing happened.\n\nA fencing token is the fix that makes those late writes harmless, even though the process itself never got the memo that it lost the lock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: lock or leader election?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Is this in the context of a lock, or leader election?\" is worth asking, since the term shows up in both, and the pattern is identical either way: whoever holds the lock or leadership gets a token, and the token's freshness — not the holder's own belief that it's still valid — is what the protected resource actually checks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: a monotonic token checked at the resource",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **fencing token** is a monotonically increasing number issued by the lock or lease service every time it grants the lock — token 33, then 34, then 35, each strictly larger than the last. Whoever holds the lock includes their token with every write to the protected resource.\n\nThe crucial move: the resource itself checks the token, not just the lock service. It remembers the highest token it's seen and rejects any write carrying a lower one. That means even a paused client that thinks it still holds the lock gets rejected the moment a newer holder has written anything — the check lives at the point of actual damage, not just at the point of acquiring the lock. See [distributed coordination](distributed-coordination) for how lock services implement this.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "iv-what-is-a-fencing-token-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a paused leader's stale write, rejected",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Client A acquires the lock with token 33 and starts a long operation, then pauses (GC, scheduling). Its lease expires. Client B acquires the lock with token 34 and writes to the resource. Client A resumes, unaware it lost the lock, and tries to write with its old token 33 — the resource, now expecting 34 or higher, rejects it.\n\n![Timeline of Client A holding token 33 then pausing past lease expiry, Client B acquiring token 34 and writing successfully, and Client A's stale token 33 being rejected on resume](assets/fencing-token-timeline.svg)",
+      "assets": [
+        {
+          "alt": "Timeline of Client A holding token 33 then pausing past lease expiry, Client B acquiring token 34 and writing successfully, and Client A's stale token 33 being rejected on resume",
+          "path": "assets/fencing-token-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s05",
+      "order": 5,
+      "sectionTitle": "Code: the resource rejecting a stale token",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\ndef write(resource, token, data):\n    if token < resource.highest_token_seen:\n        raise StaleTokenError(f\"token {token} is behind {resource.highest_token_seen}\")\n    resource.highest_token_seen = token\n    resource.data = data\n```\nThe resource doesn't need to know anything about locks, leases, or which client currently \"should\" hold them — it only needs to remember the highest token it has accepted and reject anything lower. That simplicity is what makes the fencing check reliable even when the lock service's own state is momentarily unclear.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s06",
+      "order": 6,
+      "sectionTitle": "Code: the lock service issuing monotonic tokens",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\ndef acquire_lock(lock_name, holder_id):\n    lock = locks[lock_name]\n    if lock.is_expired():\n        lock.token += 1          # strictly greater than every token issued before\n        lock.holder = holder_id\n        lock.lease_expiry = now() + LEASE_TTL\n        return lock.token\n    raise LockHeldError()\n```\nEach successful grant bumps the counter — never resets, never reuses a value — so \"newer holder\" and \"larger token\" always mean the same thing, which is exactly the property the resource's check depends on.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: why doesn't a lock timeout alone solve this?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Why doesn't a simple lock timeout alone solve this?\" A timeout only changes *when* the lock is considered free for someone else to acquire — it does nothing to stop the original holder from continuing to act as if it still holds the lock. The timeout solves the lock service's internal bookkeeping; it doesn't touch the protected resource at all, which is exactly where the stale write actually causes damage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-what-is-a-fencing-token-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: does every resource need to check the token?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Does every resource need to check the token, or just some?\" Only resources that can be **damaged by a stale write** need the check — a resource that's purely read-only, or one where a duplicate/late write is harmless (an idempotent, order-independent update), doesn't need fencing. The rule of thumb: fence anything where two writers disagreeing about state produces a real, visible bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: a lock/lease with no token check",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** describing a lock or lease system in detail, but never mentioning that the *resource itself* checks anything.\n\n**Why it's weak:** the lease alone only governs who the lock service currently believes holds the lock — it doesn't stop a paused, stale holder from still writing to the actual resource. Without the resource-side check, the whole scenario the question is testing for still happens.\n\n**Better:** explicitly name the check at the resource as the piece that actually prevents the stale write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-what-is-a-fencing-token-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: using a timestamp as the token",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** using a wall-clock timestamp as the fencing token instead of a monotonically increasing counter.\n\n**Why it's wrong:** clock skew between machines can make timestamps issued later actually be numerically *smaller* than earlier ones, breaking the one property fencing depends on — that a newer grant is always a strictly larger token. A counter maintained by a single lock service has no such ambiguity.\n\n**Correct model:** a centrally issued, strictly increasing counter, never a timestamp from potentially unsynchronized clocks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-what-is-a-fencing-token-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-a-fencing-token-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"A fencing token is a monotonically increasing number issued each time a lock or lease is granted. The protected resource remembers the highest token it's seen and rejects any write with a lower one — so even a client that paused past its lease expiry and doesn't know it lost the lock gets rejected the moment a newer holder has written anything. A lock timeout alone doesn't help, because it only affects the lock service's bookkeeping, not the resource where the damage would actually happen. The token has to be a counter, not a timestamp, because clock skew can make timestamps non-monotonic.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

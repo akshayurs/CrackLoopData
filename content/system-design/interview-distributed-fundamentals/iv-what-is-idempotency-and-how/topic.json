@@ -1,0 +1,183 @@
+{
+  "id": "iv-what-is-idempotency-and-how",
+  "title": "What Is Idempotency and How Do You Implement It?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 9,
+  "slug": "iv-what-is-idempotency-and-how",
+  "summary": "Define it precisely — same request applied N times has the same effect as once — then name the concrete mechanism, an idempotency key, that actually implements it.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-what-is-idempotency-and-how-s01",
+      "order": 1,
+      "sectionTitle": "The question, and why it follows \"how do you retry safely\"",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This question almost always follows \"how do you retry safely,\" because idempotency is the property that makes retries safe in the first place. A vague definition — \"it means safe to retry\" — passes as a start but doesn't show you can actually build it.\n\nThe strong answer defines it precisely, then names the concrete mechanism: an idempotency key.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: the whole request, or one side effect?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Idempotency of the whole request, or of one specific side effect within it?\" is a genuinely sharp clarifier. A request can have several side effects — charge a card, send a confirmation email, update inventory — and each might need its own idempotency handling; making the entire request idempotent as one unit is a different, sometimes harder, design. See [idempotency and exactly-once](idempotency-and-exactly-once) for the broader mechanics.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: define it precisely, then name the mechanism",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Idempotency**, precisely: applying the same request N times produces the same effect as applying it once. Not \"nothing bad happens\" — the *exact same end state*, whether it ran once or five times.\n\nThe mechanism that implements this for a side-effecting request: an **idempotency key** — a unique identifier the client generates once per logical operation and sends with every attempt (including retries). The server stores the key alongside the result the first time it processes the request, and any later request with the same key gets that stored result back instead of re-executing the side effect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-what-is-idempotency-and-how-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s04",
+      "order": 4,
+      "sectionTitle": "Code: a non-idempotent endpoint that double-charges",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\n@app.post(\"/charge\")\ndef charge_card(request):\n    amount = request.json[\"amount\"]\n    result = payment_gateway.charge(request.user.card, amount)\n    return {\"status\": \"ok\", \"charge_id\": result.id}\n```\nIf the client times out waiting for a response and retries, this endpoint has no way to know it's seeing the same logical request twice — it just charges the card again. The client did the reasonable thing (retry on timeout); the endpoint is what's unsafe.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s05",
+      "order": 5,
+      "sectionTitle": "Code: the fix — an idempotency key",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\n@app.post(\"/charge\")\ndef charge_card(request):\n    key = request.headers[\"Idempotency-Key\"]\n    if idempotency_store.has(key):\n        return idempotency_store.get(key)          # short-circuit the retry\n    amount = request.json[\"amount\"]\n    result = payment_gateway.charge(request.user.card, amount)\n    response = {\"status\": \"ok\", \"charge_id\": result.id}\n    idempotency_store.save(key, response)\n    return response\n```\nThe client generates `Idempotency-Key` once and reuses it on every retry of the *same* logical charge. Now a retried request returns the original result instead of charging the card a second time.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the idempotency-key table",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A small table maps each idempotency key to the result already produced for it: key `a1b2c3` maps to `{status: ok, charge_id: ch_991}`. When a request arrives with a key already in the table, the server returns the stored result directly — it never re-executes the charge.\n\n![A key-to-result table, with a retried request matching an existing key being answered directly instead of reaching the payment gateway](assets/idempotency-key-table.svg)",
+      "assets": [
+        {
+          "alt": "A key-to-result table, with a retried request matching an existing key being answered directly instead of reaching the payment gateway",
+          "path": "assets/idempotency-key-table.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: identical response, or just identical side effect?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Does idempotency mean the response is identical, or just the side effect?\" Strictly, the guarantee that matters is the **side effect** — the card is charged once, the state change happens once. Most well-built idempotent APIs also return an identical response on a repeated request (that's what the stored-result approach gives you for free), but the core promise is about the underlying effect, not the HTTP payload shape.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-what-is-idempotency-and-how-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how long to keep an idempotency key",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"How long do you keep an idempotency key around, and what happens after it expires?\" Long enough to cover realistic retry windows — a common choice is 24 hours, well past any client's retry/backoff schedule. After expiry, a request with the same key is treated as brand new and executed again, which is safe *only if* the client is also guaranteed to stop retrying that old operation by then — otherwise a very late retry could double-execute.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: does your PUT actually honor HTTP idempotency?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Is a `PUT` idempotent by HTTP convention — does your implementation actually honor that?\" By convention, yes: `PUT` (full replace) and `DELETE` are supposed to be idempotent, `POST` is not. But convention isn't enforcement — a `PUT` handler that does `current_balance += amount` instead of `current_balance = new_balance` violates the contract silently. The follow-up is really asking whether you check your implementation matches the guarantee the HTTP verb implies, not whether you know the convention exists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-what-is-idempotency-and-how-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: \"idempotent means safe to retry\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"Idempotent means safe to retry.\"\n\n**Why it's weak:** it's true but too vague to implement from — it doesn't say *what* makes a retry safe, or how you'd build that safety into an endpoint. An interviewer hearing only this can't tell if you could actually write the code.\n\n**Better:** define it precisely (same effect, N times or once), then jump straight to the idempotency-key mechanism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: deduping on request body content",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** deduping on the request body's content instead of an explicit idempotency key.\n\n**Why it's wrong:** two legitimately identical-looking requests — the same user buying the same $10 item twice in a row, minutes apart — can have byte-identical bodies. Content-based dedup treats the second, real purchase as a duplicate of the first and silently drops it, which is a correctness bug in the opposite direction from the one you were preventing.\n\n**Correct model:** the client generates a fresh, unique key per logical operation; the key, not the payload, is what defines \"the same request.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-what-is-idempotency-and-how-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-what-is-idempotency-and-how-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Idempotency means applying the same request N times has the same effect as applying it once — not just 'nothing bad happens,' the exact same end state. The concrete mechanism is an idempotency key: the client generates a unique key per logical operation, sends it with every attempt including retries, and the server stores the result against that key the first time, returning the stored result on any repeat instead of re-executing the side effect. The key has to come from the client, generated once, not derived from the request body — content can legitimately repeat, but the key shouldn't.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "id": "iv-leader-election-approach",
+  "title": "How would you approach leader election for a component in this design?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 13,
+  "slug": "iv-leader-election-approach",
+  "summary": "Tests whether you can name a concrete, off-the-shelf mechanism rather than trying to hand-roll leader election from scratch in the interview.",
+  "level": "expert",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-leader-election-approach-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The wrong instinct under interview pressure is to start designing a heartbeat-and-timeout scheme from scratch — that's a solved, subtle problem, and hand-rolling it live is a red flag, not a display of depth. The right instinct is naming an existing consensus system and describing how you'd use it.\n\nThis topic covers reaching for a proven building block — etcd, ZooKeeper, or an equivalent — and the concrete lease-acquire-renew-release mechanics of using one for leader election.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-election-approach-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether this component genuinely needs a single leader at all — some components (stateless workers pulling from a shared queue) work fine with every node acting independently, no election needed. Confirm the actual requirement (a single writer, a single scheduler triggering a job) before designing an election mechanism the component might not need.\n\nThis question alone can shortcut the entire rest of the answer if the honest response turns out to be \"actually, no leader is needed here.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-election-approach-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: reach for an existing consensus system",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Skeleton: **reach for an existing consensus system** (etcd, ZooKeeper, Consul) to hold the lease, rather than designing election logic from scratch. The leader is simply whoever currently holds the lease, and it must renew that lease before a stated deadline or lose leadership automatically.\n\nSaying this as the very first move — before any implementation detail — is the senior signal the question is testing for: knowing when *not* to build something yourself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-leader-election-approach-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-election-approach-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: acquiring, renewing, and stepping down a lease",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The lease lifecycle, concretely:\n\n```\nlease = etcd.create_lease(ttl_seconds=10)\nacquired = etcd.put_if_absent(\"/leader\", node_id, lease=lease)\n\nwhile acquired:\n    etcd.renew_lease(lease)          # must succeed before ttl expires\n    time.sleep(3)                     # renew comfortably before the 10s deadline\n\n# renewal fails (network issue, or lost majority) -> lease expires ->\n# etcd deletes \"/leader\" -> this node is no longer leader, must stop leader-only work\n```\n\nThe critical property: the node must actually **stop doing leader-only work** the moment it fails to renew, not just \"eventually notice\" — this is exactly the gap that fencing tokens exist to backstop, in case a node is slow to notice its own lease has lapsed.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-leader-election-approach-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-election-approach-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: what every follower does while waiting",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Followers aren't idle — each one **watches** the leader key for it to be deleted or expire, and races to acquire it the instant that happens. The consensus store's own atomicity guarantees that even if multiple followers race simultaneously, only one succeeds in creating the key — no separate coordination is needed among the followers themselves.\n\nThis is the part that makes reaching for an existing consensus store so valuable: the hard part (exactly-one-winner-under-a-race) is a property the store already guarantees, not something you have to build.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-election-approach-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: the exact consensus-store API calls used",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Naming the actual API shape (etcd-flavored, but ZooKeeper's ephemeral-sequential nodes work the same way conceptually) shows you've actually used one of these, not just heard the name:\n\n```\ncreate_ephemeral_key(\"/leader\", node_id)   # succeeds for exactly one racing node\nwatch(\"/leader\")                            # every node, including the leader, watches for changes\ncampaign(\"/leader\", node_id)               # convenience wrapper: create-if-absent + watch-and-retry\n```\n\nThe \"ephemeral\" property is what ties leadership to the node's own liveness: if the node's session with the store dies (crash, prolonged network loss), the store itself deletes the key — no separate expiration logic needed on the application side.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-election-approach-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Using an existing consensus store is far safer than hand-rolled election, at the cost of taking a hard dependency on that store's own availability.** If etcd or ZooKeeper itself is down or partitioned, this component can't safely elect (or re-elect) a leader either, no matter how well-designed its own logic is.\n\n| | Hand-rolled election | Consensus-store-backed election |\n|---|---|---|\n| Correctness under races | Easy to get subtly wrong | Guaranteed by the store's own consensus protocol |\n| New dependency | None | The consensus store becomes a hard dependency |\n| Operational cost | Lower — no extra service to run | Running and operating the consensus store itself |\n\nName the dependency explicitly rather than presenting the consensus store as a free correctness upgrade.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-leader-election-approach-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-election-approach-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: the consensus store becomes unavailable — is there a leader right now?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Honest answer: it depends on the failure mode. If the store is fully down, existing leases can still be valid until they expire (the current leader keeps working until its lease's TTL runs out), but no new leader can be elected once that happens — the component effectively has no leader until the store recovers.\n\nSaying this precisely — \"a currently-valid lease survives briefly, but re-election is blocked\" — is stronger than either extreme (\"nothing happens\" or \"everything breaks immediately\"), and shows you understand the actual timing involved.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-election-approach-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how short should the lease interval be?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is a direct trade-off: a **shorter** lease TTL means faster failover when a leader actually dies (a shorter window before followers can take over), but more renewal traffic against the consensus store and a higher chance of losing leadership from a merely transient network blip. A **longer** TTL is more tolerant of transient blips but means a dead leader's slot stays unusable for longer.\n\nA concrete answer: something like a 10-second TTL with renewal attempted every 3 seconds gives three renewal attempts of margin before expiry, which tolerates a couple of missed beats without an unnecessary failover.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-leader-election-approach-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: hand-rolling election with heartbeats",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll implement leader election myself with heartbeats and timeouts — it's straightforward.\"\n\n**Why it's wrong:** getting this genuinely correct requires handling races between simultaneous candidates, network partitions that could produce two leaders at once, and clock skew between nodes — subtle distributed-systems problems that existing consensus systems have already solved and hardened over years of production use.\n\n**Correct model:** treat leader election as a solved problem you consume via a proven consensus store, not one you re-derive from scratch — reserve your original engineering effort for the parts of the system that are actually novel.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-leader-election-approach-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-leader-election-approach-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd first confirm this component genuinely needs a single leader at all. If it does, I'd reach for an existing consensus store — etcd or ZooKeeper — rather than hand-roll election: the leader holds a time-bound lease, renews it before it expires, and followers watch for the lease to free up and race to acquire it, with the store's own atomicity guaranteeing exactly one winner. I'd size the lease TTL as a trade-off between fast failover and tolerance for transient blips. The honest cost: this takes a hard dependency on the consensus store's own availability, and if it's down, existing leases survive briefly but no new leader can be elected.\"\n\nSee [consensus-basics](consensus-basics) for the underlying consensus protocol these stores implement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "long-running-and-async-apis",
+  "interviewQuestions": [
+    {
+      "id": "long-running-and-async-apis-iq1",
+      "question": "Design the API for a video-transcoding or report-generation feature.",
+      "answerMarkdown": "I'd rule out a synchronous request/response contract immediately, since transcoding a video can take minutes and holding a connection open that long is fragile and expensive on the server. Instead, `POST /transcode-jobs` returns `202 Accepted` right away with a job ID and a `Location` header pointing at a status resource.\n\nFor the status resource, `GET /transcode-jobs/{id}` returns a state from a small fixed set — `pending`, `running`, `done`, `failed` — plus a progress indicator, since transcoding especially benefits from showing percent-complete to a waiting user. Once `done`, the response includes a `resultUrl` pointing at the finished file rather than embedding a large video payload directly in the status response.\n\nFor completion notification, I'd default to client polling on a short interval, but offer a webhook option for server-to-server integrations that can host a callback, so they don't have to poll at all.\n\nI'd close by naming the failure case: if the source file is corrupt, the status resource needs a structured error (`code`, `message`), not just a bare failed flag, since a client needs to know whether to retry, ask the user to reupload, or escalate.\n\n**Testing:** whether you reach for the 202-plus-status pattern by default for long operations and think through progress, failure, and notification, not just the happy path.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Designing an async job API"
+    },
+    {
+      "id": "long-running-and-async-apis-iq2",
+      "question": "How would you decide between polling and a webhook for notifying a client that a long-running job is done?",
+      "answerMarkdown": "I'd start with what the client actually is. If it's another backend service or server-to-server integration that can reliably host a public, reachable endpoint, a webhook is the more efficient choice — one call exactly when the job finishes, no wasted \"still running\" checks.\n\nIf the client is something that can't host an inbound endpoint — a mobile app, a CLI tool, a browser tab without a stream — polling (or a stream, if the client is already connected live) is the realistic option, since there's nowhere for a webhook to call back to.\n\nI'd also factor in how long jobs typically take: for something that usually finishes in a few seconds, simple short-interval polling is often not worth replacing with more infrastructure; for jobs that can take hours, the wasted-request cost of naive polling adds up enough that a webhook or a smarter polling backoff schedule is worth building.\n\n**Testing:** whether you can match the notification mechanism to what the client is actually capable of, rather than picking one as a universal default.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Polling vs webhook for async completion"
+    },
+    {
+      "id": "long-running-and-async-apis-iq3",
+      "question": "A client keeps calling POST /reports again because it thinks its previous request never went through — but it did, and now there are duplicate report jobs. How would you prevent this?",
+      "answerMarkdown": "I'd recognize this as the same retry-safety problem covered for any POST endpoint: the client can't tell 'never arrived' from 'arrived, but I never saw the 202 response,' so a naive retry creates a second job.\n\nThe fix is the same idempotency-key pattern used elsewhere: the client sends a unique key with the job-submission request, and if the server sees that key again, it returns the existing job's ID and status instead of creating a new job. I'd store the key-to-job-id mapping for a bounded window that covers realistic retry scenarios.\n\nI'd also mention a secondary mitigation on the client side: once a client has a job ID, it should always resume polling that job rather than resubmitting — but I wouldn't rely on client discipline alone, since the server-side idempotency key is what actually prevents the duplicate regardless of client behavior.\n\n**Testing:** whether you connect this async-specific problem back to the general idempotent-write pattern rather than treating it as something new.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Preventing duplicate job submission"
+    }
+  ]
+}

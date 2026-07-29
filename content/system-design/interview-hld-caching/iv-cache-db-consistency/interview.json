@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-cache-db-consistency",
+  "interviewQuestions": [
+    {
+      "id": "iv-cache-db-consistency-iq1",
+      "question": "How do you keep the cache consistent with the database?",
+      "answerMarkdown": "I'd name the pattern in play first, since the answer is completely different depending on it. If it's cache-aside — the app invalidates the cache key on write — I'd walk the specific race it leaves open: a concurrent read can slip in between the delete and the write's commit, read the still-old value, and repopulate the cache with it. The cache ends up holding stale data even though it was \"correctly\" invalidated, and nothing corrects it until the key is written again.\n\nI'd propose narrowing this with a delayed second delete — clearing the key again a few hundred milliseconds after the write commits — or versioned cache entries that reject a repopulation carrying an older version. I'd be upfront that neither fully closes the window; perfect cache-DB consistency with cache-aside isn't actually free.\n\nIf the data can't tolerate any of this risk, I'd switch to write-through instead, accepting the added write latency of updating the cache and database as one operation.\n\n**Testing:** whether you can describe the actual race, not just the pattern's name.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Reasoning through the cache-aside race"
+    },
+    {
+      "id": "iv-cache-db-consistency-iq2",
+      "question": "Does write-through avoid the cache-aside race entirely, and what does it cost you instead?",
+      "answerMarkdown": "Yes, largely — write-through updates the cache and the database as one synchronous operation, so there's no window where the cache is empty and a concurrent read can slip in and repopulate it with a stale value. By the time the write call returns, both are already consistent with each other.\n\nThe cost is that every single write now pays the latency of the cache write too, not just occasionally when a race happens to occur in cache-aside — it's a guaranteed, permanent tax rather than a probabilistic bug. I'd frame the decision as: pick write-through when correctness matters more than write latency for this data (a user's own settings, anything expected to be exactly right on the very next read), and stick with cache-aside plus mitigations when the workload is write-heavy enough that the added latency would actually hurt.\n\n**Testing:** whether you see this as a real trade-off between two costs, not a strictly-better alternative.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: write-through's cost"
+    },
+    {
+      "id": "iv-cache-db-consistency-iq3",
+      "question": "How would you detect that this cache-DB drift is actually happening in production, not just in theory?",
+      "answerMarkdown": "I'd build a periodic sampling job: pick a slice of cached keys, fetch both the cached value and the current database value, and compare them, logging a metric for how often they disagree. A rising disagreement rate is a direct, measurable signal that the race is occurring under real traffic, not just a theoretical possibility from a whiteboard.\n\nI'd tie this to alerting — if the disagreement rate spikes after a deploy or a traffic increase, that's worth investigating immediately, since it likely means the race window widened (slower writes, more concurrent reads) rather than something exotic. I'd also use this same sampling data to validate whether a mitigation like a delayed second delete is actually working — the disagreement rate should measurably drop after adding it.\n\n**Testing:** whether you'd build observability for a bug you know you can't fully eliminate, rather than shipping a mitigation and hoping.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: detecting drift in production"
+    }
+  ]
+}

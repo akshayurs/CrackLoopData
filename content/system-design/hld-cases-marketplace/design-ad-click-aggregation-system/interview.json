@@ -1,0 +1,29 @@
+{
+  "topicId": "design-ad-click-aggregation-system",
+  "interviewQuestions": [
+    {
+      "id": "design-ad-click-aggregation-system-iq1",
+      "question": "Design a system to count ad clicks for billing at scale?",
+      "answerMarkdown": "I'd frame this as stream aggregation where correctness, not freshness, is the headline requirement, since the count feeds directly into an advertiser's bill. I'd design the pipeline as ingest, then a fraud/click-spam filter, then windowed aggregation, then a billing store — deliberately filtering fraud *before* aggregation, since unwinding an already-counted fraudulent click means reissuing an invoice.\n\nOn correctness specifically, I'd call out two mechanisms: deduplication by a unique event ID to turn the stream's at-least-once delivery into effectively-exactly-once counting, and a grace period on each time window so realistically-delayed events aren't simply dropped. I'd then layer a real-time count for dashboards and live monitoring on top of an authoritative end-of-day batch recount that actually drives billing, since the batch job processes fully-settled data without the streaming pipeline's window-cutoff assumptions.\n\nI'd close on the fraud filter as the likely throughput bottleneck, since it needs contextual lookups per event unlike the largely stateless ingest and aggregation stages.\n\n**Testing:** whether you recognize this as a billing-correctness problem wearing a stream-processing costume, not a generic analytics pipeline.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The full billing-accurate pipeline"
+    },
+    {
+      "id": "design-ad-click-aggregation-system-iq2",
+      "question": "How would you detect and filter click fraud without blocking legitimate clicks?",
+      "answerMarkdown": "I'd layer the filter from cheap and fast to slow and precise, rather than running every click through the same expensive check. The first tier is rule-based and near-instant: rate limits per IP/user (an implausible click rate from one source), known bot user-agent or IP-range signatures, and obvious click-spam bursts.\n\nOnly clicks that pass the cheap tier — or that look ambiguous — go to a slower, model-based scoring stage that looks at subtler behavioral patterns (click timing distributions, device fingerprint anomalies). I'd explicitly avoid false-positive-heavy rules that would silently drop real user clicks, since undercounting is also a correctness failure, just a less visible one than overcounting. I'd add that flagged-but-uncertain clicks should route to a review queue rather than a binary count/discard decision, since ad fraud detection is inherently probabilistic.\n\n**Testing:** whether you can balance filtering aggressiveness against the cost of wrongly discarding legitimate traffic, not just describe \"add a fraud filter.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fraud filtering without over-blocking"
+    },
+    {
+      "id": "design-ad-click-aggregation-system-iq3",
+      "question": "How do you handle a click event that arrives 20 minutes after its time window has already closed and been billed?",
+      "answerMarkdown": "I'd first check that against the system's grace period — if windows stay open an extra 5 minutes past nominal close to catch stragglers, a 20-minute-late event is past that grace period and needs its own handling path, not a silent drop.\n\nI'd route genuinely late events into a separate correction/reconciliation process rather than mutating an already-published aggregate directly — that keeps the originally reported number stable and auditable while still capturing the late click's revenue impact in a clearly-labeled adjustment, applied in the next billing cycle or as an explicit correction line item. I'd explicitly reject silently reopening and rewriting the original window's total, since that erodes trust in every number the system has already reported.\n\n**Testing:** whether you handle a real edge case (late data after settlement) with an auditable correction path, instead of either dropping data or silently rewriting history.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Very late events after settlement"
+    }
+  ]
+}

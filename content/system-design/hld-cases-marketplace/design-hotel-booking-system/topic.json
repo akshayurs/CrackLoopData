@@ -1,0 +1,171 @@
+{
+  "id": "design-hotel-booking-system",
+  "title": "Design a Hotel Booking System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 4,
+  "slug": "design-hotel-booking-system",
+  "summary": "Search and book date-range inventory across thousands of properties — a range-overlap problem, unlike ticket booking's single-item lock.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-hotel-booking-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: a traveler searches \"rooms in Austin, these three dates,\" books one, and the system never oversells that room for those dates.\n\nThis looks like [ticket booking](design-ticket-booking-system) at first glance — prevent double-selling scarce inventory — but the inventory here is a **date range**, not a single seat. Room 302 isn't simply available or not; it's available for *some* date ranges and booked for others, and a new request has to check for overlap against every existing booking, not against one boolean flag.\n\nThat range-overlap check, repeated across thousands of properties at search time, is the core of this design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-hotel-booking-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** search availability by city and date range across many properties, hold a room during checkout, confirm a booking, cancel within policy.\n\n**Non-functional:** search latency low enough to feel instant across a large city's worth of properties; an explicit overbooking policy — some hotels deliberately overbook by a small margin (like airlines), betting on cancellations, which is a business decision this design has to support, not just prevent.\n\nThe key framing: unlike ticket booking's zero-tolerance stance, hotel booking often *wants* a controlled amount of overbooking risk in exchange for higher occupancy — so \"never oversell\" isn't always the actual requirement here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-hotel-booking-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: properties, room-nights, and search vs booking QPS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A large city might list 5,000 properties averaging 100 rooms each — 500,000 rooms, and at 365 days of inventory, roughly 180 million room-night rows to reason about per city per year. Search traffic vastly outweighs booking traffic: for every completed booking, there might be hundreds of searches (browsing, comparing dates, checking prices).\n\nThat asymmetry matters: `searchAvailability` needs to be fast and can tolerate a few seconds of staleness, while the much rarer `confirmBooking` needs to be correct above all else. Optimizing search and booking as the same code path wastes effort on the 99% of traffic that doesn't need booking's strict guarantees.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-hotel-booking-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-hotel-booking-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three calls:\n\n- `searchAvailability(city, checkIn, checkOut, filters)` — the high-volume read path, served from a cache or search index that's refreshed frequently but need not be perfectly real-time.\n- `holdRoom(propertyId, roomId, checkIn, checkOut)` — a time-boxed hold on a specific date range, the hot path where correctness matters most.\n- `confirmBooking(holdId, paymentToken)` — finalizes the reservation once payment clears, same idempotency-key discipline as any payment-touching confirm call.\n\nNotice the shape mirrors ticket booking's API almost exactly — search, hold, confirm — but every one of these now operates over a date range instead of a single discrete item.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-hotel-booking-system-s05",
+      "order": 5,
+      "sectionTitle": "Compare: per-room-per-night rows vs a date-range calendar structure",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Per-room-per-night rows | Date-range calendar structure |\n|---|---|---|\n| Shape | One row per (room, date) — simple, like ticket booking's per-seat row | A calendar/interval structure per room, storing booked ranges directly |\n| Overlap check | A range query across many date rows | A native interval-overlap query against a small number of ranges |\n| Storage | Large — 365+ rows per room per year, mostly \"available\" and unremarkable | Compact — only booked ranges are stored explicitly |\n| Update cost | A single-night booking touches one row; a week-long stay touches seven | A booking is one interval insert, regardless of stay length |\n\n**How to decide:** per-night rows are simpler to reason about and debug (this row said available, now it's booked), while a calendar/interval structure scales better as stay lengths grow — many real systems start with per-night rows for simplicity and only move to intervals once row volume becomes the bottleneck.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-hotel-booking-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-hotel-booking-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: search fan-out across properties",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Search fans out to a date-filtered search index across properties, rather than querying each property's live booking table](assets/search-fanout.svg)\n\nSearch doesn't query each property's live booking table directly — that would mean thousands of small queries per search. Instead it hits a search index that's refreshed on a short interval, trading a little staleness for speed across a large result set.\n\nThe live, authoritative check for double-booking still happens at `holdRoom` time against the real booking data — search is discovery, not the source of truth.",
+      "assets": [
+        {"alt": "Search fans out to a date-filtered search index across properties, rather than querying each property's live booking table", "path": "assets/search-fanout.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-hotel-booking-system-s07",
+      "order": 7,
+      "sectionTitle": "Preventing overselling across overlapping date ranges",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two bookings for the same room conflict only if their date ranges **overlap** — booking June 10-12 and June 12-14 might or might not conflict depending on whether checkout and check-in on the same day counts as an overlap (usually it doesn't, since the room turns over). The overlap check has to be precise about these boundary conditions, not just a rough \"do these ranges intersect.\"\n\n`holdRoom` performs this as a single conditional operation: insert the new range only if no existing confirmed or held range for that room overlaps it, atomically, so two concurrent requests for overlapping ranges can't both succeed — the same atomic-write principle from ticket booking, applied to ranges instead of single rows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-hotel-booking-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-hotel-booking-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: strict no-overbooking vs deliberate overbooking with a buffer",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Strict no-overbooking | Deliberate overbooking with a cancellation buffer |\n|---|---|---|\n| Policy | Never book more rooms than physically exist | Allow a small percentage over capacity, betting on historical cancellation/no-show rates |\n| Occupancy | Can leave rooms empty from last-minute cancellations | Higher average occupancy, closer to true demand |\n| Risk | None of the \"walk a guest\" scenario | Occasionally has to relocate or compensate a guest when more show up than rooms exist |\n| Who uses it | Smaller properties, or brands prioritizing guarantee over revenue | Large chains with reliable historical no-show data to model the buffer accurately |\n\n**How to decide:** overbooking is a calculated bet, not a bug — it only works with good historical cancellation data for that specific property and season; a hotel with volatile or thin booking history should stay strict, since a bad bet means turning away a paying, present guest.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-hotel-booking-system-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: booking flow — hold, payment, confirm, release-on-timeout",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Room booking flow: search, holdRoom, payment, confirmBooking, with expiry as the fallback](assets/room-booking-flow.svg)\n\nThe flow mirrors ticket booking's hold-then-confirm pattern closely: the hold is reversible by default (via expiry), and only `confirmBooking` succeeding makes the reservation permanent.\n\nThe difference is entirely in what's being reserved — a date range on a specific room, not a single discrete seat.",
+      "assets": [
+        {"alt": "Room booking flow: search, holdRoom, payment, confirmBooking, with expiry as the fallback", "path": "assets/room-booking-flow.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-hotel-booking-system-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: search fan-out across a large city",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Booking-time contention is rarely the bottleneck here — unlike ticket booking's single-instant spike, hotel demand spreads across many properties and dates. The real bottleneck is **search latency**: a query for \"Austin, these dates\" has to check availability across thousands of properties and return ranked, filtered results in a couple hundred milliseconds.\n\nThe fix is the search index from earlier (§6) — pre-computing and caching availability summaries per property per date range so a search doesn't have to run a live overlap check against every property's raw booking data on every request. The trade is a small amount of staleness (a room shown as available that got booked moments ago) for search speed at scale — resolved definitively at `holdRoom` time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-hotel-booking-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-hotel-booking-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: a single \"rooms available\" counter instead of per-date rows",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just track how many rooms are available per property — simpler than per-date-per-room tracking.\"\n\n**Why it's wrong:** a single counter can't represent that a property has 10 rooms free next Tuesday but zero free next Friday — availability is inherently date-dependent, and collapsing it into one number either wrongly turns away a bookable guest or wrongly confirms a booking for a date that's actually full.\n\n**Correct model:** track availability per room per date (or per date range), the same lesson as ticket booking's per-seat rows, applied along the date axis instead of the seat axis — the granularity has to match where the real contention lives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-hotel-booking-system-s11-q1"
+      ]
+    }
+  ]
+}

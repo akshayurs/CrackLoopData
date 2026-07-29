@@ -1,0 +1,165 @@
+{
+  "id": "iv-cache-stampede",
+  "title": "What happens when your cache expires under heavy load, and how do you prevent it?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 6,
+  "slug": "iv-cache-stampede",
+  "summary": "Tests whether you know the thundering-herd failure mode by its mechanics, not just its name, and can name a concrete fix.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-cache-stampede-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A cache entry expires under heavy, concurrent read load, and every one of those requests misses the cache at once — all of them then hit the database simultaneously, trying to recompute the same value. This is the **cache stampede** (or thundering herd), and the interviewer is checking whether you can describe the actual mechanics, not just recognize the name.\n\nThe strong answer names the mechanism first, then a fix — request coalescing, staggered TTLs, or stale-while-revalidate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-stampede-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **is this one hot key expiring under load, or a mass expiry across many keys at once?** A single popular key expiring is the classic thundering-herd case — many readers all miss the same key together. A mass expiry — many keys sharing the same TTL, all set at deploy time — is a related but distinct failure, where the *database* sees a broad spike across many different keys rather than many requests hammering one.\n\nThe fixes overlap but aren't identical, so naming which case you're solving matters.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-stampede-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name the mechanism explicitly before proposing a fix: **the cache entry expires, every concurrent reader misses at once, and every one of them independently queries the database to recompute the same value** — turning one cache miss into N simultaneous database queries, where N is however many requests were in flight at that instant.\n\nThen apply a fix matched to the mechanism: **request coalescing** so only one of the N requests actually queries the database, or **staggered expiry** so N never happens at once in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-stampede-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-stampede-s04",
+      "order": 4,
+      "sectionTitle": "Request coalescing (single-flight)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Request coalescing** (also called single-flight) lets only the *first* request that misses the cache actually query the database; every other concurrent request for the same key waits on that first request's result instead of issuing its own query. When the first request finishes and repopulates the cache, all the waiters get served from it.\n\nThe effect: N simultaneous misses become exactly 1 database query, no matter how large N is — the database never sees the stampede at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-stampede-s05",
+      "order": 5,
+      "sectionTitle": "Staggered TTLs and stale-while-revalidate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Jitter on the TTL** (±10%, as covered in the TTL-choice question) prevents many keys set at once from all expiring at the same instant, spreading a mass expiry over time instead of concentrating it. **Stale-while-revalidate** goes further for a single hot key: instead of deleting the value on expiry, keep serving the (now-stale) old value to readers while exactly one background request refreshes it — nobody ever sees a miss at all, just a few seconds of an old-but-valid answer.\n\nCombined, these two mean readers almost never experience the moment a key is genuinely absent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-stampede-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-stampede-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: a homepage banner with 100k concurrent readers",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A homepage banner cached for 100,000 concurrent readers shows the scale of the problem without coalescing:\n\n```\n# Without coalescing:\n# cache key \"homepage-banner\" expires\n# 100,000 concurrent requests all miss at the same instant\n# each independently queries the database\ndb_queries_this_instant = 100_000     # the database was sized for ~normal load\n\n# With single-flight coalescing:\n# only the first miss queries the database\n# the other 99,999 wait on that one in-flight request\ndb_queries_this_instant = 1\n```\n\nGoing from 100,000 simultaneous queries to 1 is the entire value of coalescing in one number — it's the difference between a database outage and nothing happening at all.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-stampede-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Without coalescing | With coalescing |\n|---|---|\n| Every reader gets the freshest possible query, but the DB gets hammered | The DB sees exactly one query per expiry |\n| No added latency for any individual request | The unlucky first request pays a small extra latency tax waiting for its own query to complete, and every waiter pays the latency of that same query |\n\n**How to decide:** the tax coalescing adds — waiters blocking on one in-flight request — is almost always worth paying versus the alternative of a database outage; the only time to skip it is when the query itself is trivially cheap and a stampede genuinely wouldn't hurt.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-stampede-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"the DB is still hammered even with coalescing — what else?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If coalescing alone isn't enough — maybe many *different* hot keys expire around the same moment, each getting its own single-flight query, and the sum still overwhelms the database — two more tools help: a **distributed lock** so only one process across the whole fleet (not just one process per node) refreshes a given key, and **probabilistic early refresh**, where a request has a small, rising chance of refreshing a key slightly *before* it expires, spreading refreshes out over time instead of all landing exactly at the TTL boundary.\n\nNaming that coalescing solves the per-key stampede but not necessarily a fleet-wide pile-up across many keys shows depth past the textbook fix.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-stampede-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-stampede-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"how is this different from the hot-key problem?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "They're related but distinct: a **stampede** is triggered by *expiry* — the key existed and was fine, then a specific moment (its TTL running out) causes many requests to miss it together. A **hot key** problem is about sustained, ongoing overload from one key's *normal* traffic being disproportionately large, expiry or not.\n\nThe fixes do overlap — coalescing and stale-while-revalidate help both — but a hot key can still overload a single cache node even while perfectly warm, which a stampede fix alone doesn't address; that needs the hot-key-specific fixes like local caching or key splitting.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-stampede-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: naming the symptom, not the cause",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our database got overloaded right after a cache expiry — we should just scale the database up.\"\n\n**Why it's wrong:** it treats the database overload as the problem to fix, when the actual cause is upstream — many identical requests all recomputing the same value at once. Scaling the database bigger just raises the threshold at which the same stampede becomes a problem again; it doesn't stop the stampede from happening.\n\n**Correct model:** name the mechanism (cache-miss stampede) explicitly, then fix it at the source with coalescing or staggered expiry — scaling the database is treating a symptom that will recur at the next traffic tier.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-stampede-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-stampede-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A cache stampede is many concurrent readers missing the same expired key at once, each independently hitting the database. Name that mechanism, then fix it: request coalescing (single-flight) turns N simultaneous queries into one; jitter and stale-while-revalidate reduce how often a genuine miss happens at all. If the DB is still hammered across many keys, add a distributed lock or probabilistic early refresh. It's related to, but distinct from, the hot-key problem — expiry-triggered vs sustained overload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

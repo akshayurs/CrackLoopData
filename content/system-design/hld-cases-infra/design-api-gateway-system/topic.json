@@ -1,0 +1,186 @@
+{
+  "id": "design-api-gateway-system",
+  "title": "Design an API Gateway",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 10,
+  "slug": "design-api-gateway-system",
+  "summary": "The gateway as its own system with its own failure modes — routing, auth, and rate limiting at the edge, distinct from the API-design and resilience concepts it enforces.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-api-gateway-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: one edge layer sits in front of dozens of backend services, handling cross-cutting concerns — TLS termination, auth, rate limiting, routing — so individual services don't each reimplement them.\n\nThe interesting design problem isn't any single policy the gateway enforces; it's that **every request in the system passes through this one layer**, which makes it simultaneously the most important place to add value and the single biggest risk if it becomes slow, unavailable, or overloaded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** route incoming requests to the correct backend service, and enforce cross-cutting policies (auth, rate limiting, TLS) uniformly before the request reaches any backend.\n\n**Non-functional:** a strict **added-latency budget** — every request pays the gateway's overhead on top of the backend's own processing time, so that overhead must stay small; **availability** at a level matching or exceeding the platform as a whole, since it fronts every single request; and **config agility** — adding a new route or policy shouldn't require redeploying the gateway itself.\n\nThe availability requirement deserves emphasis: if the gateway's uptime is even slightly worse than the services behind it, the gateway itself becomes the platform's effective availability ceiling, no matter how reliable any individual backend is.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-api-gateway-system-s02-q1"
+      ]
+    },
+    {
+      "id": "design-api-gateway-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: fleet-wide QPS through one layer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the platform serves **200,000** requests/sec in aggregate across 50 backend services, every one of those 200,000 requests/sec passes through the gateway — while any single backend service might see only a few thousand requests/sec of that total.\n\nThe gateway's load profile looks nothing like any individual backend's: it's the sum of everyone's traffic, concentrated onto one logical layer. Sizing the gateway for \"about what one typical backend sees\" is a common and serious underestimate — it needs to be provisioned for the platform's total QPS, not any one service's share.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The gateway's own \"API\" is really its **configuration model**: a route config mapping `path → backend service`, plus the cross-cutting policies attached to that specific route — which auth scheme applies, what rate limit, what timeout before giving up on the backend.\n\nAttaching policies **per route**, not globally, matters: a public unauthenticated health-check endpoint and an internal admin endpoint sitting behind the same gateway need completely different auth and rate-limit rules, and a single global policy can't express that.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s05",
+      "order": 5,
+      "sectionTitle": "Data model: routing table plus per-route policy config",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two pieces of config, updated independently of gateway code deploys: a **routing table** (`path pattern → backend service address`) and a **policy config** per route (auth requirement, rate-limit threshold, timeout duration). Both are typically pushed from a control plane and consumed by gateway instances the same way the feature-flag config-propagation pattern works elsewhere in this group.\n\nKeeping this as data, not code, is what satisfies the config-agility requirement: a team launching a new backend service registers a new route and its policies without anyone redeploying the gateway binary itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the request path through the gateway",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A request flows through TLS termination, auth, rate limiting, and routing lookup in sequence before reaching the backend, with the response flowing back through the gateway](assets/gateway-request-path.svg)\n\nEach stage can reject or short-circuit the request before it ever reaches a backend — an unauthenticated request never gets past the auth stage, saving the backend from ever seeing it.",
+      "assets": [
+        {
+          "alt": "A request flows through TLS termination, auth, rate limiting, and routing lookup in sequence before reaching the backend, with the response flowing back through the gateway",
+          "path": "assets/gateway-request-path.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s07",
+      "order": 7,
+      "sectionTitle": "Request aggregation: composing one response from many backend calls",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For some client-facing endpoints, one logical request actually needs data from several backend services — a mobile app's \"home screen\" call might need data from a user-profile service, a recommendations service, and a notifications service. The gateway can **aggregate**: fan out to all three backends in parallel, then compose their responses into one payload the client receives as a single call.\n\nThis trades backend simplicity for gateway complexity: each backend stays focused on its own domain, while the gateway takes on the composition logic — which is exactly the kind of responsibility that has to stay disciplined (more on this in the pitfall slide) so the gateway doesn't accumulate actual business logic in the process.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: a single monolithic gateway vs sidecar-based gateways",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single monolithic gateway | Sidecar-based (service mesh) |\n|---|---|---|\n| Deployment | One cluster of gateway instances in front of everything | A proxy sidecar deployed alongside every service instance |\n| Blast radius | A gateway outage affects all north-south (client-to-backend) traffic | Failure is scoped to the sidecar of one service |\n| Fits | Edge concerns — the boundary between external clients and the whole platform | East-west (service-to-service) concerns — internal traffic between backends |\n| Operational overhead | One system to run and scale | A sidecar per service instance — more moving parts, but more granular control |\n\n**How to decide:** see [service-mesh](service-mesh) for the sidecar pattern in depth — the two aren't actually competing for the same traffic: a gateway is the right shape for north-south (client-facing) traffic, a mesh is the right shape for east-west (service-to-service) traffic, and many platforms run both.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-api-gateway-system-s08-q1"
+      ]
+    },
+    {
+      "id": "design-api-gateway-system-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: a stateless gateway cluster behind a load balancer",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A load balancer sits in front of three identical stateless gateway instances, each holding the same routing and policy config copy](assets/stateless-gateway-cluster.svg)\n\nGateway instances are stateless by design — the same statelessness principle that underlies horizontal scaling generally — so losing one instance or adding ten more is a routine capacity operation, not a special case.",
+      "assets": [
+        {
+          "alt": "A load balancer sits in front of three identical stateless gateway instances, each holding the same routing and policy config copy",
+          "path": "assets/stateless-gateway-cluster.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: the gateway itself",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because every request passes through the gateway, its own throughput and latency directly become the platform's throughput and latency ceiling — a slow gateway makes every backend look slow, even ones that are individually fast, and a gateway outage takes down every service behind it simultaneously, regardless of those services' own health.\n\nThis is why the gateway must be horizontally scaled and stateless from day one, and why its own latency budget (from the NFRs) is treated as a hard constraint, not an afterthought — any inefficiency here is paid by literally every request in the system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-api-gateway-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-api-gateway-system-s11",
+      "order": 11,
+      "sectionTitle": "Failure isolation: one slow backend must not exhaust the connection pool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If one backend service starts responding slowly (its database is struggling), and the gateway holds connections to it open waiting for responses, those connections can consume a disproportionate share of the gateway's shared connection pool — degrading requests to every *other*, perfectly healthy backend that shares that pool.\n\nThe fix is **bulkheading**: partition connection pools and timeouts per backend, so one backend's slowness only exhausts its own dedicated slice of capacity, never bleeding into requests bound for unrelated services. See [bulkheads-and-isolation](bulkheads-and-isolation) for this pattern generally — the gateway is one of the most common places it's needed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-api-gateway-system-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: putting business logic in the gateway",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The gateway already touches every request — let's put some business rules here too, like special pricing logic or user-tier feature checks.\"\n\n**Why it's wrong:** business logic coupled into the gateway means every change to that logic requires touching the one component every request in the platform depends on, turning routine backend feature changes into edge-layer deployments — high blast radius for low-value changes, and a growing, increasingly fragile gateway that's no longer easy to reason about or safely scale.\n\n**Correct model:** keep the gateway strictly to cross-cutting, protocol-level concerns — auth, rate limiting, routing, TLS — and push anything domain-specific back into the owning backend service. See [api-gateway-patterns](api-gateway-patterns) for the fuller set of responsibilities that belong at the edge versus behind it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

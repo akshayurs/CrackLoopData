@@ -1,0 +1,133 @@
+{
+  "id": "batch-vs-stream-processing",
+  "title": "Batch vs Stream Processing & Lambda Architecture",
+  "area": "system-design",
+  "group": "messaging-streaming",
+  "order": 10,
+  "slug": "batch-vs-stream-processing",
+  "summary": "Why some pipelines still process data in batches on purpose, and the two-layer architecture that hedges between correctness and freshness.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "batch-vs-stream-processing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Some pipelines still process data in nightly batches on purpose, even though streaming exists — batch gives you a correct, complete answer over all the data, at the cost of being hours old. Streaming gives you a fresh answer within seconds, at the cost of being an approximation that might still get corrected.\n\nThis topic covers the two architectures that try to get both: **Lambda**, which runs batch and stream side by side and reconciles them, and **Kappa**, which bets everything on one stream-only pipeline and gets correctness by replaying it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "batch-vs-stream-processing-s02",
+      "order": 2,
+      "sectionTitle": "Batch processing: correct, complete, and slow — reprocessing all data on a schedule",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Batch processing** runs a job over a complete, bounded dataset, all of yesterday's orders, say, on a schedule (nightly, hourly). Because it sees the entire dataset at once, it can compute exact, fully-reconciled results: every late-arriving record, every correction, every edge case gets accounted for by the time the job runs.\n\nThe cost is latency: a nightly batch job's output describes what happened up to 24 hours ago, not what's happening right now. For a finance report that needs to be exactly right, that's an acceptable trade; for a live dashboard, it's useless.\n\nBatch's real strength is correctness under reprocessing: if a bug in the aggregation logic is found, you fix it and rerun the whole batch job over historical data to get a fully corrected result — something a live stream can't do without replaying its own history.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "batch-vs-stream-processing-s02-q1"
+      ]
+    },
+    {
+      "id": "batch-vs-stream-processing-s03",
+      "order": 3,
+      "sectionTitle": "Stream processing: fast and fresh, at the cost of approximate or eventually-corrected results",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Stream processing** computes results continuously as events arrive, producing an updated answer within seconds rather than waiting for a scheduled run. This is what makes a live dashboard or a real-time leaderboard possible at all.\n\nThe cost is that a stream's result at any given moment is necessarily provisional — it reflects data seen so far, and a late-arriving event can still revise an already-emitted result. Stream processing trades completeness for freshness: you get an answer quickly, but it might not be the final answer.\n\nMost systems that need both fast and eventually-exact numbers don't pick one over the other — they run both, which is exactly the motivation for Lambda architecture.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "batch-vs-stream-processing-s03-q1"
+      ]
+    },
+    {
+      "id": "batch-vs-stream-processing-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the same raw data flowing through a batch layer and a speed layer, merged in a serving layer",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Raw events flow into a nightly batch layer and a real-time speed layer, both merged into a serving layer that answers queries with exact history plus recent approximate results](assets/lambda-architecture.svg)\n\nA query against the serving layer gets the batch layer's exact numbers for anything older than the last batch run, merged with the speed layer's fast-but-approximate numbers for anything since. That merge point is where \"today's number, updated live\" and \"yesterday's number, fully correct\" come together into one answer.\n\nThe speed layer's results are explicitly disposable: once the next batch run covers that period with an exact number, the speed layer's estimate for that period is discarded and replaced.",
+      "assets": [
+        {
+          "alt": "Raw events flow into a nightly batch layer and a real-time speed layer, both merged into a serving layer that answers queries with exact history plus recent approximate results",
+          "path": "assets/lambda-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "batch-vs-stream-processing-s05",
+      "order": 5,
+      "sectionTitle": "Lambda architecture: batch layer for ground truth, speed layer for low-latency approximate results",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Lambda architecture** runs a batch layer and a speed layer side by side against the same raw data. The batch layer periodically reprocesses everything to produce a slow-but-exact ground truth; the speed layer processes the live stream to produce a fast-but-approximate view of anything not yet covered by the latest batch run. A serving layer merges both for queries.\n\nThe appeal: you get freshness from the speed layer without giving up correctness from the batch layer eventually overwriting it. The cost, and it's a real one, is running and maintaining two separate codepaths, often in different languages or frameworks, that are supposed to compute the *same logical aggregation* — every business-logic change has to be implemented and tested twice, and any drift between the two implementations shows up as inconsistent numbers.\n\nThis dual-implementation burden is exactly what motivated Kappa architecture as an alternative.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "batch-vs-stream-processing-s05-q1"
+      ]
+    },
+    {
+      "id": "batch-vs-stream-processing-s06",
+      "order": 6,
+      "sectionTitle": "Kappa architecture: treating the log as the only source of truth, reprocessing by replaying it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Kappa architecture** rejects the two-codepath premise entirely: there's only a stream-processing pipeline, and correctness comes not from a separate batch layer but from **replaying the log** — if the aggregation logic changes, you reprocess the entire historical stream through the new logic, exactly as a batch job would, but using the same stream-processing code you already have.\n\nThis works because a [log-based](log-based-streaming) system retains history and supports replay from any offset — Kappa is really \"use the log itself as the batch data source,\" rather than maintaining a separate batch pipeline over separately-stored historical data.\n\nThe trade-off: replaying a very large history through a stream processor to reprocess it can itself take a long time and a lot of resources, so Kappa doesn't eliminate the batch-versus-real-time tension so much as fold both into one codepath, run at two different scales — live vs. full replay.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "batch-vs-stream-processing-s06-q1"
+      ]
+    },
+    {
+      "id": "batch-vs-stream-processing-s07",
+      "order": 7,
+      "sectionTitle": "Compare: Lambda (two codepaths, reconciled) vs Kappa (one codepath, replayed) on operational complexity",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Lambda | Kappa |\n|---|---|---|\n| Codepaths | Two — batch and speed, often different tech stacks | One — stream processing only |\n| Getting a corrected historical result | The batch layer's next scheduled run | Replay the log through the (possibly updated) stream logic |\n| Business logic changes | Must be implemented and kept in sync in two places | Implemented once, applied via replay |\n| Operational burden | Running, monitoring, and reconciling two systems | Running one system, but replay of large histories can be resource-intensive |\n\n**How to decide:** Kappa is the simpler mental model and worth defaulting to if your log retains enough history and your stream processor can replay efficiently; Lambda still shows up where a mature batch pipeline already exists and full replacement isn't worth the migration cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "batch-vs-stream-processing-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a speed-layer result and a batch-layer result disagreeing, with no reconciliation step defined",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just run both a batch pipeline and a streaming pipeline for the same metric — more data, more confidence.\"\n\n**Why it's wrong:** without an explicit reconciliation step, the two pipelines will occasionally disagree — different windowing, different handling of late data, a subtle logic difference between the two implementations — and when a user sees the live dashboard say 1,204 orders while the nightly report says 1,198 for the same day, with no explanation of which one is authoritative, it reads as a bug, and trust in both numbers erodes.\n\n**Correct model:** design the reconciliation explicitly — decide which layer is the eventual source of truth (usually batch), define when and how the serving layer swaps the approximate number for the exact one, and make that swap visible or at least documented, rather than leaving two silently-diverging numbers in front of users.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "batch-vs-stream-processing-s08-q1"
+      ]
+    }
+  ]
+}

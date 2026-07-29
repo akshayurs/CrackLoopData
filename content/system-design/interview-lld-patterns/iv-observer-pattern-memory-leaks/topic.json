@@ -1,0 +1,165 @@
+{
+  "id": "iv-observer-pattern-memory-leaks",
+  "title": "Observer pattern and memory leaks — what goes wrong?",
+  "area": "system-design",
+  "group": "interview-lld-patterns",
+  "order": 6,
+  "slug": "iv-observer-pattern-memory-leaks",
+  "summary": "A production-bug story you've actually hit, not a definition — a subject's strong reference to a forgotten subscriber keeps it alive forever.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-observer-pattern-memory-leaks-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Observer pattern and memory leaks — what goes wrong?\" is testing whether you've actually debugged this in production, not whether you can define Observer. The classic failure: a subject holds a strong reference to every registered observer, and if an observer is never explicitly removed, the subject keeps it alive forever — even after the screen, request, or component that created it should have been garbage collected.\n\nA strong answer names the leak mechanism precisely, then the fix, then a way you'd detect it after the fact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 47,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: are we talking a GC'd language or one with manual memory management?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask which runtime you're in, because the leak mechanism and the fix both differ. In a garbage-collected language (Java, JavaScript, Dart), the \"leak\" is really an unintended strong reference keeping an object reachable — the GC can't reclaim it because something (the subject) still points to it. In a manually-managed language (C++, older Objective-C), forgetting to unsubscribe can mean a dangling pointer or a use-after-free if the observer's own memory gets freed while the subject still holds a raw pointer to it.\n\nMost interview follow-ups assume GC'd languages, but naming that you know the distinction is worth a sentence.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name the leak mechanism (subject holds a strong ref to a dead observer), then the fix",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The leak mechanism: an [Observer](observer-pattern) subject keeps a list of registered observers and calls into each of them on every event. If an observer is added but never removed — say a UI screen that subscribes on creation but the unsubscribe call gets missed in some code path — the subject's list keeps a strong reference to it indefinitely, and the observer (and everything it holds, like the whole screen's view tree) can never be garbage collected.\n\nThe fix: guarantee removal (lifecycle hooks, `try/finally`) or make the reference weak so it doesn't block collection on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-observer-pattern-memory-leaks-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s04",
+      "order": 4,
+      "sectionTitle": "Code: an observer that's never unsubscribed, keeping a whole UI screen alive",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass EventBus {\n    private final List<Listener> listeners = new ArrayList<>();\n    void subscribe(Listener l) { listeners.add(l); }\n    void publish(Event e) { for (Listener l : listeners) l.onEvent(e); }\n}\n\nclass ScreenController implements Listener {\n    ScreenController(EventBus bus) { bus.subscribe(this); } // never unsubscribed\n}\n```\n\nEvery `ScreenController` ever created stays in `listeners` forever, along with whatever view objects it references — the bus effectively becomes a growing list of dead screens the GC can never collect.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s05",
+      "order": 5,
+      "sectionTitle": "Code: the fix — weak references or explicit unsubscribe in a lifecycle hook",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "**Explicit unsubscribe**, tied to a lifecycle hook so it can't be forgotten in normal use:\n\n```java\nclass ScreenController implements Listener {\n    private final EventBus bus;\n    ScreenController(EventBus bus) { this.bus = bus; bus.subscribe(this); }\n    void onDestroy() { bus.unsubscribe(this); }\n}\n```\n\n**Weak references**, as a safety net when explicit unsubscribe is easy to miss:\n\n```java\nclass EventBus {\n    private final List<WeakReference<Listener>> listeners = new ArrayList<>();\n    void publish(Event e) {\n        listeners.removeIf(ref -> ref.get() == null);\n        for (var ref : listeners) { var l = ref.get(); if (l != null) l.onEvent(e); }\n    }\n}\n```\n\nWeak references don't excuse skipping the lifecycle hook — they're a backstop, not the primary fix.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "iv-observer-pattern-memory-leaks-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s06",
+      "order": 6,
+      "sectionTitle": "Code: a subject that snapshots its observer list before notifying, avoiding a mutation-during-iteration crash when an observer unsubscribes mid-notify",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A second, subtler bug: if `publish()` iterates `listeners` directly and an observer's `onEvent` triggers an unsubscribe (its own or another observer's), you get a `ConcurrentModificationException` or a skipped observer mid-iteration.\n\n```java\nvoid publish(Event e) {\n    List<Listener> snapshot = new ArrayList<>(listeners); // copy before notifying\n    for (Listener l : snapshot) l.onEvent(e);\n}\n```\n\nNotifying against a snapshot means an unsubscribe that happens *during* notification is safe — it affects the next `publish()` call, not the one in progress.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"how do reactive/event-bus frameworks handle this for you?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Frameworks like RxJava, Combine, or Flutter's `ChangeNotifier` and widget lifecycle tie subscriptions to a **scope** — a `Disposable` bag, a `CompositeDisposable`, or the widget's own dispose lifecycle — so unsubscribing happens automatically when the scope ends, instead of relying on every call site remembering to do it manually.\n\nNaming this shows you understand the leak isn't inherent to Observer as an idea — it's inherent to *manual* subscription management, and mature frameworks solve it by attaching subscriptions to something with a well-defined lifetime.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-observer-pattern-memory-leaks-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how would you detect this leak happened, after the fact — what does the heap dump look like?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take a heap dump (`jmap` for the JVM, Xcode's memory graph for iOS, Chrome DevTools' heap snapshot for JS) after triggering the suspected leak path repeatedly, and look for an object count that keeps growing across snapshots — many more `ScreenController` instances alive than screens the user actually opened.\n\nThe telltale next step is following the **retained path**: the heap tool shows *what's holding a reference* to the leaked object, and tracing that path usually lands directly on the subject's observer list — the exact evidence that confirms the leak mechanism you named earlier.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: describing the pattern correctly but never naming why it leaks",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak belief:** correctly explaining subjects, observers, `subscribe()`, and `notify()` — and stopping there.\n\n**Why it's weak:** the question is specifically about the memory leak, not the pattern's mechanics — an answer that never names \"unremoved strong reference keeps the observer alive\" hasn't actually answered what was asked, no matter how accurate the pattern description is.\n\n**Correct model:** get to the leak mechanism in your first or second sentence — the pattern's mechanics are assumed background, not the answer itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: \"just trigger garbage collection manually\" instead of removing the dangling reference",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If memory keeps growing, just call `System.gc()` periodically to clean it up.\"\n\n**Why it's wrong:** the GC won't collect an object that's still reachable — a leaked observer is still referenced by the subject's list, so forcing a GC cycle changes nothing; it just wastes CPU pausing the app to confirm the object is still alive.\n\n**Correct model:** remove the dangling reference itself (unsubscribe, or a weak reference the GC can actually reclaim through) — a leak is a reachability problem, not a \"the GC hasn't gotten around to it yet\" problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-observer-pattern-memory-leaks-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-observer-pattern-memory-leaks-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The leak: a subject's observer list holds a strong reference to every subscriber, and a missed unsubscribe keeps that subscriber (and everything it holds) alive forever. Fix it with a lifecycle-tied unsubscribe as the primary defense, weak references as a backstop, and snapshot the list before notifying so an in-flight unsubscribe doesn't crash iteration.\n\nTo detect it after the fact, take a heap dump and follow the retained path back to the subject's list — that's the concrete evidence, not just a hunch that something's leaking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

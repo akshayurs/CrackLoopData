@@ -1,0 +1,173 @@
+{
+  "id": "design-logging-metrics-pipeline",
+  "title": "Design a Logging & Metrics Pipeline",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 5,
+  "slug": "design-logging-metrics-pipeline",
+  "summary": "Ingesting and querying telemetry at a volume far exceeding the systems it monitors — the pipeline's own scale, not the queries, is the design problem.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-logging-metrics-pipeline-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: every service in a fleet emits logs and metrics continuously; make all of it queryable and alertable, fast, without the observability system itself becoming the thing that falls over during an incident.\n\nThe twist that makes this an interesting design problem: telemetry volume is usually **an order of magnitude larger** than the traffic it describes — one user request can trigger a dozen log lines and several metric points across the services it touches. You're designing a system whose own throughput dwarfs the thing it's observing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** ingest logs (unstructured/semi-structured text events) and metrics (numeric time-series points) from every service, support ad-hoc queries over both, and evaluate alert rules against them continuously.\n\n**Non-functional:** sustained **ingest volume** far exceeding query volume, **query latency** low enough for an on-call engineer mid-incident to actually use it (seconds, not minutes), and **retention/cost tiers** — nobody needs millisecond-resolution metrics from six months ago, but they do need last week's at full fidelity.\n\nThat last requirement — different value at different ages — is what drives the hot/cold tiering design later in this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: fleet-scale ingest vs storage cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At **10,000** service instances each emitting **50 log lines/sec** and **20 metric points/sec**, that's `10,000 * 50 = 500,000` log lines/sec and `10,000 * 20 = 200,000` metric points/sec fleet-wide.\n\nAt ~200 bytes/log line, that's `500,000 * 200B ≈ 100MB/sec` of raw log volume — roughly **8.6TB/day**, before any retention multiplier. Keeping 30 days at full fidelity means hundreds of terabytes, which is exactly why nothing in this design keeps everything at full resolution forever (sampling and downsampling, ahead).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-logging-metrics-pipeline-s03-q1"
+      ]
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three operations: `emit(log/metric)` — the write path every service calls constantly; `query(timeRange, filter)` — the read path engineers use to investigate; and continuous **alert rule evaluation** — a background process checking incoming data against thresholds (\"error rate > 5% for 5 minutes\") and firing notifications.\n\nAlert evaluation deserves its own mention because it isn't a passive read — it's a standing computation running against the live stream, which means it has its own latency requirement (an alert firing 10 minutes late defeats the point) separate from ad-hoc query latency.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s05",
+      "order": 5,
+      "sectionTitle": "Data model: time-series storage vs a search index",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Time-series storage (metrics) | Search index (logs) |\n|---|---|---|\n| Shape of data | Numeric points at timestamps, tagged with labels | Semi-structured text events, varying schema |\n| Optimized for | Aggregation over time (avg, p99, rate) across many series | Full-text and field-based filtering across events |\n| Compression | Very high — numeric deltas compress extremely well | Lower — text doesn't compress as uniformly |\n| Example systems | Prometheus, InfluxDB | Elasticsearch, Loki |\n\n**How to decide:** metrics and logs have genuinely different access patterns, so production pipelines almost always run two separate storage systems rather than forcing one engine to serve both well.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the pipeline end to end",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Host agents ship into an ingest buffer, a stream processor consumes and routes into a hot store and a cold store](assets/ingest-pipeline.svg)\n\nThe **ingest buffer** is the shock absorber: it decouples \"how fast services emit\" from \"how fast the stream processor can process,\" so a processing slowdown doesn't cause data loss at the source, just a queue backlog.",
+      "assets": [
+        {
+          "alt": "Host agents ship into an ingest buffer, a stream processor consumes and routes into a hot store and a cold store",
+          "path": "assets/ingest-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s07",
+      "order": 7,
+      "sectionTitle": "Sampling and aggregation: not every log line survives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At fleet scale, storing every single log line forever is neither affordable nor useful — most log lines are routine \"request succeeded\" noise. The stream processor applies **sampling** (keep, say, 1-in-100 of routine success logs, but keep 100% of errors and warnings) and **aggregation** (roll many similar events into a count-per-minute instead of storing each one).\n\nThe rule that makes this safe: sample the boring, keep the anomalous. A spike in error logs is exactly the signal you can't afford to sample away, even while routine success logs get aggressively thinned.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-logging-metrics-pipeline-s07-q1"
+      ]
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s08",
+      "order": 8,
+      "sectionTitle": "Downsampling metrics over time",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Metrics get a similar treatment along a different axis: **downsampling**. Raw points might arrive every 10 seconds; after a day, they're rolled up to 1-minute averages; after a month, to 1-hour averages. Each rollup keeps enough signal to answer \"what was the trend\" while discarding the fine-grained detail nobody queries months later.\n\nThis is a direct, deliberate trade against the retention requirement from the NFRs: full-resolution data is expensive and rarely queried past a few days, so cost scales down as data ages, while the coarse long-term trend stays available indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: hot vs cold storage tiers",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A query is routed to a hot tier (recent, full resolution, fast disks) and/or a cold tier (older, downsampled, cheap storage) depending on the time range it spans](assets/hot-cold-tiers.svg)\n\nA query spanning both tiers (say, \"last 60 days\") transparently reads recent full-resolution data from hot storage and older rolled-up data from cold storage, stitching the two into one result.",
+      "assets": [
+        {
+          "alt": "A query is routed to a hot tier (recent, full resolution, fast disks) and/or a cold tier (older, downsampled, cheap storage) depending on the time range it spans",
+          "path": "assets/hot-cold-tiers.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: one misbehaving service drowning out everyone's signal",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single service with a bug can suddenly emit 100x its normal log volume (a crash-loop logging a stack trace every restart, or a debug flag left on in production). Without protection, that spike consumes the shared ingest buffer's capacity, delaying or dropping other services' logs — during exactly the kind of incident window when everyone needs their telemetry most.\n\nThis is the pipeline's defining failure mode: the system meant to help you observe an incident becomes unavailable **because of** an incident, unless the ingest path is explicitly protected against any one source dominating it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-logging-metrics-pipeline-s10-q1"
+      ]
+    },
+    {
+      "id": "design-logging-metrics-pipeline-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: no per-tenant ingest limit",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The ingest buffer is horizontally scaled, so it can absorb any single service's log volume without special handling.\"\n\n**Why it's wrong:** horizontal scaling raises aggregate capacity, but without a **per-tenant (per-service) ingest limit**, one noisy service can still consume a disproportionate share of that aggregate capacity, starving every other service's telemetry of buffer space and processing time — the total capacity being large doesn't stop one source from monopolizing it.\n\n**Correct model:** enforce a rate limit or fair-share quota **per emitting service**, so a single misbehaving source degrades only its own visibility, not the whole platform's. This is the same isolation principle as a noisy-neighbor problem in any shared multi-tenant system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

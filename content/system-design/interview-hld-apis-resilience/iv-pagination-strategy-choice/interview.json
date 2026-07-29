@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-pagination-strategy-choice",
+  "interviewQuestions": [
+    {
+      "id": "iv-pagination-strategy-choice-iq1",
+      "question": "How would you paginate this endpoint at scale?",
+      "answerMarkdown": "I'd first ask whether the underlying data is written to concurrently while users page through it, and how deep users typically page. If it's a live feed with deep pagination, I'd rule out OFFSET/LIMIT immediately — it breaks two ways at scale: rows shift under concurrent inserts, causing skipped or duplicated results, and OFFSET scans get slower the deeper you page since the database still has to scan and discard every skipped row.\n\nMy answer is cursor, or keyset, pagination: anchor each page to a specific row's sort-key values, like `(created_at, id)`, encoded as an opaque token the client passes back. That's immune to concurrent writes because it's anchored to a row, not a shifting position, and it's fast at any depth because it's an index seek, not a scan.\n\nI'd close by naming the trade-off — cursor pagination gives up direct jump-to-page-N, which some UIs need, so I'd ask whether that's actually a requirement here.\n\n**Testing:** whether you know OFFSET's failure mode by name, not just that cursors exist.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Choosing a pagination strategy"
+    },
+    {
+      "id": "iv-pagination-strategy-choice-iq2",
+      "question": "A user jumps to page 50 directly — does cursor pagination support that?",
+      "answerMarkdown": "Not natively. A cursor only encodes \"give me the rows after this specific row\" — it has no concept of an absolute position like \"row 1000,\" so there's no way to compute \"page 50's cursor\" without having actually walked through pages 1 through 49 first.\n\nI'd present two real options rather than pretend one solves it cleanly. A hybrid approach uses OFFSET for shallow, infrequent jumps — where the scan cost is negligible — and cursor pagination once a user is scrolling deep. Alternatively, accept an approximate jump: estimate a starting point from row counts or timestamps, then let the cursor take over exactly once real data loads, accepting the first page might be slightly off.\n\nI'd flag this as a product decision, not just an engineering one — whether exact jump-to-page matters enough to justify the extra complexity.\n\n**Testing:** whether you can name a pagination approach's real limitation instead of overselling it as a universal fix.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Jump-to-page with cursors"
+    },
+    {
+      "id": "iv-pagination-strategy-choice-iq3",
+      "question": "How do you paginate when the sort field, like likes_count, isn't unique?",
+      "answerMarkdown": "I'd append a unique tiebreaker — usually the row's `id` — to both the sort order and the cursor, so the effective sort becomes `(likes_count, id)` instead of `likes_count` alone.\n\nWithout it, two rows sharing the same `likes_count` can land right on a page boundary, and depending on how the database happens to order ties internally, the second page might repeat one of them or skip it entirely — a subtle correctness bug that only shows up under ties, so it's easy to miss in testing with mostly-unique data.\n\nI'd verify this by checking the query plan uses both columns in the index, so the tiebreaker doesn't turn into an unindexed sort that kills performance at depth.\n\n**Testing:** whether you think through pagination correctness on realistic, tie-heavy data, not just a toy unique-values example.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Pagination with non-unique sort keys"
+    }
+  ]
+}

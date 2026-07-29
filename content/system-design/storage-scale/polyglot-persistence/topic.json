@@ -1,0 +1,118 @@
+{
+  "id": "polyglot-persistence",
+  "title": "Polyglot Persistence",
+  "area": "system-design",
+  "group": "storage-scale",
+  "order": 5,
+  "slug": "polyglot-persistence",
+  "summary": "Combining multiple data stores in one system without losing track of which one owns the truth.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "polyglot-persistence-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Polyglot persistence** means using more than one type of data store in a single system — a relational database for orders, Elasticsearch for search, Redis for sessions — instead of forcing every access pattern into one store.\n\nThe upside is real: each store gets to do what it's best at. The risk is just as real: without a clear owner for each piece of data, the same fact ends up duplicated and drifting between stores, and nobody can say which one is right.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "polyglot-persistence-s02",
+      "order": 2,
+      "sectionTitle": "Why real systems use more than one data store",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "No single data store is good at everything — a relational database is poor at free-text search, a search engine is a poor system of record for financial transactions, and a cache isn't durable enough to be anyone's only copy. Rather than accept a bad fit everywhere, most non-trivial systems pick a different store per job: relational for transactional data, a search index for full-text queries, a cache for hot reads, object storage for large files.\n\nThis isn't over-engineering by default — an e-commerce site genuinely needs transactional guarantees for orders and full-text relevance ranking for product search, and one store rarely does both well.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "polyglot-persistence-s02-q1"
+      ]
+    },
+    {
+      "id": "polyglot-persistence-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: one system, several stores, each owning its slice",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![An application service connected to four stores: Postgres for orders, Elasticsearch as a derived search index synced via CDC, Redis for ephemeral sessions, and S3 for images](assets/polyglot-stores.svg)\n\nEach store here has a clear job: Postgres owns the transactional order data, Elasticsearch holds a derived, denormalized copy of product data built for search, Redis holds ephemeral session state that can be lost and rebuilt, and S3 owns the actual image bytes.\n\nThe arrow from Postgres to Elasticsearch matters as much as the boxes — it shows that the search index is a *copy*, kept in sync from the source of truth, not an independent store of new facts.",
+      "assets": [
+        {
+          "alt": "An application service connected to four stores: Postgres for orders, Elasticsearch as a derived search index synced via CDC, Redis for ephemeral sessions, and S3 for images",
+          "path": "assets/polyglot-stores.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "polyglot-persistence-s04",
+      "order": 4,
+      "sectionTitle": "Drawing store-ownership boundaries so data doesn't get duplicated ad hoc",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core discipline of polyglot persistence is deciding, for every field, exactly one store that owns it — the **system of record** — and treating every other copy as derived and rebuildable. A product's price lives in Postgres; its copy in Elasticsearch exists only to make search fast, and if that copy is ever wrong, the fix is \"resync from Postgres,\" never \"edit Elasticsearch directly.\"\n\nWithout this rule, teams drift into writing directly to whichever store is closest to the code that needs a quick fix, and within a few incidents nobody can say which store holds the truth for a given field — the exact failure mode this discipline prevents.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "polyglot-persistence-s04-q1"
+      ]
+    },
+    {
+      "id": "polyglot-persistence-s05",
+      "order": 5,
+      "sectionTitle": "Keeping stores in sync: dual writes, CDC, event-driven updates",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Dual writes** — writing to both stores in the application code, one after the other — is the simplest sync method and the least reliable: if the process crashes between the two writes, the stores silently diverge with no record that it happened. **Change Data Capture (CDC)** reads the source database's write-ahead log or replication stream and publishes each change as an event, so the search index (or any downstream store) updates from a durable, ordered feed instead of the application remembering to write twice. **Event-driven updates** generalize this — the system of record publishes a domain event on every change, and any interested store subscribes and updates itself.\n\nCDC and event-driven approaches cost more to set up than dual writes, but they remove the single largest source of derived-store drift: an application code path that forgot the second write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "polyglot-persistence-s06",
+      "order": 6,
+      "sectionTitle": "Compare: one-store simplicity vs polyglot flexibility",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | One store | Polyglot persistence |\n|---|---|---|\n| Operational overhead | One system to run, back up, monitor | Multiple systems, each with its own ops burden |\n| Fit per access pattern | Compromise fit for every pattern | Strong fit per store, per pattern |\n| Consistency | Single transaction covers everything | Cross-store sync (CDC/events) needed, eventual consistency between stores |\n| Team cognitive load | Low — one query language, one mental model | Higher — every engineer needs to know which store owns what |\n\n**How to decide:** start with one store and add a second only when a specific access pattern is genuinely bad on it (like full-text search on a relational database) — polyglot persistence is a cost you pay for a real capability gap, not a default architecture.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "polyglot-persistence-s06-q1"
+      ]
+    },
+    {
+      "id": "polyglot-persistence-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: polyglot persistence without a clear source of truth per field",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have Postgres and Elasticsearch both storing product data — if one is out of date we'll just check both and use whichever looks right.\"\n\n**Why it's wrong:** without a designated system of record, \"whichever looks right\" is a guess made under pressure, usually during an incident, and different engineers will guess differently — leading to fixes that patch the wrong store and reintroduce the same drift later.\n\n**Correct model:** name one store as the system of record for each field before you add the second store, document it, and treat every other copy as derived — rebuildable from the source of truth, never edited directly. Sync failures then have one clear fix: resync the derived copy, not investigate which store is \"more correct.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "polyglot-persistence-s07-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "search-index-freshness",
+  "interviewQuestions": [
+    {
+      "id": "search-index-freshness-iq1",
+      "question": "A newly-created post doesn't show up in search yet — why?",
+      "answerMarkdown": "I'd start by naming that this is expected behavior in most architectures, not necessarily a bug: a search index is a derived, denormalized copy of the database, kept in sync through a separate pipeline, and that pipeline has some inherent lag — usually seconds, sometimes longer depending on the sync mechanism.\n\nI'd walk through where the lag comes from concretely: if the system uses CDC, the change has to propagate through the change stream, get transformed into an indexable document, and land in the search engine, which may itself only refresh its searchable view periodically. If the system uses dual writes instead, I'd also consider a less benign explanation — the second write to the index may have failed silently after the database write succeeded, which wouldn't self-correct without a reconciliation job.\n\nI'd close by describing how I'd actually debug it: check the pipeline's current lag metrics first (is this within normal bounds, or unusually delayed?), then check whether this specific document's write actually reached the indexing pipeline at all.\n\n**Testing:** whether you understand indexing lag as an expected trade-off with a bound, and can distinguish normal lag from an actual sync failure.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Debugging a missing search result"
+    },
+    {
+      "id": "search-index-freshness-iq2",
+      "question": "How would you design the pipeline that keeps a search index in sync with a primary database?",
+      "answerMarkdown": "I'd start by rejecting dual writes as the primary mechanism, even though it's the simplest to reach for — writing to the database and then separately to the index in application code isn't atomic, so a failure on the second write silently and permanently diverges the two stores.\n\nInstead I'd design around change data capture: read the database's own write-ahead log or a native change-stream feature, and derive index updates from that. Since CDC reads from what the database actually committed, it structurally can't miss a write the way a failed second write can — even if the indexing pipeline is briefly down, it catches up once it's back, rather than losing the update entirely.\n\nI'd add monitoring on the pipeline's lag specifically (not just uptime), and a periodic reconciliation job that diffs a sample of the database against the index to catch any drift the primary mechanism missed.\n\nI'd close by naming when I'd still reach for simple batch reindexing instead of this whole pipeline: content that changes rarely and where users won't notice a few hours of staleness doesn't justify the added complexity.\n\n**Testing:** whether you default to a robust sync mechanism (CDC) over the fragile obvious one (dual writes), and can justify when the simpler option is actually fine.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Designing the DB-to-index sync pipeline"
+    },
+    {
+      "id": "search-index-freshness-iq3",
+      "question": "When would you need a full reindex, and how do you do it without taking search offline?",
+      "answerMarkdown": "I'd name the specific triggers for a full reindex rather than treating it as routine maintenance: a schema or analyzer change (documents indexed under old tokenization rules need to be reprocessed under the new ones), suspected corruption or unrecoverable drift from the database, or a migration to new infrastructure entirely. Day-to-day updates should always be incremental — a full reindex is the exception, not the norm.\n\nFor the zero-downtime approach, I'd build the new index in parallel alongside the live one — same data, new schema or new cluster — and let it catch up fully before cutting over. Once it's verified caught up and correct, I'd switch read traffic to the new index (often via an alias, so the cutover is instant), and only then decommission the old one.\n\nI'd flag the risk to watch for during the parallel build: if writes keep flowing to the old index while the new one is being built, the new index needs to also capture those writes (via the same CDC stream, say) so it's not stale the moment it goes live.\n\n**Testing:** whether you can name concrete triggers for a full reindex and design the cutover so it doesn't cause a search outage.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Full reindex without downtime"
+    }
+  ]
+}

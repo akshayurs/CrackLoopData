@@ -1,0 +1,126 @@
+{
+  "id": "distributed-rate-limiting",
+  "title": "Distributed Rate Limiting",
+  "area": "system-design",
+  "group": "resilience",
+  "order": 2,
+  "slug": "distributed-rate-limiting",
+  "summary": "Enforcing one limit consistently across many app servers without the limiter itself becoming the new bottleneck.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "distributed-rate-limiting-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A [token bucket](rate-limiting-algorithms) or window counter is easy to reason about on one machine. The moment you have ten app servers behind a load balancer, \"100 requests/minute per client\" stops being simple — which server's counter is the real one?\n\nThis topic covers how to enforce one shared limit across many nodes: centralizing the counter, the race conditions that show up doing it naively, and the trade-off between strict correctness and the limiter becoming a bottleneck itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-rate-limiting-s02",
+      "order": 2,
+      "sectionTitle": "Why per-node rate limiting fails once you have many nodes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If each app server keeps its own in-memory counter, a client's true rate is the **sum across whichever nodes it happened to hit** — but no single node knows that sum. With 10 nodes and a per-node limit of 100/minute, a client that gets load-balanced evenly could send 1,000/minute total while every node individually reports \"under limit.\"\n\nThe failure gets worse as you scale out: adding nodes to handle more traffic silently *raises* the effective per-client ceiling, which is the opposite of what a rate limiter is for.\n\nThe fix isn't a smarter per-node algorithm — it's moving the counter somewhere all nodes can see, which is the rest of this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "distributed-rate-limiting-s02-q1"
+      ]
+    },
+    {
+      "id": "distributed-rate-limiting-s03",
+      "order": 3,
+      "sectionTitle": "Centralized counter in Redis: shared state for the limit",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The standard fix: move the counter out of app-server memory into a fast shared store, almost always **Redis**. Every node runs the same algorithm (token bucket, sliding window counter) against the same key — typically `ratelimit:<client-id>` — so \"the count\" has one true answer regardless of which node handled the request.\n\nRedis fits because it's fast enough to check on every request (sub-millisecond, in-memory) and supports the atomic operations (below) needed to avoid races between concurrent checks from different nodes.\n\nThis single change — same algorithm, shared backing store instead of local memory — is usually the whole answer to \"how do you rate-limit across many servers.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-rate-limiting-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: many app nodes checking one shared limiter",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Five app servers sharing one Redis counter vs disagreeing local counters](assets/distributed-rate-limit.svg)\n\nEvery node talks to the same Redis key instead of keeping its own count — that single shared source of truth is what makes the limit mean the same thing no matter which node a request lands on.\n\nThe cost of this design is visible in the diagram too: every request now makes an extra network hop to Redis before it can proceed.",
+      "assets": [{"alt": "Five app servers sharing one Redis counter vs disagreeing local counters", "path": "assets/distributed-rate-limit.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-rate-limiting-s05",
+      "order": 5,
+      "sectionTitle": "Race conditions in check-then-increment, and atomic fixes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A naive implementation reads the counter, checks it against the limit, then writes it back — three separate round trips. Between two nodes' reads and writes, both can see \"99 of 100 used\" and both increment, letting through one more request than the limit allows. Under high concurrency this isn't rare, it's routine.\n\nThe fix is making check-and-increment **atomic**: a single Redis `INCR` (atomic by design) compared against the limit *after* incrementing, or a Lua script that reads, checks, and writes inside one atomic execution so no other client's request can interleave.\n\nThe general lesson: any \"read current value, decide, write new value\" pattern shared across nodes needs an atomic primitive, not just a fast one — speed doesn't prevent the race.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-rate-limiting-s05-q1"
+      ]
+    },
+    {
+      "id": "distributed-rate-limiting-s06",
+      "order": 6,
+      "sectionTitle": "Approximate/local limiting to avoid a single limiter becoming the bottleneck",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A fully centralized limiter checked on every single request adds a network round trip per request and puts all your traffic through one dependency. At very high QPS, an alternative is **approximate distributed limiting**: each node keeps a local counter and only periodically syncs a partial count to the shared store (or estimates its fair share of the global limit and enforces that locally, adjusting occasionally).\n\nThis trades strict precision for far less cross-node traffic — a client might briefly exceed the true limit by a small margin during the sync interval, but no single request pays the cost of a synchronous shared check.\n\nUse strict centralized checks when correctness matters more than latency (billing-tied quotas); use approximate local limiting when throughput matters more and a small, bounded overage is acceptable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-rate-limiting-s07",
+      "order": 7,
+      "sectionTitle": "Compare: strict centralized limiting vs eventually-consistent distributed limiting",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Strict centralized (Redis, every request) | Eventually-consistent (local + periodic sync) |\n|---|---|---|\n| Accuracy | Exact, global limit enforced precisely | Approximate — brief overage possible during sync gaps |\n| Latency added | One round trip per request | Near zero — checks are local |\n| Failure mode | Redis outage can block or fail-open all traffic | A node's stale local view degrades gracefully |\n| Best for | Billing-tied quotas, hard SLAs | High-QPS abuse protection where a small overage is fine |\n\n**How to decide:** ask what happens if the limit is briefly exceeded by a small margin — if that's genuinely fine (protecting capacity), go approximate; if it isn't (a paid quota, a contractual cap), pay the round trip for strict centralized checks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "distributed-rate-limiting-s07-q1"
+      ]
+    },
+    {
+      "id": "distributed-rate-limiting-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a rate limiter whose own lookup becomes the new bottleneck",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We centralized our rate limiter in Redis, so scaling app servers now scales cleanly.\"\n\n**Why it's wrong:** every app server now makes a synchronous call to the same Redis instance on every request. Add enough app nodes and *Redis* becomes the shared bottleneck the limiter was supposed to protect you from in the first place — the exact failure mode rate limiting exists to prevent, just relocated one hop over.\n\n**Correct model:** a centralized limiter needs its own scaling plan — Redis Cluster sharded by client-id, or a shift to approximate local limiting past a certain QPS — treat the limiter as a real dependency with its own capacity limits, not a free add-on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "distributed-rate-limiting-s08-q1"
+      ]
+    }
+  ]
+}

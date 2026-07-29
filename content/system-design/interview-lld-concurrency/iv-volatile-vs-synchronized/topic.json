@@ -1,0 +1,178 @@
+{
+  "id": "iv-volatile-vs-synchronized",
+  "title": "volatile vs synchronized — what's the actual difference?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 8,
+  "slug": "iv-volatile-vs-synchronized",
+  "summary": "Visibility vs atomicity — the distinction that trips people up the moment the shared state is a compound operation instead of a single flag.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-volatile-vs-synchronized-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "`volatile` and `synchronized` both deal with shared state, but they guarantee different things — mixing them up is one of the most common concurrency mistakes.\n\nThe question tests whether you know the exact boundary: `volatile` alone is enough for a single flag, and dangerously not enough the moment the operation becomes a compound read-modify-write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: are they asking about a single flag, or a compound operation?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **is the shared state a single flag being read and written, or a compound operation like increment that reads, modifies, and writes back?** This single question decides the entire answer: `volatile` is sufficient for the first case and unsafe for the second, no matter how it's dressed up in the example code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: volatile guarantees visibility only, synchronized guarantees visibility and atomicity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**`volatile`** guarantees **visibility** — a write to the field is immediately visible to any thread that reads it afterward — and an ordering guarantee around that write, but nothing about **atomicity** of a multi-step operation. **`synchronized`** guarantees both visibility and atomicity for everything inside the block.\n\nThat's the whole answer in one sentence: pick `volatile` for a single variable read/written as one step, `synchronized` the moment more than one step (or more than one field) must happen as a unit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-volatile-vs-synchronized-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s04",
+      "order": 4,
+      "sectionTitle": "Code: a volatile boolean flag used correctly to stop a thread",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Worker implements Runnable {\n    private volatile boolean running = true;\n\n    public void run() {\n        while (running) {\n            doWork();\n        }\n    }\n\n    void stop() {\n        running = false;   // single write, single read on the other side\n    }\n}\n```\n\nThis is exactly the case `volatile` is built for: one thread writes a flag once, another thread reads it repeatedly, and there is no read-modify-write on either side. Without `volatile`, the worker thread could cache `running` in a register or CPU cache and never observe the write, looping forever.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s05",
+      "order": 5,
+      "sectionTitle": "Code: a volatile counter used incorrectly — increment is not atomic",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Counter {\n    private volatile int count = 0;\n\n    void increment() {\n        count++;   // read, add, write — volatile fixes none of the three steps' atomicity\n    }\n}\n```\n\n`volatile` makes every read of `count` see the latest write, but `count++` is still read-modify-write, and `volatile` provides zero atomicity for that sequence. Two threads can both read the same value before either writes back, and one increment is lost — the exact bug `volatile` looks like it should prevent, but doesn't.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-volatile-vs-synchronized-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s06",
+      "order": 6,
+      "sectionTitle": "Compare: volatile vs synchronized — what each actually guarantees",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | `volatile` | `synchronized` |\n|---|---|---|\n| Visibility | Yes | Yes |\n| Atomicity of compound ops | No | Yes |\n| Blocks other threads | Never | Yes, while held |\n| Works on | A single field | Any block of code, any number of fields |\n| Typical use | A flag, a status enum, a reference swapped whole | Any read-modify-write, or state spanning multiple fields |\n\n**How to decide:** if the operation is a single read or a single write of one field, `volatile` is enough and cheaper. The moment it's read-modify-write or spans more than one field, reach for `synchronized` (or an atomic type for a single compound field).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s07",
+      "order": 7,
+      "sectionTitle": "Code: the fix for the counter — AtomicInteger, contrasted with the broken volatile version",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Counter {\n    private final AtomicInteger count = new AtomicInteger(0);\n\n    void increment() {\n        count.incrementAndGet();   // the read-modify-write itself is now atomic\n    }\n}\n```\n\nSwapping `volatile int` for `AtomicInteger` fixes exactly the gap `volatile` left: `incrementAndGet()` performs the read-modify-write as one atomic step internally, using a compare-and-swap loop, instead of relying on the caller to protect it. Same visibility guarantee as `volatile`, plus the atomicity `volatile` never provided.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"when is volatile enough, and when do you need more?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`volatile` is enough when exactly one thread ever writes a field and any number of threads only read it, with no read-modify-write on either side — a shutdown flag, a status enum set once per transition, a reference to an immutable object swapped as a whole.\n\nYou need more the moment two conditions arise: multiple threads can write the same field (a race on the write itself), or any thread performs a compound operation on it (increment, check-then-set, or anything reading before writing back).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"does volatile give any ordering guarantee for other variables written before it — happens-before?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Yes, and this is the subtler, often-missed half of `volatile`'s guarantee: a write to a volatile field establishes a happens-before edge, meaning every ordinary (non-volatile) write that happened before it in program order is guaranteed visible to any thread that subsequently reads that volatile field.\n\nThis is exactly the mechanism double-checked locking relies on — the volatile reference write makes the constructor's earlier non-volatile writes visible too, as a side effect of the ordering guarantee, not because those other fields are volatile themselves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-volatile-vs-synchronized-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: using volatile for a compound read-modify-write and thinking it's safe",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** marking a counter or any compound-updated field `volatile` and treating that as equivalent to making it thread-safe.\n\n**Why it's wrong:** `volatile` only guarantees visibility of the latest value, never atomicity of a read-modify-write sequence — two threads can still race on the read-then-write, silently losing updates, with `volatile` doing nothing to stop it.\n\n**Correct model:** reserve `volatile` for single reads/writes with no compound operation involved; reach for an atomic type or `synchronized` the moment the field is read and written back based on its own value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: assuming synchronized is always slower than volatile, so preferring volatile everywhere regardless of correctness",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** defaulting to `volatile` everywhere because \"`synchronized` is slow,\" regardless of whether the field actually needs atomicity.\n\n**Why it's wrong:** an incorrect `volatile` counter isn't a faster version of a correct `synchronized` counter — it's a broken one that happens to run fast. Modern JVM `synchronized` (with biased and thin locking) is also far cheaper under low contention than this reasoning assumes.\n\n**Correct model:** choose based on correctness requirements first — atomicity needed or not — then optimize for performance within whichever option is actually correct.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-volatile-vs-synchronized-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-volatile-vs-synchronized-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"`volatile` guarantees visibility of the latest value and an ordering guarantee around that write, but no atomicity for a compound operation. `synchronized` guarantees both. I'd use `volatile` for a single flag or reference written by one thread and read by others with no read-modify-write involved, and I'd reach for `synchronized` or an atomic type the instant the field is read and written back based on its own current value — like an increment. I'd never treat 'volatile is faster' as a reason to use it somewhere it's actually incorrect.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

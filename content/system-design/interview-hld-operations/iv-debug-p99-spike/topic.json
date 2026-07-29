@@ -1,0 +1,165 @@
+{
+  "id": "iv-debug-p99-spike",
+  "title": "p99 latency just spiked — walk me through how you'd debug it",
+  "area": "system-design",
+  "group": "interview-hld-operations",
+  "order": 6,
+  "slug": "iv-debug-p99-spike",
+  "summary": "The live-debugging probe: tests whether you have a systematic narrowing process instead of guessing at causes.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-debug-p99-spike-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Check the logs\" is not a debugging process — it's where you end up after you've already narrowed the problem down. This question is testing whether you have a systematic way to narrow which endpoint, which dependency, which resource is responsible, instead of scrolling through logs hoping something jumps out.\n\nUnlike the deploy-correlated regression question, this one is live: something is wrong *right now*, and you need a process that gets you to an answer fast, under real pressure, with incomplete information.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-debug-p99-spike-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions before you answer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether this is every endpoint or just one — a global spike suggests something shared (infrastructure, a common dependency); an isolated one points at that endpoint's own code path or its specific dependencies. Ask whether it started suddenly or drifted up gradually, since a sudden jump usually correlates with an event (a deploy, a traffic surge) while a drift suggests something accumulating.\n\nAsk whether traffic volume is also elevated, or this is happening at normal load — a spike at normal load rules out \"we're just over capacity\" and points more strongly at a specific broken dependency or a lock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-debug-p99-spike-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Narrow in three steps, in order: **by endpoint** (is it global or isolated?), **by dependency call** (using tracing to see which downstream call is eating the time), then **by resource** (CPU, GC, lock contention) if the time is spent inside your own service rather than a dependency.\n\nUse distributed tracing at each step rather than guessing — a trace tells you concretely where the milliseconds went instead of inferring it from aggregate dashboards alone. For the mechanics of instrumenting this, see [distributed tracing](distributed-tracing-design).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-debug-p99-spike-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-debug-p99-spike-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a worked example",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Trace waterfall showing 2.8s of a 3s request in a DB call, mostly lock wait rather than query execution](assets/trace-waterfall-lockwait.svg)\n\nA distributed trace shows 2.8 of a 3-second request spent inside a single downstream database call. Drilling into that call further shows it's spending most of its own time in **lock wait**, not query execution — a completely different fix (contention, not a slow query) than the trace's top-level view alone would suggest.\n\nThis is why tracing beats guessing: the top-level number (\"the DB call is slow\") and the actual cause (\"it's waiting on a lock\") are two different findings, and only tracing into the call itself reveals the second one.",
+      "assets": [{"alt": "Trace waterfall showing 2.8s of a 3s request in a DB call, mostly lock wait rather than query execution", "path": "assets/trace-waterfall-lockwait.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-debug-p99-spike-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a concrete scenario",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Dashboards show the spike is isolated to the `/checkout` endpoint, not global. Tracing that endpoint shows the added time is entirely inside a single Redis call. Checking Redis's own metrics shows a sudden spike in slow commands, correlating with a teammate running a `KEYS *` scan against production moments earlier — a command that blocks Redis's single event loop while it scans the entire keyspace.\n\nEach step narrowed the search: dashboards ruled out \"global,\" tracing ruled out \"somewhere else in our own code,\" and Redis's own metrics pointed at the specific command responsible — none of which would have been found by staring at application logs alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-debug-p99-spike-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-debug-p99-spike-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: when the time is spent in your own service",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If tracing shows the added latency is inside your own service rather than a downstream call, check — in roughly this order of likelihood for most spikes — **CPU throttling** (the container hit its CPU limit and got throttled by the runtime), **GC pause frequency and duration** (a language with garbage collection stalling on a large or fragmented heap), and **thread or lock contention** (many requests blocked waiting on the same internal lock).\n\nThis ordering matters because it's usually faster to check than to guess: CPU throttling and GC pauses show up directly in standard runtime metrics, while diagnosing lock contention typically needs a thread dump or profiler — worth reaching for once the cheaper checks come back clean.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-debug-p99-spike-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A full distributed trace on every request gives the fastest path to an answer, but costs real overhead and storage at high volume.\n\n| Approach | Speed to diagnose | Cost |\n|---|---|---|\n| Trace 100% of requests | Fastest — every request's path is available | High — storage and per-request overhead at scale |\n| Sample traces + aggregate percentile dashboards | Slower first step — localize with dashboards, then pull sampled traces | Low — most teams can afford this in steady state |\n\nMost teams sample traces and lean on aggregate percentile dashboards to first localize *where* to look, then pull individual sampled traces once they've narrowed the search — full tracing on every request is rarely worth its cost outside of active investigation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-debug-p99-spike-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: the spike correlates with a deploy 10 minutes earlier",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Treat the deploy as the prime suspect immediately. If it's still mid-rollout, check its canary metrics directly — this might already be the gate catching the problem before it reaches everyone. Be ready to roll it back right away rather than continuing a full trace-level investigation while user impact is active.\n\nThis is a deliberate change in priority from the general debugging process: when there's a strong, timing-based suspect already in hand, acting on it fast beats a slower, more thorough trace-level diagnosis you'd otherwise reach for first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-debug-p99-spike-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-debug-p99-spike-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: no recent deploy and no obvious dependency slowdown",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Check for a traffic pattern change: a new heavy client hammering one endpoint, a bot, or a genuine viral spike in demand. Also check infrastructure-level events outside your own code and deploys: autoscaling lagging behind a sudden demand jump, a noisy neighbor consuming shared resources on multi-tenant infrastructure, or a certificate or DNS issue adding latency at the connection layer before a request even reaches your application code.\n\nThese are the suspects left once you've ruled out your own recent changes and your known dependencies — the search moves outward, to traffic and infrastructure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-debug-p99-spike-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: jumping straight to \"scale up the servers\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"p99 is spiking — let's add more instances, that usually helps.\"\n\n**Why it's wrong:** scaling up only helps if the bottleneck is actually capacity. If the real cause is a lock or a single slow downstream dependency — as in the Redis `KEYS *` scenario in this topic — adding more app instances just means more clients contending for the same choke point, fixing nothing while adding cost.\n\n**Correct model:** identify where the time is actually going first — endpoint, then dependency, then resource — before reaching for any fix. \"Add capacity\" is a valid answer for some root causes and completely useless for others; the narrowing process is what tells you which situation you're in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-debug-p99-spike-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-debug-p99-spike-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Narrow in order: by endpoint (global or isolated?), then by dependency call using distributed tracing, then by resource (CPU throttling, GC, lock contention) if the time is inside your own service. Most teams sample traces and lean on aggregate dashboards to localize first, then pull individual traces once narrowed.\n\nA recent deploy is a prime suspect worth acting on fast; absent one, look outward to traffic patterns and infrastructure events. Never jump straight to \"scale up the servers\" before confirming the bottleneck is actually capacity — a lock or a single bad dependency call, like a `KEYS *` scan against Redis, isn't fixed by adding instances.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

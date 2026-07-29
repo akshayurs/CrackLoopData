@@ -1,0 +1,29 @@
+{
+  "topicId": "design-distributed-message-queue",
+  "interviewQuestions": [
+    {
+      "id": "design-distributed-message-queue-iq1",
+      "question": "Design a distributed message queue like Kafka from scratch.",
+      "answerMarkdown": "I'd anchor the whole design on one primitive: the **partitioned append-only log**. A topic splits into partitions, each an ordered log where writes always go to the end and reads are sequential from an offset — that structure alone is what makes high throughput and simple recovery possible.\n\nI'd cover the API next: `produce(topic, key, value)`, where the key deterministically picks a partition (so same-key messages stay ordered relative to each other), and `consume(topic, partition, offset)`, where the consumer owns its offset rather than the broker tracking 'next message' internally — that's what lets multiple independent consumers replay the same retained data at their own pace.\n\nFor durability, each partition replicates across a leader and several followers, and I'd flag that acknowledging a write before it's replicated (not just leader-written) is the classic durability bug. I'd close on the two failure modes that actually bite in production: a skewed key creating one hot partition no amount of extra partitions fixes, and repartitioning an existing topic silently breaking key-based ordering because the hash-to-partition mapping changes with partition count.\n\n**Testing:** whether you understand ordering as a per-partition guarantee and durability as dependent on replication acknowledgment, not just leader persistence.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Full message broker design walkthrough"
+    },
+    {
+      "id": "design-distributed-message-queue-iq2",
+      "question": "How would you achieve exactly-once processing on top of a broker that only guarantees at-least-once delivery?",
+      "answerMarkdown": "I'd be direct that true exactly-once delivery isn't something the broker itself provides — at-least-once is the realistic floor, since a producer or consumer can always retry after an ambiguous failure (did that write land or not?), and the safe default is to assume it might have and retry anyway.\n\nThe fix lives at the application layer: make message processing **idempotent**, so processing the same message twice produces the same end state as processing it once. Concretely, I'd attach a unique message ID (or use the offset itself) and have the consumer check-and-record 'have I already applied this ID' as part of the same transaction that applies the message's effect — a duplicate delivery becomes a no-op instead of a double-apply.\n\nI'd note this only works if the 'have I seen this' check and the actual side effect happen atomically together; if they're two separate steps, a crash between them reintroduces the exact race the idempotency check was meant to close.\n\n**Testing:** whether you can distinguish delivery guarantees (broker-level) from processing guarantees (application-level) and know exactly-once, in practice, always means the second.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Exactly-once processing on at-least-once delivery"
+    },
+    {
+      "id": "design-distributed-message-queue-iq3",
+      "question": "A single partition's throughput is capping out even though the cluster has plenty of spare capacity elsewhere. How would you diagnose and fix it?",
+      "answerMarkdown": "I'd start by checking whether traffic is actually skewed toward one key — if a disproportionate share of messages share a key (a viral account, one dominant tenant), they all land on the same partition by construction, and that partition's single leader is the ceiling, regardless of how many other partitions or brokers sit idle.\n\nI'd rule out the tempting-but-wrong fix first: just adding more partitions to the topic doesn't help this specific key, since the hot key still maps to exactly one partition either way, and changing partition count on an existing topic risks breaking ordering for every other key that already relies on the current mapping.\n\nThe actual fix is changing how that specific hot key is partitioned — splitting it into a small number of sub-keys (e.g. appending a bucket suffix) specifically for that one entity, spreading its traffic across several partitions while leaving every other key's mapping untouched. I'd flag the cost: that entity's per-key ordering guarantee is now only preserved within each sub-key, not globally, which needs to be an acceptable trade for that use case.\n\n**Testing:** whether you diagnose the actual cause (key skew) rather than reflexively reaching for 'add more partitions.'",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Diagnosing a hot-key partition bottleneck"
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "id": "read-repair-and-anti-entropy",
+  "title": "Read Repair & Anti-Entropy",
+  "area": "system-design",
+  "group": "consistency-replication",
+  "order": 8,
+  "slug": "read-repair-and-anti-entropy",
+  "summary": "How leaderless, quorum-based stores like Cassandra and Dynamo heal stale replicas — one opportunistically on the read path, one continuously in the background.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "read-repair-and-anti-entropy-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Even a well-tuned [quorum](quorum-systems) doesn't stop replicas from drifting apart — a node that was down during a write simply doesn't have it. Leaderless stores need a way to notice that drift and fix it, without a leader coordinating anything.\n\nThis topic covers the two complementary mechanisms that do it: **read repair**, which fixes staleness as a side effect of a read, and **anti-entropy**, which finds and fixes drift in the background whether or not anyone reads it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s02",
+      "order": 2,
+      "sectionTitle": "Why replicas drift even with quorum writes: a node that missed a write, or was down",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A [quorum write](quorum-systems) only requires W out of N replicas to acknowledge — by design, that can leave N-W replicas without the update. A node might have missed the write because it was down, partitioned, or simply slower to respond than the W that made the cut.\n\nThis isn't a failure of the quorum system — it's an accepted trade for availability: requiring *every* replica to confirm every write would mean any single slow or down node blocks all writes. The cost is that some replicas are, at any given moment, quietly behind — and nothing about a successful quorum write guarantees they'll catch up on their own.\n\nRead repair and anti-entropy exist specifically to close that gap without needing a leader to notice and fix it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "read-repair-and-anti-entropy-s02-q1"
+      ]
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s03",
+      "order": 3,
+      "sectionTitle": "Read repair: a read notices a stale replica and fixes it as a side effect",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Read repair** happens automatically as part of a normal quorum read: the client (or coordinator node) queries R replicas, compares their versions (by timestamp or vector clock), and — having noticed one replica returned an older value — writes the newest value back to that stale replica before returning the result.\n\nThis is opportunistic: it only fixes a replica that happens to be involved in a read. A replica holding cold data that nobody queries never gets touched by read repair, no matter how far behind it drifts.\n\nThe upside is that it's essentially free — no separate background process, no extra infrastructure — it piggybacks on reads the system was doing anyway.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "read-repair-and-anti-entropy-s03-q1"
+      ]
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a quorum read comparing replica versions and pushing the newest value to the stale one",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Coordinator detecting a stale replica during a read and pushing the newest value to it](assets/read-repair-push.svg)\n\nThe repair is a normal write, just triggered by the read path instead of a client — the coordinator recognizes the mismatch across the R responses, identifies the newest value, and pushes it to whichever replica was behind, silently closing that specific gap.",
+      "assets": [
+        {
+          "alt": "Coordinator detecting a stale replica during a read and pushing the newest value to it",
+          "path": "assets/read-repair-push.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s05",
+      "order": 5,
+      "sectionTitle": "Anti-entropy: background comparison (often via Merkle trees) to find and fix drift nobody happened to read",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Anti-entropy** is a continuous background process, independent of any client read, that compares replicas against each other and synchronizes whatever has diverged. Unlike read repair, it doesn't need anyone to query the data first — it runs regardless, which is exactly what closes the gap read repair leaves open for cold, rarely-read data.\n\nComparing entire replicas byte-by-byte on every run would be prohibitively expensive at scale, so most systems use a **Merkle tree** — a hash tree where each leaf hashes a small range of the data and each parent node hashes its children's hashes. Two replicas can compare just their top-level hash first; if it matches, the entire subtree is identical and no further comparison is needed. Only mismatched branches need to be walked further down.\n\nCassandra runs this as a background repair process; Dynamo's original design used the same Merkle-tree comparison between replica pairs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "read-repair-and-anti-entropy-s05-q1"
+      ]
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: two replicas' Merkle trees compared top-down to find the exact diverged range",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Two Merkle trees compared, skipping matching subtrees to isolate the diverged leaf](assets/merkle-tree-diff.svg)\n\nThe efficiency is the whole point: instead of comparing every record between two replicas, the tree lets the comparison skip every subtree whose hash already matches, narrowing straight down to the one range that actually diverged — turning an O(all data) comparison into roughly O(depth of the tree) for a small amount of drift.",
+      "assets": [
+        {
+          "alt": "Two Merkle trees compared, skipping matching subtrees to isolate the diverged leaf",
+          "path": "assets/merkle-tree-diff.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s07",
+      "order": 7,
+      "sectionTitle": "Compare: read repair (reactive, needs a read to trigger it) vs anti-entropy (proactive, runs regardless)",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Read repair | Anti-entropy |\n|---|---|---|\n| Trigger | A client read that hits a stale replica | Runs on its own schedule, independent of reads |\n| Covers cold/rarely-read data | No — never touches data nobody queries | Yes — scans regardless of read pattern |\n| Extra infrastructure | None — piggybacks on normal reads | A background process (e.g. Merkle tree comparison) |\n| Repair latency | Immediate, but only for what's read | Depends on the scan schedule/interval |\n\n**How to decide:** run both — read repair is essentially free and fixes hot data instantly, while anti-entropy is the only mechanism that guarantees cold data eventually converges too. Neither alone is a complete answer to replica drift.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "read-repair-and-anti-entropy-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: relying on read repair alone for cold data nobody reads, so it drifts forever",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have read repair enabled, so all our replicas will eventually converge.\"\n\n**Why it's wrong:** read repair only fixes a replica when it happens to be queried by a read. Data that's written once and rarely or never read again — an old order record, an archived document — can sit permanently drifted on a replica that missed the original write, with nothing ever triggering a fix. \"Eventually consistent\" quietly becomes \"never consistent\" for that specific record.\n\n**Correct model:** treat read repair as a bonus that fixes hot data cheaply, not a substitute for anti-entropy. If a system disables or skips background anti-entropy to save resources, it needs to accept that cold data can drift indefinitely — that's a real, permanent risk, not a theoretical edge case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "read-repair-and-anti-entropy-s08-q1"
+      ]
+    }
+  ]
+}

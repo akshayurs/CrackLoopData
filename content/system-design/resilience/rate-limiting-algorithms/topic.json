@@ -1,0 +1,152 @@
+{
+  "id": "rate-limiting-algorithms",
+  "title": "Rate Limiting Algorithms",
+  "area": "system-design",
+  "group": "resilience",
+  "order": 1,
+  "slug": "rate-limiting-algorithms",
+  "summary": "Token bucket, leaky bucket, and window counters — the canonical algorithms behind any limiter, and the trade-offs that decide which one to reach for.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "rate-limiting-algorithms-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **rate limiter** caps how many requests a client can make in a given time window, rejecting or delaying the rest. Every public API needs one, and \"design a rate limiter\" is one of the most-asked system-design questions.\n\nThink of it like a bouncer at a club door: not \"no more people ever,\" just \"no more than N per minute, no matter how they arrive.\" This topic covers the four algorithms that implement that rule — fixed window, sliding window, token bucket, leaky bucket — and where each one breaks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiting-algorithms-s02",
+      "order": 2,
+      "sectionTitle": "Why rate limit at all: protecting yourself and being a good API citizen",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rate limiting solves two different problems that get conflated. **Protecting yourself**: a single misbehaving client (a retry loop gone wrong, a scraper, a bug) can consume enough capacity to degrade service for everyone else — a limiter caps the blast radius per caller. **Being a good citizen**: when *you* call someone else's API, respecting their published limit (and backing off before you hit it) keeps you from getting blocked entirely.\n\nThe two directions need different enforcement points: inbound limits live at your edge (gateway, load balancer) keyed by client; outbound limits live in your own client code, keyed by the target API's published quota.\n\nInterview signal: state which side you're limiting before picking an algorithm — the answer changes what you key on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiting-algorithms-s03",
+      "order": 3,
+      "sectionTitle": "Fixed window counter: simple, and its edge-burst flaw",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **fixed window counter** divides time into fixed slots (e.g. per-minute) and keeps one integer counter per client per window: increment on each request, reject once the counter exceeds the limit, reset to zero when the window rolls over.\n\nIt's the simplest limiter to build and reason about — one counter, one TTL, done. The flaw is at the boundary: a client can spend its full limit in the last instant of one window, then immediately spend the full limit again in the first instant of the next, getting roughly **2x the intended rate** in a short burst that straddles the edge.\n\nUse it when simplicity matters more than precision — internal tooling, coarse quotas — not when you need a hard guarantee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "rate-limiting-algorithms-s03-q1"
+      ]
+    },
+    {
+      "id": "rate-limiting-algorithms-s04",
+      "order": 4,
+      "sectionTitle": "Sliding window log / sliding window counter: smoothing the edge case",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two designs fix the boundary-burst problem by no longer treating windows as hard-reset buckets. The **sliding window log** stores a timestamp per request and counts how many fall within the last N seconds on every check — exact, but memory grows with request volume. The **sliding window counter** approximates this cheaply: keep the previous window's count and the current window's count, and weight the previous one by how much of it still overlaps the sliding N-second lookback.\n\nThe counter variant is the practical default — O(1) memory like fixed window, but no 2x boundary burst, at the cost of being an approximation rather than an exact count.\n\nTrade precision for memory only when you've confirmed the approximation's error margin is acceptable for your limit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiting-algorithms-s05",
+      "order": 5,
+      "sectionTitle": "Token bucket: allowing bursts up to a cap",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **token bucket** holds up to `capacity` tokens, refilled at a steady `rate` per second. Each request consumes one token; if the bucket is empty, the request is rejected (or queued). Unlike window counters, it explicitly *allows* bursts — a client that's been idle can spend its whole bucket at once — while still capping the long-run average to the refill rate.\n\nThis matches real traffic shapes better than a hard per-window cap: a user who reads for two minutes then clicks five things quickly shouldn't be throttled just because those five clicks land in one window.\n\nTwo knobs to reason about explicitly in an interview: `capacity` (max burst size) and `rate` (sustained throughput) — they're independent and both need justifying against real traffic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "rate-limiting-algorithms-s05-q1"
+      ]
+    },
+    {
+      "id": "rate-limiting-algorithms-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: token bucket filling and draining over time",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Token bucket level over time: steady refill, sharp burst drain](assets/token-bucket.svg)\n\nThe refill line rises at a constant slope regardless of traffic — that's the sustained rate. The sharp drop is a burst consuming stored tokens instantly; the bucket can't go negative, so any request after empty is rejected until the next refill tick.\n\nThe shape to notice: bursts are absorbed instantly, but the bucket only recovers at the fixed refill rate — it can't be \"paid back\" faster.",
+      "assets": [{"alt": "Token bucket level over time: steady refill, sharp burst drain", "path": "assets/token-bucket.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiting-algorithms-s07",
+      "order": 7,
+      "sectionTitle": "Leaky bucket: smoothing output to a constant rate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **leaky bucket** queues incoming requests and processes them out at a fixed rate, like a bucket with a hole in the bottom leaking at constant speed no matter how fast water is poured in. If the queue (bucket) fills up, new requests are dropped.\n\nThe key difference from token bucket: leaky bucket **smooths** output to a perfectly constant rate — it never lets a burst through faster than the drain rate, only lets it wait longer. Token bucket instead **permits** bursts to pass through immediately, up to the capacity.\n\nChoose leaky bucket when downstream truly can't tolerate any burst (a fixed-capacity worker pool); choose token bucket when short bursts are fine and you mainly care about the long-run average.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "rate-limiting-algorithms-s07-q1"
+      ]
+    },
+    {
+      "id": "rate-limiting-algorithms-s08",
+      "order": 8,
+      "sectionTitle": "Compare: all four algorithms on burst tolerance and memory cost",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Fixed window | Sliding window (counter) | Token bucket | Leaky bucket |\n|---|---|---|---|---|\n| Burst tolerance | Poor — up to 2x at boundary | Good — smoothed approximation | Explicit, up to bucket capacity | None — output always constant |\n| Memory per client | O(1) | O(1) | O(1) | O(1) + queue size |\n| Precision | Exact, but flawed at edges | Approximate | Exact | Exact |\n| Typical use | Coarse internal quotas | General-purpose API limiting | Bursty client traffic (APIs, UIs) | Traffic shaping into a fixed-capacity worker |\n\n**How to decide:** if downstream must never see a burst, use leaky bucket; if occasional legitimate bursts should pass, use token bucket; if you just need a decent general-purpose limiter with low memory, sliding window counter beats fixed window for the same cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiting-algorithms-s09",
+      "order": 9,
+      "sectionTitle": "Code: token bucket rate limiter",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal in-memory token bucket, lazily refilling on each check rather than running a background timer:\n\n```python\nclass TokenBucket:\n    def __init__(self, capacity, refill_rate):\n        self.capacity = capacity\n        self.tokens = capacity\n        self.refill_rate = refill_rate  # tokens per second\n        self.last_check = time.monotonic()\n\n    def allow(self):\n        now = time.monotonic()\n        elapsed = now - self.last_check\n        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)\n        self.last_check = now\n        if self.tokens >= 1:\n            self.tokens -= 1\n            return True\n        return False\n```\n\nLazy refill avoids a background thread: each call computes how many tokens *would* have accrued since the last check, caps at capacity, then spends one if available. This same shape moves to Redis (`INCR` + Lua script) once you need it shared across processes.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "rate-limiting-algorithms-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: fixed window allowing 2x the limit right at the window boundary",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We cap at 100 requests/minute with a fixed window counter, so clients can never exceed 100/minute.\"\n\n**Why it's wrong:** a client can send 100 requests in the last second of minute 1, then another 100 in the first second of minute 2 — 200 requests inside a 2-second span, both windows individually \"compliant.\" The counter resets to zero at the boundary with no memory of what just happened in the previous window.\n\n**Correct model:** if the boundary burst matters for your use case (protecting a fragile downstream, a strict published SLA), use a sliding window counter or token bucket instead — both consider recent history across the boundary rather than resetting sharply to zero.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "rate-limiting-algorithms-s10-q1"
+      ]
+    }
+  ]
+}

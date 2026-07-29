@@ -1,0 +1,165 @@
+{
+  "id": "iv-design-retry-utility",
+  "title": "Design a Retry Utility",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 4,
+  "slug": "iv-design-retry-utility",
+  "summary": "Resilience thinking packed into a small, pluggable API — a retry(operation, policy) shape where backoff and idempotency matter more than the loop itself.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-design-retry-utility-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a retry utility** — a small piece of code every distributed system needs, and a surprisingly good vehicle for testing resilience thinking. The loop itself is trivial; what's actually scored is whether backoff, jitter, and idempotency are treated as first-class design concerns rather than afterthoughts.\n\nA naive `for` loop that retries three times with no delay is a common weak answer. A strong one names a pluggable policy, a backoff strategy, and which failures are even safe to retry.\n\nThe 10-minute bar: a `RetryPolicy` abstraction, backoff with jitter, and a clear rule for retryable vs non-retryable failures.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-retry-utility-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: retry any failure, or only specific types?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether the utility should retry **any** failure or only specific exception types. Retrying everything indiscriminately is a real trap: a `400 Bad Request` or a validation error will fail identically every time, so retrying it just adds latency and load for no benefit.\n\nThe useful distinction is **transient vs permanent** failure — a network timeout or a `503` is worth retrying, a malformed request or an auth failure is not. Getting the interviewer to confirm which failures are in scope shows you're not going to build a retry-everything hammer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-retry-utility-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: retry(operation, policy)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core shape is a single function: `retry(operation, policy)`. The **operation** is whatever might transiently fail — a network call, a DB query. The **policy** is pluggable and owns everything about *how* to retry: max attempts, which exceptions are retryable, and the backoff strategy between attempts.\n\nKeeping backoff strategy inside the policy, not hardcoded in the loop, is what makes this a *utility* rather than a one-off — callers can swap fixed delay for exponential backoff without touching the retry loop itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-retry-utility-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-retry-utility-s04",
+      "order": 4,
+      "sectionTitle": "Code: a RetryPolicy interface and the retry loop",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface RetryPolicy {\n    int maxAttempts();\n    boolean isRetryable(Exception e);\n    Duration backoffFor(int attempt);\n}\n\npublic <T> T retry(Supplier<T> operation, RetryPolicy policy) {\n    Exception last = null;\n    for (int attempt = 1; attempt <= policy.maxAttempts(); attempt++) {\n        try { return operation.get(); }\n        catch (Exception e) {\n            if (!policy.isRetryable(e)) throw e;\n            last = e;\n            sleep(policy.backoffFor(attempt));\n        }\n    }\n    throw new RetryExhaustedException(last);\n}\n```\n\nNotice `isRetryable` is checked before sleeping — a non-retryable exception fails fast on the first attempt, matching [retries, timeouts, and backoff](retries-timeouts-and-backoff).",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-retry-utility-s05",
+      "order": 5,
+      "sectionTitle": "Code: jitter added to the backoff calculation",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic Duration backoffFor(int attempt) {\n    long base = (long) (baseDelayMs * Math.pow(2, attempt - 1));\n    long jitter = ThreadLocalRandom.current().nextLong(0, base / 2 + 1);\n    return Duration.ofMillis(base + jitter);\n}\n```\n\nA fixed exponential backoff still causes a **thundering herd of retries**: if a thousand clients all failed at the same instant (a brief outage), they all retry at exactly the same computed delay, hammering the recovering service in synchronized waves. Adding random jitter spreads those retries out in time, smoothing the load instead of re-creating the spike.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-design-retry-utility-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-design-retry-utility-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: how do you avoid retrying a non-idempotent operation?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Retrying blindly is dangerous when the operation isn't idempotent — a payment charge retried after a timeout could charge the customer twice, even though the first attempt actually succeeded and only the response was lost.\n\nI'd propose two defenses. First, only retry operations known to be idempotent, or make them idempotent — e.g. attach a client-generated idempotency key so the server can recognize and dedupe a retried request. Second, distinguish \"the request never reached the server\" (safe to retry) from \"the server may have processed it but the response was lost\" (needs an idempotency key), which is exactly the concern covered in [idempotency and exactly-once](idempotency-and-exactly-once).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-retry-utility-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-retry-utility-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: how would you add jitter, and why does it matter?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd add a random component to the computed exponential delay — for example, take the base delay and add a random amount between zero and half of it, so retries spread across a window instead of landing on one exact millisecond.\n\nIt matters because without jitter, every client that failed together retries together: a brief service blip causes a synchronized retry storm at, say, exactly 2 seconds later, which can look like a bigger spike than the original failure. Jitter turns a synchronized wave into a smoothed-out trickle, which is often the difference between a service recovering and it staying down.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-retry-utility-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you decide which exceptions are retryable?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd sort failures by whether the same input would fail identically next time. **Retryable**: network timeouts, connection resets, `503 Service Unavailable`, `429 Too Many Requests` — all signal a transient condition that might clear up. **Not retryable**: `400 Bad Request`, `401/403` auth failures, validation errors — these will fail the same way every time, so retrying just adds latency without any chance of success.\n\nI'd make this an explicit, injectable predicate on the policy (`isRetryable(Exception)`) rather than a hardcoded list, so callers with unusual error taxonomies can override it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-retry-utility-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: hardcoding the backoff instead of making it pluggable",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** writing `Thread.sleep(1000)` directly inside the retry loop, with no way for a caller to configure or swap the delay strategy.\n\n**Why it's wrong:** the prompt asks for a *utility* — reusable across many call sites with different needs. A hardcoded delay forces every caller to accept the same backoff, which fails the reusability bar the question is actually testing.\n\n**Correct model:** push backoff strategy into the `RetryPolicy`, so one caller can use fixed delay, another exponential-with-jitter, without touching the retry loop itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-retry-utility-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: retrying indiscriminately on every exception type",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just catch `Exception` and retry every failure the same way — simpler code, and it covers everything.\"\n\n**Why it's wrong:** some exceptions mean \"don't retry\" — a `400 Bad Request` will fail the same way on attempt two, three, and four, so retrying it just burns time and load on a request that was never going to succeed.\n\n**Correct model:** classify exceptions as retryable or not before looping, and fail fast on the non-retryable ones instead of burning through the full attempt budget.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-design-retry-utility-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-retry-utility-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Shape** — `retry(operation, policy)`, with the policy owning max attempts, retryability, and backoff. **Backoff** — exponential with jitter, so failures don't retry in synchronized waves. **Safety** — only retry idempotent operations, or make them idempotent with a request key. **Classification** — retryable failures are transient (timeouts, 503s); non-retryable ones (400s, auth errors) fail fast. **Close** by naming that the utility's value is in being pluggable, not in the loop itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

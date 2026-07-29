@@ -57,6 +57,12 @@ LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([a-z0-9-]+)\)")
 TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.M)
 TABLE_SEP = re.compile(r"^\s*\|[-:\s|]+\|\s*$", re.M)
 HEADING = re.compile(r"^\s{0,3}#{1,6}\s", re.M)
+FENCE_BLOCK = re.compile(r"```.*?(?:```|\Z)", re.S)
+
+
+def outside_fences(md):
+    """Drop fenced code blocks so a shell/YAML/Python `# comment` never reads as a heading."""
+    return FENCE_BLOCK.sub("", md or "")
 # The app prepends its own header — models.dart toBlockMarkdown() returns
 #   "<star>**Q: <question>**\n\n<answerMarkdown>"
 # so an answer that opens with its own Q header renders the question twice.
@@ -184,7 +190,7 @@ def validate_topic(tdir, all_slugs, rep):
         else:
             if stype in BANDS:
                 check_band(rep, w, f"{stype} markdown", md, BANDS[stype])
-            if HEADING.search(md):
+            if HEADING.search(outside_fences(md)):
                 rep.err(w, "markdown contains a '#' heading — use sectionTitle/subTitle")
 
         want_code = "```" in md
@@ -336,14 +342,16 @@ def validate_topic(tdir, all_slugs, rep):
                 question = (q.get("question") or "").strip()
                 if not question:
                     rep.err(w, "question is empty")
-                elif not question.endswith("?"):
-                    rep.warn(w, "question does not end with '?'")
+                elif question[-1] not in "?.":
+                    # Imperative prompts ("Walk me through…", "Design a…") are real interview
+                    # questions and legitimately end in '.', so only flag missing punctuation.
+                    rep.warn(w, "question has no terminal punctuation ('?' or '.')")
                 ans = q.get("answerMarkdown") or ""
                 if not ans.strip():
                     rep.err(w, "answerMarkdown is empty")
                 else:
                     check_band(rep, w, "answerMarkdown", ans, ANSWER_BAND)
-                    if HEADING.search(ans):
+                    if HEADING.search(outside_fences(ans)):
                         rep.err(w, "answerMarkdown contains a '#' heading")
                     if ANSWER_Q_HDR.match(ans):
                         rep.err(w, "answerMarkdown starts with its own '**Q:' header — the app "
@@ -362,7 +370,9 @@ def validate_topic(tdir, all_slugs, rep):
                          f"all {len(qs)} questions are mostAsked — the badge sorts nothing; "
                          "reserve it for genuinely high-frequency questions")
     else:
-        rep.warn(rel, "no interview.json — this is an interview-prep product")
+        # Every v3 topic ships interview questions. A warning let a half-written topic
+        # (killed mid-authoring, topic.json + mcq.json on disk) pass silently.
+        rep.err(rel, "no interview.json — every topic must ship interview questions")
 
     # stray files
     for name in os.listdir(tdir):

@@ -1,0 +1,178 @@
+{
+  "id": "iv-design-plugin-system",
+  "title": "Design a Plugin System",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 3,
+  "slug": "iv-design-plugin-system",
+  "summary": "An extension-point design probe: a Plugin interface, a registry, and a lifecycle. Scored on whether the interface stays narrow and whether one bad plugin can take down the host.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-design-plugin-system-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a plugin system** — third-party or internal code that extends your application without modifying its core. The real ask is an **extension-point design**: a `Plugin` interface, a registry that finds and loads implementations, and a lifecycle governing when each hook runs.\n\nThe scoring signal is whether your interface is narrow and stable enough that a plugin author never needs your source code, and whether one misbehaving plugin can take down the host process.\n\nThe 10-minute bar: the interface, the registry, and a failure-isolation story — not every possible plugin capability.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: startup-loaded or hot-loaded?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **when plugins load**. Startup-only loading is simpler: scan a directory or classpath once, register everything, done — no runtime coordination needed.\n\n**Hot-loading** — adding or replacing a plugin while the host keeps running — is a materially harder problem: you need to handle a plugin's classes already being in use, decide whether in-flight calls to the old version finish first, and often isolate each plugin in its own classloader to avoid symbol collisions.\n\nDefault to startup-loading unless the prompt explicitly asks for hot-reload; naming the harder case and setting it aside is a strong signal on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-plugin-system-s02-q1"
+      ]
+    },
+    {
+      "id": "iv-design-plugin-system-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: interface, registry, lifecycle",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape has three pieces. A **`Plugin` interface** — the narrow contract every extension implements. A **registry** — discovers implementations (via a config file, a classpath scan, or explicit registration) and holds them. A **lifecycle** — `register` → `init` → `execute` → `shutdown` — so the host and every plugin agree on when setup and teardown happen.\n\nNaming the lifecycle explicitly matters: without it, plugins each invent their own setup timing, and you get subtle bugs when one plugin assumes another has already initialized.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s04",
+      "order": 4,
+      "sectionTitle": "Code: the Plugin interface and a discovering registry",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface Plugin {\n    String name();\n    void init(PluginContext ctx);\n    void execute(Request req, Response res);\n    void shutdown();\n}\n\npublic class PluginRegistry {\n    private final List<Plugin> plugins = new ArrayList<>();\n    public void register(Plugin p) { plugins.add(p); }\n    public List<Plugin> all() { return List.copyOf(plugins); }\n}\n```\n\n`PluginContext` is the one thing worth designing carefully — it's the narrow surface the host exposes inward, deliberately smaller than the host's full internal API, so a plugin can't reach into things it shouldn't.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the plugin lifecycle and where the host calls in",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Plugin lifecycle diagram: register, then init, then execute looped per request, then shutdown, with the host's calls into each stage labelled](assets/plugin-lifecycle.svg)\n\nThe lifecycle is the contract every plugin and the host both honor: `init` runs once at startup before any `execute` call, `execute` may run many times, `shutdown` runs once as the host winds down. A plugin that assumes `init` already ran when it hasn't is the most common integration bug in these systems.",
+      "assets": [{"alt": "Plugin lifecycle diagram: register, then init, then execute looped per request, then shutdown, with the host's calls into each stage labelled", "path": "assets/plugin-lifecycle.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s06",
+      "order": 6,
+      "sectionTitle": "Code: isolating a plugin's failure",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic void execute(Request req, Response res) {\n    for (Plugin p : plugins.all()) {\n        try {\n            runWithTimeout(() -> p.execute(req, res), Duration.ofMillis(200));\n        } catch (Exception | TimeoutException e) {\n            log.warn(\"plugin {} failed\", p.name(), e);\n        }\n    }\n}\n```\n\nEvery plugin call is wrapped individually — one plugin throwing, hanging, or timing out only removes that plugin's contribution for this request; it never propagates up and takes down the host or blocks the other plugins.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": [
+        "iv-design-plugin-system-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-plugin-system-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: how do you isolate a misbehaving plugin from crashing the host?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two layers matter. **Exception isolation**: wrap every plugin call in its own try/catch so one plugin's exception can't propagate into the host's request handling. **Time isolation**: wrap every call with a timeout, since a plugin that hangs is just as dangerous as one that throws — without a timeout, one slow plugin degrades every request that touches it.\n\nFor a stronger boundary, some systems run plugins in a separate process or a sandboxed thread pool so a plugin can't even exhaust the host's own threads — worth mentioning as the next level up if asked.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how does this compare to just using Strategy?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A plugin system is [Strategy](strategy-pattern) at a larger scale, with three differences that matter. **Discovery**: Strategy implementations are chosen and wired by your own code at compile time; plugins are discovered dynamically — often without the host ever seeing their source. **Lifecycle**: Strategy has no init/shutdown ceremony; plugins typically do. **Isolation**: a bad Strategy implementation is a bug in your own codebase; a bad plugin is untrusted code you must actively contain.\n\nIf asked to compare, lead with discovery and trust boundary — that's the actual architectural difference, not just \"more interfaces.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-plugin-system-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-design-plugin-system-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how do you version the plugin interface without breaking shipped plugins?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd treat the `Plugin` interface as a **public API with a compatibility contract**, same as any versioned SDK. Adding a new method to the interface breaks every already-compiled plugin that implements it — so I'd add new capability through **default methods**, if the language supports them, or a separate, optional interface a plugin can additionally implement, rather than changing the core contract.\n\nFor a breaking change that's genuinely unavoidable, I'd version the interface explicitly and support both for a deprecation window, rather than forcing every plugin author to update in lockstep with the host.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: a rigid interface that needs a host release per plugin type",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** designing a `Plugin` interface with one hardcoded method per plugin type (`onOrderPlaced`, `onUserSignup`, ...), so adding a new kind of extension point means shipping a new host release.\n\n**Why it's wrong:** this defeats the purpose of a plugin system — the whole point is letting extension happen without touching the host's release cycle, and a rigid, enumerated interface re-couples the two.\n\n**Correct model:** design a small number of generic extension points, like a single `execute` hook keyed by event type, that cover new use cases without a new interface method each time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-plugin-system-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: giving plugins direct access to host internals",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just pass the plugin a reference to the host's internal service objects so it can do whatever it needs.\"\n\n**Why it's wrong:** this removes any boundary between trusted host code and untrusted plugin code — a plugin can now call internal methods never meant for external use, break invariants the host relies on, and couple every future host refactor to whatever plugins happen to depend on.\n\n**Correct model:** expose a narrow, deliberately-designed `PluginContext` — a curated subset of capabilities — never the host's actual internal objects.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-plugin-system-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-design-plugin-system-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Interface** — a narrow `Plugin` contract (register/init/execute/shutdown). **Registry** — discovers and holds plugin instances, doesn't hardcode them. **Isolation** — wrap every plugin call in exception and timeout boundaries so one plugin can't take down the host. **Versioning** — extend via default methods or optional interfaces, never a breaking change to the core contract. **Close** by naming the trust boundary: plugins get a curated context, never host internals.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "id": "backpressure-and-dead-letter-handling",
+  "title": "Backpressure & Dead-Letter Handling",
+  "area": "system-design",
+  "group": "messaging-streaming",
+  "order": 6,
+  "slug": "backpressure-and-dead-letter-handling",
+  "summary": "What happens when consumers fall behind, and containing the damage with backoff, dead-letter queues, and poison-message handling.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "backpressure-and-dead-letter-handling-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every messaging system eventually hits a moment where producers create work faster than consumers can finish it. What happens next — buffering, dropping, slowing the producer down, or falling over — is **backpressure**, and getting it wrong turns a temporary spike into an outage.\n\nThis topic covers the strategies for handling a slow consumer gracefully, and the safety net (dead-letter queues) for messages that will never succeed no matter how many times you retry them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s02",
+      "order": 2,
+      "sectionTitle": "What happens when a consumer is slower than the producer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a producer emits 5,000 messages/sec and a consumer can only process 2,000/sec, the gap — 3,000 messages/sec — has to go *somewhere*. In a durable queue, it accumulates as a growing backlog: queue depth climbs, and end-to-end latency for any given message grows with it, since new messages wait behind an ever-longer line.\n\nIf nothing intervenes, this compounds: a growing backlog means the consumer needs longer to catch up even after the spike ends, and if the queue has finite capacity, it eventually fills up entirely and starts rejecting new messages.\n\nThe root question backpressure answers is: what should happen to that excess 3,000/sec while the imbalance lasts?",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "backpressure-and-dead-letter-handling-s02-q1"
+      ]
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s03",
+      "order": 3,
+      "sectionTitle": "Backpressure strategies: buffering, dropping, slowing the producer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Buffering**: let the queue absorb the backlog (within limits) and trust the consumer to catch up once the spike passes — simple, but latency for queued messages grows, and unbounded buffering risks running out of memory or disk.\n\n**Dropping**: discard messages once a threshold is hit, accepting data loss to protect the system — reasonable for metrics or best-effort notifications, unacceptable for payments or orders.\n\n**Slowing the producer**: signal back to the producer to stop or throttle sending — TCP does this natively; application-level systems approximate it by having the producer check queue depth or receive an explicit \"slow down\" signal before pushing more.\n\nThe right choice depends entirely on whether losing a message is acceptable — that single question rules out at least one of these three for almost any given use case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "backpressure-and-dead-letter-handling-s03-q1"
+      ]
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a queue building up as a consumer falls behind",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A graph showing produced and consumed message counts diverging over time, with the widening gap representing growing queue depth](assets/queue-depth-growth.svg)\n\nQueue depth is the visible symptom of the imbalance: producer rate minus consumer rate, accumulated over time. A brief spike that outpaces the consumer for 30 seconds leaves a backlog that can take minutes to drain, even after the spike itself is over, because the consumer's rate hasn't changed.\n\nWatching queue depth, and its rate of change, is usually the earliest, clearest signal that backpressure handling needs to kick in — well before request latency or error rates show anything is wrong.",
+      "assets": [
+        {
+          "alt": "A graph showing produced and consumed message counts diverging over time, with the widening gap representing growing queue depth",
+          "path": "assets/queue-depth-growth.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s05",
+      "order": 5,
+      "sectionTitle": "Compare: retry with backoff vs immediate retry storms",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Immediate retry | Retry with backoff |\n|---|---|---|\n| Behavior on failure | Retries instantly, as fast as possible | Waits an increasing interval before each retry |\n| Effect under an outage | Retry volume can exceed the original load, amplifying the outage | Retry volume tapers off, giving the failing system room to recover |\n| Typical implementation | Loop with no delay | Exponential backoff, often with jitter to avoid synchronized retries |\n| Risk | A **retry storm** — failing faster makes the outage worse, not better | Slower recovery for a single message, but a much more stable system overall |\n\n**How to decide:** always default to backoff with jitter for automated retries; immediate retry is only reasonable for a single, rare transient blip you've explicitly bounded to one attempt.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "backpressure-and-dead-letter-handling-s05-q1"
+      ]
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s06",
+      "order": 6,
+      "sectionTitle": "Dead letter queues: quarantining messages that can't be processed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **dead-letter queue (DLQ)** is a separate queue that a broker (or consumer) routes a message to after it has failed processing some configured number of times, instead of retrying it forever or silently dropping it.\n\nSay a consumer is configured to retry a message up to 5 times; on the 6th failure, the broker moves it to the DLQ rather than attempting a 7th. The main queue keeps flowing for every other, healthy message, while the failing one sits somewhere visible for a human or a separate process to inspect.\n\nA DLQ without monitoring is nearly as bad as no DLQ at all — messages quietly pile up unseen. Alerting on DLQ depth is what turns it into an actual safety net rather than a place messages go to be forgotten.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "backpressure-and-dead-letter-handling-s06-q1"
+      ]
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s07",
+      "order": 7,
+      "sectionTitle": "Poison messages: detecting and handling the \"always fails\" case",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **poison message** is one that will fail no matter how many times it's retried — a malformed payload, a reference to a record that was deleted, a bug in the consumer that only that specific message triggers. Retrying it doesn't help; it just burns capacity and, worse, can block every message behind it if ordering must be preserved.\n\nDetecting one is usually a retry-count threshold: if the same message has failed N times, it's very unlikely the (N+1)th attempt succeeds where the first N didn't, so route it to the DLQ instead of retrying indefinitely.\n\nThe fix is rarely automatic — a human typically needs to look at *why* it failed, whether it's bad data or a real bug, before deciding whether to fix and replay it, or discard it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "backpressure-and-dead-letter-handling-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: infinite retry loops amplifying an outage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just keep retrying failed messages until they succeed — retries are safe.\"\n\n**Why it's wrong:** during a real outage, say the downstream payment API is down, every failed message gets retried immediately, multiplying the load hitting an already-struggling system — this is a **retry storm**, and it can turn a brief blip into a prolonged outage by preventing the failing system from ever catching up enough to recover.\n\n**Correct model:** use exponential backoff with jitter so retry volume tapers instead of compounding, cap the number of retries, and route anything past that cap to a dead-letter queue rather than retrying forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "backpressure-and-dead-letter-handling-s08-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,188 @@
+{
+  "id": "design-file-sync-service",
+  "title": "Design a File Sync Service",
+  "area": "system-design",
+  "group": "hld-cases-media",
+  "order": 5,
+  "slug": "design-file-sync-service",
+  "summary": "Delta sync of files across devices that go offline — chunking and conflict resolution are the hard parts, not storing a file.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-file-sync-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The prompt: keep a folder in sync across a laptop, a phone, and the cloud — even when a device goes offline for hours and edits a file while disconnected.\n\nStoring a file is easy; the hard parts are **not re-uploading a whole file for a one-line change** (delta sync) and **reconciling two devices that both edited the same file while apart** (conflict resolution). Both stem from the same root fact: devices go offline, and the system has to cope gracefully when they reconnect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional and non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** sync file creates/edits/deletes across all of a user's devices, support offline editing, detect and resolve conflicting edits.\n\n**Non-functional:** a **max file size** the system commits to (large files change the chunking math), an **offline edit window** — how long a device can stay disconnected and still merge cleanly on reconnect — and an expected **conflict frequency** low enough that manual resolution stays rare rather than a constant annoyance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: bandwidth saved by only sending changed chunks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A user with 5,000 files averaging 2MB, editing ~50 files/day with small changes: naive full-file re-upload on every save is ~100MB/day just from edits. If edits typically touch a few KB out of each multi-megabyte file, delta sync at the block level can cut that to a few MB/day — often a 95%+ bandwidth reduction for typical office-document and code-editing workloads.\n\nThat gap is the entire justification for chunking: without it, a sync service either burns huge bandwidth or forces users to wait for full re-uploads on every small edit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-file-sync-service-s03-q1"
+      ]
+    },
+    {
+      "id": "design-file-sync-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`uploadChunk(fileId, chunk)` sends one changed block, not the whole file. `getChanges(since)` lets a device ask \"what changed since I was last online\" and pull only the delta, rather than re-scanning the entire file tree on every reconnect. `resolveConflict(fileId)` is invoked when two devices' changes to the same file can't be automatically merged, surfacing both versions for the user (or a policy) to pick between.\n\nThe common thread: every call is designed around *incremental* state, since a device reconnecting after hours offline should never need to re-fetch everything from scratch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s05",
+      "order": 5,
+      "sectionTitle": "Chunking files into blocks for delta sync",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Files get split into blocks — either **fixed-size** (simple, but a single inserted byte shifts every subsequent block's boundary, defeating dedup) or **content-defined** (boundaries chosen based on the data itself, e.g. rolling-hash breakpoints, so an insertion only changes the blocks actually touched).\n\nContent-defined chunking is what most real sync systems use precisely because it survives insertions and deletions gracefully — a one-line insert near the start of a file only invalidates the blocks around that insert, not every block after it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-file-sync-service-s05-q1"
+      ]
+    },
+    {
+      "id": "design-file-sync-service-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: block-level diff",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![File split into blocks B1-B6; only the changed block B3 travels over the wire](assets/block-diff-sync.svg)\n\nThe key visual is that most of the file's blocks are identical before and after the edit — only the ones the edit actually touched need to move across the network at all.",
+      "assets": [
+        {
+          "alt": "File split into blocks B1-B6; only the changed block B3 travels over the wire",
+          "path": "assets/block-diff-sync.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s07",
+      "order": 7,
+      "sectionTitle": "Metadata service: the file tree, kept separate from block storage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **metadata service** tracks the file tree structure, per-file version history, and which blocks make up each file version — separately from the **block store**, which just holds content-addressed blobs with no notion of file names or folders.\n\nSeparating them means block storage can dedup identical blocks across completely different files and users (two people with the same PDF share blocks), while the metadata service handles the parts that are actually per-user and per-file: names, folder structure, permissions, and version history.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: sync architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Client watchers calling a metadata service, which references a separate block store and pushes change notifications](assets/sync-watchers-metadata.svg)\n\nWatchers, metadata, and block storage are three separate concerns: local change detection, the source-of-truth file tree, and the actual bytes — conflating any two makes the system harder to scale and reason about independently.",
+      "assets": [
+        {
+          "alt": "Client watchers calling a metadata service, which references a separate block store and pushes change notifications",
+          "path": "assets/sync-watchers-metadata.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s09",
+      "order": 9,
+      "sectionTitle": "Conflict resolution when two devices edit the same file offline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If device A and device B both edit the same file while disconnected from each other, the system detects a conflict when both try to push changes based on the same prior version. Common resolutions: keep both as separate files (\"file (conflicted copy).txt\"), last-write-wins by timestamp (simple, but silently discards one edit), or surface both versions for the user to manually merge.\n\nMost consumer file-sync products default to the conflicted-copy approach precisely because it never silently loses data — the cost is occasionally showing a user two files where they expected one, which is far better than an edit vanishing without warning.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-file-sync-service-s09-q1"
+      ]
+    },
+    {
+      "id": "design-file-sync-service-s10",
+      "order": 10,
+      "sectionTitle": "Compare: delta-sync/offline model vs the collaborative editor's live-merge model",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | File sync (this design) | Collaborative editor |\n|---|---|---|\n| Editing model | One device edits at a time, offline-first | Many users edit simultaneously, online |\n| Conflict handling | Detected after the fact, on reconnect | Merged in real time, character by character |\n| Core mechanism | Block-level diff and periodic sync | Operational transforms or CRDTs |\n| Failure mode if wrong | A conflicted-copy file the user resolves later | A garbled document if merges are inconsistent |\n\n**How to decide:** if simultaneous, character-level co-editing is a requirement, this file-sync model is the wrong starting point entirely — that's a different design (a collaborative editor), not an extension of this one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: the metadata service under a large folder with frequent small changes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A folder with tens of thousands of small files, each changing frequently (a build directory, a large code repo), can make the metadata service the bottleneck rather than the block store — every tiny change is still a metadata write (updated version, updated block list), and those writes don't benefit from block-level dedup the way large-file bandwidth does.\n\nThe fix leans on batching: coalescing many rapid small-file changes into fewer metadata transactions, and indexing the file tree so a device catching up after being offline can fetch \"what changed\" as one efficient range query rather than one lookup per file.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "design-file-sync-service-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: re-uploading the entire file on every save",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Simplest is best — just re-upload the whole file whenever it changes, and let the cloud be the source of truth.\"\n\n**Why it's wrong:** for a multi-megabyte file edited many times a day, this wastes bandwidth proportional to file size on every keystroke-adjacent save, not to the size of the actual edit — and it gets dramatically worse on metered or slow connections, where users notice sync lag directly.\n\n**Correct model:** chunk files and sync only the blocks that changed; the whole design's bandwidth and latency numbers depend on this, and skipping it undermines the entire value proposition of a sync product over manually copying files.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-file-sync-service-s12-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "time-series-storage-at-scale",
+  "interviewQuestions": [
+    {
+      "id": "time-series-storage-at-scale-iq1",
+      "question": "Design the storage for a metrics/monitoring system ingesting millions of points/sec.",
+      "answerMarkdown": "I'd reach for a purpose-built time-series database rather than a general-purpose one, since the workload — continuous, mostly-append writes, queries almost always scoped by a time window — is exactly what a TSDB's storage layout is optimized for. I'd expect it to be built on an LSM-tree engine underneath, given the write volume.\n\nI'd design in downsampling from the start: raw resolution for a short window (say 7 days), 1-minute rollups for a few months, 1-hour rollups kept longer — so long-range dashboards query small pre-aggregated data instead of scanning raw history. I'd pair that with an explicit retention policy per resolution tier, since storage cost scales directly with ingestion rate times retention length.\n\nThe part I'd flag as highest-risk: cardinality. I'd design the tag schema up front to exclude high-cardinality identifiers like request or user IDs, routing those to logs or traces instead, since one careless tag can make storage and query cost scale with request volume rather than with what's actually being monitored.\n\n**Testing:** whether you connect the workload shape to engine choice, and whether you proactively guard against cardinality explosion rather than discovering it in an incident.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing a metrics ingestion system"
+    },
+    {
+      "id": "time-series-storage-at-scale-iq2",
+      "question": "Your monitoring system's storage costs and query latency both spiked last week — how would you investigate?",
+      "answerMarkdown": "I'd check cardinality first, since it's the most common silent cause: I'd query the number of unique time series being tracked and look for a recent jump, then check for a recently added or changed tag — a new deploy adding a `request_id` or `pod_name`-per-restart tag is a classic culprit that multiplies series count with traffic or deploy frequency.\n\nIf cardinality looks stable, I'd check whether retention or downsampling jobs are running as expected — a stalled rollup job means queries fall back to scanning raw data that should have been aggregated away by now, which explains both the storage growth and the query slowdown together.\n\nI'd fix the immediate cause (drop or bound the offending tag, or restart the rollup job) and then add monitoring on series-count growth itself, so the next cardinality spike is caught before it becomes a cost incident.\n\n**Testing:** whether you go straight to cardinality as the likely root cause instead of guessing at unrelated fixes.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a cost/latency spike"
+    },
+    {
+      "id": "time-series-storage-at-scale-iq3",
+      "question": "Why not just store metrics in your existing relational database instead of standing up a separate time-series system?",
+      "answerMarkdown": "I'd say it's possible at small scale but stops working as ingestion grows, and I'd explain why concretely: a relational database treats every metric row like any other row, with no built-in downsampling, no native retention-by-resolution, and a storage layout not optimized for time-ordered append-and-scan access. At real scale, you'd end up hand-building the rollup jobs and retention scripts a purpose-built TSDB gives you natively — extra engineering effort to approximate a feature that already exists elsewhere.\n\nI'd frame the decision as a threshold, not a rule: for a handful of metrics on a small system, a table in the existing database with a scheduled cleanup job is a reasonable, low-overhead choice. Once ingestion volume or query complexity (dashboards over months of data) grows, the operational cost of a dedicated TSDB starts paying for itself.\n\n**Testing:** whether you can name the specific missing capabilities rather than asserting relational databases 'just don't work' for this.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Relational DB vs dedicated TSDB"
+    }
+  ]
+}

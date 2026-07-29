@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-message-schema-evolution",
+  "interviewQuestions": [
+    {
+      "id": "iv-message-schema-evolution-iq1",
+      "question": "The producer changed its message format — how do you avoid breaking every consumer?",
+      "answerMarkdown": "I'd rule out \"we'll just coordinate the deploy\" as an approach, since it stops scaling the moment a topic has more than one independently-owned consumer team. My real answer is process: make changes backward-compatible by default, and enforce that with a schema registry so it's checked mechanically, not left to memory.\n\nConcretely, an additive change — adding an optional `promo_code` field to an `order_placed` event — is safe because old consumers simply ignore a field they don't know about. The failure case is the opposite: a producer renames `user_id` to `customer_id` without warning, and three consumer teams start seeing null values and silently produce wrong aggregates for two days before anyone notices. A schema registry like Confluent Schema Registry catches exactly this — it validates a new schema against compatibility rules and rejects the incompatible one at publish time, before it reaches a consumer.\n\nI'd close by naming the cost: this discipline slows down removing fields, but for a topic with several external consumers, that trade is almost always worth it.\n\n**Testing:** whether you know concrete compatibility mechanisms, not just \"we'd communicate about it.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core schema-compatibility question"
+    },
+    {
+      "id": "iv-message-schema-evolution-iq2",
+      "question": "You genuinely need to remove a field everyone agrees is legacy — how do you do that safely?",
+      "answerMarkdown": "I'd deprecate first rather than delete directly. Concretely: stop writing meaningful values into the field while keeping it present in the schema — so any consumer still reading it gets an empty or default value instead of a missing field — and use that period to confirm, via consumer-side monitoring, that nothing is actually depending on it anymore.\n\nOnly once that verification comes back clean would I remove the field in a new schema version, registered and validated the same way any other schema change would be. This is slower than a straight delete, but it converts \"we think nobody uses this\" — an assumption — into \"we've confirmed nobody uses this\" — a measured fact.\n\nI'd give a concrete failure case for skipping this: a field looks obviously unused from the producer's side, gets deleted directly, and it turns out one consumer team's rarely-run monthly reconciliation job was quietly reading it — a deprecation window with monitoring would have caught that before it broke in production.\n\n**Testing:** whether you can propose a safe, verifiable removal process instead of just deleting and hoping.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Safely retiring a legacy field"
+    },
+    {
+      "id": "iv-message-schema-evolution-iq3",
+      "question": "How do you even know which consumers depend on which fields before making a schema change?",
+      "answerMarkdown": "I'd be honest that the broker itself has no visibility into this — Kafka or SQS knows messages were consumed, not which application-level fields a consumer's code actually read. So the answer has to come from either tooling or process.\n\nWhere available, I'd use schema registry lineage/usage tooling that tracks which consumer groups have registered compatibility against which schema versions, giving at least a coarse signal of who's touching a given schema. Where that's not available, I'd fall back to a lighter-weight team convention: documenting, per field, which consumer teams rely on it, updated as part of onboarding a new consumer to the topic.\n\nI'd note that without either of these, the safe default has to be conservative — treat any field as potentially load-bearing until proven otherwise, which is exactly why the deprecate-then-monitor approach matters: it doesn't require perfect upfront visibility, just a verification window before an irreversible change.\n\n**Testing:** whether you recognize this as a real gap needing a deliberate answer, rather than assuming the platform already tracks it for you.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Tracking field-level consumer dependencies"
+    }
+  ]
+}

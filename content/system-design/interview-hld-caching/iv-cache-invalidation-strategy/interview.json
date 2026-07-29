@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-cache-invalidation-strategy",
+  "interviewQuestions": [
+    {
+      "id": "iv-cache-invalidation-strategy-iq1",
+      "question": "How would you invalidate this cache when the underlying data changes?",
+      "answerMarkdown": "I'd skip the joke about invalidation being one of the two hard problems and go straight to a strategy. First I'd ask whether this data can tolerate a short staleness window or must invalidate immediately — that decides everything after.\n\nFor tolerant, shared data — a trending list, a view count — I'd use a TTL and call it done. For data the writer expects reflected instantly, like their own profile, I'd add explicit delete-on-write in the same transaction as the database update. For a write that fans out to several derived caches — a product update touching the product page, the search index, and a recommendations cache — I'd use event-driven invalidation off a change stream, so the write path doesn't need to know about every downstream consumer.\n\nI'd close by naming the cost of the event-driven option specifically: it adds a dependency on the pipeline being reliable, and a dropped event means silent staleness with nothing to notice unless you monitor for it.\n\n**Testing:** whether you can pick and justify a real strategy instead of reciting that the problem is hard.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Picking a concrete invalidation strategy"
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-iq2",
+      "question": "Two app instances update the same cache key milliseconds apart — walk me through what happens.",
+      "answerMarkdown": "I'd separate what's safe here from what isn't. If both instances write the database and then delete the cache key, the interleaving might leave the delete happen twice, once redundantly — harmless, because the next read just refetches the current, correct value from the database. The cache self-heals as long as both operations are pure invalidations.\n\nThe actual danger is different: a *read* racing in between the two writes, populating the cache with an intermediate value that's already stale by the time either write finishes. That's the classic cache-aside race, and it's not fixed by this scenario at all — it needs its own protection, like a short delay before repopulation or versioned cache entries that reject a stale write.\n\nI'd make sure to draw that distinction explicitly, since conflating \"two writes racing\" with \"a read racing a write\" is an easy way to answer the wrong half of the question.\n\n**Testing:** whether you can tell apart a benign race (two invalidations) from a dangerous one (a read racing a write).",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: concurrent writes to the same key"
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-iq3",
+      "question": "Your event-driven invalidation pipeline silently drops an event — how would you even find out?",
+      "answerMarkdown": "I'd admit this is exactly the scary part of event-driven invalidation: nothing crashes, nothing errors, the cache just quietly keeps serving an old value. So I wouldn't rely on finding out reactively from a user complaint — I'd build detection in up front.\n\nConcretely: monitor the pipeline's consumer lag and dead-letter queue so a stuck or failing consumer shows up as an alert, not a mystery. Separately, I'd run periodic spot-checks — sampling a slice of cached keys and comparing them against the source of truth — to catch drift the pipeline monitoring itself wouldn't flag, like an event that was processed but produced the wrong invalidation.\n\nI'd frame this as a cost of choosing event-driven invalidation in the first place: if you take the decoupling benefit, you owe the system this observability, or you're trading a visible problem for an invisible one.\n\n**Testing:** whether you treat \"the pipeline might silently fail\" as something to instrument for, not an edge case to ignore.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: detecting a lost invalidation event"
+    }
+  ]
+}

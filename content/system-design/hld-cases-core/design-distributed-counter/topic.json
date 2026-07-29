@@ -1,0 +1,167 @@
+{
+  "id": "design-distributed-counter",
+  "title": "Design a Distributed Counter",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 8,
+  "slug": "design-distributed-counter",
+  "summary": "Counting billions of increments (views, likes) without turning one row into the system's hottest lock.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-distributed-counter-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Count events — video views, likes, impressions — at a rate no single database row can absorb. A viral video getting 10M views in an hour means roughly 2,800 increments/sec hitting what would naively be one row, one lock, one bottleneck.\n\nThe fix is a pattern you'll recognize from elsewhere in this group: stop trying to make one thing handle all the load, and spread the count across many things instead — a **sharded counter** — then reassemble the total when someone actually needs to read it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-counter-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** increment a named counter, read its current value.\n\n**Non-functional:** the interesting one is whether the count must be exact or approximate-is-fine. An exact count matters for something like ad-impression billing; an approximate count is perfectly fine for a \"1.2M views\" display, and approximate opens up much cheaper options.\n\nRead latency also matters — a \"trending\" feed reading view counts on every page load needs that read to be fast, not a fresh full recomputation each time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-counter-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: increments/sec on one hot object vs a single row's ceiling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single database row, protected by row-level locking, typically sustains a few thousand increments/sec at best before lock contention dominates and latency climbs sharply — well below the ~2,800/sec a single viral video can generate, and nowhere near the combined rate across many simultaneously popular objects.\n\nThis is the same shape of number as the rate limiter's \"one shared store becomes the bottleneck\" problem: a single hot row's ceiling is much lower than the platform's actual peak demand on it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-counter-s03-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-counter-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`increment(key)` → records one event against the named counter. `getCount(key)` → returns the current total.\n\nWhat `getCount` actually returns depends heavily on the design that follows: with sharded counters, it's a live sum across shards; with in-memory batching, it may lag the true total by however long a batch takes to flush. Neither is \"wrong\" — which one is right depends entirely on the exactness requirement from slide 2.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-counter-s05",
+      "order": 5,
+      "sectionTitle": "Sharded counters: splitting one logical counter into N physical shards",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Instead of one row per counter, maintain N rows (or N keys in a fast store) for the same logical counter, and have each `increment` call land on one shard chosen at random (or round-robin). Write load that would have hit one row now spreads across N, each absorbing roughly 1/N of the total rate.\n\nThe read side pays the cost back: `getCount` must sum across all N shards rather than reading one value — a deliberate trade of write scalability for slightly more expensive reads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-counter-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: writes fan out to shards, reads sum across shards",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Increment calls fanning out to N counter shards; read path sums all shards for the total](assets/counter-shard-fanout.svg)\n\nThe shard count N is a tunable capacity knob: a counter expected to see high sustained write volume (a trending video) gets more shards; a rarely-updated counter can use just one or a few, since over-sharding wastes read cost for no write benefit.\n\nSome designs shard dynamically — starting with one shard and adding more only once write pressure on the existing ones is detected.",
+      "assets": [{"alt": "Increment calls fanning out to N counter shards; read path sums all shards for the total", "path": "assets/counter-shard-fanout.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-counter-s07",
+      "order": 7,
+      "sectionTitle": "In-memory batching before flushing to durable storage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A step further than sharding: absorb increments in local, in-memory counters on each app server, and periodically flush the accumulated delta to durable storage (every few seconds, or every N increments) instead of writing to the database on every single event.\n\nThis cuts durable-storage write volume by orders of magnitude, at the cost of a small window of data loss if a server crashes before flushing its in-memory delta — an explicit trade-off to state, since it directly answers the exactness requirement from slide 2.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-distributed-counter-s07-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-counter-s08",
+      "order": 8,
+      "sectionTitle": "Compare: strongly consistent single-row counter vs eventually-consistent sharded counter",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single-row counter | Sharded, batched counter |\n|---|---|---|\n| Exactness | Exact at all times | Approximate — may lag by a flush interval |\n| Write throughput | Capped by one row's lock contention | Scales with shard count and batching |\n| Failure impact | A crash mid-write is rare and small | A crash can lose an unflushed in-memory batch |\n| Best for | Billing counts, inventory | View counts, likes, impressions |\n\n**How to decide:** match the mechanism to the exactness requirement named at the start — never default to the more scalable option just because it's more scalable if the use case actually needs an exact count (money, inventory) rather than a display number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-counter-s08-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-counter-s09",
+      "order": 9,
+      "sectionTitle": "The bottleneck: shard count vs read-time aggregation cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sharding trades one problem for another: more shards absorb more write load, but every `getCount` now has to sum more values. At some point, adding shards to fix a write bottleneck starts creating a read bottleneck instead, especially for counters read far more often than they're incremented (most view counts fit this exactly).\n\nA common resolution: keep a separately-maintained, periodically-refreshed **cached total** for reads, and only touch the live per-shard sum when the cache is stale or invalid — reads become cheap again, at the cost of the same small staleness window seen throughout this group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-counter-s10",
+      "order": 10,
+      "sectionTitle": "Approximate counting (HyperLogLog-style) when exact counts aren't required",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For counts where even \"sum of shards\" is more precision than needed — especially *distinct*-count problems like \"how many unique visitors viewed this page\" — a probabilistic structure like **HyperLogLog** estimates cardinality using a small fixed amount of memory (kilobytes, regardless of whether the true count is thousands or billions), trading a small, bounded error (typically under 2%) for massive space savings.\n\nThis is a different problem from the plain sharded counter above — HyperLogLog specifically solves *distinct* counting (avoiding double-counting the same visitor), which a simple increment-per-event counter can't do at all without tracking every individual ID.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-counter-s10-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-counter-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: recomputing a trending counter's sum on every single page view",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just sum all the shards live every time someone loads the page — it's just an aggregation query.\"\n\n**Why it's wrong:** for a counter read far more often than it's incremented (a view count shown on every page load), summing N shards on every single read multiplies read load by N and turns a cheap display value into an expensive query — for a popular video, this can dwarf the write-side load the sharding was meant to solve.\n\n**Correct model:** cache the aggregated total and refresh it periodically (or on write, incrementally) rather than recomputing the full sum on every read — reads should be O(1) against a cached value, not O(shards) against live storage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-counter-s11-q1"
+      ]
+    }
+  ]
+}

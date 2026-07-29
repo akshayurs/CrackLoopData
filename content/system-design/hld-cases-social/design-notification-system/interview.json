@@ -1,0 +1,29 @@
+{
+  "topicId": "design-notification-system",
+  "interviewQuestions": [
+    {
+      "id": "design-notification-system-iq1",
+      "question": "Design a notification system that fans events out across push, email, and SMS.",
+      "answerMarkdown": "I'd start by separating the trigger from the delivery: `sendNotification` just enqueues an event with a stable ID — it doesn't block on any provider. A worker pool then drains that queue, checking each recipient's preferences and quiet-hours settings before deciding channel and timing, and rendering the actual message from a parameterized template.\n\nI'd flag reliability as the design's real center of gravity: since upstream events can be redelivered, every dispatch attempt is logged as `(eventId, userId, channel)` before sending, so a redelivered event doesn't become a duplicate notification the user sees.\n\nI'd close on scale: a single broadcast event fanning out to every user is the same shape as fan-out-on-write in a feed — one write, millions of async downstream sends — and each channel gets its own queue and rate limit so a slow provider on one channel can't stall the others.\n\n**Testing:** whether you treat deduplication as a first-class design requirement rather than an afterthought, since at-least-once upstream delivery makes it unavoidable.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Open-ended: design a notification system"
+    },
+    {
+      "id": "design-notification-system-iq2",
+      "question": "How do you get exactly-once-feeling delivery on top of infrastructure that only guarantees at-least-once?",
+      "answerMarkdown": "I'd be direct that true exactly-once delivery across a distributed pipeline isn't achievable without cooperation from the client — what's achievable is *effectively-once from the user's perspective*, via idempotency.\n\nConcretely: every triggering event carries a stable `eventId`; before any send, the dispatch worker checks a delivery log keyed by `(eventId, userId, channel)`, and skips if that key already exists. If two workers race on the same redelivered event, I'd make the log write itself the atomic operation — a conditional insert that fails on a duplicate key — so the race resolves to exactly one successful send even if both workers attempt it.\n\nI'd note this doesn't require exactly-once messaging from the queue itself; it converts an at-least-once *delivery* guarantee into an at-least-once *attempt*, deduplicated down to an effectively-once *outcome*.\n\n**Testing:** whether you know idempotency is achieved at the application layer via a dedup key, not by demanding a stronger guarantee from the message queue.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: exactly-once-feeling delivery"
+    },
+    {
+      "id": "design-notification-system-iq3",
+      "question": "How would you prioritize a security-alert OTP ahead of a marketing blast sitting in the same queue?",
+      "answerMarkdown": "I'd reject sharing one queue for both in the first place — I'd partition by priority class at ingestion, so a security OTP goes onto a dedicated high-priority queue with its own worker pool, completely separate from the marketing-blast queue, rather than relying on in-queue reordering.\n\nIf a single shared queue were unavoidable, I'd use a priority queue structure (or several FIFO queues consumed in weighted order, high-priority drained first) so security-class messages always jump ahead. Either way, I'd size the OTP path's worker capacity independently, so it's never starved even if the marketing blast queue is enormous.\n\nI'd add that OTPs have their own tight latency SLA — seconds, not the minutes a marketing email tolerates — which by itself justifies never routing them through the same infrastructure path as bulk sends.\n\n**Testing:** whether you reach for physically separate priority lanes instead of trying to bolt priority onto a single shared queue after the fact.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: prioritizing security alerts"
+    }
+  ]
+}

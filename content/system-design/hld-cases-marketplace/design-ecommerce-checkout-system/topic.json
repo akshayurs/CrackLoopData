@@ -1,0 +1,171 @@
+{
+  "id": "design-ecommerce-checkout-system",
+  "title": "Design an E-Commerce Checkout System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 5,
+  "slug": "design-ecommerce-checkout-system",
+  "summary": "A distributed transaction across inventory, payment, and shipping that must survive retries without double-charging or overselling — the saga is the hard part, not the cart UI.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-ecommerce-checkout-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: a shopping cart becomes a confirmed order, touching three separate concerns — inventory, payment, shipping — that each can fail independently, and the whole thing has to be safe when a client retries after a timeout.\n\nThe shopping-cart UI is not the interesting part. The interesting part is that checkout is really a **distributed transaction** across services that don't share a database, so there's no single `COMMIT` that makes all three steps succeed or fail together — you have to build that guarantee yourself.\n\nThat's what a **saga** is for, and it's the spine of this whole design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** reserve inventory, charge payment, create a shipment, and end with either a fully confirmed order or a fully rolled-back one — never a half-completed order.\n\n**Non-functional:** no double-charge under retries, no oversell of limited stock, and checkout latency that holds up under a flash-sale spike, not just steady-state traffic.\n\nThe framing that matters: this isn't three independent API calls that each need to succeed — it's one logical operation spanning three services, and the system must behave as if it were atomic even though it technically isn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: steady-state vs flash-sale checkout rate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mid-size retailer might see 50 checkouts/sec in steady state — comfortably handled by ordinary request-response processing. A flash sale on a limited-stock item (a sneaker drop, a doorbuster deal) can spike that to 5,000+ checkout attempts/sec for the same handful of SKUs, a hundred-fold jump concentrated on a tiny slice of inventory.\n\nThe steady-state number tells you almost nothing about whether the system survives the spike — size the inventory-reservation step for the flash-sale case specifically, the same lesson as ticket booking's on-sale instant, just triggered by a marketing event instead of a scheduled on-sale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ecommerce-checkout-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface: checkout() and the idempotency key",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The whole flow can be exposed as one call: `checkout(cartId, idempotencyKey)`. Internally it orchestrates reserve-inventory, charge-payment, and create-shipment as steps of a saga, but the client only ever sees one request and one outcome.\n\nThe `idempotencyKey` is not optional plumbing — it's the thing that makes a client's retry-after-timeout safe. The server stores the outcome of the first call under that key; a retry with the same key returns the same result instead of re-running the whole saga and risking a second charge or a second inventory reservation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s05",
+      "order": 5,
+      "sectionTitle": "Data model: an order as a saga of compensable steps",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Model the order not as a single row that flips from `pending` to `confirmed`, but as a **saga**: an ordered sequence of steps (reserve inventory → charge payment → create shipment), where each step that succeeds has a corresponding **compensating action** if a later step fails (release inventory, refund payment).\n\nThis matters because there's no cross-service transaction to roll back automatically — if payment fails after inventory was reserved, nothing undoes that reservation unless the saga explicitly calls the compensating \"release inventory\" step. The saga's job is to track exactly how far the order got, so it knows precisely which compensations to run.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-ecommerce-checkout-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the saga",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Checkout saga: reserve inventory, charge payment, create shipment forward, with compensating actions unwinding backward on failure](assets/checkout-saga.svg)\n\nThe saga runs forward on success and unwinds backward on failure — if shipment creation fails, the saga runs refund-payment and release-inventory in reverse order, undoing exactly the steps that had committed.\n\nThis is the mechanism that gives the illusion of atomicity across three services that don't share a transaction.",
+      "assets": [
+        {"alt": "Checkout saga: reserve inventory, charge payment, create shipment forward, with compensating actions unwinding backward on failure", "path": "assets/checkout-saga.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s07",
+      "order": 7,
+      "sectionTitle": "Idempotency: a retry must not create a second order",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The riskiest moment in checkout is a client that times out waiting for a response after the saga actually succeeded server-side, then retries. Without protection, that retry looks like a brand-new checkout request — a second inventory reservation, a second charge, a second shipment.\n\nThe idempotency key from earlier (§4) is what closes this gap: the server recognizes the retry by key, sees a saga already completed (or in-flight) for it, and returns that same outcome rather than starting a second one. This has to hold even if the retry arrives on a different server instance — which is why the idempotency record has to live in shared, durable storage, not in one server's memory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ecommerce-checkout-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s08",
+      "order": 8,
+      "sectionTitle": "Compare: two-phase-commit-style locking vs a saga with compensation",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Two-phase commit (2PC) | Saga with compensation |\n|---|---|---|\n| Consistency style | Locks all resources until every participant agrees, then commits together | Commits each step immediately, compensates later if a subsequent step fails |\n| Availability | A slow or down participant blocks everyone holding locks | Each step completes independently; no cross-service lock held open |\n| Failure recovery | Automatic rollback via the protocol | Explicit compensating actions the application must define per step |\n| Fit for checkout | Poor — inventory, payment, and shipping are separate systems/vendors that can't share a 2PC coordinator | Good — matches independently-owned services, at the cost of writing compensation logic yourself |\n\n**How to decide:** 2PC needs all participants to speak the same coordination protocol, which an external payment processor simply won't do — sagas are the practical choice whenever a transaction spans services or vendors you don't fully control.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: the flash-sale path",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Concurrent checkout requests hitting an atomic inventory reservation first, so sold-out requests are rejected before ever reaching payment](assets/flash-sale-path.svg)\n\nInventory reservation is deliberately the *first* saga step, not the last — failing fast there means a sold-out request never wastes a payment authorization call.\n\nThat ordering choice (check scarce resources before touching payment) is itself a design decision worth stating explicitly in an interview.",
+      "assets": [
+        {"alt": "Concurrent checkout requests hitting an atomic inventory reservation first, so sold-out requests are rejected before ever reaching payment", "path": "assets/flash-sale-path.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: inventory decrement during a flash sale",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For a single hot SKU with limited stock, every one of the thousands of concurrent checkout attempts contends on the same inventory row — the same shape of problem as ticket booking's hot seats, just with a stock count instead of a seat-status flag.\n\nAn atomic conditional decrement (`UPDATE stock SET qty = qty - 1 WHERE qty > 0`) resolves the race the same way a conditional seat-hold does, letting the database itself be the arbiter. The mitigation is the same family too: an admission-controlled queue in front of the hot SKU during the sale window keeps the write rate at something the inventory store can actually sustain instead of a single instant of unbounded contention.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ecommerce-checkout-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-ecommerce-checkout-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: charging payment before confirming inventory",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Charge the card first — that's the step that actually matters — then sort out inventory after.\"\n\n**Why it's wrong:** if payment succeeds but inventory turns out to be unavailable (lost the race on a hot SKU, or a stock-count bug), you now have a paying customer with no product and have to trigger a refund — at flash-sale scale, that's not a rare edge case, it's a **refund storm** hitting a large fraction of a spike's traffic, generating support load and customer distrust.\n\n**Correct model:** reserve inventory first, and only charge payment once the reservation is confirmed. A failed inventory reservation should mean the customer's card was never touched at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-ecommerce-checkout-system-s11-q1"
+      ]
+    }
+  ]
+}

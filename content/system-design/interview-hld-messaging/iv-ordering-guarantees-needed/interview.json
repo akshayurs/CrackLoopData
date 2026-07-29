@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-ordering-guarantees-needed",
+  "interviewQuestions": [
+    {
+      "id": "iv-ordering-guarantees-needed-iq1",
+      "question": "Does this system need strict ordering, and how would you provide it?",
+      "answerMarkdown": "I'd reject the false choice between \"totally ordered\" and \"no order at all\" up front — almost no real system genuinely needs either extreme. I'd ask whether ordering needs to hold globally or just per user/entity, and what actually breaks if two *different* entities' events arrive out of order (usually nothing).\n\nMy answer is per-key ordering via a consistent partition key: route every event for the same entity to the same partition, and Kafka's per-partition log preserves order for free within that key. Concretely, an inventory system keyed by `sku_id` keeps two updates to the same SKU strictly ordered, while updates to 10,000 different SKUs fan out across 50 partitions and process fully in parallel.\n\nI'd close by flagging the failure mode of picking the wrong key — partitioning by `region` when the dependency is per-SKU gives you ordering you didn't need and none you did — so the key has to match the actual data dependency.\n\n**Testing:** whether you can scope ordering to where it's actually needed instead of defaulting to a global guarantee.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core ordering-scope question"
+    },
+    {
+      "id": "iv-ordering-guarantees-needed-iq2",
+      "question": "One entity's messages keep failing and are blocking every other message behind it on the same partition. How do you fix that without giving up ordering?",
+      "answerMarkdown": "I'd isolate at the key level, not the partition level. Instead of a blanket retry policy for the whole partition, I'd give each key its own retry-then-dead-letter path: if one entity's message keeps failing, move just that message to a DLQ for triage while every other key sharing the partition keeps processing normally.\n\nConcretely, if SKU-4471's inventory update has a malformed payload and fails deserialization every time, a per-key isolation mechanism means SKU-9002's and SKU-1183's updates on the same partition aren't stuck behind it — they keep flowing while an on-call engineer triages the one bad message separately.\n\nI'd contrast this with the naive fix of just repartitioning to one-entity-per-partition, which technically avoids blocking but throws away the whole throughput benefit of grouping keys in the first place — it's solving the wrong problem.\n\n**Testing:** whether you can localize a poison-message fix to the key level instead of over-correcting at the partition or topic level.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Poisoned key blocking a shared partition"
+    },
+    {
+      "id": "iv-ordering-guarantees-needed-iq3",
+      "question": "You need to repartition this topic later to add capacity — does the ordering you already have survive that?",
+      "answerMarkdown": "Not automatically, and I'd flag that clearly rather than assume it's safe. Repartitioning — say going from 10 to 30 partitions — typically rehashes keys across the new partition count, so a key's future events can land on a different partition than its past events did, breaking the ordering guarantee right at the transition point.\n\nI'd propose handling this deliberately: either drain in-flight events for each key before the repartition takes effect, so there's no straddling window, or use a partitioning scheme designed to be stable across resizes (like consistent hashing) so keys move predictably and rarely.\n\nI'd also note this is exactly the kind of decision that's cheap to get right upfront (over-provision partitions with headroom) and expensive to fix after the fact, which connects back to picking partition count with growth in mind from day one.\n\n**Testing:** whether you understand that ordering is a property of a stable partition mapping, not something that survives a resize for free.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Ordering across a repartition"
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "id": "webhooks-and-callback-apis",
+  "title": "Webhooks & Callback APIs",
+  "area": "system-design",
+  "group": "api-design",
+  "order": 8,
+  "slug": "webhooks-and-callback-apis",
+  "summary": "Pushing events to a consumer's own endpoint instead of making them poll — and the reliability problems, retries, ordering, and forged calls, that come with handing delivery to someone else's server.",
+  "level": "intermediate",
+  "slideCount": 8,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "webhooks-and-callback-apis-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **webhook** flips the usual client-server direction: instead of a consumer repeatedly asking \"anything new yet?\", you call *them* — an HTTP POST to a URL they registered — the moment something happens. It's how Stripe tells your server a payment succeeded, or GitHub tells a CI system a commit landed.\n\nThe catch is you're now making an outbound HTTP call to someone else's server, which can be down, slow, or malicious — reliability and security become your problem to solve, not theirs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "webhooks-and-callback-apis-s02",
+      "order": 2,
+      "sectionTitle": "Why webhooks exist: notifying a consumer without them polling you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Without webhooks, a consumer wanting to know \"has this order shipped yet\" has to poll — `GET /orders/42` every few seconds, most of which return \"still processing.\" That's wasted requests on both sides, and it trades off latency against load: poll often for fast updates, and you multiply load; poll rarely, and updates feel slow.\n\nA webhook eliminates the waste: the provider calls the consumer's registered URL exactly once, exactly when the event happens — no polling, no wasted checks, and near-instant notification. The consumer registers a callback URL once (`https://theirserver.com/webhooks/orders`), and every relevant event triggers an HTTP POST to it.\n\nThe tradeoff for that efficiency: the provider now depends on the consumer's endpoint being reachable, which it doesn't control — the next few slides are about handling that.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "webhooks-and-callback-apis-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: an event triggering a signed HTTP callback to a registered consumer URL",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Internal event triggers a signed webhook delivery to a merchant callback URL](assets/webhook-delivery.svg)\n\nAn internal event fires, a delivery worker picks it up, signs the payload with a shared secret, and POSTs it to whichever URL the consumer registered ahead of time. The consumer's server verifies the signature, processes the event, and responds `200 OK` to acknowledge receipt.\n\nEverything after \"event fires\" is the provider's own infrastructure reaching out — the consumer never asked for this specific call, they only asked, once, to be told about events like it.",
+      "assets": [
+        {
+          "alt": "Internal event triggers a signed webhook delivery to a merchant callback URL",
+          "path": "assets/webhook-delivery.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "webhooks-and-callback-apis-s04",
+      "order": 4,
+      "sectionTitle": "At-least-once delivery: retries with backoff when the consumer's endpoint is down or slow",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A consumer's endpoint can be down for maintenance, overloaded, or just slow to respond — none of which the provider controls. The standard contract is **at-least-once delivery**: if the consumer doesn't respond with a success status within a timeout, the provider retries, with exponentially increasing backoff (a few seconds, then minutes, then hours) over some bounded window (often 24-72 hours) before giving up.\n\n\"At-least-once\" is a deliberate choice, not a limitation to apologize for — it means the provider would rather risk delivering an event twice than risk silently losing it, since a lost `payment.succeeded` webhook is far worse for a merchant than a duplicate one they can detect and ignore.\n\nThe consequence for the consumer: they must build for delivery to arrive more than once for the same event, which the next slides address (signing and idempotency).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "webhooks-and-callback-apis-s04-q1"
+      ]
+    },
+    {
+      "id": "webhooks-and-callback-apis-s05",
+      "order": 5,
+      "sectionTitle": "Signing payloads (HMAC) so the consumer can verify the call really came from you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A webhook endpoint is a public URL that anyone can POST to — nothing about the HTTP request itself proves it came from the real provider rather than an attacker forging a fake \"payment succeeded\" event. **HMAC signing** fixes this: the provider computes a cryptographic signature of the payload using a secret shared only with that consumer, and sends it as a header, e.g. `X-Signature: sha256=...`.\n\nThe consumer recomputes the same HMAC over the raw request body using their copy of the shared secret and compares it to the header. If they match, the payload is provably unmodified and genuinely came from someone who knows the secret — practically, the real provider.\n\nA common implementation mistake: verifying against the parsed/re-serialized body instead of the exact raw bytes received, since re-serialization can subtly change formatting (key order, whitespace) and make a genuine signature appear to fail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "webhooks-and-callback-apis-s05-q1"
+      ]
+    },
+    {
+      "id": "webhooks-and-callback-apis-s06",
+      "order": 6,
+      "sectionTitle": "Ordering isn't guaranteed across retries — designing consumers to be idempotent and order-tolerant",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Retries and at-least-once delivery mean a consumer can receive the same event twice, and can receive two different events out of the order they actually happened in — a retried `order.created` might arrive after a fresh `order.updated` for the same order, if the first delivery attempt was merely slow rather than failed.\n\nThe fix on the consumer side is the same idea covered in [idempotency and exactly-once](idempotency-and-exactly-once): use the event's unique ID to detect and skip a duplicate you've already processed, and design handlers to check the *current* state before acting rather than blindly applying an event as if it must be the latest one — e.g. only update `status` if the incoming event's timestamp is newer than what's stored.\n\nA consumer that assumes \"events arrive once, in order\" will eventually corrupt state the first time a retry or an out-of-order delivery happens — and at real volume, that's a when, not an if.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "webhooks-and-callback-apis-s07",
+      "order": 7,
+      "sectionTitle": "Compare: webhooks (you push) vs polling (they pull) vs long-lived connections (SSE/WebSocket)",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Webhooks | Polling | SSE / WebSocket |\n|---|---|---|---|\n| Direction | Provider pushes to consumer | Consumer repeatedly pulls | Provider pushes over a held-open connection |\n| Latency | Near-instant | Depends on poll interval | Near-instant |\n| Infra needed | Consumer needs a public, reachable endpoint | None beyond a normal client | A long-lived connection both sides keep open |\n| Firewall/NAT friendliness | Consumer must be reachable inbound | Works anywhere a client can make outbound calls | Usually fine — connection is client-initiated outbound |\n| Best fit | Server-to-server integrations, background events | Simple cases, low update frequency, no public endpoint available | A live client (browser, app) that stays connected anyway |\n\n**How to decide:** webhooks fit server-to-server integrations where the consumer can run a stable, public endpoint. Polling is the fallback when they can't. SSE/WebSocket fit a live, connected client (like an open browser tab) better than a webhook, since a browser can't receive inbound HTTP calls at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "webhooks-and-callback-apis-s07-q1"
+      ]
+    },
+    {
+      "id": "webhooks-and-callback-apis-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a webhook consumer's slow endpoint blocking your delivery worker pool for every other consumer",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just deliver webhooks synchronously from a shared worker pool — it's simpler than building a queue.\"\n\n**Why it's wrong:** if one merchant's endpoint is slow or hanging, and delivery workers are shared across every merchant, that one slow endpoint can occupy every available worker waiting on its response — starving delivery to every other, perfectly healthy merchant. A handful of bad actors or misconfigured endpoints can degrade the whole system.\n\n**Correct model:** isolate delivery so one consumer's slowness can't consume capacity meant for others — a bounded worker pool or timeout per consumer, or a queue-per-consumer pattern, is the general fix an interviewer would recognize as bulkhead isolation applied to webhook delivery. Set an aggressive timeout per delivery attempt and treat \"too slow\" the same as \"failed,\" queuing a retry rather than holding a worker open indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "webhooks-and-callback-apis-s08-q1"
+      ]
+    }
+  ]
+}

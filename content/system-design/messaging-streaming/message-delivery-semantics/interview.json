@@ -1,0 +1,29 @@
+{
+  "topicId": "message-delivery-semantics",
+  "interviewQuestions": [
+    {
+      "id": "message-delivery-semantics-iq1",
+      "question": "Your payment consumer might get the same event twice — now what?",
+      "answerMarkdown": "I'd start by assuming this is expected, not a bug — most brokers give at-least-once delivery, so any consumer has to be ready to see the same event more than once. The fix isn't to chase \"true exactly-once\" delivery; it's to make the charge idempotent.\n\nConcretely, I'd attach a unique key to each logical charge, like the order ID, and check a dedupe store before charging: if that key's already been processed, return the stored result instead of charging again. The check-and-record needs to be atomic, an \"insert if not exists,\" or two near-simultaneous retries can both slip through.\n\nI'd close by noting this protects the specific side effect (the charge) — other actions triggered by the same event, like a confirmation email, need their own idempotency if they also can't safely fire twice.\n\n**Testing:** whether you reach for idempotency instead of trying to eliminate duplicates at the broker level.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Handling a duplicated payment event"
+    },
+    {
+      "id": "message-delivery-semantics-iq2",
+      "question": "What's the practical difference between a broker's delivery guarantee and your system's processing guarantee?",
+      "answerMarkdown": "I'd explain that the delivery guarantee is what the broker promises about how many times a message reaches the consumer — at-most-once, at-least-once, or, rarely and narrowly, exactly-once. The processing guarantee is what actually happens as a result, in your code, when that message is handled — and those aren't automatically the same.\n\nFor example, at-least-once delivery paired with a non-idempotent consumer gives you an at-least-once *processing* guarantee too: the card can get charged twice. Pair that same at-least-once delivery with an idempotent consumer, and you get an effectively exactly-once processing guarantee, built on top of a weaker delivery guarantee.\n\nI'd use this to push back on any claim like \"the broker handles exactly-once for us\" — the broker's guarantee is necessary but not sufficient.\n\n**Testing:** whether you separate what the infrastructure promises from what your code actually guarantees.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Delivery guarantee vs processing guarantee"
+    },
+    {
+      "id": "message-delivery-semantics-iq3",
+      "question": "How would you design a webhook receiver so that a retried delivery from a third-party provider doesn't cause duplicate side effects?",
+      "answerMarkdown": "I'd treat this exactly like an at-least-once queue consumer, since most webhook providers explicitly retry on timeout or a non-2xx response. First, I'd require the provider's event to carry a stable, unique ID, like Stripe's event ID, and use that as the idempotency key.\n\nOn receipt, I'd check a dedupe store for that ID before doing any side effect: if seen before, return a 200 immediately without repeating the work; if new, process it, record the ID, then respond. I'd make sure the response is sent only after the side effect and the dedupe record are both durable, so a crash between them doesn't create a gap.\n\nI'd flag TTL on the dedupe store as a real decision — too short and a very late retry slips through; I'd size it to the provider's documented max retry window.\n\n**Testing:** whether you apply the same idempotency reasoning outside a message broker, to an HTTP-delivered event.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Idempotent webhook receivers"
+    }
+  ]
+}

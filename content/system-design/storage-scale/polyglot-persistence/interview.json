@@ -1,0 +1,29 @@
+{
+  "topicId": "polyglot-persistence",
+  "interviewQuestions": [
+    {
+      "id": "polyglot-persistence-iq1",
+      "question": "Why would you use both Postgres and Elasticsearch here?",
+      "answerMarkdown": "I'd justify it by naming the specific gap Postgres has, rather than \"more stores are better\": full-text search relevance ranking, fuzzy matching, and faceted filtering are all things Elasticsearch is built for and Postgres does poorly at scale. Postgres stays the system of record for order and product data because it needs transactional guarantees Elasticsearch doesn't provide.\n\nI'd describe the sync path concretely: changes in Postgres get published as events (via CDC or an application-level event) and consumed to update the Elasticsearch index, so Elasticsearch is always a derived, rebuildable copy — never edited directly. If the two ever disagree, the fix is to resync from Postgres, not to patch Elasticsearch.\n\nI'd close by noting this is a cost, not a free win: it's two systems to run and monitor, justified only because search relevance is a real product requirement here.\n\n**Testing:** whether you can justify a second data store by a specific capability gap, and describe how you'd keep it from becoming a second source of truth.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Justifying a second data store"
+    },
+    {
+      "id": "polyglot-persistence-iq2",
+      "question": "How do you keep multiple data stores in sync without them silently drifting apart?",
+      "answerMarkdown": "I'd avoid dual writes from application code as the primary mechanism, since a crash between the two writes leaves the stores diverged with no record of it happening. Instead, I'd use Change Data Capture off the system of record's write-ahead log, or have it publish domain events on every change — either way, downstream stores update from a durable, ordered feed rather than relying on every code path remembering to write twice.\n\nI'd also build in a way to detect drift that does happen — a periodic reconciliation job comparing checksums or counts between the source and the derived store — since even CDC pipelines can lag or fail, and catching it early is cheaper than an incident caused by silently stale search results or reports.\n\n**Testing:** whether you reach for a durable sync mechanism over ad hoc dual writes, and plan for detecting drift rather than assuming sync is perfect.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Keeping stores in sync"
+    },
+    {
+      "id": "polyglot-persistence-iq3",
+      "question": "A production incident traces back to Elasticsearch and Postgres disagreeing on a product's price. How do you approach the fix?",
+      "answerMarkdown": "I'd first confirm which store is the system of record for price — if that's undocumented, that's the real root cause, not just this one incident. Assuming Postgres is the source of truth, the immediate fix is to resync the Elasticsearch copy from Postgres, not to edit Elasticsearch directly or guess which value is correct.\n\nThen I'd look for why the sync failed — a dropped CDC event, a crashed dual-write, a bug in the event consumer — and fix that root cause, since a resync alone just clears this one incident without preventing the next one. I'd also propose adding a reconciliation check if one didn't exist, so drift like this surfaces before a customer notices a wrong price rather than after.\n\n**Testing:** whether you treat the immediate fix and the root cause as two separate steps, and whether you understand which store should have been treated as authoritative.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging a store-drift incident"
+    }
+  ]
+}

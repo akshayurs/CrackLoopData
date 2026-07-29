@@ -1,0 +1,167 @@
+{
+  "id": "iv-estimate-concurrent-connections",
+  "title": "Estimate how many concurrent connections this system needs to support",
+  "area": "system-design",
+  "group": "interview-hld-estimation",
+  "order": 10,
+  "slug": "iv-estimate-concurrent-connections",
+  "summary": "Distinct from QPS: for chat, notifications, or live-collaboration systems, the number that matters is concurrent open connections, not requests per second.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-estimate-concurrent-connections-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "For a request/response API, QPS is the right capacity number. For a system built on **persistent connections** — chat, live notifications, real-time collaboration — QPS badly understates the real resource cost, because the number that matters is how many connections are held **open at once**, not how many requests arrive per second.\n\nThis question tests whether you know when to reach for concurrent-connection math instead of defaulting to the QPS skeleton out of habit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask up front: **is this a request/response API, or a persistent-connection system** — WebSocket, long-poll, gRPC streaming? The answer determines which formula even applies.\n\nA request/response API's cost is dominated by how fast it can finish and free up a request slot; a persistent-connection system's cost is dominated by how many idle-but-open connections a server has to keep alive in memory simultaneously, whether or not those connections are actively sending data right now.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The formula (a version of Little's Law): **concurrent connections ≈ number of sessions starting per second × average session duration**. Applied at the level of a peak window: take the users active during that window, convert to an arrival rate, then multiply by how long each session stays open.\n\nThis is deliberately **not** a per-request rate — it's a measure of how many things are simultaneously \"in flight\" at any instant, which is what actually consumes server memory and socket handles for a connection-holding system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-estimate-concurrent-connections-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a chat system's concurrent connections",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "10 million DAU, average 15-minute session, with activity concentrated in a 4-hour daily peak window. Assume 30% of DAU (3 million users) open a session during that window:\n\n```\n3,000,000 sessions / (4 x 3,600 s) = 3,000,000 / 14,400 s ~= 208 sessions/sec (arrival rate)\n208 sessions/sec x 900 s (15 min) ~= 187,500 concurrent connections\n```\n\nRound to **~190,000 concurrent connections** at peak — this is the number that sizes the connection-holding tier, not the request rate flowing through it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-estimate-concurrent-connections-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s05",
+      "order": 5,
+      "sectionTitle": "Translating into gateway node count",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once you have a concurrent-connection figure, convert it into a fleet size the same way as any other capacity number: **concurrent connections ÷ max connections per gateway node**. A typical WebSocket gateway might sustain around 20,000 concurrent connections per node before memory or file-descriptor limits become the constraint.\n\nState the per-node ceiling explicitly — it's the input the whole downstream number depends on, the same way QPS-per-server was the key input for a request/response fleet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: checking against the max-connections ceiling",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Take the 190,000 concurrent connections and divide by a 20,000-connection-per-node ceiling:\n\n```\n190,000 concurrent connections / 20,000 per node ~= 9.5\nRound up: 10 gateway nodes (before any failover margin)\n```\n\nThat's the number to commit to before adding redundancy — 10 nodes is what peak concurrency alone demands, separate from the extra headroom you'd add for node failure, the same N+k logic used everywhere else in these estimates.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-estimate-concurrent-connections-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s07",
+      "order": 7,
+      "sectionTitle": "Compare: more connections per node vs blast radius",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Holding more connections per node** (a bigger instance, a more efficient connection-handling stack) is cheaper — fewer nodes, less overhead — but it raises the **blast radius**: one node failing now drops a proportionally larger share of concurrently connected users at once, each of whom has to reconnect.\n\nName both sides: a system tolerant of brief reconnects (most chat apps) can lean toward fewer, bigger nodes; a system where a dropped connection is costly (a live trading feed) should favor more, smaller nodes even at higher total cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-estimate-concurrent-connections-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: connections aren't evenly spread across the day",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Your peak-window assumption might be wrong — how does that hold up?\" The 30%-of-DAU-in-a-4-hour-window figure is an assumption, and the final connection count is directly proportional to it — if the real peak concentration is 50% instead of 30%, concurrent connections rise proportionally, from ~190,000 toward ~315,000.\n\nThe honest answer names this as the single most sensitive input in the whole estimate, and says you'd validate it against real historical session data the moment it's available, rather than defending the assumed 30% indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how does this change your load balancer choice?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Does this change your load balancer choice — L4 vs L7, connection draining on deploy?\" A connection-holding system usually favors an **L4 (transport-layer)** load balancer for the initial connection setup, since it's cheaper per connection at this volume than L7's per-request inspection overhead — though L7 features (routing, auth) may still apply inside the connection.\n\nAlso name **connection draining**: deploying a new version can't simply kill 20,000 open connections on a node — it needs to stop accepting new ones on that node and let existing ones finish or migrate gracefully, which a stateless request/response deploy never has to think about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: using request-per-second math for a chat system",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** estimate a chat system's capacity by computing QPS (messages sent per second) and sizing servers against that, the same way as any API.\n\n**Why it's wrong:** messages-per-second badly understates the real cost — a chat server's memory and socket handles are consumed by every **open connection**, whether or not that user is actively typing right now. A system sized only for message QPS will run out of connection capacity long before it runs out of message-processing capacity.\n\n**Correct model:** for any persistent-connection system, compute concurrent connections separately from — and usually as the binding constraint ahead of — any message-rate QPS figure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-estimate-concurrent-connections-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-estimate-concurrent-connections-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Compressed script: \"Since this is a persistent-connection system, I'd compute concurrent connections, not QPS. With 10M DAU, a 15-minute average session, and 30% of users active in a 4-hour peak window, that's roughly 190,000 concurrent connections. At 20,000 connections per gateway node, that's 10 nodes before failover margin. I'd flag the 30% peak-concentration assumption as the number most worth validating against real data.\"\n\nPractice naming *why* QPS doesn't apply here before jumping to the connection math — that's the actual signal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    }
+  ]
+}

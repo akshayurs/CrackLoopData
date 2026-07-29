@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-event-driven-vs-request-response",
+  "interviewQuestions": [
+    {
+      "id": "iv-event-driven-vs-request-response-iq1",
+      "question": "Would you make this interaction event-driven or request-response?",
+      "answerMarkdown": "I'd decide per interaction rather than per system — the same checkout flow legitimately contains both. My question is: does the caller's own flow block on the result, or does it just need the side effect to eventually happen? And separately: how many independent parties need to react to the same thing?\n\nAn inventory check before showing \"in stock\" blocks the UI, so that's request-response. Notifying shipping, billing, and analytics that an order was placed doesn't block checkout at all, and there are multiple independent reactors — that's event-driven. The concrete proof point: adding fraud-scoring as a fourth event subscriber is a zero-change addition to checkout; doing the same thing synchronously means checkout's code grows a new call, and fraud-scoring's latency and failure mode now sit on every checkout.\n\nI'd close with the cost: event-driven buys that decoupling by giving up end-to-end traceability — you can't follow one causal chain without deliberately stitching it back together with correlation IDs and tracing.\n\n**Testing:** whether you pick per interaction based on whether the caller blocks, not by declaring one style for the whole system.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core event-driven-vs-sync question"
+    },
+    {
+      "id": "iv-event-driven-vs-request-response-iq2",
+      "question": "How do you debug a chain of five event-driven services when something silently didn't happen?",
+      "answerMarkdown": "I'd say this is the real cost of choosing event-driven, and the fix is to pay for observability upfront rather than discover the gap during an incident. Concretely: propagate a correlation ID through every event from the moment it's produced, so every downstream consumer's logs can be tied back to the same originating request.\n\nOn top of that, I'd use distributed tracing that spans the async boundary — tools like OpenTelemetry support attaching trace context to a message, so a consumer picks up the same trace the producer started instead of starting a disconnected one. Without this, five loosely-coupled services and a silent no-op is genuinely hard to root-cause, because there's no synchronous call stack to walk.\n\nI'd give a concrete example: an order that never triggers a shipping notification — with correlation IDs and tracing, I can follow the `order_placed` event's ID across billing, shipping, and analytics logs and see exactly which consumer dropped it or errored silently.\n\n**Testing:** whether you have a concrete, built-in-advance answer for the traceability cost event-driven systems introduce.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging across event-driven services"
+    },
+    {
+      "id": "iv-event-driven-vs-request-response-iq3",
+      "question": "The business wants a single order-status view spanning five event-driven services — how do you build that without reverting to request-response?",
+      "answerMarkdown": "I'd build a materialized view: a read model that subscribes to the events from all five services and aggregates them into one place, so a status query hits that one fast store instead of five live services.\n\nConcretely, an `order-status` service subscribes to `order_placed`, `payment_captured`, `shipment_created`, and `delivery_confirmed` events, and updates a single row per order as each event arrives. A status check becomes one fast read against that row, and the five source services stay exactly as decoupled as they were before — none of them gained a new synchronous caller.\n\nI'd contrast this with the tempting-but-wrong fix of just having the client poll all five services directly, which reintroduces coupling to every one of them and duplicates the aggregation logic in every client instead of once, centrally.\n\n**Testing:** whether you can solve a read-side requirement (status view) without compromising the write-side decoupling that event-driven was chosen for.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "A read model instead of reverting to sync"
+    }
+  ]
+}

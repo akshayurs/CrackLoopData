@@ -1,0 +1,29 @@
+{
+  "topicId": "design-ephemeral-stories-system",
+  "interviewQuestions": [
+    {
+      "id": "design-ephemeral-stories-system-iq1",
+      "question": "Design Instagram or Snapchat Stories — content that disappears after 24 hours.",
+      "answerMarkdown": "I'd start by naming what's actually hard here: uploading and serving media is a solved problem, so I'm focusing on two things — guaranteeing expiry at scale, and tracking potentially huge viewer lists cheaply. Each story carries its own `ttl`, stored as data rather than hardcoded, so expiry is a generic mechanism, not a special case.\n\nFor expiry, I'd combine lazy deletion on read (a story past its TTL reads as gone the instant anyone tries to view it, correctness guaranteed immediately) with a background reaper that physically deletes expired records in batches during a scheduled window — smoothing out what would otherwise be a load spike exactly at each story's 24-hour mark, especially since posting activity clusters around peak hours and so does the resulting expiry demand a day later.\n\nFor viewer tracking, I'd shard or batch view writes rather than hitting one record per story per view, since a popular story's view count is the same hot-object problem as a viral like count, solved the same way.\n\n**Testing:** whether you connect this back to patterns you already know — hot-object writes, and expiry as a two-part lazy-plus-background mechanism — instead of treating stories as an unfamiliar new problem.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Open-ended: design ephemeral stories"
+    },
+    {
+      "id": "design-ephemeral-stories-system-iq2",
+      "question": "How would you handle a story's viewer list when it gets hundreds of thousands of views?",
+      "answerMarkdown": "I'd treat this explicitly as the same hot-object problem seen with viral like counts, just applied to a viewer list instead of a count: a single synchronous write per view to one record would serialize hundreds of thousands of writers on the same target.\n\nConcretely, I'd shard the viewer-tracking store by story ID plus a shard suffix, so concurrent views spread across multiple partitions instead of contending for one, and batch writes in memory briefly before flushing, since the product requirement is \"who has viewed this eventually,\" not a live, instantaneous viewer feed. `getViewers()` then reads from the aggregated, slightly-lagging result rather than a single hot table.\n\nI'd add one wrinkle specific to stories: unlike a like count, the viewer *list* itself (not just a count) needs to be retrievable — so the sharded storage has to actually keep per-viewer identity, which rules out a pure numeric sharded-counter approach and requires a sharded key-value or list structure instead.\n\n**Testing:** whether you correctly generalize the hot-object pattern to a case where you need the actual list, not just a count, and adjust the storage shape accordingly.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: viewer lists at massive scale"
+    },
+    {
+      "id": "design-ephemeral-stories-system-iq3",
+      "question": "Does a story need to expire at exactly 24 hours, or is some slop acceptable — and how does that change your design?",
+      "answerMarkdown": "I'd push back on \"exactly\" as the requirement in the first place — for a consumer feature like stories, a few minutes of slop is not just acceptable but the whole reason cheap expiry is possible. I'd confirm that assumption explicitly before designing further, since it changes the answer completely.\n\nGiven slop is acceptable, I'd lean on native TTL support in the storage layer (Redis `EXPIRE`, DynamoDB TTL) which typically reaps within minutes of the set expiry, rather than building a custom high-precision sweep — far less operational complexity for a requirement that doesn't need precision.\n\nIf, hypothetically, the product genuinely needed second-level precision (say, a compliance requirement rather than a UX one), I'd say that changes the whole architecture — native TTL is no longer sufficient, and you'd need a dedicated, tightly-scheduled sweep with its own cost and complexity trade-offs, which is a meaningfully harder and more expensive system to build.\n\n**Testing:** whether you treat the precision requirement as something to clarify and confirm, rather than assuming exactness and over-engineering the whole expiry mechanism around it.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: exact vs approximate expiry"
+    }
+  ]
+}

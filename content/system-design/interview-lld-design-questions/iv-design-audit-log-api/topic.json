@@ -1,0 +1,165 @@
+{
+  "id": "iv-design-audit-log-api",
+  "title": "Design an Audit Log API",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 2,
+  "slug": "iv-design-audit-log-api",
+  "summary": "Append-only, immutable records — mutability defeats the entire point of an audit trail. A common LLD probe testing whether your API structurally prevents editing history.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-design-audit-log-api-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design an audit log API** — record who did what, when, to what. The shape almost writes itself once you commit to one non-negotiable property: audit records are **append-only and immutable**.\n\nThe scoring signal isn't cleverness, it's discipline: does your API structurally prevent mutating or deleting a past record, or does it just document a convention a caller could violate? An audit trail that can be edited after the fact isn't an audit trail.\n\nThe 10-minute bar: an immutable event shape, a write-only API surface, and an answer for how reads stay separate from writes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-audit-log-api-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: who consumes this?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **who consumes this API** before designing it. If it's purely a **write sink** — application code calling `record()` on every state change — you can keep the write path simple and defer query shape entirely.\n\nIf **compliance or support teams query it** — \"show every change to this account in the last 90 days\" — you need to think about indexing and query patterns from the start, since a naive append-only log scanned linearly won't answer that fast at scale.\n\nMost real systems need both, but naming which is primary tells you where to spend your remaining time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-audit-log-api-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: immutable event, append-only writer, separate reads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape has three pieces. An **immutable `AuditEvent`** — who, what, when, and the relevant before/after values — with no setters, only a constructor. An **append-only writer** — `AuditLogger.record(event)` — that does exactly one thing: durably append. A **read side kept separate** — queries go through their own path, not through the writer.\n\nSeparating write and read isn't over-engineering here — it's what keeps the write path fast and the read side free to add indexes without touching the append logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-audit-log-api-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-audit-log-api-s04",
+      "order": 4,
+      "sectionTitle": "Code: the AuditEvent record and record() signature",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic record AuditEvent(\n    String actorId,\n    String action,\n    String targetId,\n    Instant occurredAt,\n    Map<String, Object> details\n) {}\n\npublic interface AuditLogger {\n    void record(AuditEvent event);\n}\n```\n\nOne method, one job. `record()` takes a fully-formed, immutable event — there's no `update()` or `delete()` on this interface, which is itself the design statement. Compare this to [designing public APIs](designing-public-apis): the absence of a method is as much a design decision as its presence.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-audit-log-api-s05",
+      "order": 5,
+      "sectionTitle": "Code: an append-only storage sketch",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class FileAuditLogger implements AuditLogger {\n    public void record(AuditEvent event) {\n        appendLine(serialize(event));\n    }\n    // no update(id, ...) or delete(id) — intentionally absent\n}\n```\n\nThe implementation only ever appends — no code path seeks back into the file or store and rewrites a prior record. If a later requirement demands \"correcting\" an entry, the fix is a **new compensating event** (\"correction: X was actually Y\"), never a mutation of the original, so the trail of what happened — including the correction — stays intact.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-audit-log-api-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: how do you guarantee events aren't lost if the write fails mid-request?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An audit event that's silently dropped defeats the entire point of an audit trail. I'd propose writing the audit event **synchronously, in the same transaction** as the business change where the storage supports it — insert the order and its audit event in one commit, so either both happen or neither does.\n\nWhere that's not possible (writing across two systems), I'd use an **outbox pattern**: write the event to a local outbox table in the same transaction as the business change, then a separate process reliably publishes it — the durability guarantee shifts to \"the outbox write can't fail silently\" instead of \"the network call can't fail.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-audit-log-api-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-audit-log-api-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: should this API be synchronous or fire-and-forget?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd default to **synchronous** for anything compliance-sensitive — if the write path can't guarantee the audit event landed, you can't guarantee you have a real audit trail, which is the one thing this API exists for.\n\n**Fire-and-forget** is tempting for latency, but a burst of failures (a downstream outage, a full queue) silently loses audit coverage exactly when something suspicious might be happening. If latency is a real constraint, I'd make the write asynchronous but backed by a durable local buffer — the outbox again — not a best-effort network call.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-audit-log-api-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you let compliance query \"who changed X\" efficiently?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A raw append-only log answers this by scanning everything, which doesn't hold up past a modest volume. I'd add a **secondary index keyed by `targetId`** — a separate table or search index updated alongside the write — so \"every change to entity X\" is an indexed lookup, not a table scan.\n\nThe append-only property of the log itself doesn't change; the index is additive infrastructure on the read side, which is exactly why keeping reads and writes separate pays off here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-audit-log-api-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-design-audit-log-api-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: designing mutable audit records",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** giving `AuditEvent` setters so a caller can adjust a field after construction, \"in case something needs fixing later.\"\n\n**Why it's wrong:** the entire value of an audit log is that a record, once written, reflects exactly what happened at that moment — mutability defeats that guarantee structurally, not just by convention.\n\n**Correct model:** make `AuditEvent` immutable with only a constructor. If something needs correcting, write a new event that says so; never edit the old one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-audit-log-api-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: logging the full before/after object graph on every event",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll log the entire before and after object on every change, to be thorough.\"\n\n**Why it's wrong:** this bloats storage fast on any object with a large graph, and — more seriously — it risks capturing sensitive fields (passwords, tokens, PII) that shouldn't sit in an audit log at all, turning a compliance tool into a compliance liability.\n\n**Correct model:** log the specific fields that changed and their old/new values, explicitly allow-listed per event type — never a blanket object dump.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-audit-log-api-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-audit-log-api-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Shape** — an immutable `AuditEvent` (who, what, when) written through a single `record()` method with no update or delete. **Durability** — write synchronously in the same transaction as the business change, or via an outbox if that's not possible. **Reads** — kept on a separate path with their own index, so query needs never pull mutation back into the writer. **Close** by naming that corrections are new events, never edits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+{
+  "id": "design-collaborative-editor",
+  "title": "Design a Collaborative Editor",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 3,
+  "slug": "design-collaborative-editor",
+  "summary": "Merging concurrent real-time edits from many users into one consistent document, without a naive last-write-wins silently dropping anyone's changes.",
+  "level": "advanced",
+  "slideCount": 16,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "design-collaborative-editor-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: many users edit the same document at the same time — think Google Docs — and everyone converges on the same consistent result, with no one's keystrokes silently lost. This is fundamentally a **concurrency** problem wearing an editor's clothes.\n\nThe interview centers on one question: when two people type in the same spot at the same instant, what makes both edits survive and both users end up seeing the identical final text? That question leads straight to Operational Transformation and CRDTs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** apply a user's edit to a shared document and propagate it live to every other connected editor.\n\n**Non-functional:** **offline-edit support** — a user who loses connectivity should be able to keep typing and reconcile later — and a **convergence guarantee**: every client that has seen the same set of edits must end up with byte-identical document state, regardless of the order edits arrived in.\n\n**Explicit non-goal:** rich-text rendering itself (fonts, layout, embedded images) — that's a client-side editor-widget concern. This design is about the sync and merge layer underneath it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: editors, ops/sec, op-log growth",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A typical shared document has a handful of concurrent editors — say **10** — each typing at roughly **5 ops/sec** (each keystroke or paste is one op), so one busy document generates ~50 ops/sec. Across **100,000** simultaneously-active documents platform-wide, that's up to **5 million ops/sec** in aggregate.\n\nA single document's op-log grows without bound the longer it's edited — a document edited daily for a year at 50 ops/sec of active editing time accumulates millions of ops. That's why periodic **compaction** (folding the op-log into a fresh snapshot) matters — more on this in the data-model slide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two operations: `applyOp(docId, op)` submits one edit (an insert, delete, or format change at a position) to the shared document, and `subscribe(docId)` opens a live stream of every op applied by anyone else, so a client's local view stays current.\n\nNotice `applyOp` doesn't take \"the new document text\" — it takes a small, structured **operation**. That distinction is what makes merging tractable: transforming or merging small ops against each other is well-defined; diffing and reconciling whole documents on every keystroke is not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s05",
+      "order": 5,
+      "sectionTitle": "The core problem: merging concurrent edits without clobbering",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two users, editing the same document, both start from the same text \"Hello world\". User A inserts \"there\" after \"Hello\" (offset 5). At the same instant, User B deletes \"world\" (offsets 6-11). If both ops are applied literally at their original offsets in arrival order, the delete's offsets no longer point at \"world\" once A's insert has shifted the text — B's op corrupts or misfires.\n\nThis is the entire problem in miniature: ops are only correct relative to the document state they were created against, and concurrent ops change that state out from under each other. Every collaborative-editing algorithm exists to solve exactly this.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-collaborative-editor-s05-q1"
+      ]
+    },
+    {
+      "id": "design-collaborative-editor-s06",
+      "order": 6,
+      "sectionTitle": "Operational Transformation: transforming ops against each other",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Operational Transformation (OT)** solves the corruption above by *adjusting* one op's offsets against another's before applying it. If A's insert of \"there\" at offset 5 is applied first, B's delete of \"world\" gets transformed from offsets 6-11 to 11-16 — shifted by the length of A's insertion — before it's applied, so it still targets the right text.\n\nThe transform functions must satisfy a strict mathematical property (applying ops in either order after transformation yields the same result), which is why OT implementations are notoriously hard to get exactly right — Google Wave's team called it one of the hardest parts of that system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s07",
+      "order": 7,
+      "sectionTitle": "CRDTs: merge by construction, not transformation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **CRDT** (Conflict-free Replicated Data Type) takes a different approach: instead of transforming ops relative to each other, it designs the data structure itself so that *any* order of applying ops produces the same result, by construction. For text, this typically means giving every character a stable, globally-unique position identifier that never changes, instead of a fragile numeric offset.\n\nBecause merging is commutative and associative by design, a CRDT doesn't need a central authority deciding a canonical order — any two replicas that have seen the same set of ops converge, even if they received them in different sequences.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-collaborative-editor-s07-q1"
+      ]
+    },
+    {
+      "id": "design-collaborative-editor-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: two concurrent edits merged into a consistent result",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![User A's insert applies directly while User B's concurrent delete is transformed against A's op before applying, both converging on identical text](assets/ot-concurrent-merge.svg)\n\nWhichever mechanism is used — transformation or CRDT construction — the end state is the same: both clients reach identical text despite applying the two edits, potentially, in different orders.",
+      "assets": [
+        {
+          "alt": "User A's insert applies directly while User B's concurrent delete is transformed against A's op before applying, both converging on identical text",
+          "path": "assets/ot-concurrent-merge.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s09",
+      "order": 9,
+      "sectionTitle": "Compare: OT vs CRDTs",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Operational Transformation | CRDTs |\n|---|---|---|\n| Complexity | Transform functions are intricate and easy to get subtly wrong | Data structure design is complex once, then merging is simple |\n| Server authority | Usually needs a central server to establish op order | Can work fully peer-to-peer, no central authority required |\n| Offline support | Harder — reconciling a long offline op queue against transforms is complex | Natural fit — ops merge cleanly whenever connectivity returns |\n| Storage overhead | Lower — ops stay close to their original size | Higher — stable position IDs (e.g. per-character) add metadata |\n\n**How to decide:** CRDTs fit offline-first and peer-to-peer products (Figma's multiplayer, some note apps); OT still shows up in editors built around a strong central server (Google Docs' original design) where the storage overhead isn't worth paying.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s10",
+      "order": 10,
+      "sectionTitle": "Data model: the document as an op-log/CRDT structure",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The document isn't stored as \"the current text\" — it's stored as the **sequence of ops** (OT) or the **CRDT structure with its position metadata** (CRDT) that produced that text. The current text a client sees is a derived, cached view, replayable from the log at any point.\n\nThis is what makes both undo/redo and offline reconciliation possible: because history is the source of truth, not a side effect, you can always answer \"what did the document look like before op N\" or \"what changed while I was offline\" by replaying or diffing the log, not by guessing from a single flattened blob.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s11",
+      "order": 11,
+      "sectionTitle": "Real-time sync transport: WebSockets plus presence",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ops propagate over a persistent **WebSocket** connection per client — a request/response HTTP call per keystroke would add too much latency and overhead for a feel that needs to be near-instant. The same connection typically carries **presence** data alongside content ops: cursor positions, selection ranges, and \"who's online,\" so users see each other's cursors move live.\n\nPresence and content ops are logically separate streams multiplexed on one connection — losing a presence update (a cursor blip) is harmless, but losing a content op is a correctness bug, so they're often handled with different reliability guarantees even on the same socket.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s12",
+      "order": 12,
+      "sectionTitle": "Diagram: end-to-end architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Three clients connect via WebSocket to a sync server, which appends ops to a per-document op-log and broadcasts them, with the op-log periodically persisted to a document store](assets/sync-server-architecture.svg)\n\nThe sync server is the one component every client for a given document routes through — which is exactly why it becomes the scaling bottleneck discussed next.",
+      "assets": [
+        {
+          "alt": "Three clients connect via WebSocket to a sync server, which appends ops to a per-document op-log and broadcasts them, with the op-log periodically persisted to a document store",
+          "path": "assets/sync-server-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s13",
+      "order": 13,
+      "sectionTitle": "Offline edits: buffering and reconciling on reconnect",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a client loses connectivity, it keeps applying ops locally against its own copy of the document and buffers them in an outbound queue instead of failing. On reconnect, it sends the buffered ops to the server, which transforms (OT) or merges (CRDT) them against everything that happened server-side while the client was offline.\n\nThe longer the offline window, the larger the divergence to reconcile — a client offline for 30 seconds merges trivially; one offline for 3 days might need to merge against thousands of ops. This is exactly where CRDTs' \"any order converges\" property earns its complexity cost over OT's transform chains.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-collaborative-editor-s13-q1"
+      ]
+    },
+    {
+      "id": "design-collaborative-editor-s14",
+      "order": 14,
+      "sectionTitle": "The bottleneck: the sync server's per-document ordering point",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For OT specifically, one document's ops must be transformed relative to a single agreed-upon order — which means one logical process (or a lock) owns \"what happened when\" for that document. Under many simultaneous editors on one wildly popular document, that ordering point becomes a throughput ceiling no amount of extra servers relieves, because it's inherently per-document, not per-request.\n\nThe fix is **document sharding**: route all traffic for a given `docId` to the same server instance (consistent hashing on `docId`), so the ordering bottleneck is confined to one document at a time and different documents scale independently across many servers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: naive last-write-wins silently drops edits",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just save whichever full-document version arrives at the server last — simplest possible merge.\"\n\n**Why it's wrong:** last-write-wins on whole-document saves means the second save **completely overwrites** the first, discarding every edit the first user made that wasn't also in the second user's copy — with no error, no conflict marker, nothing. The user just discovers their paragraph is gone.\n\n**Correct model:** never merge at the document-blob level. Merge at the **operation** level (OT) or the **CRDT structure** level, where each individual edit is tracked and reconciled against others — not silently replaced by whatever arrived last.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-collaborative-editor-s16",
+      "order": 16,
+      "sectionTitle": "Summary: op-log plus ordering turns concurrent edits into one result",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **op-log or CRDT structure** as the source of truth, plus a **per-document ordering point** (or a merge-by-construction guarantee), is what turns many people's simultaneous edits into one consistent document everyone agrees on.\n\nIf you remember one line: the hard part was never storing text, it was defining what \"the same edit, applied twice in different orders\" even means — and committing to either OT or CRDTs to answer that.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

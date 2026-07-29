@@ -1,0 +1,165 @@
+{
+  "id": "iv-time-series-data-design",
+  "title": "How would you store and query time-series data at scale?",
+  "area": "system-design",
+  "group": "interview-hld-data",
+  "order": 12,
+  "slug": "iv-time-series-data-design",
+  "summary": "Time-series data has a distinct shape — append-only, time-ranged, and eager to shrink with age. Learn to design for it instead of treating it like generic relational rows.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-time-series-data-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Metrics, sensor readings, and event logs share a shape that makes them a different design problem from generic relational data: writes are append-only and arrive continuously, queries are almost always scoped to a time range, and fine-grained history matters far less the older it gets.\n\nTreating this like an ordinary table — insert rows, index a few columns, keep everything forever — works until volume makes it collapse. This topic walks the actual design levers: time-based partitioning, downsampling, and picking a store built for this shape.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-time-series-data-design-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions before you answer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **what's the write rate, the retention period, and the typical query — a single point, or a range and aggregate?** A system ingesting a million points per second at 1-second resolution has fundamentally different storage needs from one ingesting a handful per minute.\n\nAlso ask how far back queries typically need full resolution versus a rough trend — this directly determines how aggressively you can downsample older data without losing anything anyone actually uses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-time-series-data-design-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Structure it as: **partition by time range, write append-only, downsample old data instead of keeping full resolution forever.** These three levers together define most production time-series designs, regardless of the specific database chosen.\n\n\"I'd partition storage by time window so a query for 'the last hour' never touches older data. Writes only ever append new points, never update existing ones. And I'd downsample data past a defined age — full resolution for recent data, progressively coarser for older data — so storage doesn't grow unbounded.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-time-series-data-design-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-time-series-data-design-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a downsampling schedule for ingested metrics",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A concrete retention and downsampling policy for metrics ingested at 1-second resolution:\n\n```\n0 - 24 hours:    1-second resolution   (raw, full detail)\n1 - 30 days:     1-minute resolution   (60x reduction)\n30+ days:        1-hour resolution     (3600x reduction from raw)\n```\n\nA background job rolls up older data into coarser buckets on a schedule, then the original fine-grained points past their window can be deleted, since the data volume savings only materialize once the raw points are actually removed, not just once the rollup exists alongside them.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-time-series-data-design-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a purpose-built store vs a generic relational table",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Generic relational table | Time-series / wide-column store |\n|---|---|---|\n| Write pattern | Optimized for scattered updates | Optimized for high-throughput append-only writes |\n| Storage | Row-oriented, no native downsampling | Column-oriented compression, built-in rollup support |\n| Time-range queries | Requires manual indexing and partitioning | Time-range scans are a first-class, optimized operation |\n| Retention | Manual deletion jobs | Native TTL and retention policies |\n\n**How to decide:** at meaningful scale, a purpose-built store (InfluxDB, TimescaleDB, a wide-column store like Cassandra) does natively what you'd otherwise hand-build on top of a generic relational table.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-time-series-data-design-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-time-series-data-design-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a query hitting the right resolution tier",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A query for \"the last 24 hours at 1-second resolution\" hits the hot tier directly:\n\n```\nSELECT * FROM metrics_raw\nWHERE ts > now() - interval '24 hours';\n```\n\nA query for \"the last year, at whatever resolution is available\" hits the rolled-up tier instead, since that's all that still exists that far back:\n\n```\nSELECT * FROM metrics_hourly\nWHERE ts > now() - interval '1 year';\n```\n\nThe application or query layer needs to know which tier serves which time range — often abstracted behind a single query interface that routes internally, so callers don't have to know the retention policy themselves.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-time-series-data-design-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Say this explicitly: **downsampling cuts storage hard, but permanently discards fine-grained history — decide upfront what resolution you'll actually need later, because you can't reconstruct it after the raw points are gone.** This is a one-way decision at the point old raw data is deleted.\n\nA candidate who names this permanence, and asks what resolution stakeholders will actually need a year from now before finalizing the retention policy, is showing real judgment — not just implementing a rollup because it saves space.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-time-series-data-design-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-time-series-data-design-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: full resolution needed from six months ago",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the retention policy already rolled that data up and deleted the raw points, the honest answer is: no, that data is gone, and this is exactly the permanence the trade-off warned about. This is why the resolution schedule needs sign-off from whoever actually needs incident-review-grade data, before it's finalized — not decided unilaterally by whoever's optimizing storage cost.\n\nA mitigation worth naming: keep raw data slightly longer for known-sensitive systems (payment processing, safety-critical sensors) even if the general policy downsamples faster elsewhere, rather than applying one retention policy uniformly regardless of what's at stake for different data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-time-series-data-design-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: handling a burst of out-of-order data",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Time-series systems need an explicit **acceptance window** — how far back a late-arriving point can still be written before it's rejected or handled specially. A point arriving 30 seconds late for an already-closed 1-minute bucket either needs that bucket to be reopened and recomputed, or the late point gets routed to a separate correction path.\n\nName the choice: reopening buckets is more correct but adds complexity to every downstream rollup that already ran on the old value; rejecting or side-channeling late points is simpler but means the primary data is knowingly incomplete for a window after ingestion.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-time-series-data-design-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: storing raw time-series data forever in a generic table",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just store every metric point at full resolution forever in our regular relational database — storage is cheap.\"\n\n**Why it's wrong:** storage cost isn't the only cost — query performance degrades as the table grows unbounded, since a generic relational table has no built-in notion of rolling up or expiring old data, and every query scanning a time range pays the cost of the entire accumulated history sitting alongside it.\n\n**Correct model:** downsample or expire data past a defined age, and use a store with native time-range and retention support once volume justifies it — full-resolution-forever is rarely the right default at real scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-time-series-data-design-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-time-series-data-design-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd partition storage by time range so range queries stay cheap, write append-only since time-series data is rarely updated in place, and downsample older data instead of keeping full resolution forever — recent data stays fine-grained, older data gets progressively coarser. I'd use a purpose-built time-series or wide-column store once volume justifies it, since it gives this natively instead of hand-built on a generic table. And I'd name the trade-off explicitly: downsampling is a one-way door, so the retention schedule needs real sign-off before old raw data is deleted for good.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

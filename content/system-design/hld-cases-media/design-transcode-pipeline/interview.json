@@ -1,0 +1,29 @@
+{
+  "topicId": "design-transcode-pipeline",
+  "interviewQuestions": [
+    {
+      "id": "design-transcode-pipeline-iq1",
+      "question": "Design the system that processes every file a user uploads into one or more derivative outputs.",
+      "answerMarkdown": "I'd frame this as a general async job system, not a media-specific pipeline: `submitJob(mediaId, jobType)` enqueues work and returns immediately, with completion reported via a webhook plus a polling status endpoint as a fallback for missed callbacks. Each job type gets its own queue and worker pool — a thumbnail and a 4K transcode differ by 40x in worker-seconds, so sharing a pool lets expensive jobs starve cheap ones.\n\nA job-state table keyed by `(mediaId, jobType)` tracks attempts and status durably, separate from the transient queue. Every job carries a deterministic idempotency key so a retry after a crash overwrites the same output instead of duplicating it, and only the state table's completion flag — not the output write itself — is the source of truth for 'did this succeed.'\n\nI'd close on prioritization: user-facing jobs (someone waiting on a thumbnail) get a high-priority queue that batch jobs can never block.\n\n**Testing:** whether you generalize this beyond 'transcode video' into a reusable async job pattern with real failure handling.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "General async media-processing pipeline"
+    },
+    {
+      "id": "design-transcode-pipeline-iq2",
+      "question": "How do you make sure a job retried after a worker crash doesn't corrupt or duplicate its output?",
+      "answerMarkdown": "I'd assign every job a deterministic idempotency key — typically `mediaId + jobType + version` — and derive the output's storage path from that key rather than from a freshly generated ID per attempt. That way, a retry writes to (or overwrites) the exact same location instead of creating a new copy.\n\nJust as important: I'd only mark the job complete in the job-state table after the output write is confirmed durable, and treat that table's flag — not the existence of some output file — as the single source of truth. If a worker crashes after writing output but before updating state, the retry's overwrite is harmless because it lands on the same path; if it crashes before writing anything, the retry just redoes the work cleanly.\n\nI'd also cap retries with a bounded budget, landing failed jobs in a dead-letter state rather than retrying forever.\n\n**Testing:** whether you can name the concrete mechanism (idempotency key tied to output path) instead of just saying 'add retry logic'.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Designing safe idempotent retries"
+    },
+    {
+      "id": "design-transcode-pipeline-iq3",
+      "question": "How would you make sure a user waiting on a thumbnail isn't stuck behind a backlog of overnight batch jobs?",
+      "answerMarkdown": "I'd route by priority into separate queues rather than relying on a priority field inside one shared queue — a shared queue processed roughly FIFO can still leave a user-facing job sitting behind thousands of batch jobs during a backlog, since a field alone doesn't guarantee preemption.\n\nConcretely: a high-priority queue and worker pool for user-facing job types (thumbnails, quick previews) that batch jobs never enter, and a separate low-priority queue for batch work (nightly re-encodes) that fills spare capacity. I'd autoscale each pool independently against its own queue depth, so a batch backlog triggers batch-pool scaling without touching the user-facing pool's capacity at all.\n\nI'd also make sure alerting differs: a stalled user-facing queue pages someone immediately, while a stalled batch queue can tolerate a slower response.\n\n**Testing:** whether you reach for separate queues/pools instead of a same-queue priority field that doesn't actually prevent starvation.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Prioritizing user-facing over batch jobs"
+    }
+  ]
+}

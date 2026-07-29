@@ -1,0 +1,29 @@
+{
+  "topicId": "distributed-rate-limiting",
+  "interviewQuestions": [
+    {
+      "id": "distributed-rate-limiting-iq1",
+      "question": "How do you rate-limit consistently across 100 app servers?",
+      "answerMarkdown": "I'd start from the failure mode: if each server keeps its own counter, a client's true rate is the sum across whichever servers it happened to hit, and no single server knows that sum. So the fix is moving the counter out of local memory into a shared, fast store — Redis is the default choice — keyed per client, checked by every node against the same key.\n\nI'd flag the race condition next: a naive read-check-write against that shared counter lets concurrent requests from different nodes both slip through near the limit. I'd make the check atomic — a single `INCR` compared post-increment, or a Lua script — so no interleaving is possible.\n\nFinally I'd address the new bottleneck this creates: every request now makes a network hop to Redis, so at very high QPS I'd consider approximate local limiting with periodic sync instead of a synchronous check on every request, trading a small bounded overage for far less load on the shared store.\n\n**Testing:** whether you can go beyond \"just use Redis\" to the race condition and the new bottleneck it introduces.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Rate-limiting across 100 servers"
+    },
+    {
+      "id": "distributed-rate-limiting-iq2",
+      "question": "What race condition can occur in a distributed rate limiter, and how do you fix it?",
+      "answerMarkdown": "The race shows up when the check is split into separate steps: read the current count, compare to the limit, then write the incremented value back. Two nodes can both read the same pre-increment value at nearly the same time, both see room under the limit, and both let their request through — one more request slips in than the limit allows, and under real concurrency this happens constantly, not rarely.\n\nThe fix is collapsing read-check-write into one atomic operation so no other node's request can interleave in the middle. In Redis that's either a plain `INCR` (atomic by construction) checked against the limit after incrementing, or a small Lua script that does the read, comparison, and write inside a single atomic execution on the server.\n\nI'd generalize this: any shared counter checked from multiple processes needs an atomic primitive, not just a fast backing store — speed alone doesn't close the race window.\n\n**Testing:** whether you recognize check-then-act as a race and know the concrete atomic fix, not just that \"Redis is fast.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "The distributed check-then-increment race"
+    },
+    {
+      "id": "distributed-rate-limiting-iq3",
+      "question": "Would you always centralize a rate limiter in one Redis instance? What are the trade-offs?",
+      "answerMarkdown": "Not always — it depends on what an overage costs. Strict centralized checking gives an exact global count, which matters when the limit is tied to something like billing or a contractual SLA where any overshoot has a real cost. The trade-off is a synchronous network round trip on every request, and the limiter itself becoming a shared dependency that has to be scaled and kept available.\n\nFor pure abuse protection — stopping a runaway client from overwhelming capacity — I'd lean toward approximate distributed limiting: each node enforces a local share of the limit and syncs periodically, so a client might briefly exceed the true limit by a small margin, but no request pays a synchronous round trip and there's no single point that can become overloaded.\n\nI'd also plan for the centralized store's own scaling — sharding by client-id, or falling back to approximate limiting past a certain QPS — rather than treating it as a free, infinitely scalable add-on.\n\n**Testing:** whether you weigh correctness against latency and blast radius instead of defaulting to \"always centralize.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Strict vs approximate distributed limiting"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-leader-election-approach",
+  "interviewQuestions": [
+    {
+      "id": "iv-leader-election-approach-iq1",
+      "question": "How would you approach leader election for a component in this design?",
+      "answerMarkdown": "First I'd confirm the component genuinely needs a single leader — some components work fine with every node acting independently, and it's worth ruling that out before designing anything.\n\nIf it does need one, I'd reach for an existing consensus system — etcd or ZooKeeper — rather than hand-roll election with heartbeats and timeouts. The leader is whoever holds a time-bound lease from that store, and it must renew the lease before it expires or lose leadership automatically. Followers watch the leader key and race to acquire it the instant it's freed, with the store's own atomicity guaranteeing exactly one winner even under a race.\n\nI'd size the lease TTL as a real trade-off: shorter means faster failover but more renewal traffic and sensitivity to blips; longer tolerates blips but leaves a dead leader's slot unusable longer. I'd also name the honest cost: this takes a hard dependency on the consensus store's own availability.\n\n**Testing:** whether you reach for a proven building block instead of trying to hand-roll a subtle distributed-systems problem live.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Choosing a leader-election mechanism"
+    },
+    {
+      "id": "iv-leader-election-approach-iq2",
+      "question": "The consensus store itself becomes unavailable — does your component have a leader at all right now?",
+      "answerMarkdown": "It depends on the exact timing, and I'd be precise rather than give an extreme answer in either direction. If the current leader's lease was already valid when the store went down, that leader keeps working until its lease's TTL runs out — the lease itself doesn't require live contact with the store every instant, just periodic renewal.\n\nOnce that TTL expires, though, no new leader can be elected while the store is unavailable, since acquiring a new lease requires the store to be reachable and able to reach consensus internally. So the honest answer is: a currently-valid lease survives briefly, but re-election is blocked until the store recovers — not \"nothing happens\" and not \"everything breaks immediately.\"\n\nI'd also note this is exactly why the consensus store itself needs to be deployed with enough redundancy that this scenario is rare, since this component's leader availability is now bounded by it.\n\n**Testing:** whether you understand the precise timing of lease-based leadership under a dependency failure, not just that 'it depends.'",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Consensus store outage impact on leadership"
+    },
+    {
+      "id": "iv-leader-election-approach-iq3",
+      "question": "How short should the lease renewal interval be, and what's the trade-off in either direction?",
+      "answerMarkdown": "This is a direct trade-off between failover speed and stability. A shorter lease TTL means a dead leader's slot frees up faster, so followers take over sooner — but it also means more frequent renewal traffic against the consensus store, and a higher chance that a merely transient network blip causes an unnecessary failover.\n\nA longer TTL tolerates those blips better, since the leader has more slack before it actually loses the lease, but a genuinely dead leader's slot stays unusable for longer, which directly adds to the client-visible blip during a real failure.\n\nA concrete number I'd propose as a starting point: something like a 10-second TTL with renewal attempted every 3 seconds, giving a few renewal attempts of margin before expiry — tolerant of a couple of missed beats without triggering a needless failover, while still bounding real downtime to roughly 10 seconds.\n\n**Testing:** whether you can reason concretely about a tuning parameter's trade-off instead of treating it as an arbitrary constant.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Tuning the lease renewal interval"
+    }
+  ]
+}

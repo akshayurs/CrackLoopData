@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-retry-utility",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-retry-utility-iq1",
+      "question": "Design a retry utility for calls to an unreliable downstream service.",
+      "answerMarkdown": "I'd shape it as a single function, `retry(operation, policy)`, where the operation is the call that might transiently fail and the policy owns everything about how retries behave — max attempts, which exceptions count as retryable, and the backoff between attempts.\n\nFor backoff, I'd use exponential growth with jitter rather than a fixed delay: without jitter, a group of clients that failed together retries together, recreating the load spike the retry was supposed to help recover from. I'd check retryability before sleeping, so a permanent failure like a 400 fails fast on the first attempt instead of burning the whole retry budget.\n\nI'd close on safety: retries are only sound for idempotent operations, so for anything with a side effect — a payment, an order creation — I'd either confirm idempotency or attach a client-generated idempotency key so a retried request can be recognized and deduped server-side.\n\n**Testing:** whether you treat backoff and idempotency as core to the design, not details you'd add if asked.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-retry-utility-iq2",
+      "question": "How would you add jitter to the backoff, and why does it matter?",
+      "answerMarkdown": "I'd take the exponentially-computed base delay for a given attempt and add a random component on top — commonly a random value between zero and half the base delay — so the actual wait time varies per caller instead of being identical for everyone on the same attempt number.\n\nIt matters because a fixed exponential schedule is deterministic: if a thousand clients all fail at the same instant during a brief outage, they all compute the same delay and all retry at the same instant, turning a recovering service's first moment of relief into another synchronized spike. Jitter breaks that synchronization, spreading the same volume of retries across a window instead of a single moment.\n\nI'd mention that jitter is a small code change — a few lines in the backoff calculation — but it's often the difference between a dependency recovering cleanly and getting knocked back down by its own retrying clients.\n\n**Testing:** whether you understand jitter as solving a coordination problem across clients, not just adding randomness for its own sake.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Jitter follow-up"
+    },
+    {
+      "id": "iv-design-retry-utility-iq3",
+      "question": "How do you decide which exceptions are safe to retry versus which should fail fast?",
+      "answerMarkdown": "I'd sort by whether the same request, sent again unchanged, has any real chance of a different outcome. A network timeout, a connection reset, or a 503 all suggest a transient condition — the server or network hiccuped, and trying again might succeed. A 400 Bad Request, an auth failure, or a validation error will produce the exact same failure every time, since nothing about the request itself changed.\n\nI'd make this an explicit, pluggable check on the policy — `isRetryable(exception)` — rather than a hardcoded switch statement, since different services have different error taxonomies and a caller integrating with a third-party API may need to supply their own classification.\n\nI'd flag the failure mode of getting this wrong in either direction: retry-everything wastes time and load on doomed requests, while retry-nothing throws away easy wins on transient blips that a second attempt would have fixed.\n\n**Testing:** whether you can articulate a general rule (transient vs permanent) rather than just listing HTTP status codes from memory.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Retryable vs fail-fast"
+    }
+  ]
+}

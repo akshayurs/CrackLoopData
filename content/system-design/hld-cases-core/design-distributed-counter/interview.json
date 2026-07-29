@@ -1,0 +1,29 @@
+{
+  "topicId": "design-distributed-counter",
+  "interviewQuestions": [
+    {
+      "id": "design-distributed-counter-iq1",
+      "question": "Design a view counter for a video that gets 10M views in an hour?",
+      "answerMarkdown": "I'd start by sizing the problem: 10M views/hour is roughly 2,800 increments/sec on what would naively be a single row — close to or above what one row's lock contention can sustain, so a single counter is out from the start.\n\nI'd shard the logical counter into N physical shards, spreading increments across them, and sum across shards on read. Since this counter is read far more often than it's incremented (every page load reads it, only a view increments it), I'd immediately cache the aggregated total and refresh it periodically rather than summing shards live on every read — otherwise the read side becomes the new bottleneck.\n\nI'd close by asking whether the count needs to be exact: if approximate is fine (it usually is for a display number), I'd add in-memory batching before the durable write to cut storage load further.\n\n**Testing:** whether you can spot that the same sharding fix creates a new read-side cost, and address it, rather than declaring the problem solved once writes are spread out.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core distributed-counter design"
+    },
+    {
+      "id": "design-distributed-counter-iq2",
+      "question": "Your product team says the view count doesn't need to be perfectly exact — how does that change your design?",
+      "answerMarkdown": "That single requirement change unlocks the cheapest parts of the design. I'd add in-memory batching on top of sharding: each app server accumulates increments locally and flushes a delta every few seconds instead of writing on every event, cutting durable-storage writes by orders of magnitude.\n\nI'd be explicit about what \"not exact\" buys and costs: a server crash before flushing loses that server's unflushed increments — a small, bounded, and acceptable loss for a display count, but something I'd flag as unacceptable if this were ever repurposed for billing or inventory without re-examining the design.\n\nI'd also mention that displayed counts are often rounded (\"1.2M views\") specifically because the product doesn't need or want single-digit precision, which reinforces that approximate is the right target here, not a compromise.\n\n**Testing:** whether you let a stated non-functional requirement genuinely change your architecture, rather than defaulting to the most robust design regardless of what's actually needed.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Exact vs approximate counts"
+    },
+    {
+      "id": "design-distributed-counter-iq3",
+      "question": "How would you count unique visitors to a page, as opposed to total views?",
+      "answerMarkdown": "I'd flag this as a genuinely different problem from the plain view counter — unique-visitor counting is a cardinality-estimation problem (avoiding double-counting the same visitor), not just a bigger increment counter, and a sharded counter alone can't dedupe.\n\nFor an exact answer, you'd need to track every individual visitor ID (a set), which gets expensive at scale — memory grows with the true number of uniques. I'd propose HyperLogLog instead: it estimates the distinct count using a small, fixed amount of memory regardless of scale, accepting a small bounded error (commonly under 2%) in exchange for that space savings.\n\nI'd close by confirming that trade-off is acceptable for the use case — an analytics dashboard almost certainly doesn't need an exact unique count, while a legal/compliance reporting requirement might.\n\n**Testing:** whether you recognize distinct counting as a different algorithmic problem than total counting, rather than reaching for the same sharded-counter solution by default.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Counting unique visitors"
+    }
+  ]
+}

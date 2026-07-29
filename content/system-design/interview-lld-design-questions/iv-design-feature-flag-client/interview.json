@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-feature-flag-client",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-feature-flag-client-iq1",
+      "question": "Design a feature-flag client that a service embeds to check whether a feature is enabled.",
+      "answerMarkdown": "I'd scope this explicitly as the client SDK, not the flag-management backend — the API is `isEnabled(flag, context)`, synchronous, with no exception in its signature, since the client is designed to never fail loudly.\n\nInternally, I'd hold a local cache of flag definitions refreshed on a periodic interval from the backend, so every `isEnabled` call is evaluated in memory with zero network calls on the hot path — a check happening per-request can't afford to wait on a remote service every time.\n\nThe piece I'd raise without being asked: every flag needs a pre-configured default value baked into its definition, used whenever the backend is unreachable and there's nothing usable in the cache yet. I'd let that default be chosen per flag — fail closed for anything risky like a payment flow, fail open for something low-stakes like a UI tweak — rather than one global answer for every flag.\n\n**Testing:** whether you treat resilience to backend failure as core to the design, not an edge case you'd add only if prompted.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-feature-flag-client-iq2",
+      "question": "What does isEnabled return if the backend is unreachable and the cache is stale or empty?",
+      "answerMarkdown": "It returns a safe, pre-configured default — never an exception, and never a blanket true or false applied to every flag regardless of what it controls. I'd design each flag's definition to carry its own default value, set by whoever creates the flag based on that flag's actual risk: a payment-related flag defaults to false so a backend outage can't accidentally enable something untested, while a low-stakes UI flag might default to true since a minor visual miss costs little.\n\nI'd treat a merely-stale cache and a genuinely-empty one the same way from the caller's perspective — both fall through to the same per-flag default — so the behavior is predictable regardless of exactly how long the backend has been unreachable or whether the client has ever successfully refreshed at all.\n\nThe underlying principle I'd state directly: a feature-flag check should never become a new source of failure for the code that happens to use it, which is exactly what throwing an exception here would risk.\n\n**Testing:** whether you connect the safe-default requirement to an actual per-flag risk decision, rather than treating it as a single hardcoded fallback value.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Safe default on backend failure"
+    },
+    {
+      "id": "iv-design-feature-flag-client-iq3",
+      "question": "How do you support percentage rollouts so the same user consistently gets the same result?",
+      "answerMarkdown": "I'd compute a deterministic hash of the flag name combined with a stable identifier from the context — the user ID is the usual choice — and map that hash into a 0-to-100 range. If the resulting number falls under the flag's configured rollout percentage, the flag evaluates as enabled for that user; otherwise it doesn't.\n\nThe critical detail is determinism: using a hash function rather than a fresh random roll on every call means the exact same user and flag combination always produces the exact same number, on every request, on every server instance, since nothing about the calculation depends on when or where it's evaluated.\n\nWithout that, a user could see a feature flicker on and off between requests purely based on which server instance happened to serve them, which looks like a bug even though the flag logic is technically doing what was asked. I'd close by noting the same technique extends naturally to sticky A/B test bucketing, not just simple percentage rollouts.\n\n**Testing:** whether you reach for a deterministic hash instead of naive per-call randomness, since the latter creates a visible, confusing inconsistency for users.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Deterministic percentage rollouts"
+    }
+  ]
+}

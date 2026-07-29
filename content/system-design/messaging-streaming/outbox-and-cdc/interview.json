@@ -1,0 +1,29 @@
+{
+  "topicId": "outbox-and-cdc",
+  "interviewQuestions": [
+    {
+      "id": "outbox-and-cdc-iq1",
+      "question": "How do you guarantee an \"order confirmed\" event is published if and only if the order actually saved?",
+      "answerMarkdown": "I'd tie the event's existence to the same atomic commit as the order write, rather than trying to coordinate two separate network calls. Concretely: write the order row and an OrderConfirmed row into an outbox table, both in the same local database transaction — either both commit or neither does, so there's no window where one succeeded and the other didn't.\n\nA separate relay process then tails that outbox table, publishes each row to the broker, and marks it sent. If the relay crashes mid-publish, it just resumes from unsent rows on restart, which means it can occasionally republish, so the downstream consumer needs to be idempotent, but it can never silently lose an event tied to a committed order.\n\nAs an alternative, I'd mention CDC: tailing the database's own commit log with something like Debezium gives the same guarantee without a dedicated outbox table, at the cost of running extra CDC infrastructure.\n\n**Testing:** whether you reach for atomicity at the database level instead of trying to make two independent network calls reliable together.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Guaranteeing an event matches a committed write"
+    },
+    {
+      "id": "outbox-and-cdc-iq2",
+      "question": "Why can't you just wrap the database write and the broker publish in a single distributed transaction?",
+      "answerMarkdown": "Technically you sometimes can, via two-phase commit or an XA transaction, but almost nobody does this in practice, and I'd explain why: most message brokers don't support the two-phase commit protocol well, or at all, and even where it exists, it adds latency and a coordinator that becomes its own single point of failure and complexity.\n\nThe outbox pattern sidesteps this entirely by keeping the transaction local to one database, using tools every team already has, and offloading the actual publish to an asynchronous relay that can retry freely, since retries there are safe as long as consumers are idempotent.\n\nI'd frame it as a trade: distributed transactions try to make the multi-step operation atomic directly; outbox instead makes only the write atomic, and re-derives the eventual publish as a separate, retriable step.\n\n**Testing:** whether you understand why the industry converged on outbox and CDC over distributed transactions for this specific problem.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why not a distributed transaction"
+    },
+    {
+      "id": "outbox-and-cdc-iq3",
+      "question": "Your team already has 6 services publishing outbox events with 6 separate relay processes. How would you evaluate switching to CDC instead?",
+      "answerMarkdown": "I'd frame it as trading application-level control for shared infrastructure. Right now each service owns its outbox table and its relay, giving full control over the exact event payload, but that's 6 relay processes to operate, monitor, and keep consistent in behavior.\n\nSwitching to CDC would let one shared pipeline, something like Debezium connectors feeding Kafka Connect, tail each service's database directly, removing the need for a dedicated outbox table and relay per service. The trade-off is that the emitted events are now derived from raw row changes, so I'd need a transformation layer to shape them into the event contract consumers already expect, and I'd need to watch for schema changes in the source tables leaking into the event stream unexpectedly.\n\nI'd only recommend the switch if the operational savings from consolidating 6 relays into one pipeline outweigh the cost of building and maintaining that transformation layer — for a small number of services, it might not be worth it yet.\n\n**Testing:** whether you can reason about a migration trade-off concretely instead of treating CDC as strictly better.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Evaluating a migration to CDC"
+    }
+  ]
+}

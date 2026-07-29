@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-handling-long-running-requests",
+  "interviewQuestions": [
+    {
+      "id": "iv-handling-long-running-requests-iq1",
+      "question": "How do you handle a request that takes way longer than a normal API call?",
+      "answerMarkdown": "I'd first rule out just raising the timeout — that keeps a connection open for the full duration and forces every layer in between, the load balancer, gateway, and proxy, to tolerate the same long wait, which doesn't scale as more endpoints have different duration profiles.\n\nInstead, I'd make the call asynchronous: accept the request immediately and return a job reference, like a `202 Accepted` with a `job_id`. The client then polls a status endpoint, or better, registers a webhook and gets notified when the work completes — no connection sits open for the full 90 seconds.\n\nI'd name the cost too: this needs a job store, a status API, and idempotent job creation so a retried \"start job\" request doesn't kick off duplicate expensive work. I'd only reach for this once a call reliably takes long enough that synchronous genuinely breaks down.\n\n**Testing:** whether you recognize a synchronous call as the wrong shape for long work, not just propose bigger timeouts.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Handling long-running requests"
+    },
+    {
+      "id": "iv-handling-long-running-requests-iq2",
+      "question": "The client polls your status endpoint every second for 90 seconds — is that OK?",
+      "answerMarkdown": "Usually not once it's happening at scale — 90 status checks per job, multiplied across every job running concurrently, adds real load to an endpoint that's mostly returning \"still processing\" with nothing new to report.\n\nI'd recommend polling backoff first, since it's the simplest fix: start with frequent checks and space them out as elapsed time grows, so early jobs that finish fast get quick feedback while long-running ones don't hammer the endpoint. If the client can maintain a persistent connection, I'd prefer pushing updates via webhook or WebSocket instead, so the server notifies the moment status actually changes rather than the client guessing when to ask.\n\nI'd pick between these based on the caller: a server-to-server caller can register a webhook easily; a browser tab benefits more from backoff or a WebSocket if one's already in use elsewhere in the app.\n\n**Testing:** whether you think about the aggregate cost of a per-client pattern at scale, not just whether it works for one client.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Tight polling at scale"
+    },
+    {
+      "id": "iv-handling-long-running-requests-iq3",
+      "question": "The job fails halfway through — what does the status endpoint return, and can the client retry just the failed part?",
+      "answerMarkdown": "I'd design the status response around a status enum that distinguishes retryable failure from terminal failure — for example, a downstream service timeout is retryable, but a malformed input that will always fail the same way is terminal, and the client needs to know which one it's looking at to decide whether retrying is even worth attempting.\n\nFor resumability, I'd store enough job state to identify the last successfully completed step, so a retry can resume from that checkpoint instead of restarting the entire job from scratch — for a multi-step video transcode, that might mean recording which encoding pass last finished cleanly.\n\nI'd close by noting this only works if each step is itself idempotent, so re-running a step that partially completed doesn't produce duplicate or corrupted output.\n\n**Testing:** whether your failure handling goes beyond a binary success/fail into something a client can actually act on.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Partial failure in a long-running job"
+    }
+  ]
+}

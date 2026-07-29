@@ -1,0 +1,167 @@
+{
+  "id": "design-distributed-cache",
+  "title": "Design a Distributed Cache",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 5,
+  "slug": "design-distributed-cache",
+  "summary": "A cache that is itself a distributed system — sharding, invalidation propagation, and the hot-key problem at cluster scale.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-distributed-cache-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Build the shared cache tier itself — the thing other topics in this group casually put \"a cache\" in front of. At cluster scale, a cache stops being one fast box and becomes its own distributed system: sharded across nodes, with invalidation that has to propagate correctly and a hot-key problem that can exceed any single node's capacity.\n\nThis is Memcached-Cluster or Redis-Cluster territory: the algorithm (LRU, TTL) is the easy part; the distributed-systems shape around it is the interview.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-cache-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** `get`/`set`/`delete` keys, with a configurable eviction policy and per-key TTLs, serving many independent services as a shared tier.\n\n**Non-functional:** a target hit ratio (often 90%+ for the workload to matter), a staleness tolerance (how out-of-date is an acceptable cached value), and predictable low latency even as the cluster grows.\n\nThe staleness tolerance is worth stating explicitly up front — it directly decides how aggressive invalidation needs to be later in the design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-cache-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: working-set size vs node memory",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the hot working set is 500GB and each cache node has 64GB of usable memory, you need at least 8 shards just to hold the data, before adding any headroom for uneven distribution or growth — a common rule of thumb is to size for 60-70% target memory utilization per node, pushing the real number closer to 12-14 shards.\n\nThis number should come from the actual working set (what's *repeatedly* accessed), not total data volume — a cache sized for total data volume is usually wildly over-provisioned, since most systems have a small hot subset.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-cache-s03-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-cache-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`get(key)`, `set(key, value, ttl?)`, `delete(key)` — plus a versioned-invalidation variant, `set(key, value, version)`, so a stale write racing a newer one can be detected and dropped rather than silently overwriting a fresher value.\n\nKeeping the surface Memcached-simple (rather than adding transactions or complex queries) is deliberate: a shared cache tier used by many unrelated services needs to stay predictable and fast, not become a second database.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-cache-s05",
+      "order": 5,
+      "sectionTitle": "Sharding keys across cache nodes with consistent hashing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Exactly like the key-value store topic, keys are distributed across nodes using consistent hashing with virtual nodes, so adding or removing a cache node only reassigns a bounded slice of the keyspace.\n\nThe stakes are different here, though: a key-value store's ring reassignment is a durability question (data must be re-replicated); a cache's reassignment is a performance question (reassigned keys are simply cold on their new node) — losing a cache entry is an inconvenience, not data loss, since the source of truth lives elsewhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-cache-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: client routing to the right shard via a hash ring",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Client-side routing library hashing a key and going directly to the owning shard on the ring](assets/cache-client-side-routing.svg)\n\nMost distributed caches route on the **client side**: the calling application links a small library that knows the ring topology and computes which shard owns a key locally, sending the request directly there.\n\nThis avoids adding a central proxy/router as a bottleneck and single point of failure on every single cache operation — at the cost of every client needing to stay aware of ring topology changes.",
+      "assets": [{"alt": "Client-side routing library hashing a key and going directly to the owning shard on the ring", "path": "assets/cache-client-side-routing.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": [
+        "design-distributed-cache-s06-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-cache-s07",
+      "order": 7,
+      "sectionTitle": "Cache invalidation across nodes: TTL vs explicit broadcast",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | TTL expiry | Explicit invalidation broadcast |\n|---|---|---|\n| Staleness window | Bounded by TTL — can serve stale data until it expires | Near-immediate once the broadcast lands |\n| Complexity | Trivial — just set an expiry | Needs a pub/sub or messaging layer to reach every node holding the key |\n| Failure mode | Fails safe — worst case is serving slightly stale data | A missed broadcast leaves a node stale indefinitely, with no self-correction |\n\n**How to decide:** use TTL as the baseline always, since it fails safe. Layer explicit invalidation on top only for data where staleness has a real cost (e.g. a price change) — and even then, keep a TTL as a backstop in case a broadcast is missed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-cache-s07-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-cache-s08",
+      "order": 8,
+      "sectionTitle": "The hot-key problem: one key exceeding a single node's capacity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Consistent hashing balances keys evenly across nodes, but a single extremely popular key (a viral post's metadata, a flash-sale product) can still generate more read traffic than one node can serve — no amount of rebalancing helps, because the key can only live on one shard's worth of nodes at a time.\n\nThis is the cache-specific version of the hot-partition problem seen in the key-value store topic, but sharper here: since the cache's whole job is absorbing read load, a hot key defeats that purpose exactly where it matters most.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-cache-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: hot-key mitigation with local caching and key-splitting",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Hot key split into suffixed keys across nodes, plus a local in-process cache in front](assets/cache-hot-key-splitting.svg)\n\nTwo complementary fixes: **key-splitting** stores the same value under several suffixed keys (`key#0`..`key#N`) spread across different nodes, and clients pick a suffix at random, spreading one hot key's load across N nodes instead of one. **Local (in-process) caching** on each app server holds the very hottest keys directly in application memory, skipping the network hop to the distributed cache entirely for the most extreme cases.\n\nBoth trade a little staleness or memory duplication for taking pressure off the single node that would otherwise own the hot key.",
+      "assets": [{"alt": "Hot key split into suffixed keys across nodes, plus a local in-process cache in front", "path": "assets/cache-hot-key-splitting.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-cache-s10",
+      "order": 10,
+      "sectionTitle": "Node failure and rebalancing without a stampede on the database",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a cache node fails, the keys it owned become cache misses on their new owner (per the ring) — if that's a large fraction of the keyspace, the backing database can suddenly see a spike of requests it hasn't seen in a while, since those keys were previously served entirely from cache.\n\nMitigation: stagger cache warmup for a newly-added or recovered node (pre-populate from the database gradually rather than serving cold and forcing every request through), and keep per-node request-rate limiting to the database so one node's cold cache can't unbound the load it forwards downstream.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-cache-s10-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-cache-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: a full cache-cluster restart causing a thundering herd",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We can safely restart the whole cache cluster during a maintenance window — it's just a cache, the database still has the real data.\"\n\n**Why it's wrong:** restarting every node at once means every key in the cluster is a miss simultaneously — the backing database, which had been shielded from nearly all read traffic, suddenly receives the *entire* read load at once, often enough to overload or crash it, which is a much worse outage than the cache restart itself.\n\n**Correct model:** restart cache nodes in a staggered rolling fashion, never all at once, and consider pre-warming a replacement cluster from the database before cutting traffic over, so the database never sees a full-traffic spike.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-distributed-cache-s11-q1"
+      ]
+    }
+  ]
+}

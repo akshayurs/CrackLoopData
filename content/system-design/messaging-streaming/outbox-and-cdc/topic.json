@@ -1,0 +1,133 @@
+{
+  "id": "outbox-and-cdc",
+  "title": "Transactional Outbox & Change Data Capture",
+  "area": "system-design",
+  "group": "messaging-streaming",
+  "order": 8,
+  "slug": "outbox-and-cdc",
+  "summary": "The dual-write problem — updating your database and publishing an event are two separate operations that can't both succeed atomically without a trick — and the two standard tricks.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "outbox-and-cdc-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Updating your database and publishing an event about that update are two separate operations — and a crash between them means either the event silently never goes out, or, with a naive retry, it goes out twice for a write that never happened. This is the **dual-write problem**, and it shows up anywhere a service both persists data and tells the world about it.\n\nThis topic covers the two standard fixes: the transactional outbox pattern, and change data capture — both ways of making the database commit the single source of truth an event stream can safely follow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "outbox-and-cdc-s02",
+      "order": 2,
+      "sectionTitle": "The dual-write problem: a crash between the DB commit and the publish loses or duplicates the event",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A typical order service does two things when an order is placed: write the order to its database, and publish an `OrderConfirmed` event to a broker. These are two separate network calls to two separate systems, and no transaction spans both.\n\nIf the service crashes after the DB commit but before the publish call succeeds, the order exists but no event ever went out — nothing downstream (inventory, shipping, email) ever hears about it. If instead you publish first and the DB write then fails, you've told the world about an order that doesn't exist.\n\nRetrying doesn't cleanly fix this either: retry the publish blindly and you might duplicate an event that did go out; skip retrying and you might lose one that didn't. This is the same coordination problem a distributed transaction (or saga) has to solve for a multi-step business process, just at the two-step, single-service scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "outbox-and-cdc-s02-q1"
+      ]
+    },
+    {
+      "id": "outbox-and-cdc-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: a service writing to its DB, then crashing before publishing",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Service commits an order to the database successfully, then crashes before publishing OrderConfirmed to the broker, so the event never arrives](assets/dual-write-failure.svg)\n\nFrom the database's point of view, everything succeeded — the commit is durable and the order is real. From the event bus's point of view, nothing happened at all. Any downstream service waiting for OrderConfirmed simply never sees this order.\n\nThe gap between \"DB commit succeeded\" and \"publish succeeded\" is exactly where the dual-write problem lives — and no amount of retrying the publish call alone closes that gap, because by the time you retry, you don't reliably know whether the first publish attempt actually went through or not.",
+      "assets": [
+        {
+          "alt": "Service commits an order to the database successfully, then crashes before publishing OrderConfirmed to the broker, so the event never arrives",
+          "path": "assets/dual-write-failure.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "outbox-and-cdc-s04",
+      "order": 4,
+      "sectionTitle": "The outbox pattern: write the event to an outbox table in the same local transaction as the data change",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **outbox pattern** solves this by writing the event into an `outbox` table in the *same local database transaction* as the actual data change. Both the order row and its corresponding `OrderConfirmed` outbox row either commit together, or neither commits — that's an ordinary single-database transaction, not a distributed one, so it's fully atomic with tools you already have.\n\nThis converts the dual-write problem into a single-write problem: if the transaction commits, both the order and the fact that an event needs to be published are durably true at the same instant. If it rolls back, neither exists — there's no window where one succeeded and the other didn't.\n\nThe event hasn't actually reached the broker yet at this point — it's just durably recorded as *needing* to be sent, which the next step handles.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "outbox-and-cdc-s04-q1"
+      ]
+    },
+    {
+      "id": "outbox-and-cdc-s05",
+      "order": 5,
+      "sectionTitle": "A relay process (or CDC) tails the outbox table and publishes to the broker, then marks it sent",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A separate **relay process** polls (or streams from) the outbox table, picks up unpublished rows, publishes each one to the broker, and marks it sent, typically by deleting the row or flagging a `published` column.\n\nIf the relay crashes mid-publish, it simply resumes from where the unsent rows still sit in the table — this makes the relay's job at-least-once by construction: a row it already published but hadn't yet marked as sent gets republished on restart, which is why the downstream consumer still needs to be idempotent.\n\nThe outbox table plus this relay together guarantee the event is published *if and only if* the transaction committed — the crash-losing-the-event scenario from earlier can no longer happen, because the event's existence is tied to the same commit as the data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "outbox-and-cdc-s05-q1"
+      ]
+    },
+    {
+      "id": "outbox-and-cdc-s06",
+      "order": 6,
+      "sectionTitle": "Change Data Capture (CDC): tailing the database's own replication/commit log instead of a dedicated outbox table",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**CDC** takes a different route to the same guarantee: instead of a dedicated outbox table and a custom relay, a tool like Debezium tails the database's own replication or write-ahead log directly, and emits an event for every row change it sees there — including inserts into an outbox table, or even ordinary business tables directly.\n\nBecause the database's commit log is the actual source of truth for what was durably written, tailing it gives the same atomicity guarantee as the outbox pattern, without the application needing to write to a separate outbox table at all — CDC can watch the `orders` table itself and emit an event whenever a row changes, no explicit outbox insert required.\n\nThis is more infrastructure to run, often a CDC connector paired with Kafka Connect, but less application code, and it decouples the choice of what counts as an \"event-worthy\" change from what the application developer remembered to write into an outbox — useful in systems where keeping several data stores consistent is already a concern of its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "outbox-and-cdc-s06-q1"
+      ]
+    },
+    {
+      "id": "outbox-and-cdc-s07",
+      "order": 7,
+      "sectionTitle": "Compare: outbox-table-plus-relay vs log-based CDC (e.g. Debezium)",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Outbox table + relay | Log-based CDC (e.g. Debezium) |\n|---|---|---|\n| What the app does | Insert an event row into an outbox table, in the same transaction | Nothing extra — just writes to its normal tables |\n| Extra infrastructure | A relay process/job | A CDC connector tailing the DB's commit log |\n| Event shape control | Full control — the app writes exactly the event payload it wants | Derived from row changes; may need transformation to match the event contract |\n| Operational surface | One more table and one more process to run and monitor | A CDC pipeline (often Kafka Connect) to run, monitor, and keep in sync with schema changes |\n\n**How to decide:** outbox is simpler to reason about and control when only one service needs this guarantee; CDC pays off when several services need change streams off their databases, since one CDC pipeline setup serves any table, not just one outbox.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "outbox-and-cdc-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: publishing the event first and writing to the DB second \"to be safe\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll publish the event first, then write to the database — that way if the DB write fails, I still know the attempt happened.\"\n\n**Why it's wrong:** this just moves the failure window rather than closing it. Now if the publish succeeds but the subsequent DB write fails (validation error, connection drop, deadlock), the world has been told \"order confirmed\" for an order that was never actually saved — arguably worse, since downstream systems like shipping and email will act on an order that doesn't exist in the source of truth.\n\n**Correct model:** the database write and the event's existence need to be tied to the same atomic commit, which is exactly what the outbox pattern or CDC provides — publish order doesn't matter if the guarantee comes from the transaction, not from which network call you happened to make first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "outbox-and-cdc-s08-q1"
+      ]
+    }
+  ]
+}

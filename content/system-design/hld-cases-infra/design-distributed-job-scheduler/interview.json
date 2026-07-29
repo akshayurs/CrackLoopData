@@ -1,0 +1,29 @@
+{
+  "topicId": "design-distributed-job-scheduler",
+  "interviewQuestions": [
+    {
+      "id": "design-distributed-job-scheduler-iq1",
+      "question": "Design a distributed cron system like a lightweight Airflow.",
+      "answerMarkdown": "I'd open with the guarantee this system actually needs to provide: every job runs, even across worker and scheduler crashes, and I'd commit early to at-least-once semantics with idempotent jobs rather than chasing true exactly-once, since that's what nearly every production scheduler does and it keeps the rest of the design tractable.\n\nCore data model: a job table keyed by `jobId` with `nextRunTime` and lease state (which worker holds it, until when). A single leader — elected via a coordination service so exactly one instance is authoritative — polls this table for due jobs and dispatches them with a lease, not a permanent claim. Workers heartbeat to renew their lease; if a worker crashes, the lease simply expires and the job becomes available again, with no active crash-detection needed.\n\nI'd flag jitter as the fix for the scheduling-stampede problem (many jobs due at the identical timestamp), and lease-based dispatch — never mark-done-at-dispatch — as the fix for the classic double-execution pitfall.\n\n**Testing:** whether the design is driven by the reliability guarantee (at-least-once + idempotency) rather than treating cron syntax as the hard part.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Full distributed scheduler design walkthrough"
+    },
+    {
+      "id": "design-distributed-job-scheduler-iq2",
+      "question": "How would you handle a job that's still running when its lease is about to expire, even though the worker hasn't actually crashed — just running long?",
+      "answerMarkdown": "I'd distinguish two failure shapes that look identical from the scheduler's view but need different handling. A worker that's genuinely alive and making progress on a slow job should renew its lease via heartbeat before expiry — that's the whole point of the heartbeat mechanism, and it's the expected path for any job whose runtime is close to the lease window.\n\nIf heartbeats stop arriving, I'd let the lease expire and re-dispatch, accepting the risk of duplicate execution as the cost of the at-least-once guarantee — and I'd size the lease window generously enough (say, 3x expected p99 runtime) that legitimate slow jobs rarely brush against expiry in the first place.\n\nI'd also flag a subtlety: heartbeating is proof of liveness, not proof of correctness — a worker can heartbeat happily while stuck in an infinite loop, so I'd pair the lease with a separate hard timeout that force-kills and reschedules a job that's run far past any reasonable duration regardless of heartbeats.\n\n**Testing:** whether you can reason about lease sizing as a deliberate trade-off, not just as a fixed constant.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Lease sizing for long-running jobs"
+    },
+    {
+      "id": "design-distributed-job-scheduler-iq3",
+      "question": "How would you support job priority so a critical retry doesn't get stuck behind a backlog of low-priority cleanup jobs?",
+      "answerMarkdown": "I'd add a priority field to the job table and change how the leader selects the next batch of due jobs to dispatch: instead of a plain FIFO scan by `nextRunTime`, it orders by `(priority, nextRunTime)` within the due set, so high-priority jobs jump ahead of lower-priority ones that became due around the same time.\n\nThe part I'd flag as the actual risk: without a floor, a steady stream of high-priority jobs could starve low-priority ones indefinitely. I'd address that with **priority aging** — a job's effective priority increases the longer it waits, so even a low-priority cleanup task eventually gets dispatched instead of waiting forever behind a constant flow of urgent work.\n\nI'd also separate worker pools by priority tier for the truly critical path (payment retries get their own dedicated workers), so a burst of low-priority work can never fully saturate the workers a critical job needs, even before priority ordering kicks in.\n\n**Testing:** whether you catch the starvation risk that a naive priority-first ordering introduces, and fix it rather than just adding a priority column.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Priority scheduling without starvation"
+    }
+  ]
+}

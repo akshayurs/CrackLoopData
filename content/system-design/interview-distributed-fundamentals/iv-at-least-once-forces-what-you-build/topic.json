@@ -1,0 +1,170 @@
+{
+  "id": "iv-at-least-once-forces-what-you-build",
+  "title": "What Does \"At-Least-Once\" Force You to Build?",
+  "area": "system-design",
+  "group": "interview-distributed-fundamentals",
+  "order": 14,
+  "slug": "iv-at-least-once-forces-what-you-build",
+  "summary": "Given you're stuck with at-least-once delivery, name everything it forces you to build on top of it — the practical follow-up to why exactly-once is so hard.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s01",
+      "order": 1,
+      "sectionTitle": "The question, and its natural predecessor",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is the practical follow-up to [\"why is exactly-once so hard\"](iv-why-exactly-once-is-hard) — once you accept that at-least-once is what you actually get, the question becomes what that commitment forces you to build on top of it, in practice, to ship something correct.\n\nThe strong answer treats at-least-once as a starting constraint with a checklist of obligations, not a problem to complain about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: message delivery or handler execution?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"At-least-once delivery of messages, or at-least-once execution of a side-effecting handler?\" These are the same underlying issue at different layers — a message broker redelivering a message, or a job scheduler re-running a task after a worker crash mid-execution — but naming which layer you mean shows you understand it's a general pattern, not a Kafka-specific quirk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: the obligations it creates",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At-least-once forces three concrete obligations. **Idempotent handlers**: every handler must produce the same effect whether it runs once or five times, since redelivery is expected, not exceptional. **No ordering guarantee either** (often bundled with the same underlying cause): messages can arrive out of the order they were sent, so handlers can't assume message N-1 was already processed before message N. **Dedup storage**: something has to remember which messages have already been handled, which means capacity planning and a retention policy, not just a stateless handler function. See [idempotency and exactly-once](idempotency-and-exactly-once) for the deeper mechanics.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-at-least-once-forces-what-you-build-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s04",
+      "order": 4,
+      "sectionTitle": "Code: the same message handled safely and unsafely",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\ndef handle_order_placed_unsafe(event):\n    inventory.decrement(event.sku, event.qty)      # runs again on redelivery: double-decrements\n\ndef handle_order_placed_safe(event):\n    if dedup_store.already_processed(event.id):\n        return\n    inventory.decrement(event.sku, event.qty)\n    dedup_store.record(event.id)\n```\nBoth handlers process the identical redelivered event. The unsafe one silently corrupts inventory on the second delivery; the safe one, doing barely more work, produces the correct result no matter how many times the broker redelivers it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a message redelivered despite success",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A consumer processes a message successfully — the effect happens — but crashes or times out before it can acknowledge the broker. From the broker's point of view, an unacknowledged message means \"assume failure,\" so it redelivers the exact same message to another (or the same) consumer, which now processes it a second time.\n\n![Sequence diagram: a consumer processes a message then crashes before acking, the broker treats the missing ack as failure and redelivers, and the message gets processed a second time](assets/at-least-once-redelivery.svg)",
+      "assets": [
+        {
+          "alt": "Sequence diagram: a consumer processes a message then crashes before acking, the broker treats the missing ack as failure and redelivers, and the message gets processed a second time",
+          "path": "assets/at-least-once-redelivery.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 27,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s06",
+      "order": 6,
+      "sectionTitle": "Follow-up: is out-of-order delivery a separate problem?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Does at-least-once also mean out-of-order delivery, or are those separate problems?\" They're separate guarantees that often get lost together for the same underlying reason — retries and multiple partitions/consumers. Some systems give you at-least-once *with* ordering per key (Kafka, per-partition), which narrows the problem; others give neither, meaning your handler has to be both idempotent *and* order-independent, which is a strictly harder design constraint.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-at-least-once-forces-what-you-build-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: how long to remember processed IDs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"How long do you need to remember 'already processed' IDs before it's safe to forget them?\" Long enough to outlast the broker's or producer's actual maximum redelivery window — check the specific system's retry/redelivery configuration rather than guessing. Forgetting too early reopens the exact bug idempotency was meant to close; keeping every ID forever is a real, growing storage cost, so this is a deliberate retention decision, not a default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-at-least-once-forces-what-you-build-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: the cost of getting this wrong",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"What's the cost of getting this wrong in production — what does the bug actually look like to a user?\" It rarely looks like a crash. It looks like a duplicate charge on a credit card statement, an inventory count that's slightly, mysteriously off, or a welcome email sent three times to the same new signup. These bugs are quiet, intermittent, and hard to reproduce on demand — which is exactly why building the idempotency layer up front is cheaper than chasing this class of bug after the fact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s09",
+      "order": 9,
+      "sectionTitle": "Weak answer: \"duplicates are fine, that's it\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"At-least-once just means messages might duplicate, that's fine\" — with no plan for handling the duplicates.\n\n**Why it's weak:** acknowledging duplicates exist without a concrete plan for them isn't an answer, it's a restatement of the question. It also misses that ordering is frequently affected too, not just duplication.\n\n**Better:** immediately follow the acknowledgment with the specific obligations — idempotent handlers, dedup storage, ordering awareness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s10",
+      "order": 10,
+      "sectionTitle": "Wrong answer: trusting the broker's own ack tracking",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** assuming the message broker's own offset/ack tracking alone prevents duplicate processing.\n\n**Why it's wrong:** offset tracking tells the broker what it has *sent*, not what the consumer has actually, successfully *finished processing* — a consumer can crash after processing but before committing its offset, and the broker will redeliver from the last committed point, reprocessing work that already completed. The broker's bookkeeping and your application's idempotency are two separate layers; one doesn't substitute for the other.\n\n**Correct model:** application-level idempotency, independent of whatever the broker's own delivery tracking does internally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-at-least-once-forces-what-you-build-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-at-least-once-forces-what-you-build-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"At-least-once forces three things: idempotent handlers, since redelivery is expected and normal; awareness that ordering usually isn't guaranteed either, for the same underlying reasons; and dedup storage, since something has to remember which messages were already handled, with a retention window long enough to outlast the broker's redelivery window. Getting this wrong doesn't look like a crash — it looks like a duplicate charge or an inventory count quietly off by one, which is exactly why it's worth building the idempotency layer deliberately instead of trusting the broker's own offset tracking to prevent duplicates on its own.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

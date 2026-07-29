@@ -1,0 +1,29 @@
+{
+  "topicId": "webhooks-and-callback-apis",
+  "interviewQuestions": [
+    {
+      "id": "webhooks-and-callback-apis-iq1",
+      "question": "Design a webhook delivery system for a payments platform with thousands of merchant endpoints.",
+      "answerMarkdown": "I'd start with the reliability contract: at-least-once delivery with retries and exponential backoff over a bounded window (say, 24-72 hours), since silently losing a payment event is far worse for a merchant than an occasional duplicate. Delivery attempts would go through a queue per event, not a synchronous call from the payment path, so a slow merchant endpoint never blocks the actual payment processing.\n\nFor isolation, I'd avoid one shared worker pool across all merchants — a single hanging endpoint could otherwise starve delivery to everyone else. I'd bound concurrency per merchant (or partition workers) so one bad endpoint's slowness stays contained to that merchant's own retry queue.\n\nFor security, every payload gets an HMAC signature over the raw bytes using a per-merchant secret, so merchants can verify authenticity. For correctness on the consumer side, I'd document that events can arrive more than once and out of strict order, and give every event a unique ID and timestamp so merchants can dedupe and apply only newer state.\n\nI'd close with observability: a dashboard per merchant showing delivery success rate and retry counts, since \"is my webhook actually reaching them\" is the first thing a support escalation asks.\n\n**Testing:** whether you can design for failure (slow/down endpoints, forged calls, duplicate/out-of-order delivery) as first-class concerns, not just the happy path.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Designing webhook delivery at scale"
+    },
+    {
+      "id": "webhooks-and-callback-apis-iq2",
+      "question": "A merchant reports they received the same payment.succeeded webhook three times. Is this a bug?",
+      "answerMarkdown": "I'd say it's expected behavior under an at-least-once delivery contract, not necessarily a bug — if the merchant's server was slow to respond (even though it did eventually succeed), or a network blip lost the acknowledgment, the provider's retry logic would resend the same event, since it can't distinguish 'lost response' from 'never processed.'\n\nWhat I'd actually check is whether the merchant's own handler is idempotent — does it use the event's unique ID to detect it's already processed this exact event before applying it again? If not, that's the real fix needed on their side, not a request for the provider to somehow guarantee exactly-once delivery, which is a much harder and rarer guarantee to provide reliably over an unreliable network.\n\nI'd only treat it as a provider-side bug if the retries were happening despite the merchant's endpoint correctly returning a success status the first time — that would point at a bug in the delivery worker's ack-handling logic instead.\n\n**Testing:** whether you understand at-least-once delivery is a deliberate design choice with a required consumer-side responsibility, not a defect to blame on the provider by default.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Diagnosing duplicate webhook delivery"
+    },
+    {
+      "id": "webhooks-and-callback-apis-iq3",
+      "question": "How would you let a customer verify that a webhook they received genuinely came from your platform and wasn't forged?",
+      "answerMarkdown": "I'd implement HMAC signing: generate a per-customer shared secret at integration time, and for every webhook, compute an HMAC of the exact raw request body using that secret, sending it as a header alongside the payload.\n\nOn the customer's side, they recompute the HMAC over the raw bytes they received using their copy of the secret and compare it to the header — a match proves the payload wasn't tampered with and came from someone who knows the shared secret. I'd be specific in the documentation that they must verify against the raw, unparsed body, since parsing and re-serializing JSON before verifying is a common integration bug that causes valid signatures to appear to fail.\n\nI'd also recommend including a timestamp in the signed payload and having the customer reject requests with an old timestamp, to guard against a captured, valid signature being replayed later.\n\n**Testing:** whether you know the concrete mechanism (HMAC over raw bytes) rather than a vague 'use HTTPS' answer, which doesn't address forged calls at all.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Verifying webhook authenticity"
+    }
+  ]
+}

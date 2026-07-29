@@ -1,0 +1,238 @@
+{
+  "id": "design-ticket-booking-system",
+  "title": "Design a Ticket Booking System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 1,
+  "slug": "design-ticket-booking-system",
+  "summary": "Sell every seat for a concert or flight exactly once, even when thousands of people click \"buy\" on the same handful of good seats in the same second.",
+  "level": "advanced",
+  "slideCount": 16,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "design-ticket-booking-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: sell a fixed set of seats for an event without ever selling the same seat twice, even when an on-sale opens and thousands of requests hit the same few good seats in the same instant.\n\nThink of it like a single stack of numbered tickets at a box-office window — only one clerk can hand out ticket #42, no matter how many people are shouting for it at once. Everything in this design exists to be that clerk: correct under contention, not just fast.\n\nThe hard part is never the seating-chart UI — it's making \"one seat, one buyer\" hold true under load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** search seats for an event, place a time-boxed **hold** on one, confirm the booking with payment, and release a hold that isn't confirmed in time.\n\n**Non-functional:** zero tolerance for overselling a seat — that's the one guarantee that can never break, even during a traffic spike a hundred times normal. Hold duration is short (2-10 minutes) so abandoned carts free seats back up quickly rather than starving the on-sale.\n\n**Explicit non-goal:** the seating-chart rendering and browsing UX. That's a front-end concern; the interesting system-design problem is what happens the instant two people click the same seat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: sizing the on-sale spike",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A popular stadium show might sell 50,000 seats. Steady-state that's nothing — but at 10:00:00am on-sale, 500,000 fans can hit refresh in the same second, all trying to grab one of the same few thousand \"good\" seats near the stage.\n\nThat's the number that matters: not seats-per-day, but **concurrent write attempts on the same narrow row of hot rows** in the first 5-10 seconds. If your hold-table can do 5,000 conditional writes/sec but 50,000 requests arrive in one second targeting a few hundred rows, the system doesn't fail from total load — it fails from **contention on a tiny hot set**.\n\nDesign for that spike, not for the daily average.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ticket-booking-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-ticket-booking-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Four calls carry the whole flow:\n\n- `searchSeats(eventId, filters)` — read-heavy, served from a cache or replica; staleness here is fine, it's just discovery.\n- `holdSeat(seatId)` — the hot path: a conditional write that only succeeds if the seat is currently `available`.\n- `confirmBooking(holdId, paymentToken)` — turns a hold into a sold seat once payment clears.\n- `releaseHold(holdId)` — explicit release on cancel, plus an automatic expiry if the hold times out.\n\nNotice `holdSeat` is the only call that needs to be airtight under concurrency — `searchSeats` can be sloppy-fast, `holdSeat` must be slow-but-correct if it has to be.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s05",
+      "order": 5,
+      "sectionTitle": "Data model: a seat-status table, not a counter",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The tempting shortcut is a single `seatsAvailable` counter per event — fast to read, easy to decrement. It's also wrong: a counter can't tell you *which* seat was sold, so two buyers can both be told \"you got a seat\" while pointing at the same physical chair.\n\nThe correct model is one row per seat: `(eventId, seatId, status, holdId, holdExpiresAt)` with `status` in `available | held | sold`. Each `holdSeat` call is a conditional update — \"set status='held' WHERE seatId=X AND status='available'\" — so the database itself resolves the race: exactly one of two concurrent requests sees the update succeed.\n\nThe row is the unit of contention, and that's deliberate — it confines the race to one seat, not the whole event.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-ticket-booking-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-ticket-booking-system-s06",
+      "order": 6,
+      "sectionTitle": "The core problem: two buyers, one seat",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Strip away everything else and the system is one guarantee: if requests A and B both try to hold seat 14C at the same instant, exactly one succeeds and the other gets a clean \"already taken\" — never both succeeding, and never both failing.\n\nThis is a textbook **race condition**: read-then-write without atomicity lets both requests read `available`, then both write `held`. The fix is making the check-and-set a single atomic operation the database enforces, not two steps your application code performs separately.\n\nEverything from here — locking strategy, queueing, holds — is in service of that one atomic operation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s07",
+      "order": 7,
+      "sectionTitle": "Compare: pessimistic locking vs optimistic concurrency",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Pessimistic locking | Optimistic concurrency |\n|---|---|---|\n| How it works | `SELECT ... FOR UPDATE` locks the row before reading | Read a version number, write with `WHERE version = X`, retry on mismatch |\n| Under low contention | Pays lock overhead for no reason | Almost always succeeds first try — cheap |\n| Under an on-sale spike | Requests queue behind the lock; predictable but can pile up | Most requests fail-and-retry on hot seats — cheap failures, but retry storms need backoff |\n| Failure mode | A slow transaction holds the lock and stalls everyone behind it | A thundering herd of retries can itself become load |\n\n**How to decide:** optimistic concurrency wins for ticket booking specifically because a \"failed\" hold attempt is cheap and informative (seat's gone, stop retrying) — you want fast-fail, not fast-queue, when 500 people want the same seat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-ticket-booking-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-ticket-booking-system-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: two users racing for the same seat",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Two buyers racing to hold the same seat, only one write succeeds](assets/seat-race.svg)\n\nBoth requests race to the same row, but the database's conditional write is the single point where the tie is broken — only the request whose `WHERE status='available'` still matches at write time succeeds.\n\nThe loser doesn't get an error page — it gets an instant \"that seat just went, here are similar ones,\" which is a better experience than a spinner that eventually times out.",
+      "assets": [
+        {"alt": "Two buyers racing to hold the same seat, only one write succeeds", "path": "assets/seat-race.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s09",
+      "order": 9,
+      "sectionTitle": "Temporary holds: reserving without permanently locking",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hold** is a seat marked `held` with a `holdExpiresAt` timestamp a few minutes out — long enough to enter payment details, short enough that an abandoned checkout doesn't starve the on-sale. It is not a database lock held open across a network round-trip to a payment provider; that would tie up a row (and a connection) for however long a slow card processor takes.\n\nA background sweeper (or a check inline on the next `holdSeat` attempt) flips any `held` row whose `holdExpiresAt` has passed back to `available`. This turns \"lock and wait\" into \"mark and expire\" — the seat is protected during checkout but self-heals if the buyer walks away.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s10",
+      "order": 10,
+      "sectionTitle": "Handling the on-sale moment: queueing and virtual waiting rooms",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When 500,000 people hit refresh at 10:00:00am, letting all of them straight through to `holdSeat` just moves the thundering herd from the front door to the database. A **virtual waiting room** admits users to the booking flow at a rate the backend can actually handle — everyone gets a queue position immediately, then is let in gradually.\n\nThis isn't about total throughput (the event only has 50,000 seats regardless); it's about **shaping the arrival curve** so the hot-row contention from earlier slides happens at a rate the seat-status table can resolve cleanly instead of falling over in the first second.\n\nCritically, the waiting room sits in front of the system, admission-controlled — it's a pressure valve, not a workaround for a slow database.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ticket-booking-system-s10-q1"
+      ]
+    },
+    {
+      "id": "design-ticket-booking-system-s11",
+      "order": 11,
+      "sectionTitle": "Compare: database-level locking vs a distributed lock service",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Database-level locking | Distributed lock service (e.g. Redis, ZooKeeper) |\n|---|---|---|\n| Where the truth lives | The seat-status table itself is the lock | A separate service grants a lock token independent of the data store |\n| Simplicity | One system to reason about and operate | Another moving part: its own availability and failure modes |\n| Use case fit | Great when contention is scoped to rows in one datastore, as here | Better when a lock must span multiple services or datastores |\n| Risk | None extra — the DB you already have is the source of truth | Lock can expire mid-operation, or the lock service itself can partition |\n\n**How to decide:** for seat booking, the contention is entirely within one table, so a conditional write against the database *is* the lock — reaching for a separate lock service adds an operational dependency without buying correctness you didn't already have.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s12",
+      "order": 12,
+      "sectionTitle": "Diagram: end-to-end booking flow",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![End-to-end booking flow from search to confirmBooking, with hold expiry as the fallback path](assets/booking-flow.svg)\n\nThe flow has exactly one point of permanent commitment — `confirmBooking` succeeding — and everything before it is reversible by design, either explicitly (`releaseHold`) or by timeout.\n\nThat reversibility is what makes abandoned checkouts safe: a seat can be held, half-paid-for, and abandoned, and still end up back in inventory without anyone intervening.",
+      "assets": [
+        {"alt": "End-to-end booking flow from search to confirmBooking, with hold expiry as the fallback path", "path": "assets/booking-flow.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s13",
+      "order": 13,
+      "sectionTitle": "The bottleneck: row-level contention at the on-sale instant",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The system's real bottleneck isn't total throughput — it's the handful of best seats (front row, aisle) that a disproportionate share of the first second's traffic targets. Even with the waiting room shaping overall admission, those specific rows still see far more attempted writes than average.\n\nTwo mitigations compound: the admission-controlled queue from earlier caps how many requests reach the database per second at all, and optimistic concurrency (§7) makes each failed attempt on a hot row cheap — a fast \"gone\" rather than a slow queued wait. Neither alone is enough; together they turn a stampede into a manageable, if lumpy, write rate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ticket-booking-system-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: releasing a hold only on success",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll release the hold when the user cancels checkout — that covers it.\"\n\n**Why it's wrong:** users close the tab, lose signal, or just walk away without clicking cancel. If release only happens on an explicit user action, every abandoned checkout permanently leaks a seat — over a busy on-sale day, that can be a meaningful fraction of total inventory quietly stuck in `held` forever.\n\n**Correct model:** every hold gets a `holdExpiresAt` at creation time, and expiry is enforced independent of the client — a sweeper job or a check on next access reclaims it. Never rely on the client telling you it gave up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "design-ticket-booking-system-s14-q1"
+      ]
+    },
+    {
+      "id": "design-ticket-booking-system-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: no idempotency key on confirmBooking",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Confirming a booking is a single call, so retries aren't a special case.\"\n\n**Why it's wrong:** a client retry after a timeout — the request actually succeeded but the response was lost — will call `confirmBooking` again. Without protection, that can charge the card twice or, worse, try to sell an already-sold seat to the same buyer as a second booking.\n\n**Correct model:** `confirmBooking` takes a client-generated **idempotency key**; the server stores the outcome of the first call keyed on it and replays that same result for any duplicate, rather than re-executing the charge. See [idempotency and exactly-once](idempotency-and-exactly-once) for the general pattern — this is one of its highest-stakes applications.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-ticket-booking-system-s15-q1"
+      ]
+    },
+    {
+      "id": "design-ticket-booking-system-s16",
+      "order": 16,
+      "sectionTitle": "Summary: row-level state plus a time-boxed hold",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Double-booking becomes impossible not through a clever algorithm but through two boring, disciplined choices: model inventory as one row per seat so a database write can atomically arbitrate contention, and bound every reservation with an expiry so abandoned checkouts self-heal instead of leaking seats.\n\nEverything else — the waiting room, optimistic concurrency, idempotency keys — exists to make that core guarantee hold up under real-world load and real-world flaky clients, not to replace it. The same shape reappears in hotel booking with date ranges instead of single rows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

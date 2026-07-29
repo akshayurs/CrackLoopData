@@ -1,0 +1,133 @@
+{
+  "id": "message-delivery-semantics",
+  "title": "Message Delivery Semantics",
+  "area": "system-design",
+  "group": "messaging-streaming",
+  "order": 3,
+  "slug": "message-delivery-semantics",
+  "summary": "At-most-once, at-least-once, and exactly-once — what each really promises, and why idempotency is unavoidable no matter which one you pick.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "message-delivery-semantics-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every message broker has to make a promise about what happens when a network blip or a consumer crash occurs mid-delivery — send it again and risk a duplicate, or don't and risk losing it. **Delivery semantics** is the name for that promise.\n\nThere are three flavors: at-most-once, at-least-once, and exactly-once. Only one of them is safe to build on without extra work, and it isn't the one with \"exactly\" in the name. This topic is about why, and what to do about it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "message-delivery-semantics-s02",
+      "order": 2,
+      "sectionTitle": "At-most-once, at-least-once, exactly-once: what each really promises",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**At-most-once**: the broker sends a message zero or one times — if it's lost in transit or the consumer crashes before acking, it's gone for good. No duplicates, but silent loss is possible. Fire-and-forget, UDP-style delivery is the classic example.\n\n**At-least-once**: the broker keeps retrying until it gets an acknowledgment, so nothing is silently lost — but a message can arrive twice if the ack itself is lost after the consumer already processed it. This is what most production brokers (SQS, Kafka, RabbitMQ) default to.\n\n**Exactly-once**: the message is delivered and processed once, no more, no less — the ideal, and the hardest to actually guarantee end to end.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "message-delivery-semantics-s02-q1"
+      ]
+    },
+    {
+      "id": "message-delivery-semantics-s03",
+      "order": 3,
+      "sectionTitle": "Why exactly-once delivery is (almost) a myth over a network",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core problem: a network can't tell you whether your last message actually arrived. If a consumer processes a message and crashes before its acknowledgment reaches the broker, the broker can't distinguish \"it never got there\" from \"it got there but the ack was lost\" — so it retries, and now the message is processed twice.\n\nThis is a real distributed-systems limit, not a broker bug. Some brokers advertise \"exactly-once semantics,\" but they achieve it by pairing at-least-once delivery with deduplication on the consumer side, not by guaranteeing a single delivery over an unreliable network.\n\nThe practical takeaway: design for at-least-once delivery, and make your processing safe to run twice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "message-delivery-semantics-s03-q1"
+      ]
+    },
+    {
+      "id": "message-delivery-semantics-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a retry causing duplicate delivery",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Sequence diagram: a consumer processes a message and sends an ack that is lost on the network, so the broker redelivers the same message](assets/lost-ack-redelivery.svg)\n\nThe consumer did its job correctly the first time — charged the card, sent the email — but the broker never learned that, because the acknowledgment never arrived. From the broker's point of view, silence looks identical to failure, so it does the only safe thing: it resends.\n\nThat resend is not a bug. It's the direct, unavoidable consequence of at-least-once delivery over a network that can lose messages in either direction.",
+      "assets": [
+        {
+          "alt": "Sequence diagram: a consumer processes a message and sends an ack that is lost on the network, so the broker redelivers the same message",
+          "path": "assets/lost-ack-redelivery.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "message-delivery-semantics-s05",
+      "order": 5,
+      "sectionTitle": "Idempotency keys: making at-least-once safe in practice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An operation is **idempotent** if running it twice has the same effect as running it once. Idempotency keys make an operation idempotent on purpose: attach a unique key to each logical request (an order ID, an event ID), and have the consumer check \"have I already fully processed this key?\" before doing the work.\n\nA payment consumer that receives the same \"charge $50 for order #4471\" event twice, thanks to a broker retry, checks a dedupe store for order #4471 first. First time: not found, charges the card, records the key. Second time: found, skips the charge, returns the same result.\n\nThis is what turns \"the broker might redeliver\" from a bug into a non-issue — the safety net lives in the consumer, not in hoping the broker never retries.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "message-delivery-semantics-s05-q1"
+      ]
+    },
+    {
+      "id": "message-delivery-semantics-s06",
+      "order": 6,
+      "sectionTitle": "Code: an idempotent consumer using a dedupe key",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\ndef handle_payment_event(event):\n    if dedupe_store.exists(event.id):\n        return dedupe_store.get_result(event.id)  # already processed\n\n    result = charge_card(event.order_id, event.amount)\n    dedupe_store.set(event.id, result, ttl_days=7)\n    return result\n```\n\nThe dedupe check and the store write both need to be safe under concurrent retries — in practice this means an atomic \"insert if not exists\" on `event.id`, not a plain read-then-write, or two near-simultaneous retries can both slip past the check and both charge the card.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "message-delivery-semantics-s07",
+      "order": 7,
+      "sectionTitle": "Compare: delivery guarantee vs processing guarantee — they're not the same",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A broker's delivery guarantee and your system's actual processing guarantee are two different promises, and conflating them is where most \"exactly-once\" bugs come from.\n\n| | Delivery guarantee | Processing guarantee |\n|---|---|---|\n| Who owns it | The message broker | Your consumer code |\n| What it promises | Whether a message reaches the consumer, and how many times | Whether the *effect* of processing happens once |\n| At-least-once delivery, no idempotency | Message may arrive twice | Effect happens twice (e.g. double charge) |\n| At-least-once delivery, with idempotency key | Message may arrive twice | Effect happens once |\n\n**How to decide:** never treat the broker's delivery guarantee as the processing guarantee — build idempotency into the consumer whenever an effect (charge, write, side effect) must happen exactly once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "message-delivery-semantics-s07-q1"
+      ]
+    },
+    {
+      "id": "message-delivery-semantics-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: assuming the broker's \"exactly-once\" removes the need for idempotency",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our broker supports exactly-once semantics, so I don't need to worry about duplicate processing.\"\n\n**Why it's wrong:** \"exactly-once\" in most brokers means exactly-once *within that broker's own pipeline* — Kafka's exactly-once producer-to-topic guarantee, for example, doesn't extend to an external side effect like calling a payment API, which can still be invoked twice on retry.\n\n**Correct model:** treat every consumer as if delivery is at-least-once, regardless of what the broker advertises, and make any side effect that matters (charges, writes, emails) idempotent. The broker's guarantee helps at the edges; your idempotency key is what actually protects the side effect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "message-delivery-semantics-s08-q1"
+      ]
+    }
+  ]
+}

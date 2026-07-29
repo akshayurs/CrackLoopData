@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-scheduler-cron-abstraction",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-scheduler-cron-abstraction-iq1",
+      "question": "Design an in-process scheduler that can run recurring tasks at defined intervals.",
+      "answerMarkdown": "I'd shape the API as `schedule(task, trigger)`, with a `Trigger` interface that computes the next fire time given the current time — decoupling *what* runs from *when*, so the same scheduler supports fixed intervals, cron-style schedules, or one-off delayed execution as different Trigger implementations.\n\nInternally, I'd hold every scheduled task in a min-heap ordered by next-fire-time, so the soonest task is always at the top and finding \"what's next\" never requires scanning the full task list. A single loop thread sleeps until that top task's deadline, wakes, hands the task off, computes its new next-fire-time, and reinserts it into the heap.\n\nThe detail I'd flag unprompted: the loop thread should only ever decide *when*, never actually execute a task itself — execution goes to a separate worker pool, so one task that hangs or throws can't stall the scheduling of everything else.\n\n**Testing:** whether you reach for a heap-backed design instead of polling every task on every tick, and whether you isolate scheduling from execution.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-iq2",
+      "question": "How do you make sure one misbehaving task doesn't block every other scheduled task?",
+      "answerMarkdown": "I'd point to the specific failure mode: if the scheduler's single loop thread both decides what's next *and* runs the task directly, a task that hangs, runs long, or throws an unhandled exception stalls or kills that same thread — and since it's the only thing tracking deadlines, every other scheduled task, no matter how soon it's due, is now stuck behind it.\n\nThe fix is a clean separation of concerns: the loop thread's only job is watching the heap and waking at the next deadline; when a task is due, it's handed off to a separate worker thread pool for actual execution. A hang or exception in one task now only affects that task's own worker thread, not the scheduling loop itself.\n\nI'd also mention a per-task timeout on the worker side as a second layer, so even within the isolated worker pool, one runaway task doesn't monopolize pool capacity that other due tasks need.\n\n**Testing:** whether you separate the scheduling decision from task execution, since conflating them is the actual root cause of this failure mode.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Isolating a misbehaving task"
+    },
+    {
+      "id": "iv-design-scheduler-cron-abstraction-iq3",
+      "question": "What happens if the process was down when a scheduled task's time passed?",
+      "answerMarkdown": "I'd say this depends on the task and ask rather than assume a single default. Some tasks need to **catch up** — a daily report generator that must eventually run even if the process was down at its scheduled hour, where I'd compute what was missed on restart and run it once for the backlog rather than silently skipping it.\n\nOther tasks should just **skip** the missed occurrence — a health-check ping running every 30 seconds gains nothing from replaying every tick it missed during an hour of downtime, so on restart I'd simply compute the next fire time from now and move on.\n\nI'd design the `Trigger` or task configuration to carry this policy explicitly per task, rather than hardcoding one behavior scheduler-wide, since treating every task's missed-time semantics identically is very likely wrong for at least some of them.\n\n**Testing:** whether you recognize this as a per-task policy decision instead of a single scheduler-wide default.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Catch-up vs skip after downtime"
+    }
+  ]
+}

@@ -1,0 +1,193 @@
+{
+  "id": "iv-design-rate-limiter-class",
+  "title": "Design a Rate-Limiter Class",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 9,
+  "slug": "iv-design-rate-limiter-class",
+  "summary": "Class scope: a single-process RateLimiter, not the distributed system — scored on the algorithm choice, the API, and getting the compound refill-then-acquire operation thread-safe.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-design-rate-limiter-class-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a rate limiter** — but scoped to a single process, not the distributed system version. The scope matters: this is about the algorithm and the API around it — `tryAcquire()` — not about coordinating limits across a fleet of servers, which is the harder [rate limiter](rate-limiter) system-design question.\n\nThe scoring signal is whether you pick a concrete algorithm (token bucket is the standard default), name the API clearly, and get the thread-safety right on the compound refill-then-acquire operation.\n\nThe 10-minute bar: the API, a token-bucket implementation, and a thread-safe compound operation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: per-key limiting, or one global limiter?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether limiting is **per-key** — each user or API client gets their own independent limit — or **one global limiter** shared by everyone. A global limiter is a single bucket, trivial to implement and reason about.\n\nPer-key limiting needs a bucket per key, which raises a real question: where do those buckets live, and how do you avoid one lock, or one bucket map, becoming a bottleneck itself as the number of keys grows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: pick the algorithm, define the API, name the state",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape: pick an algorithm — **token bucket** is the standard default for a class-scope answer, since it naturally supports bursts up to the bucket's capacity while still enforcing a steady average rate. Define the API around it — `tryAcquire()` returning a boolean, or `tryAcquire(n)` for a request that costs more than one token. Name exactly what state the bucket needs: capacity, current token count, refill rate, and the timestamp of the last refill.\n\nSaying \"token bucket, because it allows bursts\" out loud signals you picked the algorithm for a reason, not by default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-rate-limiter-class-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s04",
+      "order": 4,
+      "sectionTitle": "Code: a RateLimiter interface",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface RateLimiter {\n    boolean tryAcquire();\n    boolean tryAcquire(int permits);\n}\n```\n\nReturning a boolean rather than blocking or throwing keeps the caller in control of what happens on rejection — retry, queue, or reject the request outright — a decision the limiter itself shouldn't make.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 24,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s05",
+      "order": 5,
+      "sectionTitle": "Code: a token-bucket implementation",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class TokenBucketRateLimiter implements RateLimiter {\n    private final long capacity;\n    private final double refillPerMs;\n    private double tokens;\n    private long lastRefillMs;\n\n    public synchronized boolean tryAcquire(int permits) {\n        refill();\n        if (tokens >= permits) { tokens -= permits; return true; }\n        return false;\n    }\n\n    private void refill() {\n        long now = System.currentTimeMillis();\n        tokens = Math.min(capacity, tokens + (now - lastRefillMs) * refillPerMs);\n        lastRefillMs = now;\n    }\n}\n```\n\nCapacity bounds the burst size; the refill rate sets the steady-state rate. The two are independent knobs — a large capacity with a slow refill allows big occasional bursts but a low sustained rate.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the bucket filling over time and draining on each acquire",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Token bucket filling from a refill-rate tap and draining in bursts from tryAcquire calls, capped at a capacity line](assets/token-bucket-fill-drain.svg)\n\nThe bucket never exceeds capacity even if it goes unused for a long time — refill stops adding tokens once full. This caps the maximum burst a client can spend right after being idle, which is the token bucket's built-in protection against a client hoarding unlimited credit.",
+      "assets": [{"alt": "Token bucket filling from a refill-rate tap and draining in bursts from tryAcquire calls, capped at a capacity line", "path": "assets/token-bucket-fill-drain.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s07",
+      "order": 7,
+      "sectionTitle": "Code: making it thread-safe under concurrent acquires",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nprivate final Lock lock = new ReentrantLock();\n\npublic boolean tryAcquire(int permits) {\n    lock.lock();\n    try {\n        refill();\n        if (tokens >= permits) { tokens -= permits; return true; }\n        return false;\n    } finally {\n        lock.unlock();\n    }\n}\n```\n\nRefill-then-check-then-deduct is a single compound operation that must run atomically — two threads each refilling and then checking tokens independently could both see enough tokens and both succeed, over-granting past the actual capacity. The lock, or an equivalent CAS retry loop, closes that race.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-design-rate-limiter-class-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you extend this to per-user limiting without exploding memory?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A naive per-user map of `RateLimiter` objects, one lock each, works until the number of distinct users gets large — millions of rarely-active users each holding a live bucket object wastes memory on state that's mostly idle.\n\nI'd reach for a bounded, evicting cache keyed by user ID instead of an unbounded map — inactive users' buckets get evicted and recreated fresh on their next request, trading a small amount of burst-allowance accuracy for bounded memory. At larger scale, this state typically moves out of process entirely into a shared store like Redis, which is exactly where the class-scope answer hands off to the distributed rate limiter case study.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-rate-limiter-class-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: token bucket vs sliding window at the boundary",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Both enforce roughly the same average rate, but they behave differently right at a window boundary. A **fixed-window counter** resets fully at each window edge, so a client can burst up to the limit at the very end of one window and immediately burst up to the limit again at the start of the next — nearly 2x the intended rate in a short span around the boundary.\n\n**Token bucket** has no hard window edge at all — tokens refill continuously, so there's no moment where the allowance resets to full independent of recent usage. This is the concrete, checkable difference to cite rather than a vague \"token bucket is smoother.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s10",
+      "order": 10,
+      "sectionTitle": "Follow-up: what should tryAcquire do when it fails?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd default to **returning false** — the limiter reports \"not now\" and lets the caller decide what to do next: reject the request with a 429, queue it, or apply backpressure upstream. This keeps the limiter's contract simple and composable.\n\n**Throwing** works too if the caller always wants exception-based control flow, but it's a heavier contract for what's often an expected, routine outcome. **Blocking** until a token is available changes the limiter into a throttle rather than a limiter, and is rarely what \"rate limiter\" means in this question unless explicitly asked for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-design-rate-limiter-class-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s11",
+      "order": 11,
+      "sectionTitle": "Weak answer: hardcoding the algorithm with no interface",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** implementing the token-bucket logic directly wherever it's needed, with no `RateLimiter` interface, so swapping to sliding-window later means rewriting every call site.\n\n**Why it's wrong:** the class-scope version of this question is exactly the kind of thing that should be interface-first — a rate limiter is a natural abstraction with more than one valid algorithm behind it, and hardcoding one denies the caller, and future you, the ability to swap.\n\n**Correct model:** define `RateLimiter` as the contract, `TokenBucketRateLimiter` as one implementation among possible others.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s12",
+      "order": 12,
+      "sectionTitle": "Wrong answer: a naive fixed-window counter allowing 2x the limit",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A fixed-window counter — count requests per calendar second, reset the count at each second boundary — is simple and good enough.\"\n\n**Why it's wrong:** a client can send the full limit's worth of requests in the last millisecond of one window and the full limit's worth again in the first millisecond of the next, doubling the intended rate in a span most monitoring won't even notice.\n\n**Correct model:** use token bucket, with continuous refill and no hard reset, or a sliding-window log or counter that doesn't have a hard reset boundary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-rate-limiter-class-s12-q1"
+      ]
+    },
+    {
+      "id": "iv-design-rate-limiter-class-s13",
+      "order": 13,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Algorithm** — token bucket: capacity caps burst, refill rate sets steady-state. **API** — `tryAcquire()`/`tryAcquire(n)` returning a boolean, letting the caller decide what to do on rejection. **Thread safety** — refill-then-check-then-deduct is one compound operation; lock or CAS around all of it, not just the check. **Scaling to per-user** — a bounded, evicting map, not one limiter per user forever. **Close** by naming the boundary flaw of fixed-window counters that token bucket avoids.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

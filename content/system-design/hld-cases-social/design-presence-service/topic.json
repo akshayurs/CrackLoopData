@@ -1,0 +1,167 @@
+{
+  "id": "design-presence-service",
+  "title": "Design a Presence Service",
+  "area": "system-design",
+  "group": "hld-cases-social",
+  "order": 4,
+  "slug": "design-presence-service",
+  "summary": "Fanning \"who's online\" out to millions of watchers cheaply, when the state changes constantly and matters least the moment nobody's actually looking.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "design-presence-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Design the system behind the green dot: show accurate online/last-seen status to anyone watching a given user, across a service with hundreds of millions of users whose status flips constantly. It's the same feature that sits inside a [chat system](design-chat-system), pulled out here as its own case study.\n\nThink of it like a lighthouse keeper's logbook that gets rewritten every few seconds instead of once a day — the data is nearly worthless the moment it's written, so the whole design optimizes for cheap, ephemeral state rather than durable, carefully-persisted records. Get that one framing right and most of the hard decisions here fall out of it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** any client can query or subscribe to another user's online/last-seen status.\n\n**Non-functional:** some staleness is fully acceptable — a status that's 5-10 seconds behind reality is fine, since presence is inherently a snapshot of a constantly-changing fact, not a durable record. **Watcher fan-out size** matters more than watcher count for any single user: a status change for someone with 500 friends fans out very differently than one with 5. **Mobile battery cost** is a real constraint — a heartbeat interval that's too aggressive drains client batteries at a scale that shows up in app-store reviews.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: connections, status-change rate, and watchers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take 100M concurrently connected users. If each sends a heartbeat every 30 seconds, that's over 3M heartbeats/sec platform-wide just to maintain presence — before a single status query happens.\n\nStatus-change rate (online->offline transitions) is far lower than heartbeat rate, maybe 1-5% of connected users transitioning per minute, but each transition can fan out to hundreds of watchers. A user with 300 friends going offline is one state change but up to 300 downstream notifications — the heartbeat volume and the fan-out volume are two different bottlenecks that don't move together.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-presence-service-s03-q1"
+      ]
+    },
+    {
+      "id": "design-presence-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`heartbeat(userId)` is sent periodically over an already-open connection to signal \"still here\" — it's not a separate request/response call so much as a lightweight ping down the same channel used for other real-time features. `subscribe(userId)` registers a watcher to receive future status-change events for a specific user. Status-change events themselves are pushed to subscribers, not polled.\n\nNotice there's no `getStatus(userId)` request/response call in the primary path — a watcher subscribes once and then receives pushes, which avoids every client polling for every friend's status on some fixed interval.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s05",
+      "order": 5,
+      "sectionTitle": "Data model: ephemeral in-memory state with a short TTL",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Presence state lives in an in-memory store (Redis is the common choice) as `userId -> lastHeartbeatTimestamp`, with a TTL of roughly 60-90 seconds — long enough to survive one missed heartbeat, short enough that a crashed client's status expires quickly without an explicit offline event.\n\nThis is deliberately **not** the durable database that holds account data, message history, or anything else worth backing up — presence is disposable by design, since a lost presence record just means the next heartbeat rebuilds it, at essentially no cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: heartbeat path",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Client heartbeat flows through the gateway to an in-memory presence store, fanning out to watchers only when a transition is detected](assets/heartbeat-path.svg)\n\nThe TTL-refresh step is the quiet workhorse here: as long as heartbeats keep arriving, nothing else happens — no write amplification, no event fan-out. Fan-out only fires on the comparatively rare event of an actual state transition.",
+      "assets": [
+        {"alt": "Client heartbeat flows through the gateway to an in-memory presence store, fanning out to watchers only when a transition is detected", "path": "assets/heartbeat-path.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s07",
+      "order": 7,
+      "sectionTitle": "Fan-out of one status change to a large, dynamic watcher set",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a user's status flips, the service needs to notify everyone currently watching them — which is not a fixed list, since watchers subscribe and unsubscribe as they open and close conversations or profile views. Rather than maintaining a durable, precomputed watcher list per user, it's common to maintain an ephemeral in-memory subscriber set, populated by active `subscribe()` calls and cleared as connections close.\n\nThis mirrors the presence data itself being ephemeral: a watcher list that's slightly stale (a watcher who just disconnected still briefly in the set) costs nothing, since the worst case is one wasted push to a connection that's already gone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: publish-subscribe topology for status updates",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Pub-sub topology with one topic per user, watchers subscribing only to the users they care about](assets/pubsub-topology.svg)\n\nScoping fan-out to per-user topics (rather than one global status-change stream every server filters) is what keeps this cheap: a server handling a busy chat feature only ever pushes status changes to the small set of users someone is actually watching.",
+      "assets": [
+        {"alt": "Pub-sub topology with one topic per user, watchers subscribing only to the users they care about", "path": "assets/pubsub-topology.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s09",
+      "order": 9,
+      "sectionTitle": "Handling flapping connections",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mobile client on a spotty network can disconnect and reconnect every few seconds, and naively firing an offline event on every disconnect and an online event on every reconnect produces a stream of toggling status noise that's more annoying than informative to watchers.\n\nThe standard fix is a **grace period**: don't mark a user offline the instant their connection drops — wait a short window (say, 30-60 seconds) for a reconnect before firing the offline event at all. Combined with the TTL from the data model, most brief network blips never surface as a visible status change to any watcher.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-presence-service-s09-q1"
+      ]
+    },
+    {
+      "id": "design-presence-service-s10",
+      "order": 10,
+      "sectionTitle": "Compare: push-based fan-out vs watchers polling on demand",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Push-based fan-out | Watchers polling on demand |\n|---|---|---|\n| Freshness | Watchers learn of a change within seconds | Only as fresh as the last poll interval |\n| Server load pattern | Spikes only on actual transitions | Constant load regardless of whether status ever changes |\n| Battery cost (mobile) | Low — no client-side timers needed | Higher — client must poll on a schedule even when nothing changed |\n| Scales with | Number of transitions | Number of watchers, all the time |\n\n**How to decide:** push wins for presence specifically because transitions are rare relative to how often someone might check — polling pays a constant tax to answer a question that's usually \"still online, nothing changed.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-presence-service-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: writing every heartbeat to durable storage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Presence is important user data, so heartbeats should be written to the main database like everything else, for consistency.\"\n\n**Why it's wrong:** at 3M+ heartbeats/sec platform-wide, routing that volume through a durable, replicated database overwhelms it with writes that are individually worthless — each heartbeat only matters until the next one arrives 30 seconds later, and the data is disposable by design.\n\n**Correct model:** keep presence in a fast, ephemeral, TTL-backed in-memory store, separate entirely from durable data — a lost presence record costs nothing since the next heartbeat rebuilds it, but a database melting under heartbeat load costs everything else that database serves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-presence-service-s11-q1"
+      ]
+    }
+  ]
+}

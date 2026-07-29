@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-avoiding-blocking-in-a-hot-path",
+  "interviewQuestions": [
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-iq1",
+      "question": "A shared counter under a single lock is showing heavy contention under load. How would you redesign it?",
+      "answerMarkdown": "I'd first confirm the bottleneck is actually lock contention on cheap work, not a slow operation happening while the lock is held — those need different fixes entirely. Assuming it's pure contention, I'd shard the lock: split the single counter into N slots, each with its own lock, hashing each update to one slot. Threads landing on different slots no longer contend at all, and even threads landing on the same slot only block each other, not the whole counter.\n\nIf sharding alone isn't enough — say I have evidence of extremely high per-core operation rates — I'd go further and replace the sharded locks with an array of atomic integers, using compare-and-swap instead of blocking at all.\n\nI'd read the final total by summing across slots, noting that's an approximate snapshot rather than a perfectly atomic one, and confirm that trade-off is acceptable for a counter.\n\n**Testing:** whether you redesign the sharing strategy instead of reaching for a 'faster' lock implementation.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Redesigning a contended counter"
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-iq2",
+      "question": "When would you choose a lock-free structure over simply sharding the lock?",
+      "answerMarkdown": "I'd default to sharding first, since it captures most of the throughput improvement with far less implementation and reasoning risk than lock-free code. I'd only reach for a lock-free structure once I have specific evidence sharding isn't sufficient — extremely high-frequency operations where even a striped lock's brief acquisition overhead is measurable, or a requirement that no thread can ever be blocked at all, such as code that must never pause inside a constrained execution context.\n\nI'd be explicit about the cost: lock-free code built on compare-and-swap is genuinely harder to get right, especially once an operation needs to touch more than one location atomically, which a single CAS can't cover.\n\nSo my answer is a preference order, not a binary choice: shrink the critical section, then shard, and only then consider lock-free — each step earns its complexity by evidence that the previous one wasn't enough.\n\n**Testing:** whether you can justify picking the more complex tool instead of defaulting to it for its own sake.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Lock-free vs sharding, the real trade-off"
+    },
+    {
+      "id": "iv-avoiding-blocking-in-a-hot-path-iq3",
+      "question": "What if the real bottleneck in a locked critical section turns out to be I/O, not contention?",
+      "answerMarkdown": "Then neither sharding nor a lock-free rewrite helps — the lock isn't the problem, the work happening inside it is. I'd move the I/O — a network call, a disk write, a log flush — outside the critical section entirely, holding the lock only for the minimal in-memory state change that actually needs protecting.\n\nConcretely, that might mean performing the I/O before acquiring the lock if it doesn't depend on the shared state, or queuing the write to happen asynchronously after releasing the lock rather than holding it open for the duration of a slow call.\n\nI'd flag this as a diagnosis question I'd ask early, before proposing any locking redesign — sharding a lock around a slow network call still leaves each shard slow, it just distributes the slowness across more threads instead of removing it.\n\n**Testing:** whether you diagnose the bottleneck's real cause before reaching for a locking-strategy fix that wouldn't actually help.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "When the lock isn't the actual bottleneck"
+    }
+  ]
+}

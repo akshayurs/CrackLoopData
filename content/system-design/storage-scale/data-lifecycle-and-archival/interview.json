@@ -1,0 +1,29 @@
+{
+  "topicId": "data-lifecycle-and-archival",
+  "interviewQuestions": [
+    {
+      "id": "data-lifecycle-and-archival-iq1",
+      "question": "This table grows by 1TB/month and 90% of it is never queried after 30 days — what do you do?",
+      "answerMarkdown": "I'd propose a tiered approach rather than a blanket fix. Keep the last 30 days on the primary hot store, since that's where 90% of reads land and latency matters most there. Move data older than 30 days to a warm tier — cheaper storage, still queryable but with looser latency expectations — and move data past a year (or whatever a real usage curve shows) into a cold archive, like object storage, kept queryable only through a slower path or an explicit restore step.\n\nI'd build this as a scheduled archival job, not a one-time migration, since the table keeps growing every month — it copies aging rows to the next tier, verifies the copy, then removes them from the current tier without locking live traffic.\n\nBefore picking exact thresholds, I'd check for any compliance requirement forcing a minimum retention period regardless of access pattern, since that would change the deletion end of this pipeline, if there is one at all.\n\n**Testing:** whether you propose tiering driven by measured access, not a guess, and whether you remember compliance can override a pure cost-driven answer.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Managing a fast-growing, mostly-cold table"
+    },
+    {
+      "id": "data-lifecycle-and-archival-iq2",
+      "question": "When would you use a TTL versus a full tiered-storage/archival pipeline?",
+      "answerMarkdown": "I'd use a TTL when data is genuinely disposable and its useful life is time-boxed by design — session tokens, password-reset links, cache entries — where deletion is exactly the right outcome once the clock runs out, with no need to keep the data anywhere afterward.\n\nI'd use tiered storage and archival when data still has value after it goes cold — it just doesn't need to be instantly accessible. An old customer order isn't disposable the way a session token is; it might be needed for a refund dispute a year later, just not with millisecond latency. Deleting it outright with a TTL would be the wrong tool; moving it to cheaper storage while keeping it retrievable is the right one.\n\nI'd frame the decision as: TTL when the answer to \"do we ever need this again\" is genuinely no; archival when the answer is \"rarely, but yes.\"\n\n**Testing:** whether you distinguish disposability from just infrequent access, since conflating them leads to either premature deletion or unnecessary hot-storage cost.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "TTL vs tiered archival"
+    },
+    {
+      "id": "data-lifecycle-and-archival-iq3",
+      "question": "How would you design an archival job that moves data to cold storage without causing an outage or losing data?",
+      "answerMarkdown": "I'd run it as a scheduled batch process, not a one-off script, and design it to be safe to interrupt and rerun: select a batch of records past the age threshold, copy them to the cold tier, verify the copy (checksum or count match), and only then delete them from the primary store — never delete before verifying the copy landed correctly.\n\nI'd make sure the job doesn't lock the table it reads from for long periods, using small batches and existing indexes to select candidates rather than a full table scan, and I'd explicitly exclude records that are still being actively written to, to avoid archiving something mid-update.\n\nI'd also monitor the job itself — track how much data it's moving and whether it's keeping pace with new data aging into the threshold — since an archival job that silently falls behind just becomes a slow accumulation of unarchived data on the expensive tier, quietly defeating its own purpose.\n\n**Testing:** whether you think about safety (verify-before-delete, no long locks) and ongoing operational health, not just the happy-path copy step.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Designing a safe archival job"
+    }
+  ]
+}

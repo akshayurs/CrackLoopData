@@ -1,0 +1,146 @@
+{
+  "id": "crdts-in-depth",
+  "title": "CRDTs in Depth",
+  "area": "system-design",
+  "group": "consistency-replication",
+  "order": 7,
+  "slug": "crdts-in-depth",
+  "summary": "Conflict Resolution's one-slide mention of CRDTs, expanded into the actual data types and the guarantee that makes them mergeable without coordination.",
+  "level": "advanced",
+  "slideCount": 9,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "crdts-in-depth-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Conflict resolution](conflict-resolution) introduced CRDTs as one option among several. This topic goes deeper: what specific guarantee makes a CRDT mergeable without coordination, the two families of CRDTs (state-based and operation-based), the actual data types you'd reach for, and where the pattern shows up in real products.\n\nThe short version: a CRDT is a data type engineered so that \"merge\" has exactly one correct, unambiguous answer — no matter how the two replicas got out of sync.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "crdts-in-depth-s02",
+      "order": 2,
+      "sectionTitle": "The guarantee CRDTs make: any two replicas' states merge into the same result, regardless of order",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The formal name for what a CRDT guarantees is **strong eventual consistency**: any two replicas that have seen the same set of updates — in any order, with any duplicates — will merge to the exact same state. This is a much stronger claim than plain eventual consistency, which only promises convergence *eventually*, with no guarantee about how or whether every possible ordering agrees.\n\nThe mathematical property behind this is that a CRDT's merge operation is **commutative** (order doesn't matter), **associative** (grouping doesn't matter), and **idempotent** (applying the same update twice doesn't change the result twice). Any data type with a merge function satisfying those three properties is a CRDT by definition.\n\nThat's why CRDTs don't need coordination, locking, or consensus to merge safely — the math guarantees there's only ever one right answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "crdts-in-depth-s02-q1"
+      ]
+    },
+    {
+      "id": "crdts-in-depth-s03",
+      "order": 3,
+      "sectionTitle": "State-based (CvRDT) vs operation-based (CmRDT) CRDTs: sending state vs sending operations",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "CRDTs split into two families based on what replicas actually send each other.\n\n| | State-based (CvRDT) | Operation-based (CmRDT) |\n|---|---|---|\n| What's sent between replicas | The entire current state | Just the individual operation (e.g. \"increment by 1\") |\n| Merge happens by | Combining two full states with a merge function | Applying the operation directly, assuming it's delivered at least once |\n| Network cost | Higher — full state grows with data size | Lower — small messages, but needs reliable, order-tolerant delivery |\n| Tolerates duplicate delivery | Yes, inherently (merge is idempotent) | Only if operations are also designed to be idempotent |\n\n**How to decide:** CvRDTs are simpler to reason about and forgive an unreliable network (resend the whole state, no harm done); CmRDTs are cheaper on the wire but need more care in the messaging layer to avoid double-applying an operation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "crdts-in-depth-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: two replicas diverging under concurrent updates, then converging after a merge",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Two replicas diverging with concurrent updates and merging back to the same state](assets/crdt-merge.svg)\n\nThe picture is the whole point of a CRDT: divergence during the network partition is expected and harmless, because the merge step is guaranteed to bring both replicas back to the *same* combined state — not an approximation, the same state, bit for bit.",
+      "assets": [
+        {
+          "alt": "Two replicas diverging with concurrent updates and merging back to the same state",
+          "path": "assets/crdt-merge.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "crdts-in-depth-s05",
+      "order": 5,
+      "sectionTitle": "Common CRDTs: G-Counter/PN-Counter, OR-Set, and LWW-Register",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A handful of CRDTs cover most practical needs. A **G-Counter** (grow-only counter) tracks a per-replica increment count and merges by taking the max of each replica's count, then summing — it can only go up. A **PN-Counter** (positive-negative counter) adds a second G-Counter for decrements, so the visible value is `increments - decrements`, supporting both directions.\n\nAn **OR-Set** (observed-remove set) lets elements be added and removed concurrently without the classic \"add-wins or remove-wins\" ambiguity, by tagging each add with a unique identifier so a later remove only removes the adds it actually observed.\n\nAn **LWW-Register** holds a single value resolved by timestamp on merge — effectively last-write-wins packaged as a formal CRDT, useful when you specifically want that trade-off and want it to compose cleanly with other CRDTs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "crdts-in-depth-s05-q1"
+      ]
+    },
+    {
+      "id": "crdts-in-depth-s06",
+      "order": 6,
+      "sectionTitle": "Code: implementing a PN-Counter that merges correctly under concurrent increments and decrements",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A PN-Counter is just two G-Counters (per-replica maps of increments and decrements) merged independently by taking the max seen for each replica:\n\n```python\nclass PNCounter:\n    def __init__(self, replica_id):\n        self.id = replica_id\n        self.p = {}  # replica_id -> increments this replica has applied\n        self.n = {}  # replica_id -> decrements this replica has applied\n\n    def increment(self, amount=1):\n        self.p[self.id] = self.p.get(self.id, 0) + amount\n\n    def decrement(self, amount=1):\n        self.n[self.id] = self.n.get(self.id, 0) + amount\n\n    def value(self):\n        return sum(self.p.values()) - sum(self.n.values())\n\n    def merge(self, other):\n        for rid, count in other.p.items():\n            self.p[rid] = max(self.p.get(rid, 0), count)\n        for rid, count in other.n.items():\n            self.n[rid] = max(self.n.get(rid, 0), count)\n```\n\nMerging by `max` per replica is what makes this idempotent and order-independent — re-merging the same state twice, or merging in a different order, produces the same final counts, satisfying the CRDT guarantee.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "crdts-in-depth-s06-q1"
+      ]
+    },
+    {
+      "id": "crdts-in-depth-s07",
+      "order": 7,
+      "sectionTitle": "Where CRDTs actually get used: collaborative editors, offline-first mobile apps, shopping carts",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Collaborative editors** (the kind that let two people edit the same document simultaneously and reconcile changes without a server round-trip) frequently use text-specific CRDTs to merge concurrent edits deterministically — the exact scenario a design-collaborative-editor question is probing.\n\n**Offline-first mobile apps** — note-taking, to-do lists — use CRDTs so a device can keep working fully offline and merge cleanly once it reconnects, with no server needed to arbitrate at merge time.\n\n**Shopping carts**, Dynamo's original motivating example, map naturally onto an OR-Set: items added on two devices both survive the merge.\n\nThe common thread: CRDTs fit whenever \"work offline, merge automatically, no coordinator required\" is a real product requirement, not just a nice-to-have.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "crdts-in-depth-s08",
+      "order": 8,
+      "sectionTitle": "Compare: CRDTs vs operational transformation (OT) for collaborative editing",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | CRDTs | Operational Transformation (OT) |\n|---|---|---|\n| Coordination needed | None — merge is commutative by construction | Usually needs a central server to transform and order operations |\n| Works fully offline/peer-to-peer | Yes, naturally | Harder — traditional OT assumes a server broker |\n| Complexity | Complexity lives in designing the right CRDT for text | Complexity lives in the transformation functions themselves |\n| Real-world use | Automerge, Yjs, Riak's data types | Google Docs' original architecture |\n\n**How to decide:** pick CRDTs when you need true peer-to-peer or offline-first editing with no central server; OT remains viable when you already have a central server in the loop and want its long, battle-tested track record (Google Docs).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "crdts-in-depth-s08-q1"
+      ]
+    },
+    {
+      "id": "crdts-in-depth-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: reaching for a CRDT for data where \"merge both\" is actually the wrong business answer",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"CRDTs solve conflicts automatically, so let's use one for every piece of shared state.\"\n\n**Why it's wrong:** a CRDT's merge rule is fixed by the data type's math, not by what's actually correct for the business. An OR-Set union works great for a shopping cart (both additions should survive) but is actively wrong for, say, a seat reservation — merging two concurrent \"reserve seat 12A\" operations from different users by keeping both isn't a resolved conflict, it's a double-booking.\n\n**Correct model:** ask what the correct outcome of a concurrent conflict actually is before picking a CRDT. If the true answer requires picking exactly one winner or applying business rules (checking inventory, confirming only one reservation), a CRDT's automatic \"merge both\" isn't a shortcut — it's the wrong answer wearing a mathematically elegant disguise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "crdts-in-depth-s09-q1"
+      ]
+    }
+  ]
+}

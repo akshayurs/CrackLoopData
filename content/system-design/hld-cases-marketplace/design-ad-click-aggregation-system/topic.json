@@ -1,0 +1,186 @@
+{
+  "id": "design-ad-click-aggregation-system",
+  "title": "Design an Ad Click Aggregation System",
+  "area": "system-design",
+  "group": "hld-cases-marketplace",
+  "order": 7,
+  "slug": "design-ad-click-aggregation-system",
+  "summary": "Count ad clicks accurately enough to bill advertisers on — a billing-critical stream-aggregation problem where exactly-once counting and fraud filtering matter more than raw throughput.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "design-ad-click-aggregation-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: count ad clicks and impressions accurately enough that an advertiser's bill matches reality — not approximately, since money changes hands based on this number.\n\nIt looks like a generic \"process a stream of events and aggregate them\" problem, and structurally it is — but two things make it distinctly harder than a typical analytics pipeline: the count feeds directly into **billing** (so undercounting loses revenue and overcounting overcharges advertisers), and a real fraction of clicks are **fraudulent** and must be filtered before they're ever counted.\n\nThis is stream processing where correctness, not freshness, is the headline requirement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** ingest click and impression events at platform scale, filter out fraud/click-spam, aggregate counts per ad over configurable time windows, and expose the aggregates for billing and reporting.\n\n**Non-functional:** **billing accuracy** — no systematic double-counting or under-counting; robust **fraud/click-spam filtering**, since a platform that bills advertisers for bot clicks loses their trust fast; **reporting freshness** good enough for advertisers to monitor campaigns in near-real-time, though this is explicitly secondary to correctness.\n\nThe framing: if freshness and accuracy ever conflict, accuracy wins — a slightly-delayed correct count beats an instant wrong one when real money is on the line.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: clicks/sec vs the cost of a 1% error",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A large ad platform might see 100,000 clicks/sec at peak globally — a serious but very achievable stream-processing throughput number by modern standards. The number that should actually worry you is different: at that volume, a systematic **1% counting error** is roughly 1,000 clicks/sec being wrongly billed or wrongly missed, compounding into a significant, disputable revenue discrepancy every single day.\n\nThis reframes the whole design: the throughput target is easy to hit with standard stream-processing tools, but the accuracy target is what forces every other decision — exactly-once semantics, late-event handling, fraud filtering — because a small *percentage* error at this scale is a large *absolute* number of dollars.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-ad-click-aggregation-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- `recordClick(adId, userId, ts)` — the ingest path; called at massive scale from ad-serving infrastructure the instant a click happens.\n- `getAggregate(adId, window)` — the read path advertisers and internal billing query, returning a count for a given ad over a given time window.\n\nThe two calls have very different profiles: `recordClick` is extremely high-volume, append-only, write-heavy, and must never be the bottleneck; `getAggregate` is comparatively low-volume and read-only, served from pre-computed aggregates rather than scanning raw events on every query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s05",
+      "order": 5,
+      "sectionTitle": "Stream processing: windowed aggregation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Raw click events flow through a **windowed aggregation** step — grouping events into fixed time buckets (say, one-minute windows) per ad and summing counts within each window, rather than trying to maintain one giant running total updated by every single click event directly.\n\nWindowing does two things at once: it bounds how much state any one aggregation step has to hold at a time (just the current window's tally, not all-time history), and it gives a natural unit for handling the late-arriving and out-of-order events that any real event stream produces — a window can stay \"open\" briefly past its nominal end time to catch stragglers before being finalized.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ad-click-aggregation-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: pipeline overview",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Pipeline: event ingest, dedup/fraud filter, windowed aggregation, then an aggregate store that getAggregate reads from](assets/pipeline-overview.svg)\n\nEach stage narrows and cleans the data for the next: ingest is raw and unfiltered, the fraud filter removes what shouldn't be counted at all, and aggregation collapses filtered events into per-ad, per-window counts that billing can trust.\n\nNotice fraud filtering sits *before* aggregation, not after — a design choice the next few slides make explicit.",
+      "assets": [
+        {"alt": "Pipeline: event ingest, dedup/fraud filter, windowed aggregation, then an aggregate store that getAggregate reads from", "path": "assets/pipeline-overview.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s07",
+      "order": 7,
+      "sectionTitle": "Exactly-once counting over at-least-once delivery",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Most stream ingest layers (Kafka and similar) guarantee **at-least-once** delivery — a producer or consumer failure can cause the same click event to be delivered and processed more than once. Left unhandled, that directly inflates the count, and at billing scale, duplicate delivery isn't a rare edge case, it happens continuously at low but real rates.\n\nThe fix is deduplication keyed on a unique event ID (assigned at click-generation time, not at ingest) — the aggregation step tracks which event IDs it has already counted within a retention window and discards repeats. This turns at-least-once delivery into effectively-exactly-once counting, without requiring the underlying stream infrastructure itself to guarantee it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-ad-click-aggregation-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s08",
+      "order": 8,
+      "sectionTitle": "Handling late-arriving events",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A click can be generated on a user's device, then delayed in transit by seconds or, on a flaky mobile connection, minutes — arriving after the window it logically belongs to has already been finalized and billed. Simply dropping late events undercounts; naively reopening a finalized window to add them retroactively can undercut the very billing reports you already sent.\n\nThe common approach is a **grace period**: each window stays open for a bounded extra interval (e.g. 5 minutes past its nominal end) to absorb realistic delay, and events later than that grace period are captured separately and reconciled in a later correction pass rather than silently discarded or silently mutating an already-reported number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s09",
+      "order": 9,
+      "sectionTitle": "Compare: real-time Lambda-style counts vs an end-of-day authoritative recount",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Real-time (streaming) counts | End-of-day batch recount |\n|---|---|---|\n| Latency | Seconds to minutes — good for live campaign monitoring | Hours — runs once per day over the full day's raw events |\n| Accuracy | Very good, but subject to the grace-period trade-off on late events | Authoritative — processes the complete, settled dataset with no window cutoff pressure |\n| Purpose | Dashboards, pacing, near-real-time advertiser visibility | The number actually used for billing/invoicing |\n\n**How to decide:** use the real-time count for everything advertisers and internal tools look at during the day, but treat the batch recount as the number of record for billing — this is the same real-time-vs-authoritative-batch pattern (a Lambda architecture) seen across many analytics systems, applied here because billing correctness can't depend on a stream's window-cutoff assumptions holding perfectly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-ad-click-aggregation-system-s09-q1"
+      ]
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: fraud filtering ahead of the aggregator",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Raw clicks passing through a fraud filter before the windowed aggregator, with flagged events routed to a separate review path](assets/fraud-filter.svg)\n\nFraud filtering has to happen before aggregation, not as a correction afterward — once a fraudulent click is folded into a billed count, unwinding it means reissuing an invoice, which is far more disruptive than simply never counting it.\n\nThe filter itself is a mix of fast rule-based heuristics (rate limits, known-bad signatures) and slower model-based scoring for subtler patterns, layered so obvious fraud is caught cheaply and fast.",
+      "assets": [
+        {"alt": "Raw clicks passing through a fraud filter before the windowed aggregator, with flagged events routed to a separate review path", "path": "assets/fraud-filter.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: the fraud-filter stage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ingest and windowed aggregation are both comfortably horizontally scalable — more partitions, more consumer instances. The fraud filter is where real throughput ceilings tend to show up, because unlike a stateless count-and-sum, meaningful fraud detection needs *context*: recent click history for a given user/IP, cross-referencing against known bad actor signatures, sometimes even a model inference call per event.\n\nThat context-lookup cost makes the fraud filter the natural throughput ceiling for the whole pipeline — everything downstream is only as fast as fraud filtering can clear events, which is why it's usually the stage engineers scale and optimize most carefully (caching recent-history lookups, tiering cheap rule checks before expensive model checks).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-ad-click-aggregation-system-s11-q1"
+      ]
+    },
+    {
+      "id": "design-ad-click-aggregation-system-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: counting clicks before fraud filtering",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Count clicks at ingest time for speed, then subtract out the fraudulent ones once the filter catches up.\"\n\n**Why it's wrong:** by the time fraud filtering runs, the inflated count may already have flowed into a report an advertiser saw, or worse, an invoice that was already sent — correcting it after the fact means visibly revising numbers advertisers already trusted, which damages confidence even when the correction is accurate.\n\n**Correct model:** fraud filtering is a gate a click must pass *before* it's counted at all, not a cleanup pass on an already-published number. If filtering can't keep up with ingest volume, that's the real bottleneck to scale (§11) — it's not a reason to count first and filter later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-ad-click-aggregation-system-s12-q1"
+      ]
+    }
+  ]
+}

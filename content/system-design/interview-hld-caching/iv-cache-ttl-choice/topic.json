@@ -1,0 +1,165 @@
+{
+  "id": "iv-cache-ttl-choice",
+  "title": "What TTL would you set for this cache, and why?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 3,
+  "slug": "iv-cache-ttl-choice",
+  "summary": "Tests whether you pick a TTL from the data's actual staleness tolerance and update frequency, not a copy-pasted default like \"5 minutes\" for everything.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-cache-ttl-choice-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"What TTL would you set?\" is a trap for the candidate who reaches for a copy-pasted default — \"5 minutes\" for everything — without asking what the data actually needs. A good answer derives the TTL from two numbers: how often the data changes, and how stale the user can tolerate it being.\n\nThe interviewer wants to see reasoning, not a memorized number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-ttl-choice-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask two things: **how often does the underlying data actually change?**, and **how stale can the user tolerate it being before it's a real problem?** A weather forecast updates hourly and a user won't notice a 10-minute-old read; a stock price changes every second and a 10-minute-old read is unusable.\n\nWithout both numbers, any TTL you propose is a guess. With them, the TTL nearly derives itself. See [caching fundamentals](caching-fundamentals) for how TTL fits into the broader read-through pattern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-ttl-choice-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "State the rule: **TTL ≈ how long a wrong answer is tolerable, bounded above by how often the data actually changes.** The staleness tolerance sets the ceiling you're willing to accept; the change frequency sets the ceiling past which a longer TTL buys you nothing extra, because the data would've changed again anyway.\n\nPractically: never set a TTL longer than the shorter of these two numbers. Setting it shorter than both is safe but gives up cache-hit benefit for no reason.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-ttl-choice-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-ttl-choice-s04",
+      "order": 4,
+      "sectionTitle": "Worked example: a weather widget vs a stock ticker",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Weather widget | Stock price ticker |\n|---|---|---|\n| Change frequency | Hourly | Every second |\n| Tolerable staleness | Minutes — nobody checks the forecast twice a minute | None — seconds matter to a trader |\n| Right TTL | 10 minutes is plenty | Near zero — invalidate on write instead of relying on expiry |\n\n**How to decide:** when the tolerable staleness rounds to zero, stop reaching for a TTL at all — switch to invalidate-on-write, where the cache is corrected the instant the source changes rather than waiting to expire.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-ttl-choice-s05",
+      "order": 5,
+      "sectionTitle": "Adding jitter so keys don't all expire together",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If every key set at the same moment (say, at a deploy or a cache warm-up) shares the exact same TTL, they all expire at the exact same instant — producing a mini thundering-herd of simultaneous cache misses. The fix is **jitter**: randomize each key's TTL by roughly ±10% (a 60-second TTL becomes anywhere from 54 to 66 seconds), so expiries spread out over time instead of landing in one spike.\n\nThis is a small, cheap change that prevents a real production failure mode — worth naming even if the interviewer doesn't ask for it directly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-ttl-choice-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: the load/staleness trade computed",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Moving a TTL from 10s to 60s cuts refetch frequency roughly 6x for the same key, at the cost of up to 60s of staleness instead of up to 10s.\n\n```\nrequests_per_key_per_min = 600          # 10 req/sec on this key\n\n# TTL = 10s -> ~6 refetches/min (one every 10s)\nrefetches_10s = 60 / 10                 # = 6/min\ndb_hits_10s   = refetches_10s           # cache absorbs the rest\n\n# TTL = 60s -> 1 refetch/min\nrefetches_60s = 60 / 60                 # = 1/min\ndb_hits_60s   = refetches_60s\n\n# Same key, same traffic: DB load drops 6x, worst-case staleness rises 6x\n```\n\nThe point of doing this arithmetic out loud: it turns \"longer TTL reduces load\" from a vague claim into a number you can defend against a specific staleness cost.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-ttl-choice-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-ttl-choice-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Shorter TTL | Longer TTL |\n|---|---|\n| Less DB load reduction | More DB load reduction |\n| Narrower staleness window | Wider staleness window |\n| More refetches under the same traffic | Fewer refetches under the same traffic |\n\n**How to decide:** a longer TTL always cuts DB load harder, but it also always widens the window where users can see wrong data — there's no TTL that improves both for free. Pick the point on this line the data's staleness tolerance allows, not the longest TTL that seems to \"work.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-ttl-choice-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"one TTL or two caches for two different staleness needs?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the same underlying data is shown on two screens with different staleness tolerances — say, a quick preview card (tolerates a minute) and a detail page (needs to be near-live) — the answer is usually **two cache entries with two TTLs**, not one shared TTL forced to satisfy both.\n\nSharing one TTL means picking the shorter of the two needs, which gives up cache-hit benefit on the screen that could have tolerated more staleness. Two caches cost a bit more memory but let each screen get the TTL it actually needs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-cache-ttl-choice-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-ttl-choice-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"how do you find out your TTL was wrong after shipping it?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "You don't get the TTL right by intuition alone in production — you need signals. Two concrete ones: **user-facing staleness complaints** (a support ticket saying \"my dashboard shows old data\") and **hit-rate and error dashboards** (a cache hit rate that's suspiciously high can mean the TTL is too generous for the staleness the business actually wants).\n\nNaming that you'd monitor and adjust the TTL after shipping — not just pick one number and move on — is what makes this a production-grade answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-ttl-choice-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: one global default TTL for every key",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just set TTL to 5 minutes across the board — it's a sane default.\"\n\n**Why it's wrong:** a single default ignores that different keys have wildly different change frequencies and staleness tolerances. Five minutes might be far too long for a price that updates every second, and far too short for a config value that changes once a quarter — wasting refetches on the latter while risking wrong prices on the former.\n\n**Correct model:** derive TTL per data type from its own change frequency and staleness tolerance. A single \"sane default\" is a sign the TTL was picked without asking either question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-ttl-choice-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-ttl-choice-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "TTL ≈ tolerable staleness, bounded by change frequency — derive it, don't default to it. Add jitter so keys don't expire in one spike. When staleness tolerance rounds to zero, invalidate on write instead of relying on TTL. Different screens with different staleness needs get different TTLs, possibly different cache entries. Monitor hit rate and staleness complaints after shipping — the first TTL you pick is a hypothesis, not a final answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    }
+  ]
+}

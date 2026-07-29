@@ -1,0 +1,29 @@
+{
+  "topicId": "secondary-indexes-in-sharded-systems",
+  "interviewQuestions": [
+    {
+      "id": "secondary-indexes-in-sharded-systems-iq1",
+      "question": "Your table is sharded by `user_id`, but you need to query by `email` — how?",
+      "answerMarkdown": "I'd start by naming the options rather than picking one immediately. Simplest: scatter-gather — query every shard for the matching email and merge results. It needs no new infrastructure, and I'd default to it if this query is rare and low-volume, like an internal admin tool.\n\nIf this is a frequent, latency-sensitive path — like a login flow looking up a user by email — I'd build a global secondary index: a separate structure mapping email to the data shard that owns the matching row, so a lookup becomes two targeted hops instead of an every-shard scan. I'd then decide explicitly how it stays in sync: synchronous dual-write if I can't tolerate any staleness (accepting extra write latency), or asynchronous via an event if the write path needs to stay fast and a brief staleness window is acceptable — for login lookups, I'd likely accept a small async delay.\n\nI'd close by flagging that adding this index changes write behavior too, not just reads, so I'd make sure that's understood before shipping it.\n\n**Testing:** whether you can propose the low-cost option first and only reach for a global index with an explicit consistency plan when the traffic pattern justifies it.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Querying by a non-shard-key field"
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-iq2",
+      "question": "What's the difference between a local and a global secondary index in a sharded system?",
+      "answerMarkdown": "A local secondary index lives on each shard and only indexes that shard's own rows — writes stay cheap since updating the index is a same-shard operation, but reads still have to visit every shard, just faster once there because each shard can use its own index instead of scanning everything. A global secondary index is a separate, independently partitioned structure mapping the secondary field to whichever shard owns the matching row — reads become two targeted hops, but every write across the whole cluster now has to also reach this second structure.\n\nI'd frame the choice as read-cost versus write-cost and operational overhead: local indexes push cost onto every read; a global index concentrates the cost into keeping one more sharded system correct and current.\n\n**Testing:** whether you understand these as opposite trade-offs rather than one being a strictly better version of the other.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Local vs global secondary indexes"
+    },
+    {
+      "id": "secondary-indexes-in-sharded-systems-iq3",
+      "question": "A global secondary index occasionally returns a row that was just deleted from the base table. How would you explain this, and would you fix it?",
+      "answerMarkdown": "I'd explain it as a staleness window from asynchronous index updates: the delete committed on the data shard, but the event updating the global index hasn't been processed yet, so the index briefly still points at a row that no longer exists. This is a known, expected consequence of choosing async updates over synchronous dual-writes, not necessarily a bug.\n\nWhether I'd fix it depends on the blast radius: if a client following a stale index pointer gets a clean \"not found\" from the data shard and handles that gracefully, the window is probably fine to accept, since it's usually milliseconds to low seconds. If it's causing real user-facing errors, I'd look at shrinking the window (faster event processing, checking the index result against the source before acting on it) rather than switching to synchronous dual-writes outright, since that trades the problem for slower writes cluster-wide.\n\n**Testing:** whether you can diagnose eventual consistency correctly and weigh a targeted fix against a blanket switch to synchronous updates.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging global index staleness"
+    }
+  ]
+}

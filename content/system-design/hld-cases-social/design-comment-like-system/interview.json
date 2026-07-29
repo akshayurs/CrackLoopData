@@ -1,0 +1,29 @@
+{
+  "topicId": "design-comment-like-system",
+  "interviewQuestions": [
+    {
+      "id": "design-comment-like-system-iq1",
+      "question": "Design the like and comment system for a post that can go viral.",
+      "answerMarkdown": "I'd start from the failure mode this problem is really testing: a naive `like_count` column on the posts table works fine until one post goes viral, at which point every concurrent liker serializes on that row's lock and the row becomes a queue, not a counter.\n\nMy fix is a sharded counter — split each post's count into N shard rows, have a like increment a randomly chosen shard, and aggregate the shards into a displayed total on a short periodic cycle rather than reading them live. I'd pair that with a direct dedup lookup keyed by `(postId, userId)` so checking \"has this user already liked this\" stays O(1) regardless of the post's popularity.\n\nFor comments, I'd store them as a flat list with a `parentId`, paginated in storage order, and reconstruct the tree/reply nesting at render time — deep recursive tree queries don't paginate well and aren't needed for threads that are rarely more than a couple levels deep.\n\n**Testing:** whether you identify the hot-object problem unprompted and reach for sharded, asynchronously-aggregated counters instead of trying to make one row hold up under contention.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Open-ended: likes and comments at viral scale"
+    },
+    {
+      "id": "design-comment-like-system-iq2",
+      "question": "How do you make sure a user can't like the same post twice, given that likes are being written to sharded counters?",
+      "answerMarkdown": "I'd separate the two concerns explicitly: the sharded counters answer \"how many total,\" and a completely different structure answers \"did this specific user already like this specific post.\" I'd keep a direct-lookup record — a unique index or key-value entry at `like:{postId}:{userId}` — that the like endpoint checks *before* touching any shard.\n\nWalking through the flow: a like request first attempts to insert that dedup key; if the insert fails because the key already exists, it's a duplicate and the shard increment is skipped entirely; if it succeeds, the request proceeds to increment one randomly chosen shard. This ordering matters — checking dedup after incrementing a shard risks double-counting if the dedup check itself races.\n\nI'd note the same structure supports un-like for free: deleting the dedup key and decrementing the same shard reverses the exact operation.\n\n**Testing:** whether you keep dedup and counting as two separate mechanisms rather than trying to make the sharded counters themselves detect duplicates, which they structurally can't.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: dedup under sharded counters"
+    },
+    {
+      "id": "design-comment-like-system-iq3",
+      "question": "How would you handle a comment thread with tens of thousands of replies on a single viral post?",
+      "answerMarkdown": "I'd point out that unlike likes, comments aren't a pure aggregation problem — each one is individually visible content that needs to render and paginate, so sharding doesn't directly apply the same way; the lever here is pagination and lazy loading, not write-side fan-out.\n\nConcretely: store comments flat, keyed by `postId` with a creation-time or ID-based cursor, and fetch a bounded page (say 20-50) at a time — never the full thread. For nesting, I'd only eagerly load top-level comments plus a small preview of replies (\"2 replies\" with a tap-to-expand), since rendering tens of thousands of nested replies at once would overwhelm the client regardless of how fast the backend serves them.\n\nI'd also flag that a thread this size needs its write path protected too — a hot top-level comment can itself accumulate a large reply count fast, so the same pagination-first principle applies recursively at each level.\n\n**Testing:** whether you recognize comments need a different scaling lever (pagination/lazy-load) than likes (sharded aggregation), rather than reflexively reapplying the sharded-counter pattern everywhere.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: massive comment threads"
+    }
+  ]
+}

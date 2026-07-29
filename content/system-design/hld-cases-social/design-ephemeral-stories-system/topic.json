@@ -1,0 +1,169 @@
+{
+  "id": "design-ephemeral-stories-system",
+  "title": "Design an Ephemeral Stories System",
+  "area": "system-design",
+  "group": "hld-cases-social",
+  "order": 8,
+  "slug": "design-ephemeral-stories-system",
+  "summary": "Content that must vanish after 24 hours at massive scale, plus per-viewer view-tracking — expiry and read-receipts are the hard parts, not the media itself.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "design-ephemeral-stories-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Design a system for posting a photo or video that disappears after 24 hours, and seeing exactly who viewed it — think Instagram or Snapchat Stories. Uploading and displaying media is a solved problem elsewhere; the two genuinely hard parts here are guaranteeing expiry at scale without a database-melting sweep, and tracking potentially thousands of individual viewers per story cheaply.\n\nThink of it like a chalk message on a sidewalk that's designed to wash away by tomorrow: the interesting engineering isn't drawing the message, it's making sure it actually washes away on schedule for millions of sidewalks at once, and quietly noting who stopped to read it — similar in shape to the hot-object counting problem in [comments and likes](design-comment-like-system), but for view counts instead of like counts.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** post a photo or video with a time-to-live, view a story, and see the list of who's viewed it.\n\n**Non-functional:** **exact vs approximate expiry timing** — does a story need to vanish at precisely 24h00m00s, or is a window of a few minutes' slop acceptable? Most products accept slop, and that single relaxation is what makes cheap expiry possible. **Viewer-list size** varies enormously — a story with 50 viewers is a trivial list; one with 500,000 needs the same hot-object thinking as a viral like count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: stories, views, and ephemeral storage in flight",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take 100M stories created/day, averaging 150 views each (some near zero, some in the hundreds of thousands) — 15B story views/day, around 175,000 views/sec at average load and considerably higher at evening peak.\n\nBecause every story expires within 24 hours, the total media \"in flight\" at any instant is roughly one day's worth of uploads, not an ever-growing archive — at an average 2MB per photo/video, 100M stories/day is about 200TB in flight, a bounded number that never actually grows over time, unlike a permanent post archive that keeps accumulating forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-ephemeral-stories-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-ephemeral-stories-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`postStory(media, ttl)` uploads content with an explicit expiry duration (defaulting to 24h, but the parameter matters — some products let a story be pinned longer as a \"highlight\"). `viewStory(id, viewerId)` records that a specific viewer opened a specific story. `getViewers(id)` returns the list of who's viewed it, visible only to the story's author.\n\nThe explicit `ttl` parameter is a deliberate design choice: rather than hardcoding 24 hours everywhere expiry logic lives, every story carries its own expiry moment as data, which is what makes the expiry mechanism (next slides) a generic sweep over \"anything past its TTL,\" not a special case for one fixed duration.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s05",
+      "order": 5,
+      "sectionTitle": "Compare: TTL-indexed storage vs a background expiry sweep",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | TTL-indexed storage (native TTL support) | Background expiry sweep |\n|---|---|---|\n| Mechanism | Store sets its own internal expiry (e.g. Redis `EXPIRE`, DynamoDB TTL) and reaps automatically | A scheduled job queries for `expiresAt < now()` and deletes matches |\n| Precision | Approximate — most engines reap within minutes of expiry, not the exact second | Depends entirely on sweep frequency — can be tuned tighter, at higher query cost |\n| Load pattern | Reaping is spread continuously by the storage engine itself | Concentrated in periodic bursts, sized by sweep interval and batch size |\n| Operational complexity | Low — offload expiry to infrastructure that already does this | Higher — you own correctness, indexing, and batching yourself |\n\n**How to decide:** prefer native TTL support where the store offers it and the approximate expiry is acceptable (it usually is, given the staleness tolerance in the requirements) — reserve a custom sweep for stores without TTL support or when the exact deletion timing genuinely matters.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: expiry path",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Lazy deletion treats an expired story as gone on read, while a background reaper batch-deletes past-TTL stories during off-peak windows](assets/expiry-path.svg)\n\nLazy deletion on read means a story is *functionally* gone the instant anyone tries to view it past expiry, even before the background reaper physically removes the bytes — the two mechanisms cover each other's gaps: lazy deletion guarantees correctness for reads, the reaper guarantees storage is eventually actually reclaimed.",
+      "assets": [
+        {"alt": "Lazy deletion treats an expired story as gone on read, while a background reaper batch-deletes past-TTL stories during off-peak windows", "path": "assets/expiry-path.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s07",
+      "order": 7,
+      "sectionTitle": "Tracking viewers without a hot write on every view",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A story from a popular account can accumulate hundreds of thousands of views within hours — if each `viewStory` call is a synchronous write to a single viewer-list record, that record becomes exactly the hot-object bottleneck seen with viral like counts.\n\nThe same fix applies: shard the viewer-tracking writes (across multiple partitions keyed by story ID plus a shard suffix), or batch views in memory and flush to durable storage periodically rather than per-view. Since the requirement is \"who has viewed this,\" not \"a live view counter,\" some buffering delay before a viewer appears in `getViewers()` is an acceptable trade, exactly as it was for a lagging like count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-ephemeral-stories-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-ephemeral-stories-system-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: story ring fan-out to followers",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A posted story fans out to each follower's story ring, checking only whether the followee currently has an unexpired story](assets/story-ring-fanout.svg)\n\nIt's deliberately simpler than a full feed: there's no relevance ranking to decide *order*, since story rings are typically just \"followees with an active story, most-recent-first or unviewed-first\" — a much smaller problem than ranking a general content feed.",
+      "assets": [
+        {"alt": "A posted story fans out to each follower's story ring, checking only whether the followee currently has an unexpired story", "path": "assets/story-ring-fanout.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s09",
+      "order": 9,
+      "sectionTitle": "The bottleneck: expiring millions of stories at the same moment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a large fraction of stories are posted at similar times of day (evening peak usage), their 24-hour expiry moments cluster the same way — the platform can face millions of stories all becoming eligible for expiry within the same narrow window the following evening, exactly when the system may also be at its own peak traffic for new posts.\n\nThe practical mitigation is decoupling expiry-eligibility detection from expiry-execution: mark eligible stories continuously (lazy deletion on read already does this for free) and let the background reaper drain the actual deletion work across a longer window, prioritizing storage reclamation during comparatively quieter hours rather than trying to delete everything the instant it turns eligible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-ephemeral-stories-system-s09-q1"
+      ]
+    },
+    {
+      "id": "design-ephemeral-stories-system-s10",
+      "order": 10,
+      "sectionTitle": "Compare: deleting media immediately vs soft-deleting and reaping later",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Delete immediately | Soft-delete, reap later |\n|---|---|---|\n| Mechanism | Expiry moment triggers a synchronous delete of the record and underlying media | Mark `expired=true` (or rely on TTL check) instantly; physical deletion happens in a later batch |\n| Load at expiry moment | Spiky — deletion work concentrated exactly at each story's expiry instant | Smooth — physical deletion deferred to a scheduled, batchable window |\n| Read correctness | Trivial — deleted means gone | Needs the lazy-deletion check so a soft-deleted story still reads as gone immediately |\n| Recovery from accidental expiry | Very hard — media is already gone | Easier — a brief grace window before physical deletion allows recovery |\n\n**How to decide:** soft-delete and reap later, paired with lazy deletion on read — it smooths deletion load, and the small window before physical reaping doubles as a safety margin against an incorrectly-set TTL.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-ephemeral-stories-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: a cron job scanning the entire stories table every minute",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Run a cron job every minute that scans the whole stories table for `expiresAt < now()` and deletes matches — simple and reliable.\"\n\n**Why it's wrong:** at 100M stories/day with a 24-hour retention, the table holds on the order of 100M live rows at any moment — a full scan every 60 seconds means 100M-row scans, 1,440 times a day, the overwhelming majority of which touch rows nowhere near expiry yet.\n\n**Correct model:** index on `expiresAt` so the sweep only touches rows actually near or past expiry, or rely on the storage engine's native TTL support entirely (Redis, DynamoDB, and similar all offer this) instead of hand-rolling a full-table scan — the goal is a query proportional to *what's expiring*, not proportional to *everything currently stored*.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-ephemeral-stories-system-s11-q1"
+      ]
+    }
+  ]
+}

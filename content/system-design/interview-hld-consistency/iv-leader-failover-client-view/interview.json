@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-leader-failover-client-view",
+  "interviewQuestions": [
+    {
+      "id": "iv-leader-failover-client-view-iq1",
+      "question": "Your leader/primary just failed over — what does the client experience?",
+      "answerMarkdown": "I'd trace it from the client's side, not the cluster's. A write that was in flight when the old leader crashed may or may not have landed, and the client genuinely can't tell which — its only safe move is to retry the same write against the new leader, which needs to be idempotent so a write that did land the first time doesn't get applied twice.\n\nThe client discovers the new leader through whatever mechanism the stack uses — a service registry update, a DNS change, or a redirect from a proxy — and most production database or RPC SDKs already handle this discovery and retry internally, as long as the application supplies a stable idempotency key.\n\nI'd estimate the total client-visible blip as detection time plus election time plus retry backoff — typically a few seconds, dominated by detection. If the client held a persistent connection to the old leader rather than a stateless HTTP call, it needs explicit teardown-and-reconnect handling on top of all that.\n\n**Testing:** whether you can trace failover from the caller's actual experience, not just the server-side election mechanics.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Failover from the client's point of view"
+    },
+    {
+      "id": "iv-leader-failover-client-view-iq2",
+      "question": "How long is the client-visible blip, and what determines that number?",
+      "answerMarkdown": "I'd break it into three parts that sum to the actual number: detection time, how long until the cluster notices the old leader is gone, usually bounded by a heartbeat timeout; election time, how long consensus takes to agree on a new leader; and client retry backoff, how long the client waits before its next attempt after a failed request.\n\nFor a typical setup, that might land around 2-5 seconds, dominated by the detection timeout rather than the election itself, which is usually fast once triggered. I'd want to tune the detection timeout deliberately — too aggressive and a merely slow leader gets wrongly failed over; too lax and the client-visible blip grows for no benefit.\n\nGiving this breakdown, even with rough numbers, is a stronger answer than a vague \"it recovers quickly\" — it shows I know which levers actually control the duration.\n\n**Testing:** whether you can decompose an end-to-end latency into its actual contributing components instead of estimating it as one opaque number.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Estimating the failover blip"
+    },
+    {
+      "id": "iv-leader-failover-client-view-iq3",
+      "question": "The client had a long-lived connection to the old leader — does it need special handling beyond a stateless retry?",
+      "answerMarkdown": "Yes — a persistent connection, like a database driver's long-lived socket or a gRPC stream, doesn't reconnect on its own the way a fresh HTTP request naturally would. The client library needs to explicitly detect the connection drop, typically via a read/write error or a heartbeat failure on that connection itself, tear the dead connection down, re-resolve who the current leader is, and open a new connection before it can even attempt a retry.\n\nThis is meaningfully more work than the stateless case, where the next request simply resolves the leader fresh with no stale connection to clean up first. I'd flag this explicitly rather than assume the same handling covers both cases — it's exactly the kind of detail a clarifying question about connection type at the start of the answer is meant to surface.\n\n**Testing:** whether you recognize that connection state changes the failover story, instead of treating every client the same way.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Persistent connections during failover"
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "id": "iv-designing-for-partial-failure",
+  "title": "Part of this request succeeded and part failed — what do you return, and how does the design handle it?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 7,
+  "slug": "iv-designing-for-partial-failure",
+  "summary": "Designing an API operation's contract for partial success instead of assuming every request is atomically all-or-nothing, once it spans multiple services.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-designing-for-partial-failure-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: why \"wrap it in a transaction\" fails",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just wrap it in a transaction\" doesn't work once an operation spans multiple services or databases that can't share a single transaction — there's no cross-service commit/rollback to lean on.\n\nThe strong answer designs the API's contract to **report partial success explicitly**, rather than assuming every request is atomically all-or-nothing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: does this operation touch **one system**, or does it span **multiple services or databases** that can't share a single transaction? A single-database operation might genuinely get away with an all-or-nothing transaction.\n\nAlso ask: can any of the **sub-steps be safely retried independently**? If a step is idempotent, retrying just that step is a much simpler recovery story than re-running the whole operation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For anything spanning multiple systems: design the **response to report per-item status** rather than a single success/fail for the whole request, and make each sub-step **idempotent** so the caller can safely retry just the failed parts.\n\nThose two decisions — per-item reporting, and idempotent sub-steps — are what let a caller recover correctly instead of guessing what actually happened.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-designing-for-partial-failure-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a bulk order-creation endpoint",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A worked example — a bulk `POST /orders/batch` creating 100 orders returns a per-order status array instead of one status for the whole batch:\n\n```\nPOST /orders/batch  (100 items)\n-> 207 Multi-Status\n   {\n     \"results\": [\n       { \"order_id\": \"o1\", \"status\": \"created\" },\n       { \"order_id\": \"o2\", \"status\": \"failed\", \"reason\": \"insufficient_stock\" },\n       ...\n     ]\n   }\n```\n\nThe caller reads the array and knows exactly which 3 of 100 orders need attention, instead of a single 200 hiding failures or a single 500 that wrongly implies nothing succeeded.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: an order that partially completes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete scenario: placing an order triggers inventory decrement (**succeeds**), then payment charge (**succeeds**), then a loyalty-points award (**fails** because that service is down). The design needs to decide, and clearly document, one of two answers: does the order still count as placed, with loyalty points retried out-of-band later, or does the whole thing need to unwind?\n\nNeither answer is automatically correct — it depends on what the business considers acceptable, but the API's behavior has to pick one and be consistent about it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-designing-for-partial-failure-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the saga-style answer for multi-service unwind",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Compensating rollback across services](assets/compensating-rollback.svg)\n\nFor the multi-service case where the business rule is all-or-nothing: each step either succeeds or triggers a **compensating action** for the steps already done — refund the payment charge if loyalty points can't be awarded and the rule says the whole operation must roll back together, since there's no real cross-service transaction to lean on.",
+      "assets": [{"alt": "Compensating rollback across services", "path": "assets/compensating-rollback.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Reporting partial success is more **honest** and often more **useful** to the caller than a single pass/fail response. But it pushes real complexity onto every caller, who now has to handle a **mixed-result response** — checking each item's status individually — instead of a simple success/fail branch.\n\nThat's only worth the added caller-side complexity when partial success is actually a **valid outcome for the business** — if the business rule genuinely requires all-or-nothing, per-item reporting just adds noise instead of value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-designing-for-partial-failure-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: does a retry duplicate the succeeded items?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"the caller retries the whole batch after a partial failure — do the already-succeeded items get duplicated?\"** Only if each item **isn't idempotent** — if creating order `o1` a second time just creates a duplicate order rather than recognizing it already exists.\n\nThis is why partial-failure design and idempotent operations are the **same conversation**: per-item reporting tells the caller what to retry, but idempotency is what makes retrying safe at all, typically via a client-supplied idempotency key per item.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: who decides partial success is acceptable?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"who decides whether partial success is acceptable here — engineering or the business?\"** The **business** — \"is a half-placed order OK to show the user as placed\" is a product decision that changes the whole design, not a purely technical one.\n\nNaming this explicitly signals you won't silently make a business-level call (like deciding an order counts as placed even with a missing side-effect) without checking it against what the product actually wants the customer to experience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-designing-for-partial-failure-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: one status for independently-failing operations",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A batch endpoint should return one success or one failure for the whole request — it's simpler.\"\n\n**Why it's wrong:** when the underlying operations are actually independent, this hides exactly which items failed, forcing the caller to either assume everything succeeded (masking real failures) or retry the entire batch (redoing work that already succeeded, risking duplication if it isn't idempotent).\n\n**Correct model:** if items in the batch can fail independently of each other, the response must say so per item — a single status is only honest when the operations are genuinely all-or-nothing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-designing-for-partial-failure-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A cross-service transaction doesn't exist, so design the contract instead: per-item status in the response, idempotent sub-steps so retries are safe, and a saga-style compensating action if the business rule truly requires all-or-nothing. Partial-success reporting is more honest but pushes handling complexity onto callers — only worth it when the business says partial success is a valid outcome.\n\nFor the multi-service rollback mechanics, see [Distributed Transactions and Sagas](distributed-transactions-and-sagas) and [Idempotency and Exactly-Once](idempotency-and-exactly-once); for the response contract itself, see [API Error Contract Design](api-error-contract-design).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

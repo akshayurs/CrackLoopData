@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-rate-limiter-class",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-rate-limiter-class-iq1",
+      "question": "Design a rate limiter class for a single service instance.",
+      "answerMarkdown": "I'd scope this explicitly first: a single-process `RateLimiter`, not the distributed version that coordinates across a fleet — that's a different, harder question. I'd pick token bucket as the algorithm, since it naturally allows short bursts up to a capacity while still enforcing a steady average rate, and name the state it needs: capacity, current tokens, refill rate, and the last-refill timestamp.\n\nThe API is `tryAcquire()` and `tryAcquire(n)`, returning a boolean rather than blocking or throwing — the limiter reports \"yes\" or \"not now\" and lets the caller decide whether to reject, queue, or retry.\n\nThe detail I'd make sure to call out unprompted: refill, the token check, and the deduction are one compound operation and must be atomic under concurrency — locking each step separately would let two threads both see enough tokens and both succeed, over-granting past the configured capacity.\n\n**Testing:** whether you pick a defensible algorithm and get the concurrency right on the compound operation, not just the sequential logic.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-rate-limiter-class-iq2",
+      "question": "How would you extend a single-bucket rate limiter to per-user limiting without exploding memory?",
+      "answerMarkdown": "The naive extension — a map from user ID to a `RateLimiter` instance, one lock each — works at small scale but breaks down as the number of distinct users grows, since most users are inactive most of the time yet each still holds a live bucket object in memory.\n\nI'd bound the map with an eviction policy, like an LRU cache, instead of letting it grow unbounded. An inactive user's bucket gets evicted, and if they show up again later, a fresh bucket is created — a small accuracy trade-off (they briefly get a full allowance again) in exchange for memory staying proportional to actively-limited users rather than total registered users.\n\nAt real scale, I'd note this state typically leaves the process entirely and moves into a shared store like Redis with atomic increment operations, which is exactly the point where this class-scope answer hands off to the distributed rate-limiter system design.\n\n**Testing:** whether you recognize the memory-scaling problem unprompted and reach for bounded eviction rather than an unbounded per-key map.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Scaling to per-user limiting"
+    },
+    {
+      "id": "iv-design-rate-limiter-class-iq3",
+      "question": "What's the actual behavioral difference between token bucket and a sliding window at the rate limit's boundary?",
+      "answerMarkdown": "I'd give a concrete, checkable answer rather than \"token bucket is smoother.\" A fixed-window counter fully resets its count at each window edge — so a client can send the full limit's worth of requests in the last moment of one window, then immediately send the full limit's worth again in the first moment of the next, achieving close to double the intended rate in a short span around that boundary.\n\nToken bucket has no such reset moment: tokens refill continuously based on elapsed time, so there's never an instant where the allowance jumps back to full independent of recent usage. A sliding-window log or counter approximates this by looking back over a rolling interval rather than a fixed calendar window, closing the same gap a different way.\n\nI'd close by noting this boundary behavior is exactly why a naive fixed-window counter, despite being the simplest to implement, is usually the wrong default once burst protection actually matters.\n\n**Testing:** whether you can articulate the boundary flaw precisely instead of gesturing at token bucket being generally better.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Token bucket vs sliding window"
+    }
+  ]
+}

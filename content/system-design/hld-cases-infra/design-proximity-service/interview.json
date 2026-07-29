@@ -1,0 +1,29 @@
+{
+  "topicId": "design-proximity-service",
+  "interviewQuestions": [
+    {
+      "id": "design-proximity-service-iq1",
+      "question": "How would you keep the spatial index fresh when objects update their location every second?",
+      "answerMarkdown": "I'd separate the update rate clients send from the rate the index actually applies. Clients can push a location every second, but I wouldn't write every single one straight into the index — I'd throttle by a minimum-distance threshold (say, only re-index if the object moved more than 20 meters) and batch writes over a short window, since `findNearby` doesn't need meter-level freshness to be useful.\n\nFor a geohash-based index specifically, I'd flag that a move can shift which cell — and which shard — an object belongs to, turning a naive update into a delete-plus-reinsert. Batching amortizes that cost instead of paying it on every single ping.\n\nI'd close by naming the trade-off explicitly: looser freshness thresholds cut write load a lot, but push staleness into query results, so the threshold should be tuned against how fast objects actually move relative to the query radius.\n\n**Testing:** whether you recognize that raw update volume and index-write volume are different numbers, and that closing the gap between them is a deliberate design choice.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Keeping the index fresh under high update rate"
+    },
+    {
+      "id": "design-proximity-service-iq2",
+      "question": "How would you expand search radius gracefully when a query lands in a sparse area with few nearby objects?",
+      "answerMarkdown": "I'd use expanding-ring search: start with a small radius (or the object's own geohash cell plus immediate neighbors), and if that doesn't return enough results, widen to the next ring out, repeating until either enough candidates are found or a hard cap radius is hit.\n\nThe reason this beats a single fixed generous radius is that most queries are in populated areas where the first small ring already has plenty of results — paying the cost of a huge search radius on every query wastes work for the common case just to handle the rare sparse one.\n\nI'd cap the number of expansion rounds and set a maximum radius so a genuinely sparse area (say, a query in the middle of nowhere) fails fast with 'nothing nearby' instead of the service looping indefinitely trying to satisfy an unreasonable request.\n\n**Testing:** whether you can design for the common case without silently breaking the sparse edge case.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Expanding-ring search in sparse areas"
+    },
+    {
+      "id": "design-proximity-service-iq3",
+      "question": "Design a service that answers 'what's nearby' for millions of moving objects, like Uber's nearby-drivers feature.",
+      "answerMarkdown": "I'd start from the two operations that define the system: `updateLocation` (high-volume, single-object writes) and `findNearby` (lower-volume but region-scoped reads), and immediately rule out a linear scan — at millions of objects it can't meet a millisecond budget no matter how the code is optimized.\n\nThat pushes the design toward a spatial index. I'd default to geohashing keyed into a sharded, in-memory sorted structure, since it reuses standard infrastructure with O(1) updates, and mention quadtrees as the adaptive-density alternative if the interviewer pushes on uneven density. I'd shard by geographic region, but flag immediately that equal-area sharding breaks under uneven demand (a busy downtown vs quiet suburbs), so shards need to be sized by load, not area.\n\nI'd close with the two correctness details that separate a working design from a broken one: querying a cell's neighbors too (not just the exact cell, to avoid missing boundary-adjacent points), and throttling location writes so update volume doesn't thrash the index.\n\n**Testing:** whether you can derive the entire architecture from the update/query cost trade-off instead of jumping straight to 'use a geohash.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Full proximity service design walkthrough"
+    }
+  ]
+}

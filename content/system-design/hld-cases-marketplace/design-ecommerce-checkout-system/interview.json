@@ -1,0 +1,29 @@
+{
+  "topicId": "design-ecommerce-checkout-system",
+  "interviewQuestions": [
+    {
+      "id": "design-ecommerce-checkout-system-iq1",
+      "question": "Design the checkout flow for an e-commerce site during a flash sale?",
+      "answerMarkdown": "I'd start by naming what checkout really is: a distributed transaction across inventory, payment, and shipping, none of which share a database — so there's no native `COMMIT` across all three, and I have to build that guarantee with a saga instead. I'd order the steps deliberately: reserve inventory first, since failing fast there means a sold-out request never wastes a payment call; charge payment second; create the shipment last. Each successful step gets a compensating action — release inventory, refund payment — that the saga runs in reverse if a later step fails.\n\nFor the flash-sale spike specifically, I'd treat the hot SKU's inventory row the same as a ticket booking's hot seat: an atomic conditional decrement so the database arbitrates concurrent claims, backed by an admission-controlled queue so the write rate during the spike stays within what the inventory store can sustain.\n\nI'd close on the idempotency key on the top-level `checkout()` call, since a client retry after a timeout is the single easiest way to double-charge or double-reserve if it's missing.\n\n**Testing:** whether you see checkout as a saga-shaped distributed-transaction problem rather than three independent API calls.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The full flash-sale checkout design"
+    },
+    {
+      "id": "design-ecommerce-checkout-system-iq2",
+      "question": "How would you handle a payment that succeeds but the shipment-creation step then fails?",
+      "answerMarkdown": "I'd walk through this as the saga unwinding, not a special case. If shipment creation fails after payment already succeeded, the saga's compensating actions fire in reverse from the point of failure: refund the payment, then release the inventory reservation, restoring both to their pre-checkout state.\n\nI'd flag two subtleties an interviewer likely wants: first, the refund itself needs to be idempotent and retried on its own if it fails, since a compensating action can fail too — the saga needs a way to track and retry incomplete compensations, not just fire-and-forget them. Second, I'd surface this to the customer honestly and promptly (order failed, refund issued) rather than leaving them in an ambiguous \"processing\" state, since the whole point of the saga is to never leave the customer facing a half-completed order.\n\n**Testing:** whether you treat compensation as a first-class part of the design — including that compensations themselves can fail — rather than an afterthought.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Saga compensation in practice"
+    },
+    {
+      "id": "design-ecommerce-checkout-system-iq3",
+      "question": "Why not just use a traditional distributed transaction (two-phase commit) across these services?",
+      "answerMarkdown": "I'd explain the practical blocker first: two-phase commit needs every participant to speak the same coordination protocol and hold locks open until all agree — that works when you control all the participating databases, but checkout's payment step usually goes through an external processor (Stripe, a card network) that has no concept of your 2PC coordinator and won't hold a lock open for you.\n\nEven ignoring that, I'd note 2PC's availability cost: a slow or unreachable participant blocks every other participant's locks, which is exactly the wrong failure mode for a checkout flow under flash-sale load. A saga trades that away — each step commits independently and failures are handled after the fact via compensation — accepting a brief window where the system is in an intermediate state, in exchange for not needing a shared coordinator or holding cross-service locks.\n\n**Testing:** whether you can justify the saga choice against a concrete alternative, not just state it as the default answer.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Saga vs two-phase commit"
+    }
+  ]
+}

@@ -1,0 +1,236 @@
+{
+  "id": "design-chat-system",
+  "title": "Design a Chat System",
+  "area": "system-design",
+  "group": "hld-cases-social",
+  "order": 2,
+  "slug": "design-chat-system",
+  "summary": "Real-time delivery, per-conversation ordering, and presence at messaging-app scale — where persistent connections replace request/response as the default assumption.",
+  "level": "advanced",
+  "slideCount": 16,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "design-chat-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Design 1:1 and group messaging with reliable, ordered, real-time delivery — think WhatsApp or Slack. Unlike most web systems, the client can't just ask for updates; the server has to be able to reach the client the instant a message arrives, which means holding open a persistent connection instead of the usual request-then-forget model.\n\nThink of it like a phone call versus postcards: a request/response API is postcards — you send one, wait, get one back. Chat needs an open phone line that either side can speak into at any moment, plus a shared notebook so both parties agree what order things were said in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** send and receive messages 1:1 and in groups, see delivery/read receipts, and see who's online.\n\n**Non-functional:** **at-least-once delivery** — a message must never silently vanish, even if that means occasional duplicates the client must handle. **Per-conversation ordering** — messages within one chat must appear in a consistent order to every participant, even if the underlying infra delivers them out of strict global order.\n\n**Explicit non-goal:** this topic is text messaging infrastructure — audio/video calling is a materially different real-time media problem (different transport, different latency budget) and is out of scope.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: connections, messages, and group fan-out",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take 100M daily active users, with 20% concurrently connected at peak — 20M simultaneous persistent connections to hold open. If each user sends 20 messages/day, that's 2B messages/day, roughly 23,000 messages/sec average (bursting several times higher at peak).\n\nGroup chats multiply this: a message to a 200-person group isn't one delivery, it's 200 — the **fan-out multiplier**. A platform where 10% of messages go to groups averaging 50 members effectively delivers ~5x more messages than it receives.\n\nThe two numbers to size infrastructure around: concurrent connections (a memory/connection-count problem) and fan-out-multiplied delivery volume (a throughput problem) — they don't scale the same way.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-chat-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-chat-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three operations over a persistent connection carry the system. `sendMessage(conversationId, content)` submits a message. `ackDelivery(messageId)` lets a client confirm receipt, driving delivery-receipt state. `subscribe(conversationId)` registers the client to receive future messages on that conversation without polling.\n\nThe key shift from a typical REST API: these aren't independent request/response calls over fresh HTTP connections — they're operations sent down one long-lived connection the client keeps open, so the server can push `sendMessage` results to *other* participants without them asking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s05",
+      "order": 5,
+      "sectionTitle": "Compare: real-time transport options",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | WebSockets | Long polling | Push notifications |\n|---|---|---|---|\n| Connection | One persistent, bidirectional connection | Repeated HTTP requests, each held open until a message or timeout | None held by the app — OS-level delivery |\n| Latency | Lowest — server pushes instantly | Near-instant but with per-request overhead | Seconds; not guaranteed or ordered |\n| Server cost | One open connection per client, memory-bound | Many short-lived requests, connection churn | Cheapest — no persistent connection |\n| Best for | Foreground, active chat sessions | Fallback when WebSockets are blocked (proxies/firewalls) | Waking up a backgrounded or closed app |\n\n**How to decide:** use WebSockets as the primary transport for anyone actively in the app, long polling as a compatibility fallback, and push notifications purely to alert a user who isn't connected at all — they're complementary, not competing choices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-chat-system-s05-q1"
+      ]
+    },
+    {
+      "id": "design-chat-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: connection topology",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Clients connect through a load balancer to stateless gateway servers, which read and write a shared message store and connection registry](assets/connection-topology.svg)\n\nThe registry is the piece a request/response system never needed: since a user's connection lives on exactly one gateway server at a time, any other server that needs to reach them has to look up *which* gateway to hand the message to.",
+      "assets": [
+        {"alt": "Clients connect through a load balancer to stateless gateway servers, which read and write a shared message store and connection registry", "path": "assets/connection-topology.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s07",
+      "order": 7,
+      "sectionTitle": "Data model: message storage and ordering",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each message is stored keyed by `conversationId`, with a **monotonically increasing sequence number scoped to that conversation** — not a wall-clock timestamp. Two servers' clocks can disagree by tens of milliseconds; a sequence counter per conversation can't.\n\nAssigning the sequence number is the one step that must be serialized per conversation (commonly via a single writer or a per-conversation lock), even though everything else in the pipeline is parallel. Clients then render messages in sequence-number order, and a client that's missing sequence number 41 while holding 40 and 42 knows precisely — and only — that it needs to fetch the one gap, not resync the whole conversation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-chat-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-chat-system-s08",
+      "order": 8,
+      "sectionTitle": "Delivery and read receipts",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Tracking exact per-recipient delivery/read state naively means one row update per recipient per message — for a 200-person group, that's 200 writes for a single message's receipts alone.\n\nA cheaper model: store, per recipient, only the **highest sequence number they've acknowledged** in that conversation. \"Alice has read up to #87\" implies she's read everything at or below 87, with one row that gets overwritten (not appended to) as she reads further — one write per recipient per *batch* of newly-read messages, not per message.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s09",
+      "order": 9,
+      "sectionTitle": "Online presence",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Presence piggybacks on the same connection: a client sends a lightweight **heartbeat** every ~20-30 seconds over its open WebSocket, and the gateway marks it offline if a heartbeat is missed for some grace period (say, 60-90 seconds) rather than instantly on disconnect, which absorbs brief network blips without flapping.\n\nA status change (`online` -> `offline`) is then a small event fanned out only to the users actively watching that person — typically their open conversations — not broadcast platform-wide. This is the same shape as presence-service's own design in miniature, scoped down to \"who's in a conversation with me.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s10",
+      "order": 10,
+      "sectionTitle": "Compare: group fan-out vs 1:1 delivery",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | 1:1 delivery | Group fan-out |\n|---|---|---|\n| Writes per message | 1 recipient to reach | N-1 recipients to reach |\n| Sequence numbering | Single conversation counter | Same, but contended by more concurrent senders |\n| Failure blast radius | One connection lookup can fail | One slow/offline member shouldn't block delivery to the rest |\n| Hot spot risk | Low — traffic spread across pairs | High — one large, active group concentrates load on its gateway servers |\n\n**How to decide:** treat delivery as fundamentally fan-out from the start (1:1 is just fan-out with N=1) rather than bolting group support onto a system designed only for pairs — retrofitting fan-out later usually means redesigning the write path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s11",
+      "order": 11,
+      "sectionTitle": "Diagram: message send path",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Message send path from sender's client through the sender's gateway, message store, connection registry, and out to each recipient's gateway](assets/message-send-path.svg)\n\nThe cross-gateway hand-off is the detail worth dwelling on: the sender and a given recipient are very likely connected to two different gateway servers, so delivery always involves at least one inter-server hop, never a same-process shortcut.",
+      "assets": [
+        {"alt": "Message send path from sender's client through the sender's gateway, message store, connection registry, and out to each recipient's gateway", "path": "assets/message-send-path.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s12",
+      "order": 12,
+      "sectionTitle": "Offline delivery",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A disconnected client isn't a delivery failure — its messages queue in per-user storage keyed by sequence number, same store the online path already writes to. On reconnect, the client sends the last sequence number it saw per conversation, and the server replays everything after it.\n\nThis is why storing a monotonic sequence number mattered from the start: \"replay everything after #40\" is a simple range read against the same table, not a special offline-only code path bolted on separately.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s13",
+      "order": 13,
+      "sectionTitle": "The bottleneck: a connection server hot-spotting on a popular group",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Connections are typically assigned to gateway servers round-robin or by load, with no awareness of *which conversations* a user is in. If a 5,000-member group is unusually active, its messages fan out across whichever gateway servers those 5,000 members happen to be connected to — but the servers *sending* into that group (assigning sequence numbers, writing to the message store) can still concentrate load on a handful of backend shards if the group's data isn't itself partitioned.\n\nThe practical mitigation is sharding hot conversations' sequence-number assignment and storage independently of how connections are load-balanced, so one viral group's write volume doesn't degrade an unrelated user's 1:1 chat sharing the same backend shard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-chat-system-s13-q1"
+      ]
+    },
+    {
+      "id": "design-chat-system-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: a single connection server becoming a hot spot for popular groups",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Connections load-balance evenly, so no single gateway server should ever be overloaded.\"\n\n**Why it's wrong:** load balancing spreads *connections* evenly, but it doesn't know that 3,000 of a popular group's members happen to be geographically or behaviorally clustered enough to land disproportionately on a handful of servers, nor does it account for fan-out amplifying every message from that group across all of them.\n\n**Correct model:** monitor and shard by conversation activity, not just connection count — a gateway holding an average number of connections can still be handling a disproportionate share of fan-out traffic if it happens to hold several highly active groups' members.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-chat-system-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: assuming exactly-once delivery",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We retry sends on failure, so as long as retries eventually succeed, each message is delivered exactly once.\"\n\n**Why it's wrong:** a retry after a timeout can't distinguish \"the first attempt truly failed\" from \"the first attempt succeeded but the ack was lost.\" At-least-once delivery, which this system explicitly requires, means the client-visible outcome is sometimes a duplicate — not a violation of the design, but a consequence of it.\n\n**Correct model:** give every message a client-generated idempotency key (or reuse its eventual sequence number) and have the client deduplicate on receipt — treat duplicates as an expected, handled case, not a bug to eliminate at the transport layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-chat-system-s15-q1"
+      ]
+    },
+    {
+      "id": "design-chat-system-s16",
+      "order": 16,
+      "sectionTitle": "Summary: gateway fan-out plus per-conversation sequencing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The whole system is two ideas: a fleet of stateless gateway servers holding persistent connections and fanning messages out across each other, and a per-conversation sequence number that makes ordering, gap-detection, offline replay, and deduplication all fall out of the same simple mechanism.\n\nPresence and group fan-out both build directly on this connection layer — presence is a lighter-weight instance of the same fan-out problem, and a dedicated notification system reuses the same at-least-once, dedup-on-receipt philosophy for delivery outside an open conversation entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

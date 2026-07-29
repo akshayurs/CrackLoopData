@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-connection-pool",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-connection-pool-iq1",
+      "question": "Design a generic connection pool with borrow and release operations.",
+      "answerMarkdown": "I'd shape the API as `borrow()`, `release(connection)`, and `close()`, with `borrow()` able to fail via a timeout — exhaustion is an expected condition, not a bug, so the contract should say so upfront. Internally, an idle list holds free connections; borrowing pulls from it or creates a new one if under a configured max size, and releasing pushes back onto it.\n\nI'd add a health check on release rather than only in a background sweep, so a connection that died mid-use gets evicted immediately instead of being handed to the next borrower and failing their request too.\n\nThe two failure modes I'd flag without being asked: handing back the raw connection object lets a careless caller close it directly and corrupt the pool's bookkeeping, so I'd wrap it in a handle whose close() calls release() instead. And an unbounded pool under load can exceed the backing service's own connection limit, so I'd enforce a hard max and block with a timeout once it's reached.\n\n**Testing:** whether you treat exhaustion, dead connections, and caller misuse as first-class design concerns rather than edge cases to patch in later.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-connection-pool-iq2",
+      "question": "How do you prevent a caller who forgets to release a connection from starving the pool?",
+      "answerMarkdown": "I'd treat this as the single most common real bug with connection pools and design against it structurally rather than trust developer memory. The strongest fix is making the API itself hard to misuse: expose borrowing through a scoped-resource wrapper whose close() calls release() internally, so using the language's own try-with-resources-style syntax makes correct cleanup the path of least resistance, not an extra step someone has to remember.\n\nAs a backstop for cases that slip through anyway, I'd add a per-connection borrow timeout — if a connection has been checked out longer than some sane maximum for the workload, log it loudly or forcibly reclaim it, since a legitimately long-running use is rare and a silent leak is far more likely.\n\nI'd also expose a metric for currently-borrowed count versus max size, since a slow leak shows up as that number creeping upward over time long before the pool actually exhausts.\n\n**Testing:** whether you reach for a structural fix (API shape) before an operational one (monitoring), since the API fix prevents the bug rather than just detecting it.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Preventing leaked connections"
+    },
+    {
+      "id": "iv-design-connection-pool-iq3",
+      "question": "How do you decide how large to make the pool?",
+      "answerMarkdown": "I'd reach for the standard sizing formula rather than picking a round number: pool size equals the number of CPU cores available to the service, multiplied by one plus the ratio of time a request spends waiting on the connection versus time it spends actively using it.\n\nConcretely, if requests mostly wait on a slow query — I/O-bound — that wait-to-service ratio is high, and you need meaningfully more connections per core than the core count alone would suggest. If requests are CPU-bound and barely wait on the connection, the ratio approaches one and a smaller pool close to the core count is enough.\n\nI'd be explicit that this formula is a starting point built on estimated inputs, not a guarantee — the actual wait and service times should come from measuring the real workload, and the pool size should be tuned from there rather than treated as a one-time calculation.\n\n**Testing:** whether you know a real formula exists and can explain why it depends on the workload's wait-to-service ratio, not just recite a number.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Sizing the pool"
+    }
+  ]
+}

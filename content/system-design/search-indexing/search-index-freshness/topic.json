@@ -1,0 +1,113 @@
+{
+  "id": "search-index-freshness",
+  "title": "Search Index Freshness",
+  "area": "system-design",
+  "group": "search-indexing",
+  "order": 6,
+  "slug": "search-index-freshness",
+  "summary": "Keeping a search index in sync with the source of truth, and living with the lag when it isn't — dual writes, CDC, and reindex strategies.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "search-index-freshness-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A search index is almost always a **derived copy** of data that lives in a primary database — which means every write to the database has to somehow make its way into the search index too. Get that sync wrong and users see stale or missing results; get it slow and there's a window where the database and search index simply disagree.\n\nThis topic covers the plumbing that keeps them in sync (dual writes vs CDC), how much lag is normal, and when a full reindex is unavoidable versus an incremental update will do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "search-index-freshness-s02",
+      "order": 2,
+      "sectionTitle": "Batch reindexing vs near-real-time indexing",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "There are two fundamentally different cadences for getting data into a search index.\n\n| | Batch reindexing | Near-real-time indexing |\n|---|---|---|\n| Cadence | Scheduled (hourly, nightly) | Seconds after the write happens |\n| Simplicity | Simple — one big job, easy to reason about | More moving parts — a continuous pipeline |\n| Freshness | Data can lag by the whole batch interval | Lag measured in seconds |\n| Good fit | Content that changes slowly (product catalogs, docs) | Content users expect to see instantly (a new post, a price change) |\n| Resource pattern | Spiky — one big load, then idle | Steady, ongoing background load |\n\n**How to decide:** batch is fine — and cheaper to build — wherever a few hours of staleness doesn't hurt the product. Reach for near-real-time only where users would actually notice the lag, since it's meaningfully more infrastructure to run correctly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "search-index-freshness-s02-q1"
+      ]
+    },
+    {
+      "id": "search-index-freshness-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: a write path that updates the DB and the search index",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Write path fanning out to the database and, via CDC, the search index](assets/index-freshness-pipeline.svg)\n\nEvery write path needs two destinations to end up consistent: the database (the source of truth) and the search index (a derived, denormalized copy). How those two updates happen — synchronously in the same request, or asynchronously via a separate pipeline — is exactly the dual-writes-vs-CDC decision on the next slide.\n\nNotice the search index update is drawn as asynchronous even in the \"near-real-time\" case — true synchronous updates to both stores in one transaction are rare, because they'd tie the database's write latency to the search engine's.",
+      "assets": [{"alt": "Write path fanning out to the database and, via CDC, the search index", "path": "assets/index-freshness-pipeline.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "search-index-freshness-s04",
+      "order": 4,
+      "sectionTitle": "Keeping the index in sync: dual writes vs CDC-driven indexing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Dual writes** mean the application code writes to the database and then separately writes to the search index, in the same request. It's simple to implement but fragile: if the second write fails after the first succeeds (a crash, a timeout, a bug), the two stores silently diverge with no automatic recovery.\n\n**CDC (change data capture)** instead reads the database's own write-ahead log or replication stream and derives index updates from it, entirely outside the application's write path. Because it reads from the database's actual committed changes, it can't miss a write the way a failed second dual-write can — if the database recorded the change, CDC will eventually see it, even if the indexing pipeline is temporarily down.\n\nCDC costs more infrastructure to set up (Debezium, a database's native change stream, or similar), but it's the standard choice in production because it structurally can't drift the way dual writes can.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "search-index-freshness-s04-q1"
+      ]
+    },
+    {
+      "id": "search-index-freshness-s05",
+      "order": 5,
+      "sectionTitle": "Indexing lag: why search results can trail the source of truth",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Even a well-built near-real-time pipeline has **indexing lag** — the delay between a write committing to the database and that change becoming visible in search. It comes from real, unavoidable steps: the change has to propagate through the CDC stream, get transformed into an indexable document shape, and get written into the search engine's index (which itself may only refresh its searchable view periodically, as Elasticsearch does by default).\n\nThis lag is usually seconds, not milliseconds — and that's a legitimate, accepted trade-off in most products, not a bug to chase to zero. The goal is bounding and monitoring the lag, not eliminating it (eliminating it entirely would mean synchronous writes to both stores, which most systems deliberately avoid for latency reasons).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "search-index-freshness-s06",
+      "order": 6,
+      "sectionTitle": "Full reindex vs incremental reindex, and when each is needed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **incremental reindex** updates just the documents that changed — the normal, ongoing mode of keeping an index fresh, whether via dual writes or CDC. A **full reindex** rebuilds the entire index from scratch, document by document, from the source of truth.\n\nFull reindexes are needed in a specific set of situations: the index's schema or analyzer changes (a new field, a different tokenizer — old documents were never indexed with the new rules), index corruption or an unrecoverable divergence from the database, or migrating to a new search cluster entirely. They're expensive and slow on a large collection, so production systems build them to run without taking search offline — typically by building the new index in parallel and only swapping traffic over once it's caught up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "search-index-freshness-s06-q1"
+      ]
+    },
+    {
+      "id": "search-index-freshness-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: dual writes to DB and index falling out of sync silently",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We write to the database, then write to the search index right after — if both calls are in our code, they'll stay in sync.\"\n\n**Why it's wrong:** the two writes aren't atomic. If the process crashes, the request times out, or the search engine is briefly unavailable between the two calls, the database write succeeds and the index write is silently lost — with no error visible to the user and nothing forcing a retry. Over time, these small failures accumulate into a meaningfully stale or incomplete index, and nobody notices until a customer reports a missing search result.\n\n**Correct model:** treat dual writes as inherently lossy and either add a reconciliation mechanism (a periodic diff-and-repair job comparing database and index) or move to CDC-driven indexing, which derives updates from the database's own durable log instead of a second application-level write that can fail independently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "search-index-freshness-s07-q1"
+      ]
+    }
+  ]
+}

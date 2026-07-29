@@ -1,0 +1,165 @@
+{
+  "id": "iv-network-partition-walkthrough",
+  "title": "A network partition just happened — walk me through what your system does",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 10,
+  "slug": "iv-network-partition-walkthrough",
+  "summary": "Tests whether you can trace concrete, step-by-step behavior during a live partition, not recite CAP theory in the abstract.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-network-partition-walkthrough-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Reciting \"you can't have consistency and availability during a partition\" answers the theory, not the question. The interviewer wants CAP applied moment-by-moment: what does each side of the split actually do to a request arriving right now, and what happens the instant the partition heals.\n\nThis topic walks a concrete split step by step — which side keeps serving, which side doesn't, and how reconciliation happens afterward — so you can narrate a partition the way you'd narrate an actual incident.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask exactly which two components got split — two database replicas, a client and its server, two data centers — since the walkthrough differs by which pair is disconnected. Also ask which side, if either, holds the **majority** for quorum purposes, since that's usually what decides which side keeps serving writes.\n\nWithout knowing which side has the majority, you can describe CAP in the abstract but can't actually say what happens to a specific in-flight request.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: majority side, minority side, and the heal",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Skeleton, in this exact order: name what the **majority side** does (keeps serving, since it can still form a quorum), what the **minority side** does (per your CP/AP choice — reject writes, or serve stale reads-only), and what happens **when it heals** (reconciling anything the minority accepted, if it accepted anything at all).\n\nThis three-part structure is what turns \"CAP theorem\" into an actual walkthrough — each part is a concrete, checkable claim about system behavior, not a restatement of the trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-network-partition-walkthrough-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a 5-node cluster splits 3/2",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![5-node cluster split into majority and minority](assets/partition-majority-minority.svg)\n\nA concrete split: 5 nodes, partitioned into a group of 3 and a group of 2. The 3-node side still holds a majority (3 of 5), so it keeps accepting writes and forming quorum normally — clients routed there see no disruption.\n\nThe 2-node side can no longer form a majority on its own. Depending on the system's CP/AP choice, it either rejects writes outright (CP) or continues serving reads with an explicit staleness warning while refusing writes (a common middle ground) — but it never accepts a write that would silently diverge from the majority side.",
+      "assets": [{"alt": "5-node cluster split into majority and minority", "path": "assets/partition-majority-minority.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-network-partition-walkthrough-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: what happens the moment the partition heals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The instant connectivity restores, the minority side has to reconcile with the majority side before resuming normal operation. If the minority accepted no writes during the split (the strict-CP choice), reconciliation is trivial — it simply catches up on the majority side's writes it missed.\n\nIf the minority did accept writes (an AP choice that allowed writes on both sides), reconciliation now needs a conflict-resolution strategy for any key both sides wrote independently — this is exactly where the earlier conflict-resolution question's toolkit (vector clocks, CRDTs, app-level merge) gets applied in practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a client on the minority side retrying its write",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Trace one specific request: a client connected to the minority side submits a write during the partition. If the minority rejects writes, the client gets an explicit error (not a silent timeout) and retries every few seconds. Each retry fails identically until the partition heals and that node rejoins the majority — at which point the exact same retry succeeds, with no special handling needed on the client beyond ordinary retry-with-backoff.\n\nNaming that the client's own retry logic is what eventually succeeds — not some special partition-recovery code path — shows the design doesn't need extra machinery beyond what already exists for ordinary transient failures.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Letting the minority side stay available for reads risks serving stale data; refusing entirely is safer but costs those users availability.** Neither choice is free of cost during a partition — the decision is which cost this system can tolerate.\n\n| Minority-side behavior | Cost |\n|---|---|\n| Serve reads (with staleness caveat), reject writes | Users see potentially stale data, but the app doesn't go dark for them |\n| Reject everything | No stale data ever shown, but minority-side users see a full outage until the heal |\n\nName which one this specific system needs — a read-only social feed usually tolerates the first; a banking ledger usually needs the second.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-network-partition-walkthrough-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: the partition lasts 10 minutes, not 10 seconds",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A longer partition changes the calculus even if the mechanism stays the same: the minority side being unavailable for 10 seconds is a blip; being unavailable for 10 minutes might breach an SLA, and a growing backlog of rejected client retries could itself become a load problem once the partition heals and they all succeed at once (a retry storm).\n\nAt 10 minutes, I'd also mention paging a human — a partition long enough to matter this much is usually also long enough that automated healing alone isn't a sufficient answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how does the system know it's a partition, not a slow node?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It usually can't tell the difference with certainty, and saying so is the honest, correct answer — a node that's unreachable because of a partition looks identical, from the outside, to a node that's just extremely slow. Systems handle this with a timeout-based heuristic: if a node misses enough heartbeats within a threshold, it's treated as partitioned (or down) for quorum purposes, even though it might actually just be overloaded.\n\nThis is why timeout tuning matters — too short, and a merely slow node gets wrongly excluded; too long, and a genuinely partitioned node stays counted toward quorum longer than it should.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: describing CAP without saying what happens to a request",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"During a partition, you have to choose consistency or availability — that's CAP theorem.\"\n\n**Why it's wrong:** stating the theorem is the setup, not the answer. It says nothing about what actually happens to the in-flight request a real user is waiting on right now — does it error, hang, or succeed with a caveat?\n\n**Correct model:** always follow the theorem statement with the concrete behavior — which side serves what, what an in-flight request experiences, and what happens on reconnection — since that's the part that actually demonstrates you understand the system, not just the theory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-network-partition-walkthrough-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-network-partition-walkthrough-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd name which side holds the majority, since that decides who keeps serving writes. The majority side operates normally; the minority side either rejects writes or serves stale reads with a caveat, per the CP/AP choice, but never silently diverges. On reconnection, the minority reconciles — trivially if it took no writes, or via a conflict-resolution strategy if it did. I'd also name the failure-detection reality: the system can't truly distinguish a partition from a slow node, so it uses a timeout heuristic, and I'd flag what a long partition does to retry storms and SLAs.\"\n\nSee [split-brain-and-quorum-loss](split-brain-and-quorum-loss) for what goes wrong if this majority/minority behavior isn't enforced correctly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

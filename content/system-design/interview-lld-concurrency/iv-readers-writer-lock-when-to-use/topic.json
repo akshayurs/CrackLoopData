@@ -1,0 +1,178 @@
+{
+  "id": "iv-readers-writer-lock-when-to-use",
+  "title": "When would you use a ReadWriteLock instead of a plain lock?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 14,
+  "slug": "iv-readers-writer-lock-when-to-use",
+  "summary": "The read-heavy, write-rare access pattern it's built for — and why it can be a net loss the moment that ratio flips.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A `ReadWriteLock` lets multiple readers proceed at once while still giving a writer exclusive access — a real improvement over a plain lock, but only for a specific access pattern.\n\nThe skill being tested is naming that pattern precisely, and knowing when the trade stops paying off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: what's the actual read:write ratio in this workload?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **what's the actual read:write ratio here?** A `ReadWriteLock` only wins over a plain lock when reads vastly outnumber writes and readers would otherwise spend real time waiting on each other unnecessarily. If writes are frequent, the picture changes: a writer needs exclusive access anyway, so the extra bookkeeping a `ReadWriteLock` does to track multiple concurrent readers becomes pure overhead with little payoff.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: multiple readers run concurrently, a writer gets exclusive access — pick it when reads dominate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core mechanism: any number of threads can hold the **read lock** simultaneously, since concurrent readers don't conflict with each other. A thread requesting the **write lock** must wait for all current readers (and any other writer) to finish, and blocks new readers from starting while it holds the lock.\n\nPick it specifically when reads genuinely dominate — a cache, a config store, a lookup table read far more often than it's updated. It's a targeted optimization for that shape, not a general-purpose upgrade over a plain lock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-readers-writer-lock-when-to-use-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s04",
+      "order": 4,
+      "sectionTitle": "Code: a cache using a plain lock — readers block each other unnecessarily",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Cache {\n    private final Map<String, String> data = new HashMap<>();\n    private final Object lock = new Object();\n\n    String get(String key) {\n        synchronized (lock) {\n            return data.get(key);\n        }\n    }\n\n    void put(String key, String value) {\n        synchronized (lock) {\n            data.put(key, value);\n        }\n    }\n}\n```\n\nEvery `get`, even from ten threads that are only reading, serializes through the same lock as every `put` — two threads that both just want to read never need to conflict with each other, but this design forces them to anyway.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s05",
+      "order": 5,
+      "sectionTitle": "Code: the same cache using a ReadWriteLock — readers proceed in parallel, writers still exclusive",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Cache {\n    private final Map<String, String> data = new HashMap<>();\n    private final ReadWriteLock rwLock = new ReentrantReadWriteLock();\n\n    String get(String key) {\n        rwLock.readLock().lock();\n        try {\n            return data.get(key);\n        } finally {\n            rwLock.readLock().unlock();\n        }\n    }\n\n    void put(String key, String value) {\n        rwLock.writeLock().lock();\n        try {\n            data.put(key, value);\n        } finally {\n            rwLock.writeLock().unlock();\n        }\n    }\n}\n```\n\nMultiple threads calling `get` now hold the read lock together and proceed in parallel. A thread calling `put` waits for all current readers to finish, then holds the write lock exclusively — no reader or writer runs concurrently with it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-readers-writer-lock-when-to-use-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: three readers holding the read lock simultaneously vs one writer holding the write lock alone",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Three readers sharing one read lock at the same time next to one writer holding the write lock exclusively](assets/read-lock-vs-write-lock.svg)\n\nThe asymmetry is the entire point: the read lock is shared among any number of holders, but the write lock is exclusive against everyone, readers and writers alike.",
+      "assets": [{"alt": "Three readers sharing one read lock at the same time next to one writer holding the write lock exclusively", "path": "assets/read-lock-vs-write-lock.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"what if writes become more frequent later — does this still pay off?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Not necessarily. A `ReadWriteLock` does more internal bookkeeping than a plain lock — tracking how many readers currently hold the lock, coordinating the handoff to a waiting writer, sometimes managing fairness between readers and writers. If writes become frequent enough that readers rarely run concurrently anyway, that bookkeeping cost stops being offset by any real parallelism gain, and a plain lock (simpler, less overhead) can end up faster in practice.\n\nThe honest answer names this as a ratio-dependent trade-off you'd re-measure if the access pattern changes, not a permanent upgrade.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"can a reader upgrade to a writer safely?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Most implementations, including Java's `ReentrantReadWriteLock`, don't allow directly upgrading a held read lock to a write lock. The reason: if two threads both hold the read lock and both try to upgrade, neither can proceed without the other releasing first, which deadlocks. The safe pattern is releasing the read lock entirely, then acquiring the write lock — accepting that another thread could modify the data in the gap between the two, and re-checking any condition that mattered after reacquiring.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-readers-writer-lock-when-to-use-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"how does this compare to just using a ConcurrentHashMap instead?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For a simple key-value cache with only single-key operations, `ConcurrentHashMap` is usually the simpler and equally effective choice — it already gives fine-grained concurrent access without you managing a lock object at all. A `ReadWriteLock` earns its place instead when the protected operation is more than a single collection call — a multi-step read that must see a consistent view across several related fields, or a data structure that isn't already available in a concurrent form. See [when do you use a concurrent collection vs a lock](iv-concurrent-collection-vs-lock) for the fuller version of this comparison.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: reaching for a ReadWriteLock without checking the actual read:write ratio first",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** reaching for a `ReadWriteLock` as a default upgrade over a plain lock, without checking the actual read:write ratio of the workload.\n\n**Why it's wrong:** the whole benefit depends on reads genuinely outnumbering writes enough that concurrent read access matters; applied to a write-heavy workload, it's strictly more overhead than a plain lock for no real parallelism gain.\n\n**Correct model:** measure or reason about the actual ratio before reaching for it — it's a targeted optimization, not a universal improvement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: assuming a ReadWriteLock is always faster than a plain lock, even under heavy write contention where it isn't",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** assuming a `ReadWriteLock` is always faster than a plain lock, even under heavy write contention.\n\n**Why it's wrong:** under heavy writes, readers rarely get to run concurrently anyway, so the `ReadWriteLock`'s extra internal coordination — tracking reader counts, arbitrating reader/writer handoff — adds cost without a matching benefit; a plain lock can genuinely outperform it in that regime.\n\n**Correct model:** \"always faster\" claims about any concurrency primitive should be treated skeptically — performance here depends entirely on the workload's actual shape.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-readers-writer-lock-when-to-use-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-readers-writer-lock-when-to-use-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd check the actual read:write ratio first, since a `ReadWriteLock` only pays off when reads dominate — multiple readers hold the read lock together, a writer gets exclusive access against everyone. I'd flag that it's not a universal upgrade: under heavy writes, its extra bookkeeping can make it slower than a plain lock. I'd also mention readers can't safely upgrade directly to a writer without risking deadlock, and that for a simple single-key cache, a `ConcurrentHashMap` is often simpler and just as effective.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

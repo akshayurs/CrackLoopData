@@ -1,0 +1,133 @@
+{
+  "id": "distributed-tracing-design",
+  "title": "Designing Distributed Tracing",
+  "area": "system-design",
+  "group": "observability",
+  "order": 3,
+  "slug": "distributed-tracing-design",
+  "summary": "Following one request across many services to find which hop is actually slow — and why the header that carries the trace ID is the whole system's weakest link.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "distributed-tracing-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A single user request in a microservices architecture might touch a dozen services before returning. When it's slow, a metric tells you latency went up; only a **trace** tells you it was the inventory service's database call that ate 4 of the 5 seconds.\n\nDistributed tracing follows one request end-to-end, recording how long each hop took and how the hops nest inside each other. This topic covers spans, context propagation, sampling trade-offs, and the header-dropping bug that quietly breaks tracing in production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-tracing-design-s02",
+      "order": 2,
+      "sectionTitle": "Why a single request's path across services needs its own tool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a monolith, \"where did the time go\" is a profiler question inside one process. In a microservices architecture, one request fans out across many processes — an API gateway calls auth, which calls a user service, which calls a database, while the gateway separately calls a pricing service. Per-service logs and metrics each see only their own slice.\n\nNo single service's logs show the full 2.1-second request; each one only knows its own 50-400ms piece. Reconstructing the whole picture from independent, unlinked logs across a dozen services is exactly the correlation problem that led to distributed tracing existing as its own tool, not just \"better logging.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-tracing-design-s03",
+      "order": 3,
+      "sectionTitle": "Traces, spans, and parent-child relationships",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **trace** represents one request end-to-end, identified by a single **trace ID**. It's made of **spans** — each span is one unit of work, like \"API gateway handling this request\" or \"payments service calling the database.\"\n\nSpans nest: a **parent span** (the gateway's overall handling) contains **child spans** (each downstream call it made), and those children can have their own children. This parent-child structure is what lets a tracing UI draw a waterfall — the gateway's span as one long bar, with the auth call, pricing call, and database call each drawn as shorter bars nested or sequenced inside it, showing exactly where the 2.1 seconds actually went.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "distributed-tracing-design-s03-q1"
+      ]
+    },
+    {
+      "id": "distributed-tracing-design-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: one trace spanning five services, with one slow span highlighted",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Trace waterfall highlighting the inventory service as the slow span](assets/trace-waterfall.svg)\n\nThe waterfall makes the bottleneck visually obvious: four of the five spans are fast, and one — inventory, at 1.7 of the request's 2.1 seconds — dominates. Without this view, a latency metric alone would tell you the request was slow, but not which of the five services to actually go fix.",
+      "assets": [
+        {
+          "alt": "Trace waterfall highlighting the inventory service as the slow span",
+          "path": "assets/trace-waterfall.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-tracing-design-s05",
+      "order": 5,
+      "sectionTitle": "Context propagation: carrying a trace ID across service boundaries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For spans from five different services to join into one trace, every service must forward the same **trace context** — the trace ID plus the current span ID — to whatever it calls next, typically as HTTP headers (the `traceparent` header in the W3C standard) or message metadata for async calls.\n\nThis is **context propagation**, and it's entirely a discipline problem, not a hard technical one: every network call, every queue message, every background job spawned from a request has to carry the header forward. A tracing library can auto-inject it into outgoing HTTP calls, but a custom client, a raw queue publish, or a fire-and-forget async job is an easy place to silently drop it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-tracing-design-s05-q1"
+      ]
+    },
+    {
+      "id": "distributed-tracing-design-s06",
+      "order": 6,
+      "sectionTitle": "Sampling: tracing everything vs tracing a representative slice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Tracing every single request at scale can double a service's overhead and generate more trace data than anyone will ever look at. **Sampling** trades completeness for cost: **head-based sampling** decides at the start of a request (say, 1 in 100) whether to trace it at all; **tail-based sampling** waits until the request finishes and keeps it only if something interesting happened — an error, or unusually high latency.\n\nHead-based is cheap and simple but can miss the rare slow request entirely; tail-based catches exactly the requests you care about but needs to buffer every span until the request completes, which costs more infrastructure. Most production setups start head-based and add tail-based sampling for errors once volume justifies it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "distributed-tracing-design-s06-q1"
+      ]
+    },
+    {
+      "id": "distributed-tracing-design-s07",
+      "order": 7,
+      "sectionTitle": "Compare: tracing overhead vs debugging value at different sample rates",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Sample rate | Overhead | Debugging value |\n|---|---|---|\n| 100% (trace everything) | Highest — CPU, network, and storage cost on every request | Catches every rare failure, but mostly generates traces nobody reads |\n| 1-10% head-based | Low, roughly proportional to the rate | Good for general latency trends; may entirely miss a rare 1-in-10,000 failure |\n| Tail-based (errors + high latency) | Moderate — buffers spans, keeps only interesting ones | High — captures exactly the failures worth debugging, without the noise volume |\n\n**How to decide:** start low and head-based to control cost, then add tail-based sampling for errors and outlier latency once you need to reliably catch rare incidents without paying to trace everything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "distributed-tracing-design-s07-q1"
+      ]
+    },
+    {
+      "id": "distributed-tracing-design-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a trace that breaks because one service drops the propagated headers",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We added tracing, so every request now shows up as one connected trace.\"\n\n**Why it's wrong:** if even one service in the path — often a legacy service, a custom HTTP client, or a message queue consumer — doesn't forward the `traceparent` header, the trace **doesn't error out**, it silently splits into two disconnected traces at that exact point. The result looks like tracing is working everywhere, except for the one hop where the mystery actually is.\n\n**Correct model:** treat header propagation as something to explicitly verify per service, not assume from having a tracing library installed — a broken trace is invisible until you're specifically trying to follow a request through the exact service that drops it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "distributed-tracing-design-s08-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-retry-storm",
+  "interviewQuestions": [
+    {
+      "id": "iv-retry-storm-iq1",
+      "question": "Everyone's retrying at once and now the downstream service is dead — what happened, and how do you prevent it?",
+      "answerMarkdown": "I'd name the feedback loop first: the dependency has a failure, clients retry, those retries add load to a dependency that was already struggling, causing more failures, causing more retries. Each pass through the loop adds load instead of giving the dependency room to recover.\n\nA concrete version: 10,000 clients with a fixed 5-second timeout and no jitter all fail and retry at the same instant when the dependency has a brief 2-second blip, turning something that would have self-resolved into a sustained outage from the synchronized retry spike alone.\n\nThe fix is exponential backoff with jitter, so retries spread out across a window instead of firing together, plus a circuit breaker to stop sending calls entirely once failure is clearly sustained rather than transient. I'd also mention server-side load shedding as a backstop, since client-side fixes take time to roll out everywhere.\n\n**Testing:** whether you can name the self-reinforcing mechanism, not just recite \"add backoff.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Diagnosing and preventing a retry storm"
+    },
+    {
+      "id": "iv-retry-storm-iq2",
+      "question": "You fix the clients, but they're deployed slowly — what protects you in the meantime?",
+      "answerMarkdown": "I'd rely on server-side load shedding on the dependency itself, since it protects the system regardless of which clients have picked up the fix yet — client rollouts can take days or weeks across a large fleet, and the dependency needs protection immediately, not eventually.\n\nConcretely, the dependency would reject excess requests past a defined capacity threshold — returning a fast, cheap rejection response instead of queuing or attempting the work — so incoming load past that point doesn't consume resources needed to serve requests within capacity. This is independent of client behavior entirely: it works the same whether a caller has jitter or not.\n\nI'd pair this with monitoring on the rejection rate itself, since a consistently high shed rate signals either the dependency needs more capacity or the slow client rollout needs to be expedited.\n\n**Testing:** whether you have a server-side backstop that doesn't depend on every client cooperating.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Protecting the dependency during a slow client rollout"
+    },
+    {
+      "id": "iv-retry-storm-iq3",
+      "question": "Should every client retry the same number of times during a partial outage?",
+      "answerMarkdown": "No — I'd shrink or eliminate retries for lower-priority callers first, so higher-priority traffic gets whatever retry budget the degraded dependency can still support. Treating every caller's retries as equal means a background sync job can compete for the same limited capacity as a live checkout request, which isn't the right trade-off during a partial outage.\n\nConcretely, I'd tag calls with a priority level and have the retry policy consult it — critical-path traffic keeps its normal retry count and backoff, while best-effort or batch traffic backs off more aggressively or stops retrying sooner, freeing capacity for what matters more.\n\nThis requires the priority to be known at the call site, which means designing for it upfront rather than retrofitting it once an outage is already underway.\n\n**Testing:** whether you think about retries as a shared, finite resource to allocate, not a uniform policy applied blindly to every caller.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Priority-based retry budgets"
+    }
+  ]
+}

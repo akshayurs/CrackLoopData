@@ -1,0 +1,29 @@
+{
+  "topicId": "stream-processing-and-windowing",
+  "interviewQuestions": [
+    {
+      "id": "stream-processing-and-windowing-iq1",
+      "question": "Design a real-time leaderboard that updates every 10 seconds from a click stream.",
+      "answerMarkdown": "I'd start by picking the windowing style based on what \"real-time leaderboard\" actually means: if it's \"top scores in the last 10 seconds, refreshed every 10 seconds,\" that's a tumbling window; if it's \"top scores in a rolling last-60-seconds view, refreshed every 10 seconds,\" that's a sliding window with a 60-second width and 10-second slide. I'd clarify which the interviewer means, since it changes the aggregation logic.\n\nI'd window by event time, the timestamp on each click as it happened on the client, not by when my server received it, since a network hiccup shouldn't let a user's older click count toward the wrong ranking period. I'd configure a watermark with a small allowed-lateness grace period, since clicks can arrive slightly out of order, and I'd rather correct a leaderboard slightly than close windows so aggressively that legitimate clicks get dropped.\n\nFor the actual ranking, I'd maintain running per-user counts in a keyed state store, Kafka Streams or Flink both support this, emit the top-N per window close, and push that result to a fast read path like Redis for the leaderboard UI to poll or subscribe to.\n\n**Testing:** whether you can connect the abstract windowing concepts to a concrete, working design with a clear read path.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing a real-time leaderboard"
+    },
+    {
+      "id": "stream-processing-and-windowing-iq2",
+      "question": "How would you handle a click that arrives 2 minutes late, after its window has already closed and been reported?",
+      "answerMarkdown": "I'd first check whether my allowed-lateness configuration covers 2 minutes — if the watermark plus grace period is, say, 30 seconds, this click is genuinely too late and I'd need to decide upfront whether to drop it or route it to a separate \"late events\" handling path rather than silently ignoring it.\n\nIf I do want to handle it, most stream processors support emitting an updated result when a late event arrives within the allowed-lateness window — I'd use that to issue a correction to the already-reported leaderboard rather than trying to prevent lateness entirely, since preventing it completely isn't possible over a real network.\n\nI'd also make sure downstream consumers of the leaderboard, a cache or a UI, can handle a correction gracefully — treating every emission as final and never revisable would make this late-arrival case impossible to fix without inconsistency.\n\n**Testing:** whether you understand that watermarks are a policy choice with real consequences, not a guarantee that eliminates late data.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Handling a late-arriving event"
+    },
+    {
+      "id": "stream-processing-and-windowing-iq3",
+      "question": "What would break if you swapped this design's tumbling windows for sliding windows without changing anything else downstream?",
+      "answerMarkdown": "The first thing that breaks is additivity: if any downstream consumer was summing consecutive window results to get a longer-period total, that stops being valid, since sliding windows overlap and the same click can be counted in several windows at once.\n\nThe second is update frequency and cost: sliding windows emit far more frequently, proportional to the slide interval rather than the window width, so the per-user state store and the emission pipeline both see more write and read traffic for the same underlying data.\n\nI'd also flag a subtler issue: the leaderboard's \"top scores\" would now reflect a moving 60-second view rather than a clean 10-second period, which changes what the number actually means to a viewer, even if nobody touches the UI code.\n\n**Testing:** whether you understand the practical downstream consequences of a windowing choice, not just the definitional difference.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Swapping tumbling for sliding windows"
+    }
+  ]
+}

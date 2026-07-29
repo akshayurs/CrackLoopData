@@ -1,0 +1,165 @@
+{
+  "id": "iv-hot-key-problem",
+  "title": "One key is getting 100x the traffic of others — how do you handle it?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 13,
+  "slug": "iv-hot-key-problem",
+  "summary": "The hot-key/hot-partition-at-the-cache-layer question — tests whether you can go beyond \"add more cache nodes,\" since a single key can't be sharded across nodes trivially.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-hot-key-problem-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A distributed cache shards keys across nodes so no single node holds everything — but each individual key still lives on exactly one node (or its replicas). If that one key gets 100x the traffic of any other, adding more nodes doesn't help: the new nodes hold *other* keys, while the one hot key's node is still taking the full brunt alone.\n\nThe interviewer wants a fix that works on a single key, not a cluster-wide scaling answer that doesn't apply here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-hot-key-problem-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **is this a celebrity-user pattern, a viral post, or a misbehaving client retrying?** A celebrity's profile getting sustained heavy traffic is a different shape than a post that spikes for an hour and fades, and both are different from a client bug hammering the same key in a retry loop — the last one might be fixed by rate-limiting the client rather than any caching change at all.\n\nMisdiagnosing which of these it is can lead you to over-engineer a caching fix for what's actually a client bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-hot-key-problem-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "State the rule: **detect the hot key, then replicate it locally or split it — don't just scale the cluster.** Adding cluster nodes doesn't redistribute one key's traffic, since a key isn't automatically re-sharded just because the cluster grew; you need a fix that operates on that specific key.\n\nThe two concrete fixes — local caching in front of the cluster, and splitting the key into multiple physical keys — are covered next, and picking between them depends on whether the key is mostly read or also frequently written.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-hot-key-problem-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-hot-key-problem-s04",
+      "order": 4,
+      "sectionTitle": "Fix one: local caching in front of the cluster",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Cache the hot key **locally, in-process, on every app node**, in front of the distributed cache. Most reads for that key now get absorbed at the app layer before they ever reach the distributed cluster — the one overloaded node sees only the traffic that misses every app node's local copy, a small fraction of the original volume.\n\nThis is the same local-cache technique from the local-vs-distributed question, applied specifically to rescue one overloaded key rather than as a general latency optimization.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-hot-key-problem-s05",
+      "order": 5,
+      "sectionTitle": "Fix two: key splitting",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Key splitting** shards one logical key into N physical keys — `key#0`, `key#1`, ... `key#N` — spread across different nodes by the cluster's normal hashing. A read picks one of the N physical keys (often randomly, or round-robin) to read from, spreading read load across N nodes instead of concentrating it on one. Where the logical value needs to be exact (like a counter), reads merge results across all N physical keys.\n\nThis directly fixes the single-node bottleneck by turning \"all traffic on one node\" into \"traffic spread across N nodes,\" at the cost of added complexity on both read and write paths.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-hot-key-problem-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-hot-key-problem-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: a celebrity profile at 500k reads/sec",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The scale mismatch that makes this a real production problem:\n\n```\ncluster_capacity_per_node = 5_000       # reads/sec, what each node is sized for\ncelebrity_key_traffic = 500_000         # reads/sec, all landing on one node\n\noverload_factor = celebrity_key_traffic / cluster_capacity_per_node\n# = 100x -- the node holding this one key is 100x over its designed capacity\n\n# with key splitting across N=20 physical keys:\nper_physical_key_traffic = celebrity_key_traffic / 20\n# = 25,000 reads/sec per physical key -- still 5x over, needs N~100 to fully fit\n```\n\nThe arithmetic shows key splitting isn't automatically enough on its own — you need to pick N large enough to actually bring each physical key's share back under the per-node capacity, not just split it into a few pieces.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-hot-key-problem-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Key splitting | No key splitting |\n|---|---|\n| Read load spreads across N nodes | All reads concentrate on one node |\n| Every write must now fan out to all N physical keys | Write is a single, simple operation |\n| Reads need a merge step to reconstruct the logical value | Reads are direct, no reconstruction |\n\n**How to decide:** key splitting fixes the hot-read problem but complicates every write, which must now update all N physical keys to keep them consistent with each other — worth it when reads vastly outnumber writes (the celebrity-profile case), much less clearly worth it if writes are frequent too.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-hot-key-problem-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how do you even detect a hot key before it takes down the node?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two practical approaches: **per-key traffic sampling** on the cache client or proxy layer, tracking the top-N most-requested keys in a rolling window, and **per-node load monitoring** that alerts when one node's traffic is disproportionate to its peers, which is often the first visible sign even before you've identified which specific key is responsible.\n\nCatching this before an outage, not after, is the actual goal — a hot key detected early can get a local-cache or split fix proactively; one detected only after a node falls over is an incident, not a design decision.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-hot-key-problem-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-hot-key-problem-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"the hot key is also written to frequently — does the same fix still work?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Local caching still helps the read side, but it doesn't solve frequent writes — those still have to land somewhere consistent, and a local cache per node now needs frequent invalidation, eating into the benefit. Key splitting gets notably worse here: every write has to fan out to all N physical keys, so a key that's both hot-read and hot-write turns N-way splitting into N times the write cost, not a free lunch.\n\nThe honest answer: a frequently-written hot key is harder, and the fix shifts toward reducing write frequency itself (batching updates, accepting slightly looser consistency) rather than purely scaling reads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-hot-key-problem-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: adding more cache nodes and being surprised",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The cache is overloaded — let's add more nodes to the cluster.\"\n\n**Why it's wrong:** a single key lives on one node (or its replica set) regardless of how many other nodes exist — new nodes take on *other* keys, not a share of this one. The hot node stays exactly as overloaded as before, and the team is left confused why scaling didn't help.\n\n**Correct model:** diagnose whether the overload is cluster-wide (more nodes helps) or concentrated on one key (more nodes doesn't help — you need local caching or key splitting instead). Check per-node load distribution before assuming adding capacity fixes anything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-hot-key-problem-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-hot-key-problem-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A hot key overloads one node regardless of cluster size, because that key lives on one node no matter how many others exist. Fix it with local caching in front of the cluster to absorb reads, or key splitting to shard one logical key into N physical keys across nodes — the latter complicates every write, which must fan out to all N. Detect hot keys via traffic sampling and per-node load monitoring before they cause an outage. A frequently-written hot key is harder — the fix shifts toward reducing write frequency, not just scaling reads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

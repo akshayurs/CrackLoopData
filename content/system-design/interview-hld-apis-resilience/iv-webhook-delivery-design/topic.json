@@ -1,0 +1,165 @@
+{
+  "id": "iv-webhook-delivery-design",
+  "title": "How would you design reliable webhook delivery to a client's endpoint?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 12,
+  "slug": "iv-webhook-delivery-design",
+  "summary": "The concrete mechanics — retries with backoff, signing, idempotency keys, and ordering — that make an outbound callback as reliable as an inbound API.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-webhook-delivery-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: why webhooks are harder than they look",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Webhooks are actually **harder to get right** than the inbound API they complement — an inbound API controls its own reliability, but a webhook depends on a client endpoint you don't control being up, fast, and correctly implemented.\n\nThe strong answer names concrete mechanics — retries with backoff, signing, idempotency keys, and ordering guarantees — not just \"we'd POST to their URL.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-webhook-delivery-design-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: can the client's endpoint be **temporarily down or slow**, and for how long should you keep retrying before giving up? A client that deploys for 20 minutes needs a much longer retry window than one that's occasionally slow for a few seconds.\n\nAlso ask: does **delivery order across events matter** to the client? A payment status webhook where \"succeeded\" arriving before \"created\" would confuse the client is a very different design than one where order genuinely doesn't matter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-webhook-delivery-design-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three mechanics, together: **retry failed deliveries with backoff** up to a bounded window (not forever, and not just once), **sign every payload** so the client can verify it's really from you, and give every event an **idempotency key** so a retried delivery is safe for the client to process twice.\n\nEach piece covers a different failure: backoff handles transient endpoint issues, signing handles authenticity, idempotency handles the duplicate deliveries that retries inevitably cause.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-webhook-delivery-design-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-webhook-delivery-design-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: signing the payload with HMAC",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A worked example — a `payment.succeeded` webhook signed with an HMAC over the payload and a timestamp:\n\n```\nsignature = HMAC-SHA256(secret, timestamp + \".\" + payload_body)\n\nPOST https://client.example.com/webhooks\nHeaders:\n  Webhook-Signature: t=1732900000,v1=5c8a2f...\nBody: { \"event\": \"payment.succeeded\", \"id\": \"evt_88\", ... }\n```\n\nThe client recomputes the signature using their shared secret and rejects the request if it doesn't match, so forged or replayed requests (an attacker resending an old captured payload) are rejected — the timestamp in the signed data lets the client also reject requests that are suspiciously old.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-webhook-delivery-design-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: 20 minutes of client-side downtime",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete scenario: a client's endpoint returns 500s for **20 minutes** during their own deploy. Your delivery system retries with **exponential backoff** (1 minute, 5 minutes, 15 minutes, 1 hour...) up to a **24-hour window**, instead of giving up after the first failure or hammering their endpoint every second while it's still recovering.\n\nThe bounded window matters both ways: long enough to survive a realistic deploy or brief outage, but not infinite, since an endpoint that's still failing after 24 hours needs a different response than more silent retries.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-webhook-delivery-design-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-webhook-delivery-design-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the out-of-order delivery problem",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Out-of-order webhook delivery](assets/webhook-out-of-order.svg)\n\nThe ordering problem: two events for the same object fire close together, and the **second delivery attempt for event 1 lands after event 2 already arrived**, because event 1 needed a retry. The client needs each event's own **sequence number or timestamp** to detect and handle out-of-order arrival, since HTTP delivery order isn't guaranteed once retries are involved.",
+      "assets": [{"alt": "Out-of-order webhook delivery", "path": "assets/webhook-out-of-order.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-webhook-delivery-design-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Retrying aggressively **maximizes delivery**, but risks delivering the same event **multiple times** to a client that isn't idempotent on their end — a retried delivery that actually did land the first time but whose response was lost looks identical to a genuinely failed delivery from your side.\n\nThat's why the **idempotency key is not optional** — it's what makes \"retry until it lands\" safe to do at all. Without it, aggressive retrying trades missed deliveries for duplicate ones, which isn't actually an improvement for a client that double-processes each duplicate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-webhook-delivery-design-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-webhook-delivery-design-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: the endpoint stays down the whole retry window",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"the client's endpoint has been down for the entire 24-hour retry window — what happens to that event?\"** It lands in a **dead-letter state** visible to the client — for example, in a dashboard — so they can **manually replay it** once their endpoint is back, rather than the event being silently lost the moment the retry window expires.\n\nSilently dropping the event after 24 hours with no trace is the failure mode this is protecting against — the client needs a way to discover and recover a missed event even after your system stops actively retrying it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-webhook-delivery-design-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how does the client know an update didn't fail silently?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"how does the client know a webhook update didn't just fail silently on their end?\"** They don't — **unless you also expose a polling/list API as a fallback source of truth**. Webhooks should be a convenience layer over data the client can still pull directly, not the only way to learn the current state.\n\nA client that suspects it missed an event can call `GET /events?since=...` to reconcile, rather than being permanently stuck if a webhook silently failed to process on their end for a reason your delivery system can't see (a bug in their own handler, say).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-webhook-delivery-design-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-webhook-delivery-design-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: treating a non-2xx response as delivered",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We fired the webhook once and the client's server accepted the connection — that counts as delivered.\"\n\n**Why it's wrong:** firing once and treating a **non-2xx response as \"delivered\"** gives the client no way to recover a missed event — if their endpoint returns a 500, or times out, or is simply unreachable, the event is gone with no retry and no record for the client to discover it was lost.\n\n**Correct model:** delivery isn't confirmed until a 2xx response is received; anything else triggers the retry-with-backoff path, and exhausting that path lands the event somewhere the client can still recover it from.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-webhook-delivery-design-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Retry failed deliveries with exponential backoff up to a bounded window (not forever, not just once), sign every payload with HMAC so clients can verify authenticity, and attach an idempotency key to every event so retries are safe to process twice. Give each event a sequence number since retries can deliver out of order. Exhausted retries land in a dead-letter state the client can replay, and a polling API backs up webhooks as a source of truth.\n\nFor the full delivery contract and callback design patterns, see [Webhooks and Callback APIs](webhooks-and-callback-apis) and [Idempotency and Exactly-Once](idempotency-and-exactly-once).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

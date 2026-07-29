@@ -1,0 +1,29 @@
+{
+  "topicId": "design-rate-limiter-service",
+  "interviewQuestions": [
+    {
+      "id": "design-rate-limiter-service-iq1",
+      "question": "Design a rate limiter usable by every service in the company?",
+      "answerMarkdown": "I'd reframe the problem first: this isn't \"pick a rate-limiting algorithm,\" it's \"build one of the highest-QPS services in the company,\" since every protected service's checks funnel through it.\n\nI'd expose one atomic operation, `checkAndIncrement(key, limit, window)`, backed by a sharded shared store (Redis, keyed and partitioned like the key-value store topic) so counts are accurate across every limiter instance, not just per-node. I'd keep the limiter instances themselves stateless so they scale horizontally like any app tier.\n\nI'd close on the requirement most candidates miss: what happens when the shared store or the limiter itself is unreachable. I'd design an explicit fail-open or approximate-fallback path rather than blocking every protected service on the limiter's own availability.\n\n**Testing:** whether you treat the limiter as a critical-path service with its own scaling and failure needs, not a lightweight helper bolted onto other systems.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The core shared rate-limiter design"
+    },
+    {
+      "id": "design-rate-limiter-service-iq2",
+      "question": "How do you keep the rate limiter's own latency low when every check requires a round-trip to a shared store?",
+      "answerMarkdown": "I'd start by acknowledging the tension directly: perfect accuracy wants every check to hit the shared store, but that adds a network hop to every single protected call.\n\nMy answer is local batching — a limiter instance requests a small burst allowance from the shared store periodically (say, a chunk of 50 allowed requests) and serves checks against that local allowance without a round-trip, only syncing back with the shared store when it needs to refill. This trades a small amount of accuracy (a caller could burst slightly past its exact limit at the boundary between syncs) for cutting most round-trips entirely.\n\nI'd also mention a local, short-TTL cache for identical rapid-fire checks on the same key as a smaller-scale version of the same idea.\n\n**Testing:** whether you can propose a concrete mechanism for a latency/accuracy trade-off rather than just naming that the trade-off exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Reducing check latency"
+    },
+    {
+      "id": "design-rate-limiter-service-iq3",
+      "question": "Product wants to change a customer's rate limit from 100 to 500 requests/minute without any redeploy. How does your design support that?",
+      "answerMarkdown": "This requirement is why I'd never bake limits into the deployed limiter binary or a consuming service's config — they need to live in a separate, dynamically-read config store from day one.\n\nI'd have limiter instances subscribe to config changes via pub/sub for near-instant propagation, or poll a short-TTL cache as a simpler fallback if a pub/sub dependency isn't wanted. Either way, I'd state the propagation delay out loud (seconds, typically) since \"without a redeploy\" doesn't mean \"instantaneous,\" and that distinction matters if product expects the new limit to apply the moment they click save.\n\n**Testing:** whether you designed for this requirement upfront rather than treating it as an afterthought that needs bolting on later.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Dynamic limit changes"
+    }
+  ]
+}

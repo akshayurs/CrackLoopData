@@ -1,0 +1,193 @@
+{
+  "id": "iv-design-connection-pool",
+  "title": "Design a Connection Pool",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 10,
+  "slug": "iv-design-connection-pool",
+  "summary": "Class scope: the borrow/return API, sizing, and health checks — not a specific driver's implementation. Scored on lifecycle discipline under leaks and dead connections.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-design-connection-pool-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a connection pool** — the reusable, generic kind: `borrow()`/`release()`, not a specific database driver's internal implementation. The scoring signal is lifecycle discipline — a caller that forgets to release, and a connection that's gone bad, both need to be handled without the pool silently degrading.\n\nThe 10-minute bar: the borrow/release API, an internal free list bounded by a max size, and a health-check story for evicting a broken connection instead of handing it back out.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: fixed size, or elastic between a min and max?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether the pool is **fixed-size** — always exactly N connections, created upfront — or **elastic** between a min and max, growing under load and shrinking back when idle. Fixed-size is simpler and predictable but wastes resources at low load and hard-caps throughput at high load.\n\nElastic adapts but adds real complexity: when to grow, when to shrink, and how to avoid thrashing — constantly creating and tearing down connections right at the boundary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: borrow/release, a free list, exhaustion behavior",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape: `borrow()` hands out a connection from an internal free list, creating a new one if under the max and none are free; `release(connection)` returns it to the free list for reuse. The free list itself is the pool's core state — connections currently checked out aren't in it, connections idle and ready are.\n\nThe interesting design decision is what `borrow()` does when the pool is exhausted — every free connection is checked out and the pool is already at max size — which the next few subtopics dig into.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-connection-pool-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-connection-pool-s04",
+      "order": 4,
+      "sectionTitle": "Code: a ConnectionPool<T> interface",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface ConnectionPool<T> {\n    T borrow() throws TimeoutException;\n    void release(T connection);\n    void close();\n}\n```\n\n`borrow()` can throw a `TimeoutException` — it's not guaranteed to succeed immediately, which is itself a design statement: exhaustion is a normal, expected condition the caller must handle, not a bug.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s05",
+      "order": 5,
+      "sectionTitle": "Code: a blocking queue of idle connections, created up to a max",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class BlockingConnectionPool implements ConnectionPool<Connection> {\n    private final BlockingQueue<Connection> idle = new LinkedBlockingQueue<>();\n    private final AtomicInteger created = new AtomicInteger();\n    private final int maxSize;\n\n    public Connection borrow() throws TimeoutException {\n        Connection c = idle.poll();\n        if (c != null) return c;\n        if (created.incrementAndGet() <= maxSize) return createConnection();\n        created.decrementAndGet();\n        c = pollWithTimeout();\n        if (c == null) throw new TimeoutException(\"pool exhausted\");\n        return c;\n    }\n}\n```\n\nA blocking queue gives thread-safe hand-off for free: `borrow` pulls from it, `release` pushes back to it, and the queue itself handles the concurrency of multiple threads borrowing and releasing at once.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-design-connection-pool-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-design-connection-pool-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the lifecycle of one connection",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![State diagram of a pooled connection cycling idle, borrowed, and returned, with a health check that can route to discarded instead of back to idle](assets/pool-lifecycle-states.svg)\n\nA connection spends most of its life cycling between idle and borrowed. The health check is the one path that can break the cycle — instead of returning a borrowed-then-released connection straight to idle, the pool checks it's still alive and evicts it if not.",
+      "assets": [{"alt": "State diagram of a pooled connection cycling idle, borrowed, and returned, with a health check that can route to discarded instead of back to idle", "path": "assets/pool-lifecycle-states.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s07",
+      "order": 7,
+      "sectionTitle": "Code: a health check evicting a stale connection",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic void release(Connection c) {\n    if (isHealthy(c)) {\n        idle.offer(c);\n    } else {\n        c.closeQuietly();\n        created.decrementAndGet();\n    }\n}\n```\n\nChecking health on release, not just periodically in the background, catches a connection that died mid-use immediately, instead of handing the same broken connection to the next borrower and failing their request too.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what should borrow() do when the pool is exhausted?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd block with a timeout by default: `borrow()` waits up to a configured duration for a connection to free up, then throws if none appears — this is what a blocking queue's timed poll gives you almost for free, and it matches how most callers actually want to behave: wait a bit, then fail loudly rather than hang forever.\n\nThrowing immediately with no wait at all is defensible under very strict latency budgets, where waiting even briefly is worse than failing fast. Blocking forever with no timeout is close to always wrong — a slow downstream problem becomes a pool-wide hang with no visibility into why.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-connection-pool-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-design-connection-pool-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how do you prevent a caller who forgets release() from starving the pool?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the most common real-world bug with connection pools, so I'd design against it structurally rather than trusting callers to remember. The strongest fix: expose borrowing through a resource-management-compatible wrapper — a handle whose `close()` calls `release()` — so the language's own scoped-resource syntax makes the common case correct by default.\n\nAs a backstop, I'd add a **borrow timeout on the connection itself** — if a connection has been checked out longer than some sane maximum, log it loudly, or forcibly reclaim it, since that's almost certainly a leak, not a legitimately long-running use.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-connection-pool-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-design-connection-pool-s10",
+      "order": 10,
+      "sectionTitle": "Follow-up: how do you size the pool?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd reach for the standard formula rather than a guess: pool size equals the number of CPU cores times one plus the ratio of wait time to service time. If each request holds a connection mostly waiting on I/O — a slow query — that ratio is high and you need more connections per core; if it's mostly CPU-bound work, the ratio is closer to one.\n\nI'd caveat this is a starting point, not a guarantee — the real number should come from measuring actual wait time versus service time under realistic load, then tuning from there, since the formula's inputs are themselves estimates.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s11",
+      "order": 11,
+      "sectionTitle": "Weak answer: a pool with no upper bound",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** letting the pool create a new connection every time `borrow()` finds none free, with no maximum at all.\n\n**Why it's wrong:** the pool exists specifically because connections are expensive and the backing service has its own connection limit — an unbounded pool under load can exceed that limit and take down the very service it's connecting to.\n\n**Correct model:** enforce a hard maximum; once at max, `borrow()` waits, with a timeout, for an existing connection to free up rather than creating another.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-connection-pool-s12",
+      "order": 12,
+      "sectionTitle": "Wrong answer: handing out the raw connection with no wrapper",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just return the actual connection object from `borrow()` — simplest possible API.\"\n\n**Why it's wrong:** a caller holding the raw connection can close it directly, which destroys the connection the pool still thinks is checked out and healthy — the pool's internal bookkeeping is now silently wrong, and the next `borrow()` may hand out a dead connection.\n\n**Correct model:** wrap the raw connection in a pool-aware handle whose `close()` calls `release()` instead of actually closing the underlying connection.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-connection-pool-s12-q1"
+      ]
+    },
+    {
+      "id": "iv-design-connection-pool-s13",
+      "order": 13,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**API** — `borrow()`/`release()`/`close()`, with `borrow` able to fail via timeout. **Bound** — a hard max size; exhaustion blocks with a timeout, doesn't grow unbounded. **Lifecycle** — idle to borrowed to returned to idle, with a health check on release evicting anything dead. **Leak prevention** — a scoped-resource wrapper makes correct release the default, plus a borrow-timeout backstop. **Close** by naming the sizing formula: cores times one plus wait-to-service ratio, tuned from real measurements.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

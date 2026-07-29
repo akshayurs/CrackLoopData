@@ -1,0 +1,165 @@
+{
+  "id": "iv-detecting-split-brain",
+  "title": "How would you detect and resolve split-brain in this system?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 11,
+  "slug": "iv-detecting-split-brain",
+  "summary": "Distinct from a general partition-behavior question — this is specifically about two nodes each believing they're the leader at once, and the concrete mechanism that prevents or resolves it.",
+  "level": "expert",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-detecting-split-brain-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Split-brain is a specific, sharper failure than \"a partition happened\": two nodes each genuinely believe they're the leader or primary at the same time, and both may be accepting writes that will conflict. The interviewer wants the actual prevention and detection mechanism — fencing, quorum-backed leases, epoch numbers — not a restatement that partitions are bad.\n\nThis topic covers those mechanisms concretely, including the honest limitation: fencing only works if every downstream system actually checks it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-detecting-split-brain-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether leadership here is decided by a real consensus system (etcd, ZooKeeper, or similar Raft/Paxos-based store) or by a simpler heartbeat-and-timeout scheme with no consensus underneath. This matters because a consensus-backed lease has a built-in defense against split-brain that a bare heartbeat scheme fundamentally lacks.\n\nIf it's the simpler scheme, expect the answer to include \"the first fix is actually adopting a consensus store\" — not a cleverer heartbeat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-detecting-split-brain-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: quorum-backed lease plus fencing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Skeleton: **prevent** split-brain with a quorum-backed lease — leadership requires holding a lease that only a majority-agreeing consensus store can grant — and **fence** every write with a token tied to that lease, so even if an old leader keeps issuing writes after losing leadership, storage itself rejects them as stale.\n\n**Detect** it, separately, by watching for two nodes reporting the same epoch or term number as leader simultaneously — that's the unambiguous signal, distinct from merely suspecting a partition happened.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-detecting-split-brain-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-detecting-split-brain-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a fencing token attached to every write",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The mechanism that actually prevents damage even if two leaders briefly coexist: every write carries the current lease's fencing token (a monotonically increasing number), and storage rejects any write with a token older than the highest one it's already seen.\n\n```\n# old leader, lease expired, doesn't know it yet\nwrite(key, value, fencing_token=41)\n\n# storage has already accepted a write from the new leader\nstorage.max_seen_token  # = 42\n\n# rejected: 41 < 42, even though this write looks otherwise valid\n```\n\nThe old leader's writes are rejected not because storage knows it's \"the old leader\" — it doesn't need to — but purely because its token is stale relative to what storage has already seen.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-detecting-split-brain-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-detecting-split-brain-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a new leader can't renew without a majority lease",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The prevention side, walked through: a node becomes leader by acquiring a time-bound lease from the consensus store, which only grants it if a majority of the store's own nodes agree. It must periodically renew that lease before it expires, and if it can't reach a majority to renew (say, because it's on the minority side of a partition), the lease lapses and it must stop acting as leader.\n\nMeanwhile, a different node on the majority side can acquire a fresh lease with a new, higher epoch number — the old leader, even if it doesn't yet realize its lease lapsed, is now structurally prevented from renewing, which is what makes this a prevention mechanism and not just a detection one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-detecting-split-brain-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a monitoring alert on duplicate epoch numbers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For detection specifically, distinct from prevention: an alert fires the moment two nodes simultaneously report holding the same epoch or term number as leader — this is an unambiguous signal, not a heuristic, since a correctly functioning consensus system never grants the same epoch to two different nodes.\n\nSeeing this alert fire despite fencing being in place would point to a genuine bug in the consensus implementation itself, which is a much rarer and more serious finding than an ordinary partition — worth escalating differently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-detecting-split-brain-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Fencing tokens fully prevent split-brain damage but require every downstream system to actually check them — one component that skips the check reopens the hole.** The mechanism is only as strong as its weakest enforcement point, which is a real operational risk, not just a theoretical caveat.\n\n| | With fencing checked everywhere | With one component skipping the check |\n|---|---|---|\n| Old leader's stale write | Rejected by storage | Silently accepted — split-brain damage still happens |\n| Effort required | Every write path must validate the token | One missed integration point undoes the whole guarantee |\n\nName this honestly: fencing is necessary but not automatically sufficient — it has to be enforced everywhere writes land.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-detecting-split-brain-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-detecting-split-brain-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what if the consensus store itself partitions?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The fencing mechanism's own safety depends on the consensus store staying correct — if the consensus store itself partitions, the same majority-quorum logic that protects your application's leadership also protects the consensus store's own internal leader election, so the minority side of *that* store simply can't grant new leases at all.\n\nThe honest answer: you don't get \"no leader\" as a failure mode here, you get \"the minority side of the consensus store correctly refuses to grant any lease,\" which surfaces as your application having no leader on that side — a safe failure, not a silent one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-detecting-split-brain-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: what signal shows split-brain happened, after the fact?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a postmortem, the clearest signal is a spike in fencing-rejected writes around the incident window — that's direct evidence two leaders existed simultaneously and the fencing mechanism did its job. A secondary signal is the epoch-number history itself: if logs show two nodes both claiming the same epoch, however briefly, that's proof split-brain occurred at the leadership layer, independent of whether any damage got through.\n\nNaming \"check the fencing-rejection metric first\" as a concrete postmortem step is a stronger answer than a general \"we'd look at the logs.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-detecting-split-brain-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: heartbeats and timeouts alone with no fencing",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If a leader hasn't heartbeated in N seconds, we elect a new one — that handles leader failure.\"\n\n**Why it's wrong:** this prevents nothing about the old leader's own behavior — it might still be alive and writing, just unable to reach the heartbeat monitor because of a partition, not because it actually stopped. A new leader gets elected while the old one, a \"zombie,\" keeps accepting writes it believes are valid, and both leaders' writes can now conflict with no mechanism stopping either.\n\n**Correct model:** heartbeat-based election alone only handles *detecting absence* — it needs fencing (or an equivalent lease mechanism) to actually stop a zombie old leader's writes from landing, which timeouts by themselves can never guarantee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-detecting-split-brain-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-detecting-split-brain-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd prevent split-brain with a quorum-backed lease — leadership requires a majority-granted lease from a consensus store, and a node that can't renew it must stop acting as leader. I'd fence every write with a token tied to that lease, so even a zombie old leader's writes get rejected by storage as stale. I'd detect it separately by alerting on two nodes reporting the same epoch simultaneously. The honest caveat: fencing only works if every write path actually checks the token — one integration that skips it reopens the hole — and the whole mechanism's safety ultimately depends on the consensus store itself staying correct during its own partitions.\"\n\nSee [split-brain-and-quorum-loss](split-brain-and-quorum-loss) for the fuller mechanics behind fencing and quorum leases.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

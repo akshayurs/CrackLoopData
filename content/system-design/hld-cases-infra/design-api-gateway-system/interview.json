@@ -1,0 +1,29 @@
+{
+  "topicId": "design-api-gateway-system",
+  "interviewQuestions": [
+    {
+      "id": "design-api-gateway-system-iq1",
+      "question": "Design an API gateway for a company with dozens of backend services.",
+      "answerMarkdown": "I'd open with the property that shapes everything else: every request in the platform passes through this one layer, so its availability and latency become the platform's ceiling — worse than any individual backend automatically drags the whole system down with it, no matter how good that backend is on its own.\n\nFor the request path, I'd walk through sequential stages: TLS termination, authentication, rate limiting, then a routing lookup against a config table (`path → backend`) with per-route policies, since a public health-check and an internal admin endpoint need very different auth/rate-limit rules on the same gateway. I'd size it for total platform QPS, not any one backend's share — that's the volume math that often gets underestimated.\n\nI'd make the gateway cluster stateless and horizontally scaled behind a load balancer, and add per-backend connection-pool isolation (bulkheading) so one slow backend can't exhaust capacity meant for others. I'd close on the discipline point: keep business logic out of the gateway entirely — it's a cross-cutting, protocol-level layer, not a place for domain rules.\n\n**Testing:** whether you treat the gateway's blast radius as the central design constraint, not an afterthought.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Full API gateway design walkthrough"
+    },
+    {
+      "id": "design-api-gateway-system-iq2",
+      "question": "How would you prevent one slow or failing backend service from degrading requests to unrelated, healthy backends through the same gateway?",
+      "answerMarkdown": "I'd name the failure mode precisely: if the gateway shares one connection pool across all backends, a slow backend holding connections open waiting for responses can consume a disproportionate share of that shared pool, starving requests meant for completely unrelated, healthy services — a classic noisy-neighbor problem at the edge.\n\nThe fix is bulkheading: give each backend (or backend category) its own dedicated connection pool and timeout configuration, sized to that backend's own expected load, rather than one global pool shared across everything. A backend that starts failing can exhaust its own slice of capacity — its own requests start timing out or getting circuit-broken — without touching capacity reserved for anyone else.\n\nI'd pair this with per-backend circuit breakers: once a backend's error rate or latency crosses a threshold, the gateway stops sending it new requests for a cooldown period, failing fast instead of piling up more waiting connections against an already-struggling service.\n\n**Testing:** whether you can name bulkheading specifically, rather than a vague 'add more capacity' answer that doesn't address the shared-resource root cause.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Isolating one backend's failure from others"
+    },
+    {
+      "id": "design-api-gateway-system-iq3",
+      "question": "How would you design the gateway to support request aggregation — combining several backend calls into one client-facing response — without letting it accumulate business logic over time?",
+      "answerMarkdown": "I'd draw a sharp line between **composition** (fan out to multiple backends, merge their responses into one payload) and **business logic** (deciding what the data means, applying domain rules, transforming values based on application state) — the gateway should only ever do the former.\n\nConcretely, aggregation logic in the gateway should be limited to a declarative description of which backends to call and how to shape the combined response — not conditional business rules like 'apply a discount if user tier is X.' If a team wants that kind of logic, it belongs in a dedicated backend-for-frontend (BFF) service that itself calls the underlying domain services, keeping the shared, every-request-touches-this gateway free of anything domain-specific.\n\nI'd flag the actual risk if this discipline slips: aggregation rules that started as simple response-shaping tend to accrete conditionals over time ('for this one client type, also call this other backend'), and each one adds latency and coupling to the single component every request in the platform depends on.\n\n**Testing:** whether you can hold the line on gateway responsibilities even when a feature request makes it tempting to bend it, and know where the escape hatch (a BFF layer) belongs instead.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Aggregation without scope creep"
+    }
+  ]
+}

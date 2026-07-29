@@ -1,0 +1,165 @@
+{
+  "id": "design-pastebin",
+  "title": "Design a Pastebin",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 2,
+  "slug": "design-pastebin",
+  "summary": "Storing and serving arbitrary-size text blobs cheaply, including the read stampede when one paste goes viral.",
+  "level": "beginner",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-pastebin-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Paste text, get a shareable link back, optionally set an expiry and control who can view it. It looks like a URL shortener with content attached — but variable-size payloads (a one-line snippet vs a 5MB log dump) change the storage answer completely.\n\nThe interesting design decisions live in where the actual text lives (not the database row) and what happens when one paste suddenly gets shared everywhere.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** create a paste (text + optional title/syntax), fetch it by a generated link, set visibility (public or unlisted-by-link), set an optional expiry.\n\n**Non-functional:** support pastes from a few bytes up to several megabytes; fetch latency must stay low regardless of paste size; storage cost per byte must stay cheap since some users paste large payloads routinely, not just short snippets.\n\nThe size variance is the requirement that makes this a different system from a URL shortener, even though the surface API looks similar.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: sizes, ratio, and storage growth",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Assume 1M new pastes/day, averaging 10KB each (most are short snippets, a long tail runs to megabytes). That's ~10GB/day of raw content, or roughly 3.6TB/year — small compared to a URL shortener's row count, but each row is much heavier.\n\nRead:write ratio is high but lower than a shortener's, maybe 10:1 — pastes get read a handful of times, not thousands, except for the rare one that goes viral. That long tail is exactly what breaks a naive design (see the viral-paste slides ahead).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-pastebin-s03-q1"
+      ]
+    },
+    {
+      "id": "design-pastebin-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- `POST /paste {content, title?, visibility?, ttl?}` → returns a shareable code/link.\n- `GET /{code}` → fetch and render the paste content.\n- `DELETE /{code}` → owner-initiated early removal, or automatic on expiry.\n\nNo edit endpoint by default — pastes are typically immutable once created, which simplifies caching enormously: a cached paste never goes stale from an edit, only from expiry or deletion.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s05",
+      "order": 5,
+      "sectionTitle": "Data model: blob storage for content vs a metadata row",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Content in the database row | Content in object storage, metadata in DB |\n|---|---|---|\n| Row size | Grows unbounded with paste size | Fixed — DB row is just a pointer + metadata |\n| DB cache efficiency | Large blobs crowd out the DB's buffer cache | DB stays small and fully cacheable |\n| Cost per byte | Expensive — DB storage is pricier than object storage | Cheap — S3-class storage is built for this |\n| Serving large pastes | DB has to stream a large column | Object store serves large blobs natively, even via CDN |\n\n**How to decide:** always split them. Store paste content in an object store (S3/GCS/blob storage) keyed by the paste code, and keep a small metadata row (code, title, visibility, expiry, size, content's storage key) in a normal database. The DB stays fast and small; the object store does what it's built for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-pastebin-s05-q1"
+      ]
+    },
+    {
+      "id": "design-pastebin-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: high-level architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Pastebin architecture: client, API server, object store for content, database for metadata, cache](assets/pastebin-architecture.svg)\n\nWrites: client -> API server -> object store (content) + DB (metadata row). Reads: client -> API server -> cache (hit) or object store + DB (miss, then populate cache).\n\nThe split from the previous slide is visible here as two separate storage systems doing two separate jobs.",
+      "assets": [{"alt": "Pastebin architecture: client, API server, object store for content, database for metadata, cache", "path": "assets/pastebin-architecture.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s07",
+      "order": 7,
+      "sectionTitle": "Why this isn't just a URL shortener",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A shortener's mapping table row is fixed-size (a URL string, rarely over a couple hundred bytes) — every row costs roughly the same, so a single sharded relational table works fine for the payload itself.\n\nA pastebin's payload varies from bytes to megabytes. Cramming that into a database row either wastes space (fixed-width columns sized for the worst case) or requires large-object handling the database wasn't optimized for. Recognizing \"my payload size varies by orders of magnitude\" is the signal to reach for object storage instead of forcing everything through the relational row.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s08",
+      "order": 8,
+      "sectionTitle": "Handling a viral paste: read stampede on one hot key",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single paste shared widely (a leaked config, a viral snippet) turns into a **read stampede**: thousands of concurrent `GET`s for the same code, all hitting the same cache key and, on a miss, the same object-store object.\n\nUnlike the metadata row, the object itself can be large enough that re-fetching it repeatedly under load is genuinely expensive, not just a wasted DB query — so this failure mode is worth its own diagram.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: cache-aside with request coalescing",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Cache coalescing N concurrent requests for a hot paste into one object-store fetch](assets/pastebin-request-coalescing.svg)\n\nRequest coalescing means the cache recognizes N concurrent misses for the same key as one logical fetch — it issues a single read to the object store and fans the result back out to all N waiters, instead of N redundant reads.\n\nThis is the mechanism, not just \"add a cache\": a plain cache-aside layer without coalescing still lets a stampede of misses through in the split second before the first response populates it.",
+      "assets": [{"alt": "Cache coalescing N concurrent requests for a hot paste into one object-store fetch", "path": "assets/pastebin-request-coalescing.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": [
+        "design-pastebin-s09-q1"
+      ]
+    },
+    {
+      "id": "design-pastebin-s10",
+      "order": 10,
+      "sectionTitle": "Expiry at scale: TTL sweep vs lazy deletion",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Lazy deletion on read | Background TTL sweep |\n|---|---|---|\n| Correctness | Expired paste blocked immediately once read, even if not yet swept | Only correct after the sweep runs |\n| Storage reclaim | Only reclaims what's actually re-requested | Reclaims everything on schedule, read or not |\n| Object-store cost | Expired blobs linger, still billed, until read | Bounded — deleted on schedule regardless of traffic |\n\n**How to decide:** same conclusion as a URL shortener — use both. Here the object-store storage cost makes the reaper sweep matter even more: a paste nobody re-reads after expiry would otherwise sit in (billed) blob storage indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-pastebin-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: storing every paste inline in the DB row",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"It's simpler to just put the paste text in a `TEXT` column alongside the metadata — one table, one query.\"\n\n**Why it's wrong:** it bloats the primary store with highly variable-size data, wrecks the database's buffer cache (a few large pastes can evict the working set of small, frequently-accessed metadata), and makes the database far more expensive per byte than purpose-built object storage.\n\n**Correct model:** keep content in an object store and metadata in the database — the split from earlier isn't a nice-to-have, it's what keeps the database small, fast, and cheap as paste sizes vary by orders of magnitude.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "design-pastebin-s11-q1"
+      ]
+    }
+  ]
+}

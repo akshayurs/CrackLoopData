@@ -1,0 +1,175 @@
+{
+  "id": "design-image-hosting-service",
+  "title": "Design an Image Hosting Service",
+  "area": "system-design",
+  "group": "hld-cases-media",
+  "order": 4,
+  "slug": "design-image-hosting-service",
+  "summary": "Content-addressable storage for billions of small immutable blobs — dedup and on-the-fly derivatives are the hard parts, not the upload form.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-image-hosting-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The prompt: let a user upload an image, get back a URL, and have that image served fast at whatever size a page or app requests.\n\nThe upload form itself is trivial — the real design lives in two places: avoiding storing the same bytes twice at billions-of-images scale (**deduplication**), and serving a given image at dozens of possible sizes without pre-generating and storing every one of them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional and non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** upload an image, retrieve it at a requested size and format, delete an image.\n\n**Non-functional:** the **read:write ratio** matters a lot here — images are typically written once and read enormously more often (thumbnails alone can multiply reads by the number of places an image appears), so the read path deserves most of the optimization budget. Also fix supported upload volume, and which sizes/formats must be servable (thumbnail, feed, full-res; JPEG/PNG/WebP).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: images/day, storage growth, derivative multiplier",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At 10M uploads/day averaging 2MB each, that's ~20TB/day of originals, or ~7PB/year before any derivatives. If a typical image gets requested at 4 common sizes (thumbnail, feed, detail, full), precomputing all of them multiplies stored bytes by roughly that same factor — pushing derivative storage well past the originals alone.\n\nThis multiplier is exactly why the on-the-fly-vs-precompute decision (a few slides ahead) matters so much more here than in a system with a small, fixed set of items.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-image-hosting-service-s03-q1"
+      ]
+    },
+    {
+      "id": "design-image-hosting-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`upload(image)` returns an `id` derived from the image's content (next slide). `getUrl(id, size)` returns a URL for that image at a requested size — which may already exist as a stored derivative or may be generated on the fly, transparently to the caller. `delete(id)` removes the original and, importantly, must also invalidate or remove any cached/precomputed derivatives, not just the source object.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s05",
+      "order": 5,
+      "sectionTitle": "Content-addressable storage: hashing bytes to dedup identical uploads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Content-addressable storage** derives an image's storage key from a hash (e.g. SHA-256) of its actual bytes, not from a user-supplied filename or an autoincrementing ID. If two users upload the exact same image — a common occurrence with memes, stock photos, and shared media — they hash to the same key, and the system stores the bytes exactly once while both uploads point at that one object.\n\nThis turns a potentially huge duplication problem (the same viral image uploaded independently thousands of times) into a cheap hash lookup, at the cost of needing a small reference-count or ownership layer so one user's delete doesn't remove bytes another user is still using.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: upload path",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Upload hashed and dedup-checked before either storing a new original or just adding a reference](assets/upload-dedup-flow.svg)\n\nThe dedup check has to happen before any storage write, not after — otherwise you've already paid the storage cost you were trying to avoid.",
+      "assets": [
+        {
+          "alt": "Upload hashed and dedup-checked before either storing a new original or just adding a reference",
+          "path": "assets/upload-dedup-flow.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s07",
+      "order": 7,
+      "sectionTitle": "Compare: on-the-fly resizing vs precomputing common sizes",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | On-the-fly resizing | Precompute common sizes at upload |\n|---|---|---|\n| Storage cost | Low — only the original is stored | Higher — every common size stored per image |\n| First-request latency | Higher — resize happens on that request | Low — already generated |\n| Handles unpredictable sizes | Naturally — any requested size just gets generated | Poorly — an uncommon size still needs on-the-fly fallback |\n| Best fit | Rarely-requested sizes, or a huge/unpredictable size catalog | The handful of sizes almost every image gets requested at |\n\n**How to decide:** most systems do both — precompute the few sizes nearly every image needs (thumbnail, feed), and fall back to on-the-fly generation (cached after first request) for anything less common.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "design-image-hosting-service-s07-q1"
+      ]
+    },
+    {
+      "id": "design-image-hosting-service-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: read path",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Client image request served from CDN cache, or falling through to origin to resize and cache a new derivative](assets/derivative-cache-flow.svg)\n\nThe first request for an uncommon size is the slow path; every request after it — for that exact size — becomes fast, because the generated derivative is cached and reused rather than regenerated each time.",
+      "assets": [
+        {
+          "alt": "Client image request served from CDN cache, or falling through to origin to resize and cache a new derivative",
+          "path": "assets/derivative-cache-flow.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s09",
+      "order": 9,
+      "sectionTitle": "The bottleneck: a burst of requests for sizes that weren't precomputed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a new page layout or app version suddenly requests a size nobody precomputed — say a redesign introduces a new thumbnail dimension — every image on that page misses on first load and triggers an on-the-fly resize simultaneously, spiking resize-worker load right when the redesign ships.\n\nThe same **request-collapsing** idea from cache-miss handling elsewhere applies: multiple simultaneous requests for the same image at the same new size should collapse into one resize job, with everyone else waiting on that result, rather than each one running its own redundant resize.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-image-hosting-service-s09-q1"
+      ]
+    },
+    {
+      "id": "design-image-hosting-service-s10",
+      "order": 10,
+      "sectionTitle": "Serving via CDN with size/format-aware cache keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because the same image ID can be requested at many sizes and formats (JPEG vs WebP, thumbnail vs full), the CDN's cache key must include size and format, not just the image ID — otherwise a request for a thumbnail could return a cached full-size image, or vice versa.\n\nThis is a small detail with a real failure mode: a cache key that's too coarse silently serves the wrong derivative to the wrong request, which is far worse than a cache miss since it looks correct until someone notices the wrong image dimensions rendering on a page.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-image-hosting-service-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: deduping by file name instead of content",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Two uploads with the same filename are probably duplicates, so hashing the filename is a good-enough dedup check.\"\n\n**Why it's wrong:** filenames are arbitrary and collide constantly by coincidence (`image.jpg`, `photo.png`) while carrying zero information about the actual bytes — this approach both misses true duplicates with different filenames and can wrongly treat different images sharing a common filename as the same.\n\n**Correct model:** hash the image's actual bytes (content-addressable storage) — identical content always produces the same key regardless of what either uploader named the file, and different content never collides.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-image-hosting-service-s11-q1"
+      ]
+    }
+  ]
+}

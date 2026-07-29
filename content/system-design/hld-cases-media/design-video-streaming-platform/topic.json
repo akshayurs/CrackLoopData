@@ -1,0 +1,224 @@
+{
+  "id": "design-video-streaming-platform",
+  "title": "Design a Video Streaming Platform",
+  "area": "system-design",
+  "group": "hld-cases-media",
+  "order": 1,
+  "slug": "design-video-streaming-platform",
+  "summary": "Upload, transcode, and adaptively stream video to any device — the rendition pipeline and playback protocol that turn one uploaded file into a scalable stream.",
+  "level": "advanced",
+  "slideCount": 15,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "design-video-streaming-platform-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The prompt: accept video uploads, transcode them, and stream adaptively to any device — phone on cellular, laptop on fiber, TV over wifi.\n\nThink of it as two pipelines glued together: a **write path** (upload → transcode → store) that runs once per video, and a **read path** (fetch manifest → stream chunks → adapt quality) that runs millions of times per view. Most of the design's hard parts live in making the write path cheap and the read path resilient to bad networks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s02",
+      "order": 2,
+      "sectionTitle": "Functional and non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** upload a video, transcode it into multiple qualities, let any client fetch a manifest and stream it, support seeking and resuming playback.\n\n**Non-functional:** an upload SLA (e.g. a 10-minute video should be watchable within a few minutes, not hours), low **startup latency** (first frame in under ~2 seconds), and playback that survives a flaky network without buffering forever.\n\n**Explicitly out of scope:** the global CDN and multi-region edge strategy — that's its own case study, since deciding which titles live on which edge cache is a different problem from transcoding one video.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: uploads, renditions, storage, viewers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Say 100K uploads/day, averaging 10 minutes each. Transcoding into 5 renditions (240p–1080p) multiplies stored bytes roughly **4-6x** the original, since lower renditions are smaller but you keep them all.\n\nAt ~1GB/hour for source video, that's ~1.6TB/day of source, ballooning to ~7-9TB/day once every rendition is stored. Concurrent viewers matter more for read capacity than uploads do: 1M concurrent streams at ~3Mbps average egress is **3Tbps** — a number that immediately tells you this cannot be served from origin storage directly, only from a CDN.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-video-streaming-platform-s03-q1"
+      ]
+    },
+    {
+      "id": "design-video-streaming-platform-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three calls carry most of the design. `initiateUpload(metadata)` returns an upload target (often a direct-to-storage presigned URL, not a route through your app servers) and a `videoId`. `getManifest(videoId)` returns the list of available renditions and their chunk URLs once transcoding has produced at least one usable rendition.\n\nPlayback itself uses a short-lived **session token** scoped to one video and one viewer, so a leaked chunk URL can't be replayed indefinitely or handed to another account — it's checked on each chunk fetch, not just once at manifest time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: upload to playback",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Upload-to-player pipeline showing the decoupled write side and read side](assets/vod-write-read-split.svg)\n\nThe write side (upload through storage) happens once; everything from CDN onward happens on every view. Keeping those two sides decoupled — the player never talks to the transcode pipeline directly — is what lets you scale reads and writes independently.",
+      "assets": [
+        {
+          "alt": "Upload-to-player pipeline showing the decoupled write side and read side",
+          "path": "assets/vod-write-read-split.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s06",
+      "order": 6,
+      "sectionTitle": "The rendition ladder: transcoding into multiple resolutions and bitrates",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **rendition ladder** is the fixed set of quality levels you transcode every upload into — say 240p/400kbps, 480p/1Mbps, 720p/2.5Mbps, 1080p/5Mbps. Each rendition is a fully separate encode of the whole video, not a crop of a bigger one.\n\nThe ladder is a deliberate trade-off: more rungs mean smoother quality adaptation for viewers but more transcode compute and more stored bytes per video. Platforms tune the ladder by content type — a talking-head video needs fewer rungs than fast-motion sports, where low bitrates visibly smear detail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s07",
+      "order": 7,
+      "sectionTitle": "Adaptive bitrate streaming: the player picks quality in real time",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Adaptive bitrate (ABR)** streaming means the player, not the server, decides which rendition to fetch next — usually every few seconds, based on two live signals: how much video is buffered ahead, and the measured download throughput of recent chunks.\n\nIf the buffer is draining and throughput is dropping, the player drops to a lower rendition *before* it stalls; if both are healthy, it steps up. This is why a video can start blurry and sharpen after a few seconds — the player is climbing the ladder as it learns your real bandwidth, not guessing upfront.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-video-streaming-platform-s07-q1"
+      ]
+    },
+    {
+      "id": "design-video-streaming-platform-s08",
+      "order": 8,
+      "sectionTitle": "Chunked delivery (HLS/DASH): the protocol that makes ABR possible",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "ABR only works because video is delivered as many small **chunks** (typically 2-10 seconds each) rather than one giant file — protocols like **HLS** and **DASH** describe exactly this: a manifest listing chunk URLs per rendition, refreshed as new chunks become available.\n\nBecause each chunk is independently addressable, the player can switch renditions between chunks without re-buffering the whole video, and a viewer can seek to the middle without downloading everything before it. A single monolithic MP4 file supports neither — this is why chunking is the enabling mechanism, not just a delivery detail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s09",
+      "order": 9,
+      "sectionTitle": "Compare: on-the-fly transcoding vs precomputed renditions",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | On-the-fly transcoding | Precomputed renditions |\n|---|---|---|\n| When work happens | At request time, per viewer | Once at upload time |\n| Storage cost | Low — only the source is kept | High — every rendition stored |\n| First-view latency | High — viewer waits on a live encode | Low — renditions already exist |\n| Compute cost pattern | Scales with view count | Scales with upload count |\n\n**How to decide:** precompute for content you expect many views of (the overwhelming majority of platforms), and reserve on-the-fly for rarely-watched long-tail content where storing every rendition forever is wasted spend.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-video-streaming-platform-s09-q1"
+      ]
+    },
+    {
+      "id": "design-video-streaming-platform-s10",
+      "order": 10,
+      "sectionTitle": "Data model: object storage plus a manifest/metadata database",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Video **bytes** — source and every rendition's chunks — live in object storage (S3-like), addressed by path, never in a relational database. A separate **metadata database** holds the small structured facts: `videoId`, upload owner, per-rendition transcode status, and the manifest's chunk-URL list.\n\nThis split matters because the two have opposite scale shapes: object storage needs to hold petabytes cheaply with simple key lookups, while the metadata DB needs fast indexed queries (\"is this video's 1080p rendition ready yet?\") over a comparatively tiny row count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: transcode-queue backlog during an upload spike",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Transcoding is CPU-heavy and slow relative to upload — a 10-minute video can take several minutes of worker time per rendition. A viral moment or a scheduled bulk-upload event can spike uploads faster than the transcode worker pool can drain them, so videos sit queued and unwatchable well past their upload SLA.\n\nThe fix is autoscaling the worker pool against **queue depth**, not against upload rate — queue depth reflects the actual backlog, while upload rate alone can look fine even as a backlog silently grows if each job is taking longer than expected.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-video-streaming-platform-s11-q1"
+      ]
+    },
+    {
+      "id": "design-video-streaming-platform-s12",
+      "order": 12,
+      "sectionTitle": "Compare: precompute every rendition upfront vs lazily transcode rarely-watched ones",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Precompute all renditions upfront | Lazy-transcode rare renditions |\n|---|---|---|\n| Time-to-first-playback | Delayed until the *slowest* rendition finishes | Fast — publish as soon as one rendition (e.g. 480p) is ready |\n| Storage for long-tail content | Full ladder stored even if 4K is never requested | 4K only encoded on first actual request |\n| Complexity | Simple — one job, one completion event | Needs on-demand transcode path plus caching of the result |\n\n**How to decide:** publish as soon as the lowest usable rendition exists, and lazily fill in the rest of the ladder in the background — most viewers start watching within seconds of upload, and gating that on your slowest rendition wastes the SLA for no benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s13",
+      "order": 13,
+      "sectionTitle": "Pitfall: serving video directly from origin storage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Object storage already serves files over HTTP, so the player can just fetch chunks straight from there.\"\n\n**Why it's wrong:** origin storage is provisioned for durability and moderate throughput, not for millions of concurrent viewers pulling megabits each — a single popular video would saturate origin egress and add latency for every viewer, everywhere, regardless of how close they are to the origin region.\n\n**Correct model:** origin storage is the source of truth chunks get *copied from*; a CDN caches those chunks at edges near viewers and absorbs the actual read traffic, so origin only serves cache misses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-video-streaming-platform-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: transcoding every rendition before publishing anything",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A video should only go live once the full rendition ladder — 240p through 4K — has finished transcoding, so playback is consistent from the first view.\"\n\n**Why it's wrong:** the slowest rendition (usually the highest resolution) can take far longer than the lowest, so this gates *every* viewer's time-to-first-playback on the worst-case job — directly blowing the upload SLA for no real benefit, since most first viewers are on a phone that wouldn't pick 4K anyway.\n\n**Correct model:** publish as soon as one low/mid rendition is ready, and let the rest of the ladder fill in asynchronously; the player's ABR logic already tolerates a video that gains higher renditions mid-playback.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-video-streaming-platform-s14-q1"
+      ]
+    },
+    {
+      "id": "design-video-streaming-platform-s15",
+      "order": 15,
+      "sectionTitle": "Summary",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Upload triggers a fan-out into a rendition ladder; chunked delivery (HLS/DASH) and adaptive bitrate streaming make playback resilient to whatever network the viewer actually has. Publish early on the fastest rendition, fill in the rest asynchronously, and never let the player touch origin storage directly — a CDN sits in between.\n\nThe pieces this case study deliberately leaves out — global edge placement, recommendations, view-count accuracy, live ingest — are each a design in their own right, built on top of this pipeline rather than inside it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

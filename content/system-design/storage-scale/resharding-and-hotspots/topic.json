@@ -1,0 +1,131 @@
+{
+  "id": "resharding-and-hotspots",
+  "title": "Resharding & Hotspots",
+  "area": "system-design",
+  "group": "storage-scale",
+  "order": 4,
+  "slug": "resharding-and-hotspots",
+  "summary": "Rebalancing shards as data grows, and taming the celebrity/hot-key problem.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "resharding-and-hotspots-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A shard count that was right at launch stops being right as data grows or one key gets unexpectedly popular. **Resharding** moves data to new or rebalanced shards without taking the system down; the **hot-key problem** is when one key — not a whole shard's key range — soaks up disproportionate traffic.\n\nBoth problems share a theme: the fix that works cleanly on paper (stop the world, move the data, restart) is rarely acceptable in production, so this topic is really about how to do both live.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "resharding-and-hotspots-s02",
+      "order": 2,
+      "sectionTitle": "Why shard counts change over time (growth, hotspots)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A shard count picked for launch-day traffic and data volume is, almost by definition, wrong a year later — either each shard has grown past a comfortable size, or traffic has concentrated unevenly across shards that were sized for an even split. Both symptoms point to the same fix: change the number of shards, or move data between the ones you have.\n\nThe naive approach — take the whole system offline, recompute where every row belongs, and copy it — doesn't scale either: for terabytes of data, that downtime window grows into hours, which is unacceptable for anything user-facing. **Resharding** exists to do this move while the system stays up and serving traffic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "resharding-and-hotspots-s02-q1"
+      ]
+    },
+    {
+      "id": "resharding-and-hotspots-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: consistent hashing to minimize data movement on resharding",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Consistent hashing ring with nodes A, B, C; adding node D only moves the keys in the small arc between D and its counter-clockwise neighbor](assets/consistent-hashing-ring.svg)\n\nPlain hash partitioning (`hash(key) % N`) means adding or removing a shard changes almost every key's assigned shard, since the modulus changes. **Consistent hashing** places both shards and keys on a ring by hash value, assigning each key to the next shard clockwise — adding a shard only moves the keys that fall in the small arc it now owns, leaving every other assignment untouched.\n\nThis is what makes live resharding practical: instead of moving a large fraction of all data, you move roughly `1/N` of it when going from N to N+1 shards.",
+      "assets": [
+        {
+          "alt": "Consistent hashing ring with nodes A, B, C; adding node D only moves the keys in the small arc between D and its counter-clockwise neighbor",
+          "path": "assets/consistent-hashing-ring.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "resharding-and-hotspots-s03-q1"
+      ]
+    },
+    {
+      "id": "resharding-and-hotspots-s04",
+      "order": 4,
+      "sectionTitle": "Live resharding without downtime: dual-write/backfill strategies",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A common live-resharding pattern has three phases. **Backfill**: copy existing data for the moving range from the old shard to the new one in the background, while the old shard keeps serving live traffic. **Dual-write**: once backfill is close to caught up, start writing every new change to both the old and new shard, so neither falls behind while the switch happens. **Cutover**: once the new shard is verified consistent with the old one, flip routing so reads and writes go only to the new shard, then stop dual-writing and decommission the old copy.\n\nThe dual-write window is the fragile part — a bug there silently diverges the two copies, so most teams verify with a checksum or row-count comparison before fully cutting over.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "resharding-and-hotspots-s05",
+      "order": 5,
+      "sectionTitle": "The celebrity/hot-key problem: one key overwhelming one shard",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Resharding fixes an unevenly-sized *shard*, but sometimes the problem is a single unevenly-popular *key* — a celebrity's profile getting read a million times more than an average user's, all landing on the one shard that owns that key, no matter how evenly the rest of the keyspace is balanced (see [partitioning-and-sharding](partitioning-and-sharding) for how a shard key is chosen in the first place).\n\nAdding more shards doesn't help here: the hot key still lives on exactly one shard, and every request for it still funnels through that one node's CPU and connection limit. This needs a different class of fix, aimed at the key itself rather than the shard count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "resharding-and-hotspots-s05-q1"
+      ]
+    },
+    {
+      "id": "resharding-and-hotspots-s06",
+      "order": 6,
+      "sectionTitle": "Mitigations: key salting, splitting hot keys, caching in front",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Key salting** splits one hot key into several sub-keys (`user123#0` through `user123#9`) spread across different shards, with reads fanning out to all sub-keys and merging results — trading one hot shard for ten warm ones. **Splitting the hot entity** itself (e.g. separating a celebrity's rarely-changing profile data from their frequently-read post list) reduces contention on the parts that actually get hit hardest.\n\n**Caching in front** — a read-through cache like Redis in front of the shard — absorbs the read volume entirely for hot keys, since most reads never reach the database at all. In practice, caching is usually the first and cheapest mitigation tried, with salting reserved for keys hot enough that even a cache miss storm would overwhelm one shard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "resharding-and-hotspots-s07",
+      "order": 7,
+      "sectionTitle": "Compare: static shard count vs dynamic/elastic sharding",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Static shard count | Dynamic/elastic sharding |\n|---|---|---|\n| Setup complexity | Simple — pick a number, done | Needs a resharding mechanism (consistent hashing, directory) up front |\n| Growth handling | Requires a manual, planned resharding event | Adds shards incrementally as needed |\n| Operational risk | Lower day-to-day, higher during infrequent big reshardings | Ongoing, smaller-scale rebalancing operations |\n| Best fit | Predictable, slow-growing workloads | Unpredictable or fast-growing workloads |\n\n**How to decide:** if growth is slow and predictable, a static count with an occasional planned resharding is simpler to operate; if traffic or data volume is volatile, paying the upfront cost of elastic sharding avoids repeated high-risk, all-at-once migrations.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "resharding-and-hotspots-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: resharding synchronously and taking the system down to do it",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll schedule a maintenance window, stop writes, move the data, and bring it back up — it's simpler than building dual-write logic.\"\n\n**Why it's wrong:** the maintenance window scales with data size, not with how simple the plan sounds — terabytes of data can mean hours of downtime, and any bug discovered mid-migration extends that window with no graceful way to roll back live traffic. For a system with real users, that's an outage, not a maintenance task.\n\n**Correct model:** invest in a live-resharding path (backfill, dual-write, verify, cutover) before you need it under pressure. It costs more to build up front, but it's the difference between a routine, reversible operation and a scheduled outage that can turn into an unscheduled one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "resharding-and-hotspots-s08-q1"
+      ]
+    }
+  ]
+}

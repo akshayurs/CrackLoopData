@@ -1,0 +1,180 @@
+{
+  "id": "iv-guaranteeing-no-message-loss",
+  "title": "How do you guarantee a message isn't lost end-to-end?",
+  "area": "system-design",
+  "group": "interview-hld-messaging",
+  "order": 2,
+  "slug": "iv-guaranteeing-no-message-loss",
+  "summary": "Tests whether you can name the concrete durability guarantee at every hop — producer ack, broker replication, consumer ack-after-processing — instead of assuming \"we used a queue\" is itself a loss guarantee.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-guaranteeing-no-message-loss-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"It's in a queue, so it's safe\" is not automatically true. Every hop between producer and consumer has a window where a message can be acknowledged before it's actually durable — and closing each of those windows, one at a time, is the real content of this answer.\n\nThe interviewer wants to hear you name the hops explicitly, not wave at \"we used Kafka\" as if that alone prevents loss.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **what's the acceptable loss rate** — truly zero, or \"vanishingly rare and we can detect it\"? And: **which hop is riskiest** for this system — the producer's send, the broker's durability, or the consumer's processing?\n\nThe answer changes the amount of engineering you'd propose. A payments pipeline needs every window closed; an impressions-counting pipeline might rationally accept some loss in exchange for lower latency and cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Never acknowledge too early at any hop. The **producer** waits for a durable broker ack before considering the send successful. The **broker** replicates the write before acking the producer. The **consumer** only acks the broker after the work is actually done, not on receipt.\n\nThree hops, three places to be strict about when \"done\" is declared. Miss one and the others don't save you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-guaranteeing-no-message-loss-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a durable producer ack in Kafka",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Configuring a Kafka producer so the send isn't confirmed until the write is replicated, not just accepted by the leader:\n\n```\nproducer_config = {\n    \"bootstrap.servers\": \"broker1:9092,broker2:9092\",\n    \"acks\": \"all\",       # wait for all in-sync replicas, not just the leader\n    \"retries\": 5,\n    \"enable.idempotence\": true,\n}\n```\n\n`acks=all` is the single setting most likely to come up here — with `acks=1` (leader only), a leader crash right after acking can silently drop a message that never made it to a replica.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: the consumer side — process, persist, then ack",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The consumer's ordering matters just as much: **process the message, persist the side effect, then ack.** Acking first and processing second means a crash between the two silently drops the message — the broker believes it was delivered and processed, and moves on.\n\nThis is the hop candidates most often get backwards, because auto-ack-on-receipt is the default in several client libraries and feels \"done\" the moment the message arrives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a concrete scenario where this breaks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A payment-event consumer acks on receipt instead of after writing to its ledger. A pod restart hits mid-processing — after the ack, before the ledger write commits. The broker believes the event was delivered successfully; the ledger never recorded it.\n\nThe fix is entirely about ordering: move the ack to after the ledger write commits, and the same crash just means the message gets redelivered and reprocessed instead of silently vanishing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-guaranteeing-no-message-loss-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: the three loss windows and what closes each",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Producer-broker-consumer pipeline with three loss gaps, each closed by a distinct setting](assets/no-loss-pipeline-gaps.svg)\n\nEach gap is closed by a distinct, separately-configured setting — there's no single flag that closes all three at once.",
+      "assets": [
+        {"alt": "Producer-broker-consumer pipeline with three loss gaps, each closed by a distinct setting", "path": "assets/no-loss-pipeline-gaps.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s08",
+      "order": 8,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Closing every loss window costs latency and throughput: `acks=all` waits for replication before returning, synchronous replication is slower than fire-and-forget, and ack-after-persist means the consumer holds the message longer before freeing it.\n\nYou're trading speed for durability, and the right amount of each depends on what a lost message actually costs the business — a lost payment event is unacceptable; a lost page-view ping is a rounding error.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the producer got a timeout — did the message make it?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Don't assume failure. A timeout means the ack was lost, not necessarily the write — the broker may have durably stored the message and the confirmation just never reached the producer.\n\nThe safe move is to retry with an **idempotency key** so a duplicate send (if the original did succeed) becomes a no-op on the consumer side, rather than either silently dropping a message that actually landed or double-processing one that gets resent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s10",
+      "order": 10,
+      "sectionTitle": "Follow-up: how do you detect a loss that's silent by definition?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "You can't rely on an alert firing at the moment of loss — by definition nothing signals it. Instead, run **reconciliation**: compare a count or checksum computed on the producer side against what the consumer actually processed over the same window.\n\nA daily job that diffs \"events produced\" against \"events consumed\" per topic catches drift within a day, even without knowing in advance which message was lost or when.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-guaranteeing-no-message-loss-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: \"the broker accepted it\" isn't the same as \"it's durable\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** once the broker returns success, the message is safe.\n\n**Why it's wrong:** an unreplicated write sitting on a single broker node is one disk failure away from gone. `acks=1` confirms the leader received it, not that any replica has a copy.\n\n**Correct model:** \"accepted\" and \"durable\" are different guarantees — durability requires the write to survive the leader's failure, which only synchronous replication (`acks=all`) provides.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-guaranteeing-no-message-loss-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Never ack early at any hop: producer waits for a durable broker ack (`acks=all`), the broker replicates before acking, and the consumer acks only after the side effect is persisted. Name the latency/throughput cost of closing every window, and back it up with reconciliation for detecting the loss you can't prevent.\n\nThe delivery-semantics vocabulary underneath this — at-most-once, at-least-once, exactly-once — is covered in [message delivery semantics](message-delivery-semantics).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    }
+  ]
+}

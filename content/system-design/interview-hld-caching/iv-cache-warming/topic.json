@@ -1,0 +1,165 @@
+{
+  "id": "iv-cache-warming",
+  "title": "How would you warm a cold cache after a deploy or a node restart?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 4,
+  "slug": "iv-cache-warming",
+  "summary": "Tests whether you have a concrete plan for the moment a cache is empty and every request becomes a DB hit, instead of assuming the cache is \"just always there.\"",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-cache-warming-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every cache has a first moment where it's empty — right after a deploy, a node restart, or a crash. In that moment, every request that would've hit the cache instead hits the database, and if traffic doesn't change, the database suddenly sees 100% of the load it was designed to be shielded from.\n\nThe interviewer is testing whether you have a concrete plan for that moment, not whether you know caches exist.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-warming-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **is this a planned restart (a deploy) or an unplanned one (a crash)?** A planned restart gives you time to prepare — you know it's coming, you can pre-load data before traffic arrives. An unplanned crash gives you zero warning — the cache is just empty, right now, under live traffic.\n\nThe two cases need different plans, and conflating them is a common miss: a warming strategy that only works for planned deploys leaves you exposed the first time something crashes unexpectedly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-warming-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two complementary strategies: **pre-populate the hot keys before traffic arrives** (for planned restarts, where you have the lead time), or **ramp traffic in gradually** while the cache fills naturally under real read-through requests (works for both planned and unplanned cases, since it doesn't depend on advance notice).\n\nA strong answer proposes both: pre-warm what you can ahead of time, and ramp traffic in regardless, as a safety net for whatever the pre-warm missed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-warming-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-warming-s04",
+      "order": 4,
+      "sectionTitle": "Pre-warming from a snapshot of yesterday's hot keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before a new node joins the pool, load it with a **snapshot of yesterday's top-N hot keys** — the keys that got the most requests in the last day — pulled from access logs or a metrics pipeline. By the time the node starts accepting real traffic, its cache is already populated with the values most likely to be requested again.\n\nThis only works when you have lead time, which is exactly the planned-restart case — you schedule the pre-warm to finish before the node is added to the load balancer's pool.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-warming-s05",
+      "order": 5,
+      "sectionTitle": "Gradual traffic ramp-in behind the load balancer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Instead of (or alongside) pre-warming, add the new node to the load balancer pool at a **low traffic percentage first**, then increase it over minutes as the cache fills under real read-through requests. The node absorbs a manageable slice of misses instead of taking its full share of traffic while completely cold.\n\nThis is the more general fix: it doesn't require lead time or a snapshot, so it works for unplanned restarts too, just with the caveat that the node is genuinely cold for however long the ramp takes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-warming-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: warming only the top 1000 keys",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Warming the *whole* dataset before accepting traffic is usually wasteful — most keys are rarely read. Warm only the keys that matter:\n\n```\ntop_keys = access_log.top_n_by_request_count(\n    window=\"yesterday\",\n    n=1000,\n)\n\nfor key in top_keys:\n    value = database.fetch(key)\n    cache.set(key, value, ttl=default_ttl)\n\n# node joins the load-balancer pool only after this loop completes\n```\n\nWarming 1000 keys out of a dataset with millions of rows still absorbs the overwhelming majority of real traffic, because access patterns are skewed — a small set of keys gets most of the reads.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-warming-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-warming-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Pre-warming from a snapshot | Gradual ramp-in |\n|---|---|\n| Avoids a DB spike right at start | Also avoids a spike, more slowly |\n| Snapshot may already be stale by the time it's loaded | Data is always fresh — loaded live |\n| Needs lead time and a snapshot pipeline | Works with zero advance notice |\n\n**How to decide:** pre-warming trades freshness for a faster start — the snapshot could be hours old by the time it loads, so the node starts warm but not perfectly correct; ramp-in is slower to reach full capacity but never serves stale pre-loaded data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-warming-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"the whole cluster restarts at once — does your plan still work?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If every node restarts simultaneously — a bad deploy strategy — pre-warming and ramp-in both fail, because there's no warm node left to absorb the gap; the entire cache is empty at once and the full traffic volume hits the database with nothing softening it.\n\nThe fix is at the deploy level, not the cache level: **rolling restarts**, where nodes restart one or a few at a time while the rest of the pool stays warm and serves traffic. Naming this explicitly — that cache warming assumes at least part of the cluster is always up — is the answer the follow-up is fishing for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-warming-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-warming-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"how much DB headroom do you need for an unplanned cold start?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For a full, unplanned cold start (say, the entire cache cluster crashes), the database needs enough spare capacity to absorb **100% of read traffic**, not just its usual cache-miss slice, until the cache refills. If the DB is provisioned only for the reduced load a warm cache normally leaves it, a cold start can take the database down too, turning a cache outage into a full outage.\n\nThe practical number to have ready: your current cache hit rate tells you the multiplier — a 95% hit rate means the DB needs roughly 20x its normal load's worth of headroom to survive a full cold start gracefully.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-warming-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming the cache will \"just fill up naturally fast enough\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The cache will fill up naturally as requests come in — we don't need a warming plan.\"\n\n**Why it's wrong:** it skips the arithmetic of what happens in the gap. If a cache normally absorbs 95% of reads, a cold cache means the database instantly sees roughly 20x its usual load, and \"naturally fills up\" assumes the database survives long enough for that to happen — which it often doesn't.\n\n**Correct model:** always name the DB load spike a cold start creates, and either provision the DB to survive it or add a warming/ramp-in plan so it never sees the full spike in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-warming-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-warming-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Planned restarts get pre-warming from yesterday's hot-key snapshot; both planned and unplanned restarts get a gradual traffic ramp-in as a safety net. Warm only the top keys by volume, not the whole dataset. Rolling restarts keep part of the cluster warm at all times — a full simultaneous restart defeats any warming plan. Know your DB's headroom for a full cold start: it needs to survive close to 100% of read traffic, not the reduced slice the cache normally leaves it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

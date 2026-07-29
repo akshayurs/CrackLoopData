@@ -1,0 +1,165 @@
+{
+  "id": "iv-multi-region-failover-design",
+  "title": "How would you fail this system over to another region?",
+  "area": "system-design",
+  "group": "interview-hld-operations",
+  "order": 13,
+  "slug": "iv-multi-region-failover-design",
+  "summary": "Tests whether you can name the concrete failover mechanics — replication lag tolerance, DNS/traffic cutover, active-active vs active-passive — for a stated RTO/RPO.",
+  "level": "expert",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "iv-multi-region-failover-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This question expects you to anchor the design to two numbers: **RPO** (recovery point objective — how much data loss is acceptable) and **RTO** (recovery time objective — how much downtime is acceptable). Everything else — active-active or active-passive, synchronous or asynchronous replication — falls out of those two targets.\n\nA vague \"we'd replicate to another region and fail over if needed\" skips the actual engineering decision, which is precisely which mechanism gets you the stated RPO/RTO at the least cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-multi-region-failover-design-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions before you answer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask directly what data-loss window (RPO) and downtime window (RTO) are acceptable — these numbers determine almost everything downstream, and guessing at them wastes the rest of the answer on the wrong target.\n\nAsk whether the workload is read-heavy (easier to serve from multiple regions, since reads don't need global write consistency) or write-heavy (harder to keep consistent across regions, since writes need to agree on an order or a partition scheme). This single distinction is often the difference between a straightforward multi-region read setup and a genuinely hard distributed-writes problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-multi-region-failover-design-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Choose **active-active** or **active-passive** based on the stated RTO/RPO, then describe the concrete traffic-cutover mechanism — typically health-check-triggered DNS or load-balancer failover. A stricter RTO pushes toward active-active (no failover event needed at all); a more relaxed one can be served well by active-passive at lower operational complexity.\n\nBoth halves matter to state explicitly: which topology, and exactly how traffic actually moves during a real failover — \"we'd fail over\" without naming the cutover mechanism is the same gap as \"we'd have monitoring\" without naming a signal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-multi-region-failover-design-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-multi-region-failover-design-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: active-passive failover",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Active-passive failover: async replication, health check, DNS shift, standby promotion](assets/failover-sequence.svg)\n\nThe sequence: replication keeps the standby region current, a health check detects the primary is down, DNS or load-balancer traffic shifts to the standby, and the standby is promoted to primary.\n\nEach step in that chain has a concrete failure mode worth naming out loud — a health check with too short a timeout can trigger a false failover, and DNS propagation delay adds real seconds to the RTO that a diagram alone won't show.",
+      "assets": [{"alt": "Active-passive failover: async replication, health check, DNS shift, standby promotion", "path": "assets/failover-sequence.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-multi-region-failover-design-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a concrete scenario",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An RPO of 5 minutes and RTO of 15 minutes is achievable with asynchronous cross-region replication — accepting up to roughly 5 minutes of potential data loss — and automated health-check-triggered DNS failover, with Route 53-style health checks flipping traffic within a couple minutes of detecting the primary down.\n\nA demand for **zero RPO** instead requires synchronous cross-region replication, adding meaningful write latency to every single request, all the time, to protect against an event that — hopefully — never happens. Naming that cost explicitly is what separates a considered answer from agreeing to \"zero RPO\" without pricing it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-multi-region-failover-design-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-multi-region-failover-design-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: active-active's added complexity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once you commit to active-active, writes can now land in either region, so you need a **conflict-resolution strategy** — last-write-wins, vector clocks, or application-level merge logic — or you need to partition writes by user or region so each write only ever lands in one place, avoiding the conflict problem entirely.\n\nActive-passive never has to solve this, since only one region accepts writes at any time. This is the real price of active-active's \"no failover event needed\" benefit: you trade an occasional failover event for a permanent, always-on write-consistency problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-multi-region-failover-design-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Active-active | Active-passive |\n|---|---|---|\n| Failover event | None — both regions always serving | An actual cutover event, with its own risk |\n| Latency for distant users | Better — served by the nearer region | Worse if all traffic routes to one region |\n| Write consistency | Must be solved (conflict resolution or partitioning) | Not an issue — one write-accepting region |\n| Standby capacity | Fully utilized | Wasted while idle, waiting to be needed |\n\nActive-active gives you both regions serving live traffic at the cost of solving multi-region write consistency; active-passive is operationally simpler but wastes the standby region's capacity and carries an actual failover event with its own risk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-multi-region-failover-design-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you test this failover works, without a real outage?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Run scheduled failover drills — actually cutting traffic to the standby region on a regular cadence — rather than trusting the design on paper. An untested failover path is often the least reliable part of the whole system, precisely because it's exercised so rarely that configuration drift or a forgotten dependency can silently break it between drills.\n\nA drill also surfaces the RTO you'd actually get in practice, not the RTO you calculated on paper — DNS propagation, health-check timing, and application warm-up all add real seconds that a design doc's arithmetic can easily miss. See [RPO/RTO and failover drills](rpo-rto-and-failover-drills) for how to structure these.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-multi-region-failover-design-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-multi-region-failover-design-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how do you fail back without losing data?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Replicate the standby's writes-during-failover back to the primary before flipping traffic back, and verify that replication completed before the cutback — not a same-day snap-back the moment the primary looks healthy again.\n\nThe risk being tested here: if you fail back before the standby's writes during the outage window are fully replicated to the recovered primary, those writes are silently lost the moment traffic returns to the primary. Fail-back deserves the same care as the original failover, not a rushed reversal once the immediate pressure is off. See [geo-routing and failover](geo-routing-and-failover) for the routing mechanics involved.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-multi-region-failover-design-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: claiming \"zero RPO, zero RTO\" for free",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll just design for zero RPO and zero RTO — no data loss, no downtime, ever.\"\n\n**Why it's wrong:** zero RPO requires synchronous cross-region replication, which adds real write latency to every request, permanently, to protect against a failure that hopefully never occurs. Zero RTO requires active-active with instant, seamless cutover — solving write consistency across regions at all times. Claiming both without naming these costs is agreeing to a target the design can't actually deliver without a very specific, very expensive architecture.\n\n**Correct model:** state the RPO/RTO target explicitly, then name the architecture and its ongoing latency or complexity cost required to hit it — \"zero\" is a valid target only when you can also name what it costs to achieve.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-multi-region-failover-design-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-multi-region-failover-design-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Anchor on RPO and RTO first, then choose active-active or active-passive and name the concrete traffic-cutover mechanism (typically health-check-triggered DNS failover). A 5-minute RPO and 15-minute RTO fits asynchronous replication with automated DNS failover; zero RPO requires synchronous replication and its permanent latency tax.\n\nActive-active trades an occasional failover event for a permanent write-consistency problem (conflict resolution or partitioning); active-passive is simpler but wastes standby capacity. Test the design with real failover drills, not just on paper, and treat fail-back with the same care as the original failover — replicate the standby's writes back before cutting traffic home.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

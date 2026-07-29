@@ -1,0 +1,165 @@
+{
+  "id": "iv-read-your-own-writes",
+  "title": "How would you guarantee a user sees their own write immediately?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 3,
+  "slug": "iv-read-your-own-writes",
+  "summary": "The read-your-writes question tests whether you know concrete techniques beyond 'use strong consistency everywhere' — sticky reads, session tokens, client-side caching.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-read-your-own-writes-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just use strong consistency everywhere\" answers a narrower question than the one asked: how do you guarantee **one specific user** sees their **own write** immediately, without paying the cost of strong consistency for every other read in the system.\n\nThis topic covers the targeted techniques — sticky reads to the primary, session-scoped routing, client-side optimistic rendering — that solve read-your-writes without touching the consistency model everyone else's reads use.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-read-your-own-writes-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether this needs to hold **only for the writing user**, or for every reader who looks at that data afterward. Those are very different problems: the writer's own view is a narrow, session-scoped fix; making the write visible to everyone instantly is a much more expensive, system-wide guarantee.\n\nMost \"read your writes\" interview prompts mean the first, narrower case — confirm that before designing a heavier solution than the question actually needs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-read-your-own-writes-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: route the writer's own next reads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core move: route the **writer's own subsequent reads** to the primary, or to a replica confirmed to have caught up past that write — everyone else keeps reading from wherever is fastest. This scopes the fix to exactly the user who'd notice, instead of slowing down every read in the system.\n\nSay this distinction explicitly: you're not proposing stronger consistency system-wide, you're proposing a narrow routing rule that applies only to the person who just wrote.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-read-your-own-writes-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-read-your-own-writes-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: session-pinning to the primary",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "One concrete technique: when a user writes, tag their session so that reads within a short window (a few seconds, tunable) go to the primary instead of a replica. After the window expires, their reads fall back to the normal replica pool.\n\nThis is simple to implement — a flag in the session store with a timestamp — and requires no changes to the write path at all. Its cost is extra load on the primary for that user's reads during the window, which is usually a small fraction of total read traffic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-read-your-own-writes-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: client-side optimistic rendering",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An alternative that avoids extra primary load entirely: the client renders its own write locally the instant it's submitted — before the server even confirms it landed on a replica — then reconciles silently if the eventual read disagrees.\n\nThis is what most chat and social apps do: your own message appears instantly because the client drew it, not because the server proved it's durably replicated everywhere. The risk is a rare rollback if the write actually fails, which the client must handle gracefully (a retry, an error state) rather than silently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-read-your-own-writes-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: version-tagging and routing to a caught-up replica",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A more precise mechanism than a fixed time window: tag every write with a version or timestamp, and have the read path check each candidate replica's replicated position before routing to it.\n\n```\nwrite_version = db.write(key, value)          # e.g. a LSN or timestamp\n\ndef read_after_write(key, min_version):\n    for replica in replicas:\n        if replica.applied_version(key) >= min_version:\n            return replica.read(key)\n    return primary.read(key)                  # fallback if none caught up\n```\n\nThis avoids both failure modes of a fixed window: it doesn't pin the user to the primary longer than necessary, and it doesn't risk falling back to a replica that's still behind.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-read-your-own-writes-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-read-your-own-writes-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Session-pinning is the simplest to build, but it keeps sending that user's reads to the more-loaded primary for the entire window**, whether or not they actually read again. Version-tagged routing is more precise but requires every replica to expose a comparable position, and every read path to check it.\n\n| Technique | Simplicity | Extra load |\n|---|---|---|\n| Session-pinning | Simplest — one flag, one timeout | Primary load for the whole window, even on reads unrelated to the write |\n| Version-tagged routing | More engineering — needs comparable replica positions | Primary load only when no replica has actually caught up |\n| Client-side optimistic render | No server routing change needed | None on the server; risk shifts to client-side reconciliation |\n\nPick based on how much engineering effort you can justify versus how precisely you need to avoid extra primary load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-read-your-own-writes-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-read-your-own-writes-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what if the user switches devices right after writing?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Session-pinning and client-side optimism both break here — the pin lives on one session or one client, and a new device has neither. The fix has to move server-side: either the version-tagging approach (which works regardless of device, since it checks replica state, not session state), or accept a small, explicitly-scoped gap for the cross-device case if it's rare enough not to warrant the engineering cost.\n\nNaming this gap unprompted, rather than waiting for the interviewer to find it, is a strong signal.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-read-your-own-writes-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how long should the pinning window last?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pick the window based on your **actual observed replication lag distribution**, not a round number picked out of the air — for example, the 99th-percentile lag plus a safety margin. If p99 lag is 800ms, a 2-3 second window comfortably covers almost every case without pinning users to the primary for longer than needed.\n\nSaying \"I'd measure it and set the window from real lag data\" is a stronger answer than guessing a number, and it shows you'd revisit the constant as the system's lag profile changes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-read-your-own-writes-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: reaching for strong consistency everywhere",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"To guarantee read-your-writes, I'll just make all reads strongly consistent.\"\n\n**Why it's wrong:** read-your-writes is a narrow, per-user, per-session requirement — solving it by forcing every read in the system through the primary (or a consensus path) pays a global latency and scalability cost to fix a problem that only affects the specific user who just wrote.\n\n**Correct model:** scope the fix to the writer — session-pinning, version-tagged routing, or client-side rendering — and leave every other read on the fast, scalable path it already uses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-read-your-own-writes-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-read-your-own-writes-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd scope the fix to the writer, not the whole system. Options: pin that user's reads to the primary for a short window after they write, tag writes with a version and route reads to whichever replica has caught up past it, or render the write optimistically on the client and reconcile later. I'd pick based on how precise I need to be about extra primary load versus how much engineering effort is justified, and I'd size any time window from real observed replication lag, not a guess. Cross-device writes are the case that breaks the simplest approaches — I'd flag that gap explicitly.\"\n\nSee [consistency-models](consistency-models) for how read-your-writes fits alongside the other consistency guarantees.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

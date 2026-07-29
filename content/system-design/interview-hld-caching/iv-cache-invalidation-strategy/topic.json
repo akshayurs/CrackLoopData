@@ -1,0 +1,167 @@
+{
+  "id": "iv-cache-invalidation-strategy",
+  "title": "How would you invalidate this cache when the underlying data changes?",
+  "area": "system-design",
+  "group": "interview-hld-caching",
+  "order": 5,
+  "slug": "iv-cache-invalidation-strategy",
+  "summary": "The classic \"there are only two hard problems\" question — tests whether you can pick and defend a concrete invalidation strategy for the specific data, not just name that invalidation is hard.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "iv-cache-invalidation-strategy-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"There are only two hard things in computer science: cache invalidation and naming things\" is a joke every candidate knows — and quoting it is not an answer. The interviewer wants a **concrete strategy** for this specific data: TTL, write-through, or event-driven invalidation, chosen and defended, not a shrug that the problem is famously hard.\n\nKnowing the joke signals you've read about caching. Naming a strategy signals you can build one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **can this data tolerate a short staleness window, or must it invalidate immediately?** A blog post's view count tolerating a minute of staleness needs a very different strategy than a user's own profile update, which they'll expect to see reflected the instant they hit save.\n\nThis single answer picks between the lightest strategy (TTL) and the heaviest (event-driven), so get it before proposing anything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Name three strategies and pick one, justified against the staleness tolerance: **TTL** (simplest, tolerates a window equal to the TTL), **write-through invalidation** (the write path itself updates or deletes the cache entry, so a subsequent read never sees stale data), or **event-driven invalidation** (a change stream notifies every cache holding a derived copy).\n\nThe justification matters more than the name — say why this data's staleness tolerance rules out the two you didn't pick.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-invalidation-strategy-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: TTL-only vs explicit delete-on-write",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | TTL-only | Explicit delete-on-write |\n|---|---|---|\n| Good for | Tolerant data — a trending list, a view count | A user's own profile, settings, anything they expect updated instantly |\n| Staleness window | Up to the TTL | Effectively none — next read sees the write |\n| Extra work | None beyond setting a TTL | The write path must delete or update the cache entry |\n\n**How to decide:** if the user who made the change is the one who'll notice staleness first, use explicit delete-on-write — waiting out a TTL after your own edit feels broken, even if a stranger reading the same data a minute later wouldn't have minded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s05",
+      "order": 5,
+      "sectionTitle": "Event-driven invalidation for fan-out caches",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When one write needs to invalidate **many derived cache entries** — a product update that affects a product page, a search index cache, and a recommendations cache — a single delete-on-write call in the write path gets unwieldy fast. **Event-driven invalidation** solves this: a change stream (often CDC — change data capture — reading the database's write-ahead log) emits an event on every write, and every interested cache subscribes and invalidates its own copy.\n\nThis decouples the write path from knowing about every downstream cache, at the cost of depending on the event pipeline actually delivering.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s06",
+      "order": 6,
+      "sectionTitle": "Worked example: one price update, two cache invalidations",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A single write can fan out to multiple caches through one event:\n\n```\n# write path — unaware of downstream caches\ndb.update(\"products\", id=42, price=19.99)\n# CDC picks up the WAL entry and emits:\nevent = {\"type\": \"product.updated\", \"id\": 42}\n\n# consumers, each subscribed independently\nproduct_page_cache.delete(f\"product:42\")\nsearch_index_cache.delete(f\"search-entry:42\")\n```\n\nThe write path only had to update the database once — it never needed to know the search-index cache existed. Adding a third derived cache later means adding a third subscriber, not touching the write path again.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-invalidation-strategy-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Event-driven invalidation | Direct delete-on-write |\n|---|---|\n| Decouples writes from knowing every cache | Write path must know every cache to invalidate |\n| Scales cleanly to many derived caches | Gets unwieldy past a couple of caches |\n| Depends on the event pipeline being reliable | No extra moving part to fail |\n\n**How to decide:** event-driven invalidation is precise but adds a dependency — a bug in the pipeline (a dropped event, a stuck consumer) means the cache silently serves stale data forever, with nothing in the write path to notice. Only take this trade when the fan-out genuinely justifies it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-invalidation-strategy-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"two instances update the same key milliseconds apart\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If instance A writes the DB then deletes the cache key, and instance B does the same a few milliseconds later, the interleaving can leave the cache **either correctly invalidated or repopulated with whichever write happened to run last** — the outcome depends on exact timing, not on which write was \"more correct.\"\n\nThe honest answer: the next read simply refetches from the database and gets the true current value, so this is self-healing as long as invalidation (not repopulation with a stale value) is what happens — the real danger is a *read* racing in between the two writes and caching an intermediate value, which is the classic cache-aside race from the consistency question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"your invalidation event gets lost — how would you even notice?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Without instrumentation, you wouldn't notice — the cache just quietly keeps serving an old value forever, since nothing about a dropped event is visible from the outside. The concrete fix: monitor **event-consumer lag and dead-letter queues** on the invalidation pipeline itself, and separately, run periodic **spot-checks comparing cached values against the source of truth** for a sample of keys.\n\nNaming that silent staleness is the actual failure mode here — not a crash, not an error, just quietly wrong data — is what shows you understand why this trade-off is scary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-cache-invalidation-strategy-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: relying on TTL alone for data users expect updated instantly",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have a TTL on this cache, so it'll eventually be consistent — that's good enough.\"\n\n**Why it's wrong:** \"eventually\" can mean minutes, and for data the user themselves just changed — their own profile, their own settings — a multi-minute delay reads as a bug, not eventual consistency. TTL-only invalidation is fine for data a *stranger* reads later, not for data the *writer* expects to see reflected immediately.\n\n**Correct model:** use TTL for tolerant, shared data; add explicit delete-on-write (or event-driven invalidation) specifically for data the writer expects to see updated on their very next read.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-cache-invalidation-strategy-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-cache-invalidation-strategy-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Don't quote the joke — pick a strategy: TTL for tolerant data, delete-on-write for data the writer expects updated instantly, event-driven for one write fanning out to many derived caches. Event-driven decouples the write path but adds a dependency on the pipeline — a dropped event means silent staleness forever unless you monitor for it. Concurrent writes to the same key are self-healing on the next read as long as they only trigger invalidation, not repopulation with a stale value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

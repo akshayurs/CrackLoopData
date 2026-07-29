@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-producer-consumer-design",
+  "interviewQuestions": [
+    {
+      "id": "iv-producer-consumer-design-iq1",
+      "question": "How would you design a producer-consumer setup with multiple producers and consumers?",
+      "answerMarkdown": "I'd start with a shared bounded queue between the producers and consumers, since bounded forces an explicit decision about what happens when the queue fills up instead of letting memory grow silently. Producers block on put() when the queue is full, consumers block on take() when it's empty, and I'd use a tested BlockingQueue implementation like ArrayBlockingQueue rather than hand-rolling the coordination myself.\n\nI'd point out that BlockingQueue already handles multiple producers and multiple consumers safely — each take() and put() is atomic, so two consumers can never grab the same item.\n\nI'd close on sizing: too small and producers block on ordinary traffic spikes; too large and stale items hide behind a queue that looks healthy. I'd size it from measured throughput and the staleness I can tolerate, not a round number.\n\n**Testing:** whether you reach for a tested primitive and can reason about capacity, not just correctness.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing the full setup"
+    },
+    {
+      "id": "iv-producer-consumer-design-iq2",
+      "question": "What's wrong with hand-rolling producer-consumer coordination with wait() and notify() instead of using a BlockingQueue?",
+      "answerMarkdown": "The single most common bug is guarding wait() with an if instead of a while. The JVM specification explicitly allows wait() to return without a matching notify() — a spurious wakeup — so a thread using an if guard can proceed as if its condition were satisfied when it isn't, and read from an empty queue or write into a full one.\n\nEven with the while guard fixed, hand-rolled wait/notify still requires getting several other details right: calling wait() and notify() while holding the correct monitor, waking the right kind of waiter with notifyAll() when producers and consumers share one lock, and avoiding missed signals from calling notify() before wait() has been entered.\n\nA tested BlockingQueue already gets every one of these right, which is why I'd default to it and only hand-roll wait/notify for a genuinely custom coordination pattern it can't express.\n\n**Testing:** whether you know the specific failure mode, not just that hand-rolling is 'risky' in the abstract.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "The risk of hand-rolled coordination"
+    },
+    {
+      "id": "iv-producer-consumer-design-iq3",
+      "question": "What would you do if a producer genuinely cannot afford to block when the queue is full?",
+      "answerMarkdown": "I'd treat this as a backpressure decision rather than trying to avoid it by making the queue unbounded, since an unbounded queue just relocates the risk into unconstrained memory growth. The real options: fail fast by rejecting the new item immediately and returning an error to whatever's upstream, drop the oldest or lowest-priority item to make room for a fresher one, or propagate an explicit slow-down signal to the producer so it reduces its own rate.\n\nWhich one I'd pick depends on what the item represents — dropping is fine for a metrics sample where losing one is harmless, but not for a payment event, where I'd fail fast and let the caller retry or escalate.\n\nI'd also mention a dead-letter path for the reject case, so rejected items aren't silently lost but land somewhere inspectable.\n\n**Testing:** whether you can pick a specific backpressure strategy justified by what the data actually is, not just name that backpressure exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Handling backpressure when blocking isn't an option"
+    }
+  ]
+}

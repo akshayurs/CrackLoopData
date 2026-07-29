@@ -1,0 +1,180 @@
+{
+  "id": "iv-exactly-once-in-practice",
+  "title": "How would you actually achieve exactly-once processing here?",
+  "area": "system-design",
+  "group": "interview-hld-messaging",
+  "order": 3,
+  "slug": "iv-exactly-once-in-practice",
+  "summary": "Tests whether you know exactly-once is really at-least-once delivery plus idempotent processing, not a broker setting that hands you the guarantee for free.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-exactly-once-in-practice-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Exactly-once\" sounds like a delivery guarantee you can just turn on. It isn't. What you can actually build is **at-least-once delivery plus idempotent processing**, which together *behave* as exactly-once from the outside.\n\nThe interviewer is checking whether you know that distinction, and can point to the concrete mechanism — a dedup key — that makes duplicate deliveries harmless.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **is duplication a delivery-layer risk, a processing-layer risk, or both?** Networks retry, brokers redeliver on rebalance, and consumers themselves can reprocess after a crash — duplicates can enter at more than one point.\n\nAnd ask: **what's the actual side effect that must not happen twice** — a charge, an email, a row insert? The answer shapes where you put the dedup check and how expensive it needs to be.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Accept **at-least-once delivery** as the reality — retries and redeliveries will happen. Then make **processing idempotent**: attach a dedup key to each message, and check it before acting so a duplicate delivery becomes a no-op instead of a second side effect.\n\nThis is the load-bearing idea of the whole answer: exactly-once isn't a broker feature, it's a property you engineer into the consumer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-exactly-once-in-practice-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a dedup table with a unique constraint",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A payment consumer storing processed message IDs alongside the side effect, in the same transaction:\n\n```sql\nBEGIN;\n  INSERT INTO processed_payments (payment_intent_id, processed_at)\n  VALUES ($1, now())\n  ON CONFLICT (payment_intent_id) DO NOTHING;\n  -- if the insert above affected 0 rows, this is a duplicate: skip the charge\n  -- otherwise, proceed to charge the card in the same transaction\nCOMMIT;\n```\n\nThe unique constraint on `payment_intent_id` is what makes a redelivered message a guaranteed no-op rather than a race the application code has to win.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a concrete scenario",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A network blip causes the consumer's ack to be lost right after it already charged the card. The broker, having never seen the ack, redelivers the same message 4 seconds later. The dedup check on `payment_intent_id` finds the row already present and short-circuits — no second charge fires.\n\nWithout the dedup key, this exact sequence is a duplicate charge a customer would notice on their statement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-exactly-once-in-practice-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: where the dedup key should come from",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Prefer a **client-generated idempotency key** when one exists — the caller that initiated the payment is best positioned to say \"this is the same request as before.\" When no client key is available, fall back to a **stable hash of the message's business-meaningful fields** (user ID, amount, order ID).\n\nDon't use the broker's own offset as the dedup key — an offset identifies a position in the log, not a business event, and it changes on redelivery in ways that defeat the whole point.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: two layers stacked into an effectively-once outcome",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![At-least-once delivery plus an idempotent consumer combine into an effectively-once outcome](assets/effectively-once-layers.svg)\n\nNeither layer alone gets you there: delivery without idempotency duplicates side effects; idempotency without redelivery has nothing to guard against.",
+      "assets": [
+        {"alt": "At-least-once delivery plus an idempotent consumer combine into an effectively-once outcome", "path": "assets/effectively-once-layers.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s08",
+      "order": 8,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Exactly-once processing costs a dedup store and a lookup on every single message. For high-volume, low-stakes events — view counts, impression pings — that overhead may not be worth it versus just tolerating rare duplicates and living with a slightly inflated count.\n\nFor a payment or an inventory decrement, the cost is obviously worth paying. Naming this trade-off, rather than treating exactly-once as universally correct, is the senior signal here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: what if the dedup store itself is unavailable?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Fail closed**: don't process the message, let it retry, rather than failing open and risking a double side effect — if that side effect is costly enough to justify the extra caution (a charge, definitely; a low-stakes counter increment, maybe not).\n\nFailing open trades a processing delay for a correctness risk; for anything where a duplicate has real cost, that's the wrong trade.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s10",
+      "order": 10,
+      "sectionTitle": "Follow-up: the dedup table is growing forever — how do you bound it?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**TTL the dedup keys** to the maximum realistic redelivery window — if a broker never redelivers a message more than, say, 24 hours after the original, keys older than a few days can safely expire.\n\nKeeping the table unbounded \"just in case\" trades an unnecessary storage cost for a guarantee you don't actually need, since redeliveries past that window essentially don't happen.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-exactly-once-in-practice-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: mistaking a broker's \"exactly-once\" config for the whole answer",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** enabling Kafka's idempotent producer plus transactions makes duplicate *processing* impossible.\n\n**Why it's wrong:** that configuration only covers duplicate *writes from the producer* — it doesn't protect against a consumer crashing after acting on a message but before acking it, which still causes redelivery and reprocessing.\n\n**Correct model:** the broker-side setting and the consumer-side idempotency are two separate problems; you need both, and naming only one leaves the actual gap unaddressed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-exactly-once-in-practice-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-exactly-once-in-practice-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Exactly-once isn't a broker feature — it's at-least-once delivery plus an idempotent consumer, enforced with a dedup key checked in the same transaction as the side effect. Fail closed if the dedup store is down, and TTL the dedup keys instead of growing them forever.\n\nFor the broader vocabulary this sits inside — at-most-once, at-least-once, exactly-once — see [message delivery semantics](message-delivery-semantics).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    }
+  ]
+}

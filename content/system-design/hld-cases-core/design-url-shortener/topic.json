@@ -1,0 +1,247 @@
+{
+  "id": "design-url-shortener",
+  "title": "Design a URL Shortener",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 1,
+  "slug": "design-url-shortener",
+  "summary": "The classic first system-design problem — encoding, redirection, and a cache in front of a hot mapping table, plus the abuse and analytics surface interviewers always probe.",
+  "level": "beginner",
+  "slideCount": 17,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "design-url-shortener-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Shorten a long URL into a short code, and redirect anyone who visits the short link back to the original — at web scale, with billions of links and a read:write ratio that's overwhelmingly reads.\n\nThink of it as a giant, always-hot phone book: writing a new entry is rare, looking one up and redirecting happens constantly. Every design decision here follows from that one asymmetry — cache the reads, keep the writes simple and collision-free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** given a long URL, return a short one; visiting the short one 301/302-redirects to the original. Support an optional custom alias, an optional expiry (`ttl`), and basic per-link click analytics.\n\n**Non-functional:** redirects must be low-latency (this is on the critical path of someone's click) and highly available — a shortener that's down breaks every link ever shared. Short codes must be unique and hard to guess in sequence.\n\n**Explicit non-goal:** a full analytics dashboard with funnels and cohorts. That's a downstream consumer of click events, not this system's job — naming it out keeps the interview focused.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: reads, writes, and storage over 5 years",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Assume 100M new short URLs per month. Over 5 years that's roughly 6 billion stored mappings. At ~500 bytes per record (URL + metadata), that's about 3TB total — comfortably shardable, not a big-data problem.\n\nRead:write ratio for a shortener is typically **100:1** — most links get clicked far more often than they're created. 100M writes/month is ~40 writes/sec average; 100:1 reads puts sustained read QPS around 4,000/sec, with spikes far higher when one link goes viral.\n\nThe number that matters most for architecture: reads dominate by two orders of magnitude, so the redirect path is what you optimize first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-url-shortener-s03-q1"
+      ]
+    },
+    {
+      "id": "design-url-shortener-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three endpoints cover the whole feature:\n\n- `POST /shorten {longUrl, alias?, ttl?}` → returns the short code. `alias` lets a user request a specific code; `ttl` sets expiry.\n- `GET /{code}` → looks up the mapping and issues a redirect to the original URL. This is the hot path.\n- `DELETE /{code}` → invalidates a link early (owner-initiated takedown).\n\nKeeping the surface this small matters in an interview: it forces you to justify anything you add (a `PUT` to edit a destination, for instance) rather than accreting endpoints nobody asked for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s05",
+      "order": 5,
+      "sectionTitle": "Compare: counter-based vs hash-based short-code generation",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Counter-based | Hash-based (e.g. MD5/SHA + truncate) |\n|---|---|---|\n| Collisions | None by construction — each counter value is unique | Possible — must check-and-retry on collision |\n| Predictability | Sequential — code N+1 exists right after N | Not sequential — harder to enumerate |\n| Reversibility | Trivial to guess adjacent codes (security concern) | Not reversible, but not truly random either |\n| Scaling writes | Needs a coordinated counter across nodes | Any node can hash independently |\n\n**How to decide:** counter-based is simpler and collision-free but leaks volume and invites enumeration unless you obscure the mapping (base62-encode a non-sequential offset, or pre-shuffle ranges). Hash-based avoids the sequential-guessing problem but adds retry logic for the rare collision. Most production designs use a counter *fed by* a pre-generated, shuffled range — the Key Generation Service on the next slide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-url-shortener-s05-q1"
+      ]
+    },
+    {
+      "id": "design-url-shortener-s06",
+      "order": 6,
+      "sectionTitle": "The Key Generation Service (KGS)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **Key Generation Service** pre-generates a large batch of unique, shuffled short codes offline and hands them out to app servers on request, marking each as used. When a new URL comes in, the app server just pops a pre-generated key instead of computing one on the write path.\n\nThis solves the collision-and-retry problem at its root: since every key was already guaranteed unique before any URL was assigned to it, a write never needs to check for a collision or retry. The KGS itself just needs to track which keys are handed out — a much simpler, smaller-scale problem than deduplicating full URL writes.\n\nApp servers request keys in batches (say, 1,000 at a time) to avoid round-tripping to the KGS on every single write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s07",
+      "order": 7,
+      "sectionTitle": "Data model and sharding the mapping table",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core table is simple: `short_code (PK), long_url, created_at, expires_at, owner_id`. At billions of rows, one database instance won't hold it — you shard by hashing the short code and routing to one of many DB nodes.\n\nSharding by the short code (rather than, say, creation date) keeps the lookup path simple: a `GET /{code}` hashes the code once and goes straight to the owning shard — no fan-out, no scatter-gather. The trade-off is that range queries (\"all links created last week\") become expensive, but the API surface never asks for that, so it's an acceptable cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: high-level architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![URL shortener architecture: client, load balancer, API servers, KGS, sharded DB, cache](assets/url-shortener-architecture.svg)\n\nWrites flow: client -> API server -> KGS (get a key) -> sharded DB (store mapping). Reads flow: client -> API server -> cache (hit) or DB shard (miss, then populate cache).\n\nThe redirect path is deliberately short — cache lookup, then at most one DB read — because it's the path nearly every request takes.",
+      "assets": [{"alt": "URL shortener architecture: client, load balancer, API servers, KGS, sharded DB, cache", "path": "assets/url-shortener-architecture.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s09",
+      "order": 9,
+      "sectionTitle": "Caching the hot redirects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "With a 100:1 read:write ratio, a **cache-aside** layer (Redis or Memcached) in front of the mapping table absorbs almost all redirect traffic: on a `GET /{code}`, check the cache first; on a miss, read the DB and populate the cache with a TTL.\n\nBecause link popularity follows a power law — a small fraction of links get the overwhelming majority of clicks — a modest cache (holding the hottest few percent of codes) can serve the vast majority of redirects, keeping the database's steady-state load close to write-only.\n\nThis is why redirects are \"almost all cache hits\": the workload's own skew does most of the work for you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-url-shortener-s09-q1"
+      ]
+    },
+    {
+      "id": "design-url-shortener-s10",
+      "order": 10,
+      "sectionTitle": "Compare: 301 vs 302 redirect",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | 301 (Permanent) | 302 (Temporary) |\n|---|---|---|\n| Browser/CDN caching | Cached long-term — repeat visits skip your server entirely | Not cached — every visit hits your server |\n| Server load | Lower — offloads load to the browser/CDN | Higher — you see every single click |\n| Analytics visibility | Blind after the first visit per client — you can't count repeat clicks | Full visibility — every click is observed |\n| Re-routing a link later | Risky — cached clients may never re-check | Safe — always re-checks with you |\n\n**How to decide:** if per-click analytics matters (it usually does for a shortener product), use 302 despite the extra load — you already built caching in step 9 to absorb it. Reach for 301 only when you're confident you'll never need to change the destination or count clicks, e.g. permanent internal short links.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-url-shortener-s10-q1"
+      ]
+    },
+    {
+      "id": "design-url-shortener-s11",
+      "order": 11,
+      "sectionTitle": "Custom aliases and collision handling on the write path",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a user requests a custom alias instead of taking a KGS-generated code, that alias bypasses the pre-generated pool — you must check it against the mapping table directly and reject (or 409) if it's already taken.\n\nThis is the one place a genuine collision check belongs on the write path, and it's rare enough (a small minority of creates) that a direct read-then-write against the owning shard, guarded by a unique constraint on `short_code`, is enough — no need to route custom aliases through the KGS at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s12",
+      "order": 12,
+      "sectionTitle": "Compare: expiry/TTL cleanup",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Lazy deletion on read | Background reaper sweep |\n|---|---|---|\n| Mechanism | Check `expires_at` at lookup time; treat as 404 if expired | Periodic job scans for expired rows and deletes them |\n| Storage growth | Expired rows linger until read — table keeps growing | Bounded — reclaimed on a schedule regardless of traffic |\n| Read cost | Tiny added check per lookup | None — reads stay simple |\n| Never-visited links | Never cleaned up | Always eventually cleaned up |\n\n**How to decide:** use both. Lazy deletion guarantees correctness immediately (an expired link never redirects, even before the reaper runs); the reaper sweep is what actually reclaims storage for links nobody ever revisits after expiry. Neither alone is sufficient.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s13",
+      "order": 13,
+      "sectionTitle": "Rate limiting and abuse prevention",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An open `POST /shorten` endpoint is an obvious abuse target: spammers scripting thousands of shortened phishing links per second. Throttle link creation per user/IP (a token-bucket limiter, covered in its own topic), and check destination URLs against a blocklist or safe-browsing API before accepting them.\n\nThis is a case where the non-functional requirement (\"don't get abused\") shapes the write path as much as any functional one — an interviewer who asks \"what stops someone from farming a million spam links?\" is testing whether you thought past the happy path.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s14",
+      "order": 14,
+      "sectionTitle": "Analytics pipeline: async click capture off the critical path",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Recording a click event (timestamp, referrer, rough geo/device) must never block the redirect itself — the user is waiting for a 30x response, not for an analytics write to commit.\n\nThe fix: on a hit, fire the redirect immediately and publish a click event to a message queue (Kafka/SQS) asynchronously; a separate consumer aggregates events into whatever analytics store downstream reporting needs. If the queue is briefly unavailable, you drop or buffer that click's analytics — you never delay or fail the redirect for it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "design-url-shortener-s14-q1"
+      ]
+    },
+    {
+      "id": "design-url-shortener-s15",
+      "order": 15,
+      "sectionTitle": "The bottleneck: a viral short link overwhelming a shard or cache",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "One short link going viral concentrates enormous read traffic onto a single cache key and, on a cold cache, a single DB shard — a **hot key** problem. If that key's cache entry ever expires under sustained load, you get a cache-miss storm: thousands of concurrent requests all missing at once and hammering the same DB row simultaneously.\n\nMitigations: never let a hot key's TTL expire under load (refresh proactively, or serve slightly-stale on refresh-in-progress), and use request coalescing so concurrent misses for the same key trigger one DB read, not thousands. This is the same shape of problem you'll see again in caching-heavy topics — recognizing it here transfers directly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "design-url-shortener-s16",
+      "order": 16,
+      "sectionTitle": "Pitfall: using a raw auto-increment ID as the short code",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just base62-encode the database's auto-increment primary key and use that as the short code — it's unique for free.\"\n\n**Why it's wrong:** it leaks your total link volume (code `4` was your 4th link ever, no matter how you encode it) and lets anyone enumerate every link on the platform by walking adjacent codes — a serious information-disclosure and scraping risk, and exactly the predictability problem the counter-vs-hash comparison flagged earlier.\n\n**Correct model:** decouple the short code from any sequential internal ID — pull from the pre-generated, shuffled KGS pool instead, so adjacent codes carry no relationship to creation order or volume.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-url-shortener-s16-q1"
+      ]
+    },
+    {
+      "id": "design-url-shortener-s17",
+      "order": 17,
+      "sectionTitle": "Summary: encode, shard, cache, and pre-generate keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A URL shortener is a lesson in exploiting a known access pattern: reads outnumber writes 100:1, so cache the redirect path aggressively; writes need collision-free keys, so pre-generate them offline via a KGS instead of checking on the hot path; billions of rows need sharding by short code for O(1) lookups.\n\nThe redirect (`GET /{code}`) is the only truly latency-critical path — every other decision (KGS, sharding, cache, async analytics) exists to keep that one path fast and simple.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    }
+  ]
+}

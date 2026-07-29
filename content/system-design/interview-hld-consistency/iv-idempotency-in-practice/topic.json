@@ -1,0 +1,165 @@
+{
+  "id": "iv-idempotency-in-practice",
+  "title": "How would you make this API endpoint safe to retry?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 6,
+  "slug": "iv-idempotency-in-practice",
+  "summary": "Tests whether you can implement idempotency concretely — an idempotency key, a dedup table — not just say 'make it idempotent.'",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-idempotency-in-practice-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just make it idempotent\" names the property without the mechanism — the interviewer wants the mechanism. Retries happen constantly in real systems: client timeouts, mobile network drops, at-least-once delivery from a queue. An endpoint has to survive being called twice for the same logical request.\n\nThis topic covers the concrete pattern — a client-generated idempotency key and a server-side dedup store — that turns \"idempotent\" from a buzzword into something you can actually build.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-idempotency-in-practice-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask where the retry risk actually comes from: is it the client retrying after a timeout (it never learned whether the first request succeeded), at-least-once delivery from a message queue (the same message can be redelivered), or both? The mechanism is the same either way, but naming the source shows you understand why retries happen, not just that they might.\n\nAlso worth asking: does this endpoint have side effects beyond the database write — does it call a third-party payment API, send an email — since those need their own idempotency handling too.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-idempotency-in-practice-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: key, store, dedupe",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The skeleton: the **client generates an idempotency key** (a UUID, usually) and sends it with the request. The **server stores that key alongside the result** of processing it. On any retry with the same key, the server looks it up, finds it already processed, and **returns the stored result instead of reprocessing**.\n\nThe key insight to say out loud: the server is answering \"have I seen this exact request before\" as its very first step, before it does anything with side effects — that ordering is what makes the endpoint actually safe to retry.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-idempotency-in-practice-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-idempotency-in-practice-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a payment endpoint with a client-generated request ID",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A payment endpoint is the classic case — retrying a charge without protection risks charging the customer twice.\n\n```\nPOST /charge\nHeaders: Idempotency-Key: 7f3e-...-a91c\n\ndef charge(request):\n    existing = dedup_store.get(request.idempotency_key)\n    if existing:\n        return existing.stored_response      # retry: return the same result, no new charge\n    result = payment_gateway.charge(request.amount)\n    dedup_store.put(request.idempotency_key, result, ttl_hours=24)\n    return result\n```\n\nThe client generates the key once per logical charge attempt and resends the *same* key on every retry of that attempt — a new key would defeat the whole mechanism.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-idempotency-in-practice-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-idempotency-in-practice-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: what the dedup store itself needs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The dedup store needs two properties: a **unique constraint** on the idempotency key, so two concurrent requests with the same key can't both slip through and both charge the customer, and a **TTL**, so the store doesn't grow forever — old keys expire once retries for that logical request are no longer plausible (24 hours is a common default).\n\nWithout the unique constraint, a race between two near-simultaneous retries can both pass the \"have I seen this\" check before either has written its result — say this risk out loud, since it's the detail that separates a correct implementation from one that only looks correct.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-idempotency-in-practice-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: the dedup table's schema",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A concrete schema for the dedup store itself:\n\n```\nCREATE TABLE idempotency_keys (\n  idempotency_key   TEXT PRIMARY KEY,\n  response_body     JSONB NOT NULL,\n  status            TEXT NOT NULL,       -- 'in_progress' | 'completed'\n  created_at        TIMESTAMP NOT NULL\n);\n-- cleanup job: DELETE WHERE created_at < now() - interval '24 hours'\n```\n\nThe `status` column matters as much as the response body: it lets the server distinguish \"already fully processed, return the stored result\" from \"currently being processed by another request right now\" (see the in-flight case next).",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-idempotency-in-practice-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**Idempotency keys add a storage and lookup cost to every request in exchange for safe retries — worth it exactly where retries are actually expected.** Adding this machinery to an endpoint that's never retried (a rare internal batch job) is pure overhead with no benefit.\n\n| | Without idempotency keys | With idempotency keys |\n|---|---|---|\n| Extra cost per request | None | One lookup, one write to the dedup store |\n| Retry safety | A retry can double-charge or double-create | A retry safely returns the original result |\n| Where it's worth it | Endpoints never retried | Any endpoint reachable via client retry or at-least-once delivery |\n\nName which category this specific endpoint falls into before proposing the mechanism unconditionally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-idempotency-in-practice-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-idempotency-in-practice-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: what if the first request is still in flight?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a retry arrives while the first attempt is still processing, returning \"not found, go ahead and process\" would let both attempts run concurrently — exactly the race the unique constraint is supposed to prevent. The fix: mark the key's status as `in_progress` the instant processing starts (an atomic insert), and have a retry that finds `in_progress` either wait briefly and re-check, or return a 409/425-style \"still processing\" response rather than proceeding.\n\nThis is the detail that separates candidates who've actually built this from candidates who've only read about it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-idempotency-in-practice-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the client never sent an idempotency key at all",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Some endpoints can be made safe without relying on the client at all: use an **upsert** keyed on a natural identifier already in the request, so processing the same logical operation twice lands on the same row instead of creating a duplicate — \"set this user's profile picture to X\" is naturally idempotent; \"append a new order\" is not, unless the order itself carries a natural dedup key (like a cart checkout ID).\n\nWhere no natural key exists and the client can't be changed to send one, you're limited to best-effort deduplication (e.g. a short window keyed on request contents) — say this limitation honestly rather than claiming full safety you can't actually guarantee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-idempotency-in-practice-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming a PUT is automatically safe",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This is a PUT, and PUTs are idempotent by definition, so retries are already safe.\"\n\n**Why it's wrong:** the HTTP method being conventionally idempotent describes the intended semantics, not a guarantee about the implementation. A `PUT /accounts/:id/balance` that internally does `balance += amount` rather than `balance = amount` has side effects that repeat on every retry, regardless of the verb used.\n\n**Correct model:** check what the handler actually does on a second identical call — if it has any side effect that isn't purely \"set to X\" (an increment, a side-effecting third-party call, a notification), it needs explicit idempotency handling no matter what HTTP verb is on the outside.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-idempotency-in-practice-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-idempotency-in-practice-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd have the client generate an idempotency key and send it with the request. The server checks a dedup store for that key before doing any side-effecting work; if it's already there, it returns the stored result instead of reprocessing. The dedup store needs a unique constraint (to close the race where two near-simultaneous retries both slip through) and a TTL (so it doesn't grow forever). For an in-flight retry, I'd mark the key `in_progress` atomically so a concurrent retry doesn't double-process. Where the client can't be changed to send a key, I'd fall back to a natural-key upsert where possible, and say honestly where full safety isn't achievable.\"\n\nSee [idempotency-and-exactly-once](idempotency-and-exactly-once) for the broader delivery-semantics context this pattern sits in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

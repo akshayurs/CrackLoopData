@@ -1,0 +1,29 @@
+{
+  "topicId": "design-blob-object-store",
+  "interviewQuestions": [
+    {
+      "id": "design-blob-object-store-iq1",
+      "question": "Design a durable object store like S3 from first principles.",
+      "answerMarkdown": "I'd anchor on durability as the headline requirement — often stated in nines — and separate it explicitly from availability, since they fail independently and interviewers often probe that distinction.\n\nArchitecturally, I'd split the system into two independent subsystems: a metadata service mapping `key → shard locations`, and dumb, interchangeable storage nodes holding actual bytes. For durability, I'd default to erasure coding (say 6+3) for the bulk of data — roughly 1.5x storage overhead versus 3x for plain replication — while keeping replication for hot, frequently-read objects where read latency and CPU cost matter more than storage efficiency.\n\nFor large uploads, I'd use multi-part upload: independent chunks uploaded (potentially in parallel, with per-chunk retries), assembled into one logical object only on an explicit commit, so partial uploads stay invisible to readers. I'd close on consistency: strong read-after-write per key, but eventual consistency for list operations, since making listing strongly consistent at this scale isn't worth the cost for most use cases.\n\n**Testing:** whether you can justify each mechanism against a concrete cost or failure mode rather than naming techniques abstractly.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "Full object store design walkthrough"
+    },
+    {
+      "id": "design-blob-object-store-iq2",
+      "question": "How would you decide between replication and erasure coding for a given piece of data in this system?",
+      "answerMarkdown": "I'd frame it as a trade between storage cost and read/CPU cost, not a universal 'better' choice. Replication (say 3x) costs more storage but reads are trivial — grab any one full copy, no reconstruction math. Erasure coding (say 6+3) costs roughly half the storage but a read may need to reconstruct the object from multiple shards, which costs CPU and adds latency versus a plain copy.\n\nSo I'd tier by access pattern: newly-written, frequently-accessed objects (a photo just uploaded, likely to be viewed repeatedly in the next few hours) get replication for fast reads; objects that age past a access-frequency threshold get transitioned to erasure coding, trading a little read latency for roughly half the storage cost, since they're rarely read anyway.\n\nI'd note this transition itself needs a background process — an object doesn't erasure-code itself the instant it goes cold, someone has to notice the access pattern has changed and re-encode it, which is its own storage-tiering job running continuously in the background.\n\n**Testing:** whether you can turn a static trade-off table into an actual operational policy that adapts as data ages.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Choosing replication vs erasure coding"
+    },
+    {
+      "id": "design-blob-object-store-iq3",
+      "question": "How would you scale the metadata service as the object count grows into the hundreds of billions?",
+      "answerMarkdown": "I'd start from why this is the hard part: every single put/get touches the metadata layer, so its lookup index has to scale with total request volume across the entire keyspace, not just with storage capacity the way data nodes do.\n\nThe fix is sharding the metadata index itself, typically by a hash of the object key, spreading both the keyspace and the query load across many metadata nodes so no single node holds the whole index or serves the whole platform's lookup traffic. I'd also cache hot key lookups aggressively in front of the metadata service — a small fraction of keys (recently written or frequently accessed) account for a disproportionate share of lookup traffic, and a cache absorbs that without touching the sharded index at all.\n\nI'd flag that this metadata index is itself a distributed database in miniature — it needs its own replication for durability (a metadata-only failure is just as bad as losing the actual object, since you can no longer find it), which is exactly why colocating it with data-storage nodes is the pitfall this topic calls out.\n\n**Testing:** whether you recognize the metadata service as its own full-blown scaling problem, not a lookup table you bolt on as an afterthought.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Scaling the metadata service"
+    }
+  ]
+}

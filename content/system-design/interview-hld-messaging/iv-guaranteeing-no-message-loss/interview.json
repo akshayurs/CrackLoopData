@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-guaranteeing-no-message-loss",
+  "interviewQuestions": [
+    {
+      "id": "iv-guaranteeing-no-message-loss-iq1",
+      "question": "How do you guarantee a message isn't lost end-to-end?",
+      "answerMarkdown": "I'd push back gently on the premise that using a queue or Kafka is itself a loss guarantee — it isn't. I'd walk through the three hops where a message can silently vanish and name what closes each one.\n\nAt the producer, I'd use `acks=all` so the send isn't confirmed until it's replicated to the in-sync replicas, not just accepted by the leader — with `acks=1`, a leader crash right after acking can drop it. At the broker, that replication has to be synchronous before the ack goes out. At the consumer, I'd process the message and persist the side effect *before* acking — acking on receipt and processing second means a crash in between loses the message with the broker believing it succeeded.\n\nI'd close by naming the cost: closing every window trades latency and throughput for durability, so I'd size that trade to what a lost message actually costs — a payment event, not the same as a lost analytics ping.\n\n**Testing:** whether you can name the concrete durability setting at every hop instead of trusting the queue by default.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core no-loss guarantee question"
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-iq2",
+      "question": "Your producer's send timed out — did the message actually make it to the broker or not?",
+      "answerMarkdown": "I wouldn't assume it failed. A timeout means the acknowledgment was lost, not necessarily the write itself — the broker may have durably stored the message and the confirmation simply never reached the producer over the network.\n\nMy move is to retry the send, but pair it with an idempotency key generated on the producer side (or a stable hash of the message's business-meaningful fields). That way, if the original send actually succeeded and this is a duplicate, the consumer's dedup check turns it into a no-op instead of double-processing. If the original genuinely failed, the retry is the only copy that lands.\n\nI'd contrast this with the naive alternative — treating a timeout as definite failure and not retrying — which risks silently losing a message that actually succeeded on the broker side but whose ack got dropped in transit.\n\n**Testing:** whether you understand that a timeout is ambiguous, not a failure signal, and design the retry to be safe either way.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Timeout ambiguity and idempotent retries"
+    },
+    {
+      "id": "iv-guaranteeing-no-message-loss-iq3",
+      "question": "Message loss is silent by definition — how would you even detect that it happened?",
+      "answerMarkdown": "I'd say you can't rely on an alert firing at the moment of loss, since nothing signals it there — you need an independent, after-the-fact check instead. My answer is reconciliation: compute a count or checksum on the producer side for a given window, and compare it against what the consumer actually processed for that same window.\n\nConcretely, I'd run a daily job per topic that diffs \"events produced\" against \"events consumed,\" and alert when the gap exceeds a small tolerance. This catches drift within a day even without knowing in advance which specific message was lost or exactly when.\n\nI'd note this is a detection mechanism, not a prevention one — it doesn't replace closing the loss windows at each hop, it's the safety net for whatever slips through despite that.\n\n**Testing:** whether you can propose a concrete detection mechanism for a failure mode that produces no direct signal.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Detecting silent message loss"
+    }
+  ]
+}

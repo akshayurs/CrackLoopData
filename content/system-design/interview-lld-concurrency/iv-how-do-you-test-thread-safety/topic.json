@@ -1,0 +1,178 @@
+{
+  "id": "iv-how-do-you-test-thread-safety",
+  "title": "How do you test thread-safety?",
+  "area": "system-design",
+  "group": "interview-lld-concurrency",
+  "order": 13,
+  "slug": "iv-how-do-you-test-thread-safety",
+  "summary": "The honest answer: tests can't prove the absence of races, but a layered toolkit of stress tests, tools, and review still catches most real bugs.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "iv-how-do-you-test-thread-safety-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Write a test and run it\" is an incomplete answer — a single passing test proves almost nothing about a concurrency bug, since races are inherently timing-dependent and most runs won't hit the narrow interleaving that triggers one.\n\nThe strong answer names a layered toolkit and is honest about what each layer can and can't prove.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: testing for a known suspected race, or general hardening before ship?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask **are we testing for one specific, already-suspected race, or doing general hardening before shipping new concurrent code?** A known suspected race can be targeted directly with a stress test built around the exact operation in question. General hardening needs a broader toolkit — static analysis, code review focused on shared mutable state, and stress tests across the whole surface, since you don't yet know where the bug is.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: name that tests can't prove absence of races, then the layered toolkit that actually helps",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Lead with the honest limit: **no test proves the absence of a race** — it can only fail to reproduce one, which isn't the same as it not existing. Then name the layered toolkit that raises confidence anyway: **stress tests** that maximize the odds of hitting a bad interleaving, **static/dynamic race-detection tools** that reason about the code or a specific run more directly than a black-box test can, and **code review** focused specifically on shared mutable state, since a human reading for that pattern catches bugs no test run happened to trigger.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-how-do-you-test-thread-safety-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s04",
+      "order": 4,
+      "sectionTitle": "Code: a stress test spinning up N threads hammering the same object to surface a race under load",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nvoid naiveStressTest(Runnable racyOperation, int threads) throws InterruptedException {\n    Thread[] pool = new Thread[threads];\n    for (int i = 0; i < threads; i++) {\n        pool[i] = new Thread(racyOperation);\n        pool[i].start();\n    }\n    for (Thread t : pool) t.join();\n}\n```\n\nThe idea: run the suspected operation from many threads at once, repeatedly, and check the result afterward — a counter's final value, a collection's size, an invariant that should always hold. This surfaces some races, but thread-start timing is uneven, so threads often don't actually overlap at the exact moment the race window is open.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s05",
+      "order": 5,
+      "sectionTitle": "Code: the same test made more reliable with a CountDownLatch forcing all threads to start simultaneously, maximizing interleaving",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nvoid stressTest(Runnable racyOperation, int threads) throws InterruptedException {\n    CountDownLatch ready = new CountDownLatch(threads);\n    CountDownLatch start = new CountDownLatch(1);\n    CountDownLatch done = new CountDownLatch(threads);\n\n    for (int i = 0; i < threads; i++) {\n        new Thread(() -> {\n            ready.countDown();\n            try {\n                start.await();        // all threads wait here until released together\n                racyOperation.run();\n            } catch (InterruptedException e) {\n                Thread.currentThread().interrupt();\n            } finally {\n                done.countDown();\n            }\n        }).start();\n    }\n\n    ready.await();       // wait until every thread has reached the starting line\n    start.countDown();   // release them all at the same instant\n    done.await();\n}\n```\n\nThe `ready`/`start` pair forces every thread to line up before any of them run the racy operation, then releases them all at once — far more likely to produce genuine overlap than threads starting at whatever moment the OS scheduler happens to run them.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-how-do-you-test-thread-safety-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: the interleaving space a stress test samples vs the full space of possible thread schedules",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A grid of every possible thread interleaving with only a scattered few cells highlighted as the ones a stress test actually samples](assets/interleaving-sample-space.svg)\n\nEven a well-built stress test with a synchronized start only samples a small, essentially random slice of the full space of possible schedules — a passing run means the specific interleavings it happened to produce didn't trigger the bug, not that no interleaving would.",
+      "assets": [{"alt": "A grid of every possible thread interleaving with only a scattered few cells highlighted as the ones a stress test actually samples", "path": "assets/interleaving-sample-space.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: \"what does a race detector tool actually catch that a stress test might miss?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A dynamic race detector (like Java's `-Xcheck` instrumentation approaches, or ThreadSanitizer in native-code ecosystems) instruments memory accesses during a single run and can flag a race the moment two threads touch the same memory without a proper happens-before relationship — even if the actual bug never manifested as a wrong result in that run. A stress test only tells you the outcome was wrong (or wasn't) on this run; a race detector can catch the unsynchronized access itself, which is a much lower bar to trigger than a full visible failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: \"how does code review catch races that testing can't?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A reviewer reading specifically for shared mutable state can spot a check-then-act or read-modify-write pattern by inspection, regardless of whether any test run ever happened to trigger the exact timing that exposes it. This is a fundamentally different kind of coverage than testing: it doesn't depend on getting lucky with scheduling at all, at the cost of depending entirely on the reviewer noticing the pattern in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-how-do-you-test-thread-safety-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: \"how do you make a flaky-under-load test reproducible enough to debug?\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Increase the odds deliberately: run with far more threads than cores to force more context switches and preemption points, add small random sleeps or `Thread.yield()` calls at suspected race points to widen the window, and run the test in a tight loop hundreds or thousands of times rather than once. None of this guarantees reproduction, but it shifts a race from \"once a week in production\" toward \"once every few dozen local runs,\" which is usually enough to debug against.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: \"I ran it in a loop 1000 times and it passed\" as proof of thread safety",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** \"I ran it in a loop 1000 times and it passed\" offered as the complete case for thread safety.\n\n**Why it's wrong:** 1000 passes only means those particular 1000 runs didn't happen to hit the bad interleaving — for a narrow race window, that can easily happen even when the bug is real and will eventually surface in production under different timing or load.\n\n**Correct model:** treat repeated passing runs as raised confidence, never proof, and pair them with a race-detection tool or targeted code review for anything genuinely important.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: claiming a passing stress test proves the class is race-free",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong answer:** claiming outright that a passing stress test *proves* a class is race-free.\n\n**Why it's wrong:** it's a stronger claim than any test can support — races are timing-dependent, and a stress test samples a small, effectively random slice of possible thread interleavings, not an exhaustive one. Stating this as proof rather than evidence overstates what testing alone can establish.\n\n**Correct model:** describe stress testing accurately as raising confidence, and pair it with static analysis or review for anything where being wrong is expensive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-how-do-you-test-thread-safety-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-how-do-you-test-thread-safety-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd be upfront that no test proves the absence of a race, only that a given run didn't hit one. I'd still stress-test with many threads forced to start at the same instant using something like a CountDownLatch, since that maximizes the odds of surfacing a real interleaving. I'd pair that with a race-detection tool where available, since it can catch an unsynchronized access directly rather than waiting for a visible wrong result. And I'd treat code review focused on shared mutable state as a genuinely different, complementary layer, not a formality.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+{
+  "id": "design-proximity-service",
+  "title": "Design a Proximity Service",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 2,
+  "slug": "design-proximity-service",
+  "summary": "Answering \"what's nearby\" in milliseconds against millions of moving points, by trading a linear scan for a spatial index shaped around your update and query costs.",
+  "level": "intermediate",
+  "slideCount": 16,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "design-proximity-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: given a location, answer \"what's nearby\" — drivers, restaurants, friends — in milliseconds, against millions of points that keep moving. Think Uber's driver-matching or Yelp's \"restaurants near me.\"\n\nThe core insight the interview wants: a plain scan-every-location approach can't hit millisecond latency at this scale, so the whole design pivots on choosing a **spatial index** that turns \"search everywhere\" into \"search a small nearby region.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** update an object's location as it moves, and given a location, return nearby objects within a query radius (typically a few hundred meters to a few kilometers).\n\n**Non-functional:** a **query radius range** the index must serve efficiently at both ends, and an **update frequency** per object that can be as high as once per second for a moving vehicle.\n\n**Explicit non-goal:** route planning (turn-by-turn directions, ETA calculation) — this service answers \"what's near this point,\" not \"how do I get there.\" That's a separate routing system consuming this one's output.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: objects, updates, and queries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Say **5 million** active moving objects (drivers), each pushing a location update every **4 seconds** — that's `5e6 / 4 ≈ 1.25M` updates/sec platform-wide.\n\nQueries are spikier: in one dense city center at rush hour, tens of thousands of riders might each fire a \"nearby drivers\" query within the same few seconds — call it **20,000 queries/sec** in that one hotspot alone. The mismatch matters: updates dominate total volume, but queries concentrate geographically, which is exactly what stresses a naive uniform index (more on this in the bottleneck slide).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two operations carry the whole system: `updateLocation(objectId, lat, lng)` — called continuously as an object moves — and `findNearby(lat, lng, radius)` — called on demand, returning object IDs within that radius.\n\nNotice the asymmetry: `updateLocation` is high-volume but simple (one object, one write), while `findNearby` is lower-volume but expensive (it has to search a region, not a point). Every design decision downstream is about making that search cheap without making updates expensive in return.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s05",
+      "order": 5,
+      "sectionTitle": "Why a linear scan doesn't scale, and what it motivates",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The naive approach — store every object's `(lat, lng)` in a flat list, and on a query compute the distance to every single one — is `O(n)` per query. At 5 million objects and 20,000 queries/sec in one hotspot, that's `1e11` distance computations/sec just for that one region. No amount of hardware makes that fit a millisecond budget.\n\nThe fix isn't a faster distance formula, it's not comparing against everyone: a **spatial index** groups nearby points together up front, so a query only has to examine the handful of objects in the query's own neighborhood.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-proximity-service-s05-q1"
+      ]
+    },
+    {
+      "id": "design-proximity-service-s06",
+      "order": 6,
+      "sectionTitle": "Geohashing: encoding location into a sortable prefix",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Geohashing** encodes a `(lat, lng)` pair into a single string by recursively halving latitude and longitude ranges and interleaving the bits — each added character narrows the cell the point falls in. Two points that share a geohash prefix are (usually) near each other.\n\nThis matters because it turns a 2D nearness problem into a 1D string-prefix problem: store objects keyed by geohash in any ordered structure (a sorted set, a B-tree index), and \"find nearby\" becomes \"find keys sharing this prefix\" — a range query, not a distance computation over everyone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: geohash grid cells around a query point",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A 3x3 grid of geohash cells with a query point at the center; the center cell and all 8 surrounding cells are highlighted](assets/geohash-neighbor-cells.svg)\n\nA query fetches objects in the point's own cell **plus its neighbors**, not just the exact cell — a point 10 meters from the query but on the other side of a cell boundary would otherwise be missed entirely.",
+      "assets": [
+        {
+          "alt": "A 3x3 grid of geohash cells with a query point at the center; the center cell and all 8 surrounding cells are highlighted",
+          "path": "assets/geohash-neighbor-cells.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s08",
+      "order": 8,
+      "sectionTitle": "Quadtrees as an alternative spatial index",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **quadtree** recursively splits a 2D region into four quadrants, subdividing further only where point density is high — a sparse rural area stays one big cell, while a dense downtown gets subdivided many times over. This gives it a property geohash's fixed-precision grid lacks: cell size adapts to actual data density.\n\nThe cost is structural complexity — a quadtree is a tree to traverse and rebalance, not a flat string you can drop into an off-the-shelf sorted-set index, so operationally it needs more custom infrastructure than geohashing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s09",
+      "order": 9,
+      "sectionTitle": "Compare: geohash vs quadtree vs a fixed grid",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Fixed grid | Geohash | Quadtree |\n|---|---|---|\n| Update cost | O(1) — recompute one cell | O(1) — recompute one string | O(log n) — may need rebalancing |\n| Query cost | Fast, but wastes work in sparse cells | Fast, works with standard sorted indexes | Fast, and adapts to density |\n| Precision | Fixed everywhere, wrong for uneven density | Fixed per prefix length | Adapts — fine-grained where dense, coarse where sparse |\n| Infra fit | Simplest to build | Fits existing key-value/sorted-set stores | Needs custom tree infrastructure |\n\n**How to decide:** geohash is the default choice because it reuses existing sorted-index infrastructure at O(1) update cost; reach for a quadtree only when density is wildly uneven and query precision in sparse areas actually matters.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-proximity-service-s09-q1"
+      ]
+    },
+    {
+      "id": "design-proximity-service-s10",
+      "order": 10,
+      "sectionTitle": "Data model: in-memory index, sharded",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The spatial index lives **in memory** — a disk round-trip per query would blow the millisecond latency budget — typically as a sorted structure (a Redis sorted set keyed by geohash, or an in-memory service holding a quadtree) with periodic snapshots to disk for recovery.\n\nAt 5 million objects it's sharded by geographic region (contiguous geohash prefix ranges map cleanly to shards), so any one query only touches one or two shards instead of the whole index, and any one shard's memory footprint stays bounded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s11",
+      "order": 11,
+      "sectionTitle": "Handling moving objects: throttling and batching index writes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At 1.25M updates/sec platform-wide, writing every single update straight into the spatial index would thrash it — especially geohash, where even a small move can shift which prefix (and thus which shard) an object belongs to, requiring a delete-and-reinsert.\n\nThe fix is throttling and batching: only push an update to the index if the object has moved past a minimum distance threshold since its last indexed position, and batch several updates before applying them. Clients can send updates every second, but the index itself only needs to reflect movement at whatever granularity `findNearby` actually cares about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s12",
+      "order": 12,
+      "sectionTitle": "Diagram: end-to-end architecture for a nearby-drivers query",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Driver apps write through a throttled/batched write path into a sharded geohash index; the rider app's read path looks up the query cell plus neighbors and returns driver IDs](assets/write-read-path-index.svg)\n\nWrite path and read path share the same index but have very different shapes: writes are constant high-volume and single-object, reads are bursty and region-scoped.",
+      "assets": [
+        {
+          "alt": "Driver apps write through a throttled/batched write path into a sharded geohash index; the rider app's read path looks up the query cell plus neighbors and returns driver IDs",
+          "path": "assets/write-read-path-index.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s13",
+      "order": 13,
+      "sectionTitle": "The bottleneck: a dense hotspot overloading one shard",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sharding by geographic region works well on average, but geography isn't evenly loaded: downtown at rush hour might hold as many active objects and queries as ten rural shards combined, while all of it lands on one shard.\n\nThe fix is **not** uniform geographic sharding by area — it's sharding so each shard carries a comparable *load*, which usually means finer-grained shards in dense regions (more, smaller cells downtown) and coarser shards in sparse ones, dynamically rebalanced as demand shifts through the day.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "design-proximity-service-s13-q1"
+      ]
+    },
+    {
+      "id": "design-proximity-service-s14",
+      "order": 14,
+      "sectionTitle": "Compare: expanding-ring search vs a fixed generous radius",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Fixed generous radius | Expanding-ring search |\n|---|---|---|\n| Dense area | Wastes work scanning far more candidates than needed | Finds enough results from a small first ring — fast |\n| Sparse area | Works, but so does the alternative | Needs multiple rounds to widen the ring until enough results appear |\n| Latency | Predictable, but padded for the worst case | Variable — best case is fast, worst case (very sparse) is several round trips |\n| False negatives | None if radius is generous enough | Risk of stopping too early if the widening logic is too conservative |\n\n**How to decide:** expanding-ring search wins in practice because most queries are in populated areas where the first small ring already has enough results — reserve the fixed generous radius as a fallback cap so sparse-area queries don't loop indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: a cell boundary splitting nearby points",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just look up the query point's exact geohash cell and return everything in it.\"\n\n**Why it's wrong:** two points can be 5 meters apart in the real world but fall on opposite sides of a geohash cell boundary, landing in different cells with completely different prefixes. A query that only checks the exact cell silently misses those true neighbors.\n\n**Correct model:** always query the point's own cell **and its adjacent cells** (typically the 8 surrounding it), then filter the combined candidates by actual distance. This is the same fix shown in the grid diagram — boundary handling isn't optional polish, it's required for correctness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-proximity-service-s16",
+      "order": 16,
+      "sectionTitle": "Summary: the index shape is the whole design",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Geohash, quadtree, and fixed grid all trade **update cost** against **query cost and precision** differently — there's no universally correct choice, only the one that fits your density and update-rate profile. Everything else in this system (sharding, throttling, boundary handling) exists to support whichever spatial index you pick.\n\nIf you remember one line: proximity search is a data-structure problem wearing a systems-design costume — get the index shape right and the rest follows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

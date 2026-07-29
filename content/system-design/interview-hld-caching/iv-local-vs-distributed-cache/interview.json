@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-local-vs-distributed-cache",
+  "interviewQuestions": [
+    {
+      "id": "iv-local-vs-distributed-cache-iq1",
+      "question": "Would you use a local (in-process) cache or a distributed cache here?",
+      "answerMarkdown": "I'd start by asking whether every app node needs to see the exact same value, or whether per-node staleness is acceptable. That answer picks the tool almost directly: local caching for data that tolerates per-node inconsistency and needs sub-millisecond access — a compiled config, a feature flag — and a distributed cache for shared state every node must agree on, like a rate-limit counter or anything gating a correctness-sensitive decision.\n\nI'd back the local choice with a number: an in-process lookup is roughly a microsecond, a distributed cache round trip is roughly a millisecond — about a 1000x gap, which matters enormously on a hot path hit on every request.\n\nIf the data is both hot and needs some consistency guarantee, I'd propose a two-tier setup: a small local cache in front of the distributed one, absorbing the hottest keys' traffic while the distributed cache stays the shared source of truth for everything else.\n\n**Testing:** whether \"just use Redis\" gives way to an actual latency-vs-consistency trade-off, with local caching as a real option, not an afterthought.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Choosing between local and distributed"
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-iq2",
+      "question": "You've added a local cache layer — how do you invalidate it across every node when the data changes?",
+      "answerMarkdown": "I'd acknowledge this is the real cost of local caching: there's no single delete call that reaches every node's memory the way there is for a shared distributed cache. The fix I'd propose is a pub/sub invalidation channel — when the underlying data changes, publish an event, and every node subscribes and clears its own local copy on receipt.\n\nI'd keep a short TTL as a backstop underneath this, specifically for the case where a node misses the pub/sub message due to a network blip or a brief disconnect — the TTL guarantees the entry eventually expires even if the event never arrives, bounding the worst case.\n\nI'd frame the two layers as covering for each other: pub/sub handles the common case fast, TTL handles the rare case where pub/sub fails, so neither has to be perfect on its own.\n\n**Testing:** whether you have a concrete invalidation story for local caching, since it's easy to reach for the speed without a plan for this exact gap.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: invalidating across every node"
+    },
+    {
+      "id": "iv-local-vs-distributed-cache-iq3",
+      "question": "A node has been running for weeks with a stale local cache entry — how would you catch that?",
+      "answerMarkdown": "I'd say this is exactly the scenario that a TTL-only or pub/sub-only invalidation plan can miss silently: a node that dropped one invalidation event a while back just keeps serving the wrong value indefinitely, with nothing crashing or erroring to surface it. Long-lived nodes are actually the highest-risk case, since they've had the most chances to miss an event over their lifetime.\n\nThe fix is the same shape as detecting cache-DB drift elsewhere: periodically sample local cache entries, per node, and compare them against the source of truth, alerting on disagreement. I'd want this per-node rather than aggregated, since the whole failure mode is that individual nodes can diverge from each other, not just from the database as a whole.\n\nI'd also note this is a good argument for keeping a TTL backstop even when pub/sub invalidation exists — it puts a hard ceiling on how long any single missed event can persist.\n\n**Testing:** whether you think about detection for a failure mode that's invisible until you specifically look for it.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Follow-up: catching a long-lived stale entry"
+    }
+  ]
+}

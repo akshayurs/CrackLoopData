@@ -1,0 +1,186 @@
+{
+  "id": "design-blob-object-store",
+  "title": "Design a Blob / Object Store",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 7,
+  "slug": "design-blob-object-store",
+  "summary": "Building the durable object store itself, S3-like — erasure coding, metadata scaling, and multi-part upload, not just using one.",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-blob-object-store-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: store and serve arbitrarily large immutable objects — photos, videos, backups — durably, at exabyte scale. Think building S3 itself, not calling its API.\n\nThe interesting problem isn't \"where do bytes live\" — it's **durability**: guaranteeing an object survives disk failures, node failures, even whole rack failures, at a cost far below simply keeping three full copies of everything. That trade-off, plus how metadata scales independently of raw storage, is the whole design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** store an object under a key, retrieve it by key, and support very large objects via chunked upload.\n\n**Non-functional:** a **durability target** stated in \"nines\" (11 nines means roughly a 1-in-100-billion annual chance of losing a given object), high **availability** for reads even during node failures, and practical **upload size limits** — a single PUT can't reasonably stream a 500GB file in one shot, which is exactly what motivates multi-part upload.\n\nDurability and availability are distinct and often conflated: durability is \"does the data still exist somewhere,\" availability is \"can I read it right now\" — a design can be extremely durable while briefly unavailable during a failover.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-blob-object-store-s02-q1"
+      ]
+    },
+    {
+      "id": "design-blob-object-store-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: objects, size, durability overhead",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Say **100 billion** objects stored, averaging **1MB** each — that's `100e9 * 1MB = 100PB` of raw data. Under 3-way replication (the simplest durability scheme), actual disk usage triples to **300PB**; under erasure coding at roughly 1.5x overhead (detailed next), it's closer to **150PB**.\n\nAt exabyte scale, that difference — 300PB vs 150PB — is the entire operating budget of a mid-size data center. This is precisely why large object stores default to erasure coding for most data rather than plain replication: the durability guarantee can be comparable, but the storage bill is roughly half.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three operations: `putObject(key, bytes)` — store an immutable object under a key; `getObject(key)` — retrieve it; and **multi-part upload** — for large objects, upload independent chunks separately and commit them together as one logical object once all parts arrive.\n\nObjects are treated as **immutable** — there's no `updateObject`; a \"change\" is a new PUT under the same key, replacing what that key points to. That immutability is what makes replication and erasure coding tractable: the system never has to handle concurrent partial writes to the same object's bytes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s05",
+      "order": 5,
+      "sectionTitle": "Data model: metadata service decoupled from storage nodes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two entirely separate subsystems. The **metadata service** maps `key → {which storage nodes hold this object's shards}` — small records, but there's one per object, so at 100 billion objects this is itself a massive indexing problem. The **storage nodes** hold the actual bytes, dumb and interchangeable, knowing nothing about keys or other objects.\n\nThis separation is deliberate: metadata queries (\"where is this key?\") and data transfer (\"give me these bytes\") have completely different scaling needs, and coupling them onto the same nodes would mean a data-node failure also takes out the lookup path for objects it isn't even storing — the exact pitfall covered at the end of this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: architecture — metadata service and storage nodes",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![GET request resolves shard locations from the metadata service, then fetches shard bytes directly from storage nodes and reassembles the object](assets/get-path-metadata-storage.svg)\n\nEvery GET is really two hops: metadata resolves *where*, then a separate fetch retrieves *what*. Keeping those hops on independently-scalable subsystems is the core architectural decision.",
+      "assets": [
+        {
+          "alt": "GET request resolves shard locations from the metadata service, then fetches shard bytes directly from storage nodes and reassembles the object",
+          "path": "assets/get-path-metadata-storage.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s07",
+      "order": 7,
+      "sectionTitle": "Compare: replication vs erasure coding",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Replication (e.g. 3x) | Erasure coding (e.g. 6+3) |\n|---|---|---|\n| Storage overhead | 3x the object size | Roughly 1.5x the object size |\n| Read path | Read any one full copy | May need to reconstruct from multiple shards if some are missing |\n| Failure tolerance | Survives loss of any 2 of 3 copies | Survives loss of any 3 of 9 shards (tunable) |\n| CPU cost | Minimal — just copy bytes | Higher — encoding/decoding math on read/write |\n\n**How to decide:** replication wins for hot, frequently-read small objects where simplicity and CPU cost matter; erasure coding wins for the bulk of cold, large, rarely-accessed data where storage cost dominates — most object stores use both, tiered by access pattern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-blob-object-store-s07-q1"
+      ]
+    },
+    {
+      "id": "design-blob-object-store-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: erasure coding — data and parity shards",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![6 data shards plus 3 parity shards, one object split across 9 storage nodes, reconstructible from any 6 of the 9](assets/erasure-coding-6-plus-3.svg)\n\nA \"6+3\" scheme means: split into 6 data shards, compute 3 parity shards from them, and any 6 of the resulting 9 shards (in any combination) are enough to reconstruct the full original object.",
+      "assets": [
+        {
+          "alt": "6 data shards plus 3 parity shards, one object split across 9 storage nodes, reconstructible from any 6 of the 9",
+          "path": "assets/erasure-coding-6-plus-3.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s09",
+      "order": 9,
+      "sectionTitle": "Multi-part upload: chunks assembled on commit",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A 500GB video upload as a single PUT would fail on any transient network blip, forcing a full restart. **Multi-part upload** splits it into independent chunks (say, 100MB each), uploads them separately — potentially in parallel, potentially with retries per-chunk — and only assembles them into one logical object once every chunk is acknowledged and a final \"complete\" call is made.\n\nUntil that complete call, the object doesn't exist from a `getObject` caller's perspective — partial uploads are invisible, which avoids ever exposing a half-written object to readers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: metadata service throughput at billions of objects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Storage nodes scale almost trivially — add more disks, more nodes, more capacity. The metadata service does not: every single `putObject` and `getObject` call touches it, and at 100 billion objects the index backing `key → location` lookups is itself a distributed-database-scale problem, not a side detail.\n\nThe fix mirrors patterns seen elsewhere in this group — shard the metadata index by a hash of the key across many metadata nodes, so no single node's lookup table has to hold the entire keyspace, and no single node's query load reflects the whole platform's request volume.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-blob-object-store-s10-q1"
+      ]
+    },
+    {
+      "id": "design-blob-object-store-s11",
+      "order": 11,
+      "sectionTitle": "Compare: strong consistency on writes vs eventual consistency on lists",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single-object read-after-write | List operations (enumerate a bucket/prefix) |\n|---|---|---|\n| Consistency offered | Strong — a GET right after a successful PUT always sees the new object | Often eventual — a freshly-written object may not appear in a list result immediately |\n| Why | Metadata for one key is a single, directly-addressable record | Listing scans across many keys' metadata, which may be replicated/indexed with some lag |\n| Practical impact | Safe to read your own writes immediately | An application that lists-then-processes may miss very recent objects |\n\n**How to decide:** most object stores guarantee strong read-after-write consistency per key (a hard product requirement) while accepting eventual consistency for list/enumerate operations, since the cost of making listing strongly consistent at this scale outweighs the benefit for most use cases.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-blob-object-store-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: colocating metadata and data on the same nodes",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Store each object's metadata right alongside its data on the same storage node — one less system to run.\"\n\n**Why it's wrong:** if a storage node dies, you don't just lose the data it held — you also lose the ability to even **look up** where that data's replicas or shards live, if the metadata was only ever recorded there. Worse, colocating means metadata query load and raw data-transfer load compete for the same node's resources, so a burst of large-file reads degrades an unrelated key lookup.\n\n**Correct model:** the metadata service is a fully separate, independently-replicated subsystem, with its own durability guarantees, that never lives solely on the same nodes as the object bytes it describes. See [replication-strategies](replication-strategies) for how the metadata layer itself gets replicated safely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

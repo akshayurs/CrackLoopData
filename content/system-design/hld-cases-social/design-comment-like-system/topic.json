@@ -1,0 +1,169 @@
+{
+  "id": "design-comment-like-system",
+  "title": "Design a Comment & Like System",
+  "area": "system-design",
+  "group": "hld-cases-social",
+  "order": 5,
+  "slug": "design-comment-like-system",
+  "summary": "Aggregating a huge number of small writes onto one hot object — a viral post's like count — without that single object becoming the whole system's bottleneck.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "design-comment-like-system-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Design the ability to like and comment on any post, at any scale — including the rare post that goes viral and receives millions of likes within minutes. The functionality itself is simple; the hard part is one specific failure mode: a single row representing one post's like count taking write traffic that would flatten any ordinary database row.\n\nThink of it like a single tip jar at a wildly popular event — if everyone tries to drop a coin into the exact same jar at the exact same second, the jar isn't the problem, the single point of contention is. The fix is spreading writes across many jars and adding up the total later, not making one jar sturdier.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** like or unlike a post, add threaded comments, edit and delete both, and read an accurate-enough like count and paginated comment thread.\n\n**Non-functional:** **like-count accuracy** can tolerate brief lag (a count off by a handful for a few seconds is fine; being off by thousands is not) in exchange for write throughput. **Comment ordering** within a thread must be stable and consistent for every viewer. **Edit/delete** must propagate without requiring a full recount or a full thread re-fetch just to reflect one changed item.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: likes on a viral post vs a row's write ceiling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A typical relational row, protected by row-level locking, can sustain on the order of a few hundred to low-thousands of writes/sec before lock contention dominates and latency climbs sharply. A viral post can draw a million likes in its first ten minutes — roughly 1,700 likes/sec sustained, and bursting several times higher at the moment it's shared by a huge account.\n\nThat burst rate alone exceeds a single row's realistic write ceiling by a wide margin, before accounting for every other post in the system also needing writes served by the same database. The numbers say plainly: no single row can be the increment target for a viral post's count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-comment-like-system-s03-q1"
+      ]
+    },
+    {
+      "id": "design-comment-like-system-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`like(postId, userId)` and `unlike(postId, userId)` toggle one user's like state on one post. `comment(postId, parentCommentId, text)` adds a comment, optionally as a reply. `getCounts(postId)` returns the current (possibly slightly lagging) like and comment counts.\n\nNotice `like()` takes a `userId`, not just a `postId` — the system needs to know *who* liked something, both to prevent the same user from being counted twice and to let a user un-like their own action, which a bare increment/decrement pair could never support correctly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s05",
+      "order": 5,
+      "sectionTitle": "Compare: comments as a tree vs a flat list with parentId",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Tree / adjacency list | Flat list with `parentId` |\n|---|---|---|\n| Storage | Each comment stores its own `parentId`, forming an implicit tree | Same underlying storage — the difference is how it's queried and rendered |\n| Fetching a full thread | Requires recursively walking parent-child links, or precomputing a materialized path | One query by `postId`, then reconstructed into a tree client-side or server-side |\n| Deep nesting | Natural to represent, but expensive to fetch recursively at depth | Flat fetch is cheap; reconstructing deep nesting client-side is still work, just moved |\n| Pagination | Awkward — paginating a tree by depth-first order is non-trivial | Straightforward — paginate the flat list, then group by parent client-side |\n\n**How to decide:** store as a flat list with `parentId` (it's simpler to paginate and shard) and reconstruct the tree structure at read time — reserve a true recursive tree query for threads that are rarely more than 2-3 levels deep, which is most comment sections in practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: write path for a like",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A like request passes a dedup check, then async-increments a randomly chosen shard, which a background aggregator sums into the displayed count](assets/like-write-path.svg)\n\nTwo separate stores appear in this path: one recording *who* liked the post (for dedup and un-like), and one just counting *how many* (the sharded counter) — conflating them into a single row is exactly the mistake this topic exists to avoid.",
+      "assets": [
+        {"alt": "A like request passes a dedup check, then async-increments a randomly chosen shard, which a background aggregator sums into the displayed count", "path": "assets/like-write-path.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s07",
+      "order": 7,
+      "sectionTitle": "Deduplicating repeated likes without a full scan",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Preventing a user from liking the same post twice (or un-liking a post they never liked) requires knowing whether a `(userId, postId)` pair already exists — but scanning all likes on a post to check would itself become the bottleneck on a viral post with millions of rows.\n\nThe fix is a direct-lookup structure keyed on the pair itself — a unique index or a key-value entry at `like:{postId}:{userId}` — so the dedup check is an O(1) point lookup regardless of how many other users have liked the same post. This is a small design choice with an outsized effect: get the key shape right and dedup cost stops scaling with a post's popularity.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-comment-like-system-s07-q1"
+      ]
+    },
+    {
+      "id": "design-comment-like-system-s08",
+      "order": 8,
+      "sectionTitle": "The hot object",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hot object** is any single record that a disproportionate share of traffic concentrates on — here, one viral post's like-count row, hammered by write attempts from every one of a million-plus likers within minutes, while every other post in the system sees ordinary traffic.\n\nThe danger isn't average load, it's that this one row can become a lock-contention bottleneck even while the database as a whole has plenty of spare capacity — the system looks healthy in aggregate metrics while one specific post's counter update queue backs up. Any design here has to assume some post, eventually, will be the hot object, rather than treating it as an edge case to handle later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s09",
+      "order": 9,
+      "sectionTitle": "Sharded counters and async aggregation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Instead of one row per post holding the count, split it into N shard rows (say, 20) per post, each holding a partial count. A like increments a **randomly chosen shard**, spreading write contention across N independent rows instead of funneling every writer onto one.\n\nThe displayed count is the sum of all N shards for that post — computed periodically by a background aggregator and cached, not recomputed synchronously on every read. This is exactly the deferred-staleness trade the non-functional requirements allowed: the true total lags by however often the aggregator runs, in exchange for write throughput scaling roughly N-fold.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-comment-like-system-s09-q1"
+      ]
+    },
+    {
+      "id": "design-comment-like-system-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: comment thread rendering",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Flat comment storage keyed by postId, paginated by creation time, then grouped client-side into parent/reply nesting](assets/comment-thread-rendering.svg)\n\nPagination happens on the flat, storage-native order; nesting is a presentation-layer transformation applied after the page is fetched — keeping those two concerns separate is what makes a comment section with thousands of replies still paginate cheaply.",
+      "assets": [
+        {"alt": "Flat comment storage keyed by postId, paginated by creation time, then grouped client-side into parent/reply nesting", "path": "assets/comment-thread-rendering.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-comment-like-system-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: incrementing a single like_count column directly",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just do `UPDATE posts SET like_count = like_count + 1 WHERE id = ?` — it's one column, how expensive can it be?\"\n\n**Why it's wrong:** every one of a viral post's million-plus concurrent likers is now issuing a row-level lock on that exact same row, one at a time, serializing what should be independent operations — the post's row becomes a queue, not a counter, and latency climbs as contention grows.\n\n**Correct model:** never let the increment target be a single row for anything that can go viral — shard the counter across multiple rows and aggregate asynchronously, so contention is divided by the shard count instead of concentrated on one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-comment-like-system-s11-q1"
+      ]
+    }
+  ]
+}

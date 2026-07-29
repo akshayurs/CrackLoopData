@@ -1,0 +1,29 @@
+{
+  "topicId": "design-leaderboard",
+  "interviewQuestions": [
+    {
+      "id": "design-leaderboard-iq1",
+      "question": "Design a real-time leaderboard for a game with 100M players?",
+      "answerMarkdown": "I'd rule out the naive approach immediately — `ORDER BY score DESC` on a table doesn't scale to live rank queries against millions of rows — and reach for a sorted set (a skip list under the hood), which gives O(log n) score updates and a native rank operation instead of a full scan.\n\nAt 100M users I'd shard the sorted set across multiple nodes, since one instance won't hold everything, and merge per-shard top-N lists for the global leaderboard view. I'd flag global rank as the hard part of sharding: a user's true rank needs counts from every other shard, so I'd maintain small periodically-refreshed aggregates per shard rather than querying every shard live on each request.\n\nI'd close by naming tie-breaking rules explicitly, since equal scores need a deterministic secondary order or rank will flicker between reads.\n\n**Testing:** whether you can justify the sorted-set data structure from the access pattern, and whether you notice that sharding turns \"exact global rank\" into a genuinely hard sub-problem, not a free consequence of adding more nodes.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core leaderboard design"
+    },
+    {
+      "id": "design-leaderboard-iq2",
+      "question": "How would you get a user's exact global rank without querying every shard on every request?",
+      "answerMarkdown": "I'd start from the local rank, which is cheap — the user's position within their own shard's sorted set. The missing piece is how many higher scores exist in every other shard, and querying all of them live on every rank check doesn't scale.\n\nMy fix: each shard periodically publishes a small aggregate — counts of scores above a set of threshold buckets — and a rank query combines the user's local rank with those cached aggregates from other shards, giving an estimate that's accurate as of the last aggregate refresh (typically seconds old) instead of a live cross-shard query.\n\nI'd explicitly name the trade-off: this sacrifices perfect real-time accuracy for a query that stays fast regardless of shard count, which is the right call for almost every consumer-facing leaderboard.\n\n**Testing:** whether you can propose a concrete mechanism (aggregates, not \"just query everything\") for a scaling problem that looks deceptively simple at first glance.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Global rank without a full scan"
+    },
+    {
+      "id": "design-leaderboard-iq3",
+      "question": "Two players end up with the exact same score. How does your leaderboard decide who ranks higher?",
+      "answerMarkdown": "I'd point out this needs a defined rule, or the relative order between tied players can flicker unpredictably across reads depending on internal implementation details of the sorted-set structure.\n\nI'd propose a secondary sort key applied consistently — commonly, whoever reached that score first ranks higher, which rewards being first and matches how most competitive leaderboards intuitively feel fair to users. I'd mention a neutral fallback, like sorting by user ID, as a simpler alternative when \"who got there first\" isn't meaningful for the product.\n\nI'd close by noting this has to be baked into the sorted set's actual sort key (e.g. combining score and a tiebreaker into one composite key), not handled as an afterthought at display time, or ranks won't be stable across different reads of the same data.\n\n**Testing:** whether you think about tie-breaking as a real design decision with product implications, not just an edge case to wave away.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Tie-breaking rules"
+    }
+  ]
+}

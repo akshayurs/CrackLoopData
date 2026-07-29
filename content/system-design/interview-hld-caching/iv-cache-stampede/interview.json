@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-cache-stampede",
+  "interviewQuestions": [
+    {
+      "id": "iv-cache-stampede-iq1",
+      "question": "What happens when your cache expires under heavy load, and how do you prevent it?",
+      "answerMarkdown": "I'd name the mechanism before proposing anything: a cache entry expires, and every concurrent reader in flight at that moment misses the cache together — each one independently queries the database to recompute the same value, turning one expiry into N simultaneous database queries.\n\nThe fix I'd lead with is request coalescing, or single-flight: only the first request that misses actually queries the database, and every other concurrent request for the same key waits on that one result instead of issuing its own. That turns N simultaneous queries into exactly one. I'd pair it with jitter on the TTL so many keys set at once don't all expire together, and stale-while-revalidate for especially hot keys, so readers get a slightly stale answer instead of a miss at all.\n\nI'd close by naming the cost: coalescing adds a small latency tax to the requests waiting on the one in-flight query, which is almost always worth it compared to a database outage.\n\n**Testing:** whether you know the mechanics of thundering herd, not just its name, and can name a concrete fix.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The stampede mechanism and its fix"
+    },
+    {
+      "id": "iv-cache-stampede-iq2",
+      "question": "Request coalescing is in place, but the database is still getting hammered — what else would you do?",
+      "answerMarkdown": "I'd point out that per-node coalescing only limits things to one query per node — if the service runs on many nodes, each node can still independently fire its own one query, and the sum across nodes can still be large. So I'd add a fleet-wide distributed lock, so only one process across the entire fleet refreshes a given key, not one per node.\n\nI'd also add probabilistic early refresh: instead of every refresh happening exactly at the TTL boundary, give each read a small, rising chance of triggering a refresh slightly before expiry. That spreads refreshes out over time instead of concentrating them at one instant, which helps especially when many different hot keys share similar TTLs.\n\nI'd frame this as escalating fixes for escalating scale — coalescing handles one node's stampede, the distributed lock and early refresh handle a fleet-wide or multi-key pile-up.\n\n**Testing:** whether you have a second-level fix ready, not just the textbook single-flight answer.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: coalescing isn't enough"
+    },
+    {
+      "id": "iv-cache-stampede-iq3",
+      "question": "How is a cache stampede different from a hot-key problem, and do the fixes overlap?",
+      "answerMarkdown": "I'd draw the distinction on what triggers each: a stampede is triggered by expiry — a key was fine, then a specific moment (its TTL running out) causes many requests to miss it together. A hot key is about sustained, ongoing load — one key is disproportionately popular in its normal traffic, expiry or not, and can overload a cache node even while perfectly warm.\n\nThe fixes do overlap: coalescing and stale-while-revalidate help a stampede and also reduce how often a hot key's misses cascade. But a hot key needs its own fixes on top — local, in-process caching to absorb reads before they reach the distributed cache, or splitting the key across multiple physical keys — because those address sustained load a stampede fix alone doesn't touch.\n\nI'd say naming both problems separately, then naming where their fixes overlap and where they diverge, is the strongest way to answer this.\n\n**Testing:** whether you can distinguish two related-sounding failure modes instead of treating \"cache overload\" as one undifferentiated problem.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: stampede vs hot key"
+    }
+  ]
+}

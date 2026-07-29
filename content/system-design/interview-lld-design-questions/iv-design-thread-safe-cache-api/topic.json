@@ -1,0 +1,180 @@
+{
+  "id": "iv-design-thread-safe-cache-api",
+  "title": "Design a Thread-Safe Cache API",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 1,
+  "slug": "iv-design-thread-safe-cache-api",
+  "summary": "A common 10-minute LLD probe: design a thread-safe cache with get/put/remove. The trap is chasing eviction algorithms when the API shape and concurrency strategy are what's actually scored.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-design-thread-safe-cache-api-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design a thread-safe cache** with `get`, `put`, and `remove` — that's often the entire prompt, with no eviction policy mentioned at all.\n\nThe trap: candidates immediately dive into LRU internals. This question is scored on the **API shape and concurrency strategy**, not the eviction algorithm — that's a separate, harder question in its own right. Treat eviction as a pluggable detail you name once and move past.\n\nThe 10-minute bar: a clean interface, a defensible concurrency choice, and a thundering-herd fix — not a fully-tuned cache.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: eviction policy and concurrency shape",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before designing anything, ask two questions. **What eviction policy** does the interviewer want — none, LRU, TTL-based, or \"your choice\"? This scopes how much of the cache internals you actually need to build versus stub out.\n\n**What's the read/write ratio?** Most production caches are read-heavy — a user-profile cache might see a thousand reads per write. That fact should drive your concurrency choice: a concurrent map with a lock only where eviction happens beats a single global lock, which would serialize even plain reads.\n\nAsking this signals you design for the actual workload, not a generic \"thread-safe\" checkbox.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: interface first, then concurrency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Structure your answer in two passes so you're never mid-explanation with no plan. **Pass one — the interface**: `get(key)`, `put(key, value)`, `remove(key)`, maybe `size()`. Get this right before touching concurrency; a wrong interface stays wrong no matter how clever the locking is.\n\n**Pass two — the concurrency strategy**: name the backing data structure (a concurrent hash map), then narrow exactly where extra locking is needed — only around eviction bookkeeping, never around every `get`.\n\nSaying the plan out loud first — \"I'll define the interface, then handle concurrency\" — buys you thinking room and shows you're not improvising.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "iv-design-thread-safe-cache-api-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s04",
+      "order": 4,
+      "sectionTitle": "Code: a minimal Cache<K,V> interface",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic interface Cache<K, V> {\n    V get(K key);\n    void put(K key, V value);\n    void remove(K key);\n    int size();\n}\n```\n\nA minimal, boring interface is the goal. No mention of eviction, capacity, or thread-safety yet — those are implementation concerns, not API concerns. Keeping return types plain, with no exposed locks or internals, is itself a signal that you separate contract from implementation.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s05",
+      "order": 5,
+      "sectionTitle": "Code: concurrent map, lock only around eviction",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class BoundedCache<K, V> implements Cache<K, V> {\n    private final ConcurrentHashMap<K, V> store = new ConcurrentHashMap<>();\n    private final ReentrantLock evictionLock = new ReentrantLock();\n    private final int capacity;\n\n    public V get(K key) { return store.get(key); }\n\n    public void put(K key, V value) {\n        store.put(key, value);\n        if (store.size() > capacity) {\n            evictionLock.lock();\n            try { evictOne(); } finally { evictionLock.unlock(); }\n        }\n    }\n}\n```\n\n`get` never takes a lock — it's a plain concurrent-map read, so reads scale across threads. The lock only guards eviction bookkeeping, which is rare relative to reads. This is the same pattern as [designing thread-safe classes](designing-thread-safe-classes): lock the smallest critical section, not the whole class.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": [
+        "iv-design-thread-safe-cache-api-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s06",
+      "order": 6,
+      "sectionTitle": "Code: a thundering-herd fix for cache misses",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic V get(K key, Function<K, V> loader) {\n    return store.computeIfAbsent(key, loader);\n}\n```\n\nWithout this, ten concurrent misses for the same cold key trigger ten identical, expensive recomputes — a **thundering herd**. `computeIfAbsent` (or a per-key lock) guarantees only one thread runs the loader; the other nine block briefly and get the same computed value for free.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": [
+        "iv-design-thread-safe-cache-api-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: how do you avoid a thundering herd on a cache miss?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When asked this cold, name the failure first: N threads miss simultaneously, all call the same expensive loader — a database query, an API call — and the backing system takes N times the load a single miss should cost.\n\nThe fix is to make \"compute this value\" a **single, coordinated operation per key**, not per caller. `computeIfAbsent` on a concurrent map does this natively; a per-key lock map works if your cache isn't map-based. One caveat worth naming: a slow loader now makes every concurrent caller wait for that one computation, so pair this with a timeout on the loader itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how does this differ from the LRU cache case study?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This question and \"design an LRU cache\" sound similar but score differently. **This one** is scored on API cleanliness and concurrency correctness — the eviction policy is almost a footnote. The [LRU cache case study](lru-cache) is scored on the opposite: getting O(1) `get`/`put` with a doubly-linked list plus hash map, where concurrency is often waved away entirely.\n\nIf the interviewer says \"thread-safe cache\" with no algorithm named, lead with the API and locking. If they say \"design an LRU cache,\" lead with the data structure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-design-thread-safe-cache-api-s08-q1"
+      ]
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: should get block on a miss, or return a future?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Both are defensible — the interview scores whether you name the trade-off. A **blocking `get`** is simpler to use and reason about but ties up the calling thread for the loader's duration, which is fine for a fast lookup and bad for a slow downstream call.\n\nA **future-returning `get`** lets the caller compose non-blocking pipelines and avoids tying up threads, at the cost of a more complex API where every caller now has to handle async. Default to blocking unless the prompt mentions high concurrency or a slow loader — then propose the future-based signature as the natural upgrade.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: designing eviction while ignoring the API contract",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** spending most of your time drawing the LRU linked-list-plus-hashmap structure, then rushing the actual `Cache` interface and concurrency story in the last minute.\n\n**Why it's wrong:** the prompt asked for an API, and eviction detail wasn't requested — you've optimized for the wrong axis and left the interviewer with no signal on what they're actually scoring.\n\n**Correct model:** name the eviction policy in one sentence (\"LRU, using a linked hash map\") and spend your time on the interface and concurrency strategy instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-thread-safe-cache-api-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: exposing the internal lock or backing map",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll add a `getInternalMap()` method so tests and callers can inspect the cache state directly.\"\n\n**Why it's wrong:** this breaks encapsulation — any caller can now mutate the backing map without going through your locking or eviction logic, silently corrupting the cache's invariants. It also locks you into the current implementation forever, since callers now depend on internal structure.\n\n**Correct model:** expose only `get`/`put`/`remove`/`size`. If tests need visibility, add a narrow, intentional accessor like `containsKey`, never the raw internals.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-thread-safe-cache-api-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Interface** — `get`/`put`/`remove` on a `Cache<K,V>`. **Concurrency** — back it with a concurrent map so reads never block; only lock around eviction bookkeeping. **Thundering herd** — use `computeIfAbsent` (or a per-key lock) so concurrent misses for the same key compute once, not N times. **Close** by naming one trade-off you didn't have time to fully explore, like blocking vs future-based `get`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

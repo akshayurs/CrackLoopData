@@ -1,0 +1,29 @@
+{
+  "topicId": "design-video-streaming-platform",
+  "interviewQuestions": [
+    {
+      "id": "design-video-streaming-platform-iq1",
+      "question": "How would you design the end-to-end pipeline for a video streaming platform like YouTube, from upload to playback?",
+      "answerMarkdown": "I'd split it into a write path and a read path, since they scale completely differently. Write path: a client uploads directly to object storage via a presigned URL (never through my app servers), which enqueues a transcode job. Workers produce a rendition ladder — say 5 quality levels — and I publish the video as soon as the first low/mid rendition is ready rather than waiting on the full ladder, to protect the upload SLA.\n\nRead path: a client fetches a manifest (HLS/DASH) listing chunk URLs per rendition, and the player's ABR logic picks quality per chunk based on buffer and measured throughput. All chunk reads go through a CDN, never origin storage directly, since concurrent viewer egress dwarfs what origin can serve.\n\nI'd close by naming what's explicitly out of scope — global edge placement and multi-CDN routing are their own design.\n\n**Testing:** whether you can decompose a huge prompt into a write path and read path with clearly different bottlenecks, instead of describing one monolithic flow.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "End-to-end upload-to-playback design"
+    },
+    {
+      "id": "design-video-streaming-platform-iq2",
+      "question": "Where would recommendations and view-count accuracy live relative to this transcode-and-delivery pipeline?",
+      "answerMarkdown": "Neither belongs inside the transcode pipeline — they're separate systems that consume events this pipeline emits. Recommendations need a feature store and a ranking model trained on watch history, which is closer to a machine-learning system design than a media pipeline; I'd treat 'which video gets transcoded' and 'which video gets recommended' as fully decoupled concerns with different teams and different scaling shapes.\n\nView-count accuracy is its own hard problem: naive per-request counters double-count refreshes, bot traffic, and partial views. I'd route playback heartbeats through an event stream, deduplicate by session and watch-time thresholds, and reconcile counts asynchronously rather than incrementing synchronously on every chunk request — the transcode/delivery path shouldn't block on, or be blocked by, either system.\n\n**Testing:** whether you resist scope creep and correctly draw the boundary between this case study and adjacent systems.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Scoping recommendations and view counts out"
+    },
+    {
+      "id": "design-video-streaming-platform-iq3",
+      "question": "How would you extend this design to support live streaming without rebuilding the whole pipeline?",
+      "answerMarkdown": "I'd start by naming what breaks: live content doesn't exist yet when a viewer requests it, so the precompute-then-serve model this design relies on is inverted — transcoding has to happen in real time on an ingest stream, and the CDN has to distribute freshly produced segments within a second or two, not serve something already cached for hours.\n\nI'd reuse what still fits: the CDN edge layer, the manifest-based chunked delivery protocol, and ABR player logic all carry over largely unchanged. What's genuinely new is a low-latency ingest-to-transcode path and much smaller segment windows so freshness beats buffering. I'd flag that this is enough of a shift in latency budget and failure modes that it deserves its own case study rather than a bolt-on.\n\n**Testing:** whether you can identify which architectural assumptions a new requirement invalidates instead of assuming everything reuses cleanly.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Extending to live streaming"
+    }
+  ]
+}

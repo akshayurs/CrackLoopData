@@ -1,0 +1,29 @@
+{
+  "topicId": "design-logging-metrics-pipeline",
+  "interviewQuestions": [
+    {
+      "id": "design-logging-metrics-pipeline-iq1",
+      "question": "Design the logging/metrics backend behind an observability platform.",
+      "answerMarkdown": "I'd frame the defining tension up front: this pipeline's own throughput is an order of magnitude larger than the traffic it observes, and it has to stay reliable specifically during incidents — exactly when the systems it monitors are also stressed. That reframes the whole problem from 'store some data' to 'don't let observability become the outage.'\n\nArchitecturally: agents on each host ship logs and metrics into an ingest buffer (a queue) that decouples emission rate from processing rate; a stream processor consumes from there, sampling routine noise while keeping errors at full fidelity, and downsampling metrics over time. I'd split storage in two — a time-series store for metrics, a search index for logs — since their access patterns don't share a good common engine, and tier both hot (recent, full-resolution) versus cold (older, downsampled) to control cost.\n\nI'd close on the failure mode that actually breaks these systems in practice: one noisy service without a per-tenant ingest quota can starve everyone else's telemetry mid-incident, so isolation at the ingest layer isn't optional polish.\n\n**Testing:** whether you identify that the pipeline's own reliability under load is the central challenge, not the storage schema.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Full logging/metrics pipeline walkthrough"
+    },
+    {
+      "id": "design-logging-metrics-pipeline-iq2",
+      "question": "How would you design alerting on top of this pipeline so it fires within minutes, not after the fact?",
+      "answerMarkdown": "I'd separate alert evaluation from ad-hoc querying, because they have different latency requirements even though they read the same underlying data. Ad-hoc queries can tolerate a user waiting a few seconds; an alert rule needs to be evaluated continuously against the live stream, not by periodically re-running a query against stored data.\n\nConcretely, I'd hook alert rule evaluation into the stream processor itself, right where sampling and aggregation already happen — a rule like 'error rate > 5% for 5 minutes' becomes a standing aggregation window computed as data arrives, rather than a batch job that wakes up every few minutes and might miss a spike that started and partially resolved between runs.\n\nI'd flag the trade-off against sampling: if error logs are sampled at all (they generally aren't, per the earlier rule), alert accuracy degrades, which is exactly why error/warning-level events get full fidelity even when routine logs don't.\n\n**Testing:** whether you understand alerting as a real-time streaming computation, distinct from the batch/query path.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Real-time alert evaluation"
+    },
+    {
+      "id": "design-logging-metrics-pipeline-iq3",
+      "question": "How would you control storage cost for a pipeline retaining months of telemetry, without losing the ability to investigate old incidents?",
+      "answerMarkdown": "I'd lean on the fact that not all data ages the same way in value: a spike from six months ago is still worth knowing about at a trend level, but nobody needs millisecond-resolution detail from it. So I'd tier storage explicitly — a hot tier holding the last few days at full resolution on fast, more expensive storage, and a cold tier holding older data downsampled (1-minute, then 1-hour rollups) on cheaper storage.\n\nFor queries spanning both tiers, I'd make the routing transparent to the user — a 60-day query silently reads recent full-resolution data from hot storage and rolled-up data from cold storage, stitched into one result, rather than requiring the engineer to know which tier holds what.\n\nI'd close by naming what's given up: after downsampling, you can see that error rate spiked at 2am three months ago, but you can't zoom into second-by-second detail from that night — the trade is explicit, not accidental data loss.\n\n**Testing:** whether you can design a cost/fidelity trade-off deliberately instead of either keeping everything (unaffordable) or discarding aggressively (loses investigative value).",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Cost-aware retention tiering"
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "id": "iv-setting-timeout-budgets",
+  "title": "How do you set timeouts across a call chain so they actually add up?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 11,
+  "slug": "iv-setting-timeout-budgets",
+  "summary": "Timeout budgets must shrink down a call chain, each hop leaving room for the next, not be set identically at every layer.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-setting-timeout-budgets-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: the \"set every timeout to 5 seconds\" mistake",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just set every timeout to 5 seconds, seems safe\" is the mistake this question is testing against — it treats each layer's timeout independently, ignoring that a deep hop's timeout **compounds** through every layer above it.\n\nThe strong answer allocates a total budget at the entry point and **shrinks it down the chain**, each hop leaving room for the ones after it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: **how many hops deep** is this call chain? A 2-hop chain has much more slack to work with than a 5-hop one for the same total budget.\n\nAlso ask: **what's the end-to-end SLA at the top** — the number every downstream timeout ultimately has to fit inside. Without that top-level number, there's nothing to divide among the hops in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Allocate a **total budget at the entry point**, matching the end-to-end SLA, then **divide it down the chain** — each hop's timeout shorter than its caller's, leaving room for network and processing overhead at every step.\n\nThe key idea in one sentence: a timeout isn't a property of one service in isolation, it's a slice of a shared, shrinking budget that the whole chain has to respect together.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-setting-timeout-budgets-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a shrinking budget across a 4-hop chain",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeout budget shrinks at each hop](assets/timeout-budget-chain.svg)\n\nA 4-hop chain with a **shrinking timeout budget** at each layer: 5000ms at the gateway, 4000ms at the API, 2500ms at the service, 1000ms at the DB call. Each hop gets strictly less time than its caller, leaving room for its own network and processing overhead.",
+      "assets": [{"alt": "Timeout budget shrinks at each hop", "path": "assets/timeout-budget-chain.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: every layer set independently to 5 seconds",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete scenario: every layer set independently to \"5 seconds, seems safe.\" The gateway waits 5s, the service it calls also waits 5s, and the DB call inside *that* also waits 5s. A slow DB call can now make the **gateway wait up to 15 seconds total** — 5s at each of the three layers stacking up — blowing past whatever SLA the gateway promised its own caller.\n\nEach individual number looked reasonable in isolation; the bug only shows up when you add them up across the chain, which is exactly what the naive \"set it all to 5s\" approach never does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-setting-timeout-budgets-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: the fix applied",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The fix applied to the same chain: the gateway's **5s budget** leaves **4s for the downstream API** after accounting for its own overhead, which leaves **2.5s for the service** after network and serialization cost, which leaves **1s for the DB call**.\n\nEach hop is explicitly aware it's spending from a **shared, shrinking budget**, not setting its own timeout in isolation — the gateway's 5-second promise to its own caller stays true no matter how the internal hops divide up their share.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Propagating a shrinking deadline explicitly — say, via a `deadline` field carried in the request context — is **more correct**, since every hop knows exactly how much time it actually has left. But it requires **every service in the chain to cooperate** and respect the incoming deadline.\n\nOne uncooperative hop that ignores the propagated deadline and uses its own fixed timeout instead **breaks the whole scheme** — the careful budgeting upstream doesn't help if one service in the middle doesn't participate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-setting-timeout-budgets-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: hop 3 times out before hop 1's timeout expires",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"hop 3 times out but hop 1's timeout hasn't expired yet — what does the caller see?\"** Hop 1 should **propagate the failure immediately** rather than waiting out its own full timeout once it already knows a required downstream call has failed.\n\nWaiting out the rest of its own timeout after already knowing the answer is a guaranteed failure just adds latency for no benefit — the caller gets the same failure either way, just slower if hop 1 doesn't short-circuit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: enforcing that every hop respects its slice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"how do you enforce that every service actually respects its allotted slice instead of just hoping they do?\"** Pass the **remaining deadline explicitly** in the request — a header or context field carrying an absolute deadline or remaining budget — so each hop can check **\"do I even have time left to attempt this\"** before starting work, not just trust local config.\n\nThis turns \"hoping every team configured their timeout correctly\" into something the receiving service can actually check and act on for itself, independent of what any other team configured.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-setting-timeout-budgets-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: the same timeout at every layer",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Setting every layer's timeout to the same safe-sounding number, like 5 seconds, protects the whole chain.\"\n\n**Why it's wrong:** identical timeouts at every layer **compound** rather than cap total latency — a deep hop can hang long after the caller at the top has already given up and moved on, since each layer's timeout only bounds *that* layer's own wait, not the chain's total.\n\n**Correct model:** timeouts must shrink down the chain from a single top-level budget, so the sum across all hops never exceeds what the top-level caller actually promised.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-setting-timeout-budgets-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Allocate a total timeout budget at the entry point from the end-to-end SLA, then shrink it at every hop down the chain — never repeat the same number at every layer, since that compounds instead of capping. Propagate the remaining deadline explicitly so each hop can check its own budget, and short-circuit a caller's wait the moment a required downstream call is known to have failed.\n\nFor the broader retry and timeout toolkit this pairs with, see [Retries, Timeouts, and Backoff](retries-timeouts-and-backoff).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    }
+  ]
+}

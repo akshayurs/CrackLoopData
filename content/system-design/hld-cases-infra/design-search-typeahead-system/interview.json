@@ -1,0 +1,29 @@
+{
+  "topicId": "design-search-typeahead-system",
+  "interviewQuestions": [
+    {
+      "id": "design-search-typeahead-system-iq1",
+      "question": "Design the autocomplete behind a search bar.",
+      "answerMarkdown": "I'd open by drawing the line this question is actually about: this isn't full-text search, it's ranking **completions of a partial prefix**, and it has to run on every keystroke under a strict latency budget — roughly 100ms, since it fires far more often than the underlying search itself.\n\nThat volume math drives the design: at 100k searches/sec and ~20 characters typed per query, that's ~2M getSuggestions calls/sec, which rules out querying a live search index per keystroke. I'd propose a trie (or FST) with each node precomputing its own top-K completions offline, so serving a request is just a traversal to one node — no ranking work at request time.\n\nI'd cover freshness next: the trie refreshes on a slower cycle (say hourly) from an offline aggregation job over query logs, with a separate fast-path counter tracking trending queries in near-real-time so breaking terms surface within minutes, not after the next rebuild. I'd close on sharding the trie by prefix range once vocabulary size exceeds one machine's memory.\n\n**Testing:** whether you can justify precomputation as a direct consequence of the volume math, not just as received wisdom.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Full typeahead design walkthrough"
+    },
+    {
+      "id": "design-search-typeahead-system-iq2",
+      "question": "How would you personalize typeahead suggestions without breaking the latency budget?",
+      "answerMarkdown": "I'd separate the two ranking layers cleanly. The base layer is global popularity, fully precomputed into the trie offline — that part costs nothing extra at request time. Personalization is a thin layer **on top**: a per-user signal (recent searches, saved preferences) that re-orders or injects a few candidates into the already-cheap global list, rather than recomputing rankings from scratch per user.\n\nConcretely, I'd fetch the user's recent-search history from a fast cache (keyed by userId, small and hot) in parallel with the trie lookup, then merge the two lists with a lightweight boost rule — for example, promote a personalized match into the top 2-3 slots rather than re-ranking everything. That keeps the added latency to one extra cache lookup plus a cheap merge, not a second full ranking pass.\n\nI'd flag the trade-off: too aggressive a personalization boost can push a genuinely more-popular global suggestion out of view, so the merge rule needs a cap on how much personalization can override the base ranking.\n\n**Testing:** whether you can add a feature without blowing up the cost model that made the base design fast in the first place.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Personalizing suggestions cheaply"
+    },
+    {
+      "id": "design-search-typeahead-system-iq3",
+      "question": "How would you handle typos or near-miss prefixes in a typeahead system?",
+      "answerMarkdown": "I'd note this is a real gap in a pure trie approach — a trie only matches exact prefixes, so a typo like \"pyhton\" returns nothing useful even though the user obviously means \"python\". I'd address it as a fallback layer, not a redesign of the core path: if the exact-prefix trie lookup returns too few results, fall back to a fuzzy match — typically an edit-distance-bounded search (allowing 1-2 character edits) over a smaller candidate set, or a separately-indexed phonetic/fuzzy structure.\n\nI'd keep this fallback path deliberately slower and less-used than the primary trie lookup, since fuzzy matching is inherently more expensive — most keystrokes hit the fast exact-prefix path, and only the minority that return empty or sparse results trigger the fuzzy fallback.\n\nI'd close by noting this is a latency-vs-coverage trade explicitly: full fuzzy matching on every keystroke would blow the 100ms budget, so it only activates when the fast path has clearly failed.\n\n**Testing:** whether you can extend a design to handle a real edge case without regressing the performance guarantee that made the base case work.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Handling typos and fuzzy prefixes"
+    }
+  ]
+}

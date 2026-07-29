@@ -1,0 +1,29 @@
+{
+  "topicId": "graceful-degradation-and-load-shedding",
+  "interviewQuestions": [
+    {
+      "id": "graceful-degradation-and-load-shedding-iq1",
+      "question": "Recommendations service is down — what does the homepage show?",
+      "answerMarkdown": "I'd design the homepage so recommendations is treated as an enhancement, not a dependency the whole page relies on. The response-building code wraps the recommendations call with a timeout and catches its failure locally, so a failure there doesn't throw and take the rest of the page down with it.\n\nConcretely, I'd have a tiered fallback: first choice is a recently cached personalized list (fresh enough to feel normal), falling back further to a stale cached list if nothing recent is available, and as a last resort a static \"popular items\" list that needs no personalization at all. Whichever tier is available, the homepage renders fully — header, search, categories — with just that one section showing something slightly less personalized.\n\nI'd tie the decision to skip the live call to a circuit breaker on the recommendations dependency, so once it's clearly down (not just one flaky request), subsequent requests go straight to the fallback instead of waiting out a timeout each time.\n\n**Testing:** whether you design for partial failure as a first-class case, not just handle it as an afterthought try/catch.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Degrading a homepage gracefully"
+    },
+    {
+      "id": "graceful-degradation-and-load-shedding-iq2",
+      "question": "Your system is over capacity and requests are timing out across the board — what do you do?",
+      "answerMarkdown": "I'd introduce load shedding rather than let every request queue and eventually time out, since a system past capacity serving everyone badly usually produces worse aggregate outcomes than serving most requests well and rejecting the rest immediately and cheaply.\n\nI'd shed based on a pre-decided priority scheme, not arrival order — critical paths like checkout and login protected as long as possible, standard traffic like browsing shed under sustained pressure, and best-effort traffic like analytics pings or prefetching shed first since it's always safe to drop. That priority needs to travel with the request (a header set at the edge) so any layer can make a consistent decision.\n\nI'd shed as early and cheaply as possible — ideally at the edge with a fast `503` — rather than accepting the request and failing deep in the call chain after real work has already been spent on it, and I'd pair this with monitoring so shed rate itself becomes a signal for capacity planning, not just an incident response.\n\n**Testing:** whether you understand shedding as a deliberate, prioritized decision rather than an ad hoc reaction to an outage.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Load shedding under system-wide overload"
+    },
+    {
+      "id": "graceful-degradation-and-load-shedding-iq3",
+      "question": "How does a slowdown in one service turn into an outage across services that never directly call it?",
+      "answerMarkdown": "This is cascading failure. Say Service B gets overloaded and starts responding slowly. Service A calls B without a timeout budget or fallback, so A's own threads sit tied up waiting on B's slow responses — A now looks slow too, even though A's own code is fine. A's callers experience the same delay waiting on A, and the slowdown keeps propagating outward, one hop at a time, until services with no direct relationship to B are failing because of it.\n\nI'd walk through why each individual hop's behavior looks locally reasonable — \"just wait for the response\" — but the aggregate effect across the whole chain is a spreading outage.\n\nI'd name the concrete mechanisms that break this propagation: per-hop timeouts that fit inside the caller's budget, circuit breakers that stop calling B once it's clearly degraded, bulkheads so B's slowness doesn't exhaust a shared thread pool used by other calls, and fallbacks so A can still respond with something even without B.\n\n**Testing:** whether you can trace the propagation mechanism precisely, and name the specific defenses that interrupt it at each hop.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "How cascading failure spreads"
+    }
+  ]
+}

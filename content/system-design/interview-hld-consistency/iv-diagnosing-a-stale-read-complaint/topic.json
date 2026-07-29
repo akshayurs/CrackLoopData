@@ -1,0 +1,165 @@
+{
+  "id": "iv-diagnosing-a-stale-read-complaint",
+  "title": "A user says they saw stale or wrong data — how do you investigate and fix it?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 9,
+  "slug": "iv-diagnosing-a-stale-read-complaint",
+  "summary": "A post-incident triage question — tests whether you have a concrete debugging path from complaint to root cause across the several layers staleness can hide in.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is a triage question, not a design question — the system is already live, a user already complained, and you need a fast path from \"something's wrong\" to the actual layer at fault. Replication lag is only one of several places staleness can hide.\n\nThis topic gives you that path: a layer-by-layer script ordered by how cheap each check is, so you find the real cause in minutes instead of guessing based on the last incident you happened to have.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask two things immediately: **how stale**, roughly (a few seconds versus clearly wrong data that's minutes or hours old), and **does it correlate with a specific action** — right after the user wrote something — or does it seem to happen at random, unrelated to any write they made.\n\nA complaint tied to \"I just saved X and it reverted\" points toward the write path and its immediate read-after-write behavior. A complaint with no clear write trigger points more toward a broader caching or replication issue affecting many users, not just this one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: walk the read path backward",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Skeleton: walk the **read path backward** from the user's screen to the source of truth, checking each layer in turn — client cache, CDN, application cache, then replica lag. Staleness can be introduced at any single layer, and the fix is completely different depending on which one it is.\n\nSaying the layers in order, out loud, before diving into any one of them shows the interviewer you have a systematic path rather than a hunch you're about to chase.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-diagnosing-a-stale-read-complaint-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: \"I saved my profile and it reverted\"",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Cache-aside invalidation race](assets/cache-aside-race.svg)\n\nThe complaint sounds exactly like replication lag, but tracing it reveals a **cache-aside race**: the write invalidates the cache entry, but a concurrent read slips in and repopulates the cache with the old value milliseconds later, right after the invalidation and before the new value is ever cached.\n\nThe user's next read hits that stale cache entry — the database was never wrong, and there was no replica involved at all. This is exactly why walking the read path backward, rather than assuming the usual suspect, matters.",
+      "assets": [{"alt": "Cache-aside invalidation race", "path": "assets/cache-aside-race.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-diagnosing-a-stale-read-complaint-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: checking replica lag metrics for the complaint window",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "One of the fastest checks available: pull the per-replica lag metric graph for the exact time window the user reported the issue. If lag was flat and low the whole time, replication is ruled out immediately and you move to the cache layers without wasting time chasing it.\n\nThis check is cheap precisely because the metric already exists if you built the monitoring from the replication-lag topic — it's a dashboard lookup, not a new investigation, which is exactly why it belongs early in the triage order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a runbook ordered by check cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete runbook, ordered from cheapest to most expensive check: (1) check the replica-lag dashboard for the window — seconds; (2) check whether the client has a local cache or offline-first storage that could be serving an old value — minutes; (3) check the CDN or edge cache's TTL and last-purge time for that resource — minutes; (4) check the application cache for the exact key, including whether a purge actually fired — minutes to tens of minutes; (5) if all else is clean, reproduce the write-then-read sequence directly against the database.\n\nOrdering by cost, not by \"most likely,\" means you never spend an hour on a hunch before ruling out a five-second check.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**A fast, layer-by-layer triage script gets you to root cause quickly; guessing based on the last incident you had is how you fix the wrong layer.** The two approaches feel similarly fast at the start, but only one of them reliably lands on the actual cause.\n\n| Approach | First move | Risk |\n|---|---|---|\n| Layer-by-layer script | Cheapest check first, regardless of hunch | None — systematically rules layers out |\n| Guess from last incident | Jump straight to whatever caused the last one | Wastes time if this incident has a different cause, and you may \"fix\" a layer that was never broken |\n\nThe discipline of checking cheap things first, even when you're confident you already know the answer, is what the question is really testing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-diagnosing-a-stale-read-complaint-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: is this a one-off, or does it affect every user right now?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once you've found the layer, immediately check blast radius before doing anything else: query for other users hitting the same cache key, replica, or code path in the same time window. A single user's isolated race condition and a systemic failure affecting everyone reading that data need very different urgency and response.\n\nSaying \"before I fix it, let me confirm whether this is isolated or systemic\" shows the interviewer you sequence incident response correctly — scope before remediation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: how do you make the next one take minutes, not an investigation?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Turn the runbook into a dashboard: one screen showing replica lag, cache hit/purge events, and CDN status, all filterable by the affected key or user, so the next on-call engineer runs through the same layers in a couple of clicks instead of reconstructing the investigation from scratch.\n\nThis is the concrete artifact worth naming — not \"we'd document it better,\" but a specific dashboard that turns the ad hoc investigation you just walked through into a repeatable, fast procedure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming every staleness complaint is replication lag",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A user saw stale data, so it must be replication lag — let's check the replicas.\"\n\n**Why it's wrong:** replication lag is one of several layers that can introduce staleness, and often not the most common one — client caches, CDNs, and application caches all sit in front of the database and can serve an old value with zero replication involved. Jumping straight to replicas can waste the whole investigation on a layer that was never broken.\n\n**Correct model:** check the cache layers first, since they're usually cheaper and faster to rule in or out, and only conclude replication lag once the metrics for that exact time window actually confirm it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-diagnosing-a-stale-read-complaint-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-diagnosing-a-stale-read-complaint-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd walk the read path backward from the user's screen to the source of truth — client cache, CDN, application cache, then replica lag — checking the cheapest layer first rather than guessing based on the last incident. A classic trap is a cache-aside race that looks exactly like replication lag but has nothing to do with replicas at all. Once I find the layer, I'd check blast radius — one user or everyone — before fixing anything, and I'd turn the runbook into a dashboard so the next occurrence takes minutes instead of a fresh investigation.\"\n\nSee [cache-invalidation](cache-invalidation) for the caching-layer failure modes this triage script checks first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

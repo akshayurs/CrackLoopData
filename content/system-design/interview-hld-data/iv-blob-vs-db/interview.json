@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-blob-vs-db",
+  "interviewQuestions": [
+    {
+      "id": "iv-blob-vs-db-iq1",
+      "question": "Where do you draw the line between storing something in the DB vs blob storage?",
+      "answerMarkdown": "I'd draw it by size and access pattern rather than convenience: small, structured data that I need to filter, sort, or join on stays in the database; large binary objects that I never query by their internal content go to dedicated blob storage, with just a reference and metadata left in the database row.\n\nFor something like a user-uploaded avatar, I'd store the image bytes in an S3-style object store and keep only the URL, upload timestamp, and file size as columns on the user's row. I'd get the write order right too — upload to blob storage first, and only write the database reference once that upload is confirmed, so no reader can ever hit a reference pointing at bytes that don't exist.\n\nFor uploads and downloads themselves, I'd use pre-signed URLs so the client talks directly to the object store, keeping the application tier out of the byte-moving business entirely.\n\n**Testing:** whether you know why large binaries don't belong in relational rows, and can name the reference-plus-blob pattern concretely.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Where the DB-vs-blob line sits"
+    },
+    {
+      "id": "iv-blob-vs-db-iq2",
+      "question": "What if you need to query metadata about the blob, like its upload date?",
+      "answerMarkdown": "That doesn't change the split — if anything it confirms it. Metadata like upload date, file size, content type, or owner is exactly the small, structured, queryable data the database is built to hold, so it stays as regular indexed columns on the row, separate from the object's actual bytes in blob storage.\n\nThe blob store itself never needs to answer a query like \"which files were uploaded last week\" — that question gets answered from the database's metadata columns with an ordinary indexed query. The object store's job stays narrow: store and serve bytes by key, nothing more.\n\nSo the rule holds cleanly: anything you filter, sort, or join on lives in the database as metadata; the bytes themselves, which you never query by content, live in blob storage.\n\n**Testing:** whether querying metadata makes you second-guess the split, when it actually reinforces exactly where the line belongs.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Querying blob metadata"
+    },
+    {
+      "id": "iv-blob-vs-db-iq3",
+      "question": "The DB write succeeds but the blob upload fails — what state is the record in now?",
+      "answerMarkdown": "With the write order I'd actually use — upload to blob storage first, database reference second — this specific failure shouldn't be reachable, since the database write only happens after the upload is confirmed. So I'd first check whether something bypassed that ordering.\n\nThe more realistic failure to plan for is the reverse: the blob upload succeeds, and the subsequent database write fails. That leaves an orphaned object sitting in blob storage with no reference pointing at it — wasted storage, but crucially never a dangling reference a real user could hit.\n\nFor that orphan case, I'd run a periodic cleanup job that scans blob storage for objects older than some grace period with no matching database reference, and deletes them. I'd treat this as an expected, self-healing edge case rather than something worth engineering away perfectly up front.\n\n**Testing:** whether you've actually thought through the failure ordering, not just the happy path of the write.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Handling a failed blob upload"
+    }
+  ]
+}

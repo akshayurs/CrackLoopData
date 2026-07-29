@@ -1,0 +1,167 @@
+{
+  "id": "design-leaderboard",
+  "title": "Design a Leaderboard",
+  "area": "system-design",
+  "group": "hld-cases-core",
+  "order": 7,
+  "slug": "design-leaderboard",
+  "summary": "Real-time ranked scores for millions of users — sorted-set structures and rank queries, not a sorted table scan.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-leaderboard-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Show a user's rank and the top N out of millions of scores, updated live as scores change constantly. The naive approach — `ORDER BY score DESC` on a table with an index — falls apart at this scale: re-sorting or re-scanning millions of rows on every rank query is far too slow for a live leaderboard.\n\nThe fix is a data structure built for exactly this: a sorted set, which keeps elements ordered by score and answers \"what's this element's rank?\" without scanning everything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "design-leaderboard-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** update a user's score, fetch a specific user's current rank, fetch the top N globally (or within a scope, like a friends list or a region).\n\n**Non-functional:** rank queries must stay fast (sub-100ms) even as the underlying score set churns constantly; update frequency can be very high (every match, every point scored); ties need a defined, stable resolution so rank doesn't flicker unpredictably for equal scores.\n\nThe tension to name up front: score updates want to be cheap and frequent, while rank queries want an always-current, fully-ordered view — those two pull in different directions at scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-leaderboard-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: score updates per second vs rank-read QPS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A game with 100M active players, each playing a few matches a day, might generate 50,000 score updates/sec at peak. Rank reads (checking your own rank, viewing the top 100) tend to run far higher — easily 500,000/sec — since players check standings far more often than they finish a match.\n\nThis is a read-heavy skew similar to the URL shortener, but the read here (\"what's my rank among millions\") is intrinsically more expensive per-query than a key lookup, which is exactly why the underlying data structure matters so much more here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-leaderboard-s03-q1"
+      ]
+    },
+    {
+      "id": "design-leaderboard-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- `updateScore(user, delta)` → adjusts a user's score (often incrementally, e.g. +10 points for a win) and repositions them in ranked order.\n- `getRank(user)` → returns the user's current position among all scores.\n- `getTopN()` → returns the top N users by score, for the visible leaderboard.\n\nAll three need to reflect a consistent, live view of the same underlying ranked structure — updating a score and then immediately calling `getRank` for that same user should reflect the update, not a stale snapshot.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-leaderboard-s05",
+      "order": 5,
+      "sectionTitle": "Data model: sorted set vs a B-tree index vs periodic batch ranking",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Sorted set (skip list) | B-tree index on a score column | Periodic batch ranking |\n|---|---|---|\n| Update cost | O(log n) reposition per score change | O(log n) index update, plus row-write overhead | None per update — writes just append |\n| Rank-query cost | O(log n) — a native rank operation | O(n) worst case — no native \"rank of X\" query in most SQL engines | O(1) read of a precomputed rank |\n| Freshness | Always current | Always current, but query cost dominates | Only as fresh as the last batch run |\n\n**How to decide:** a sorted set (Redis `ZSET`, backed by a skip list) is the default for a live leaderboard — it's the only option here with both cheap updates and cheap rank queries. Batch ranking is fine when near-real-time is acceptable (a weekly tournament standings page); a plain B-tree rarely wins on either axis at this scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-leaderboard-s05-q1"
+      ]
+    },
+    {
+      "id": "design-leaderboard-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: a sharded sorted-set leaderboard with a merge step",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Sharded sorted sets merged by a k-way merge layer into a global top-N and rank](assets/leaderboard-shard-merge.svg)\n\nAt 100M+ users, a single sorted set (even in-memory) can outgrow one node's practical capacity — the fix is to shard users across several sorted sets, then merge per-shard top-N lists into a global one (a classic k-way merge, since each shard's list is already sorted).\n\nGlobal rank for one user requires knowing how many higher scores exist in every *other* shard too, which is why the next slide treats this as a real problem, not an afterthought.",
+      "assets": [{"alt": "Sharded sorted sets merged by a k-way merge layer into a global top-N and rank", "path": "assets/leaderboard-shard-merge.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-leaderboard-s07",
+      "order": 7,
+      "sectionTitle": "Getting a user's rank in a sharded leaderboard without a full scan",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Within one shard, rank is cheap (a native sorted-set operation). Across shards, a user's *global* rank is their local rank plus the count of higher scores in every other shard — which naively means querying every other shard on every single rank check.\n\nThe common fix is to maintain a lightweight, periodically-refreshed count of \"scores above threshold X\" per shard (a small aggregate, not the full data), so a global rank estimate can be computed from N small aggregate lookups instead of N full shard scans. This trades perfect real-time global rank for a rank that's accurate to the last aggregate refresh (often just seconds old).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-leaderboard-s07-q1"
+      ]
+    },
+    {
+      "id": "design-leaderboard-s08",
+      "order": 8,
+      "sectionTitle": "Tie-breaking rules and their effect on rank stability",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two players with identical scores need a deterministic secondary ordering, or their relative rank can flicker on every read (some sorted-set implementations don't guarantee stable order among equal keys without one). Common tie-breakers: whoever reached the score first (earlier timestamp ranks higher), or a stable secondary key like user ID.\n\nThe choice has a real gameplay effect: \"earliest to reach the score wins ties\" rewards being first, while a neutral tie-breaker (like user ID) is arbitrary but at least stable and fair-feeling in that it never favors one strategy over another.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-leaderboard-s09",
+      "order": 9,
+      "sectionTitle": "The bottleneck: a single global leaderboard node under write pressure",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If every score update funnels through one sorted-set instance (even a fast in-memory one), write throughput caps at whatever that single node can sustain — a real ceiling once update volume climbs into the tens of thousands per second, as estimated earlier.\n\nSharding (as in the diagram) addresses this directly, but it's worth stating the cost explicitly: sharding trades a simple, always-exact global structure for a more complex, slightly-approximate one — the classic pattern seen across every topic in this group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "design-leaderboard-s10",
+      "order": 10,
+      "sectionTitle": "Trade-off: exact real-time rank vs periodically refreshed approximate rank",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Exact real-time global rank | Periodically refreshed approximate rank |\n|---|---|---|\n| Accuracy | Always exact | Accurate as of the last refresh (often seconds old) |\n| Cost per rank query | Higher — may need live cross-shard aggregation | Lower — reads a cached aggregate |\n| Write-path impact | None extra | A small periodic background refresh job |\n\n**How to decide:** most consumer leaderboards (games, fitness apps) don't need millisecond-exact global rank — a rank that's a few seconds stale is imperceptible to a user. Reserve exact real-time rank for cases where it's genuinely load-bearing, like a live tournament's final standings during the closing seconds.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "design-leaderboard-s10-q1"
+      ]
+    },
+    {
+      "id": "design-leaderboard-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: recomputing the full sorted order on every single score update",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Whenever a score changes, just re-sort the whole list of users to get accurate ranks.\"\n\n**Why it's wrong:** a full re-sort is O(n log n) on every single update — at even a modest update rate against millions of users, this makes the system fall over almost immediately, since the cost per write scales with total user count, not with the size of the actual change.\n\n**Correct model:** use a data structure (a sorted set/skip list) that supports repositioning a single element in O(log n) without touching the rest of the structure — the whole reason this topic reaches for that structure instead of a plain sorted array or list.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "design-leaderboard-s11-q1"
+      ]
+    }
+  ]
+}

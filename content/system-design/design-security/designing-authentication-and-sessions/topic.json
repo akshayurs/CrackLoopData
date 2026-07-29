@@ -1,0 +1,115 @@
+{
+  "id": "designing-authentication-and-sessions",
+  "title": "Designing Authentication & Sessions",
+  "area": "system-design",
+  "group": "design-security",
+  "order": 1,
+  "slug": "designing-authentication-and-sessions",
+  "summary": "Where authentication lives in an architecture, token vs session as an architectural choice, and how services prove their identity to each other.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "designing-authentication-and-sessions-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Authentication** answers one question: who is making this request? But *where* that question gets answered — the client, the edge gateway, or every individual service — is an architectural decision, not an implementation detail, and it reshapes latency, blast radius, and how much you trust your own network.\n\nThis topic covers that design layer: token vs session as a system-wide trade-off, how services prove their identity to *each other* (not just to users), and the parts that break first when a monolith's auth model gets carried into a distributed system unchanged.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-authentication-and-sessions-s02",
+      "order": 2,
+      "sectionTitle": "Where authentication lives: client, edge, or every service",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A request can be authenticated in three places, and each pushes the trust boundary somewhere different. **Client-side checks** (hiding a button if no token exists) are UX only — the client can be tampered with, so they never count as real authentication. **Edge/gateway authentication** verifies the credential once, at the API gateway, and everything behind it trusts that verdict — fast and simple, but every internal service implicitly trusts the network behind the gateway. **Per-service authentication** has each service independently verify the caller, which survives a compromised internal service but adds latency and duplicated verification logic everywhere.\n\nMost production systems land on a hybrid: the gateway does the expensive credential check once, then forwards a lightweight, signed identity downstream that services can verify cheaply without re-authenticating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "designing-authentication-and-sessions-s02-q1"
+      ]
+    },
+    {
+      "id": "designing-authentication-and-sessions-s03",
+      "order": 3,
+      "sectionTitle": "Compare: token-based vs session-based auth",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Both prove identity after login; they differ in *where the truth lives* and what that costs you architecturally.\n\n| | Session-based | Token-based (e.g. JWT) |\n|---|---|---|\n| Where state lives | Server-side store, keyed by a session ID | Client-held, self-contained — the token itself carries the claims |\n| Scaling the app tier | Needs a shared store (Redis) reachable by every node, or sticky routing | Any node verifies the signature locally — no shared lookup |\n| Revocation | Instant — delete the row and the session is dead | Hard — a valid token stays valid until it expires, unless you maintain a blocklist |\n| Cross-service checks | Every service needs access to the same session store | Any service that trusts the signing key can verify it independently |\n\n**How to decide:** reach for tokens when you need many services to verify identity independently without a shared datastore; reach for sessions (or short-lived tokens with a revocable refresh token) when instant revocation — killing a compromised login *now* — matters more than that convenience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "designing-authentication-and-sessions-s03-q1"
+      ]
+    },
+    {
+      "id": "designing-authentication-and-sessions-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: a login request's path to an issued token",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A login request starts at the client, which posts credentials to the **API gateway** rather than any individual service. The gateway forwards them to a dedicated **identity/auth service**, which checks them against the user store, and — on success — mints a signed token or creates a session record.\n\nThat token travels back through the gateway to the client, which attaches it to every future request. The gateway (or each downstream service) then verifies the token on each call without touching the user store again — the expensive check happened exactly once, at login.\n\n![Sequence diagram: client sends credentials through the API gateway to the identity service, which mints a token that flows back and is attached to future requests](assets/login-token-sequence.svg)",
+      "assets": [
+        {"alt": "Sequence diagram: client sends credentials through the API gateway to the identity service, which mints a token that flows back and is attached to future requests", "path": "assets/login-token-sequence.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-authentication-and-sessions-s05",
+      "order": 5,
+      "sectionTitle": "Service-to-service auth: mTLS and service identity vs forwarding the user's token",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A user's token proves who the *user* is, but services also need to know who is calling **them** — a separate identity problem. **Mutual TLS (mTLS)** gives each service its own certificate, so the receiving service can cryptographically confirm which service is calling, independent of any user context.\n\nThe alternative is **forwarding the user's token downstream** unchanged, so every service in the chain can check user-level permissions directly. That's convenient, but a compromised service anywhere in the chain can then replay that token as the user.\n\nMost real systems combine both: mTLS proves *which service* is calling, while a forwarded, scoped claim (not the raw credential) carries *on whose behalf*. Keeping these two identities distinct is what separates a system that survives one compromised service from one where a single leaked token can be replayed anywhere in the call graph.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "designing-authentication-and-sessions-s05-q1"
+      ]
+    },
+    {
+      "id": "designing-authentication-and-sessions-s06",
+      "order": 6,
+      "sectionTitle": "Session invalidation and logout across many services",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a monolith, logout is one row deleted from one table. In a distributed system, that same click has to invalidate state that may be cached in a dozen services, and the design has to pick how fast \"logged out\" actually takes effect.\n\nWith **session-based auth**, logout is still simple: delete the central session record, and every service that checks that store immediately sees the user as logged out. With **tokens**, it's harder — a signed JWT stays valid until it expires no matter what you do, so systems either keep tokens short-lived and pair them with a revocable refresh token, or maintain a shared blocklist every service must check. A third pattern is **event-based invalidation**: publish a \"user logged out\" event and let each service evict its own local cache of that user's identity.\n\nThe trade-off is always the same one: how much latency and infrastructure are you willing to pay for logout to be instant everywhere, versus accepting a short window where a token stays technically valid.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "designing-authentication-and-sessions-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: lifting a monolith's session model into a microservices split",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We already have session auth working in the monolith — just point every new service at the same session table.\"\n\n**Why it's wrong:** every new service now takes a hard runtime dependency on one shared database purely to answer \"who is this?\" That table becomes a single point of contention and failure for the entire system, and each service has coupled itself to the monolith's internal schema instead of to a stable identity contract.\n\n**Correct model:** introduce a dedicated identity layer — an auth service issuing tokens, or a session store built and scaled for this specific access pattern — so every other service depends on a narrow, versioned identity interface instead of reaching into shared internal state. The split should extend to auth too, not stop at the business logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "designing-authentication-and-sessions-s07-q1"
+      ]
+    }
+  ]
+}

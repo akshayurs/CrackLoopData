@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-designing-fanout-pubsub",
+  "interviewQuestions": [
+    {
+      "id": "iv-designing-fanout-pubsub-iq1",
+      "question": "Multiple services need to react to the same event — how do you design that fan-out?",
+      "answerMarkdown": "I'd avoid the anti-pattern first: the producer calling each subscriber's API directly. That couples the producer to every current and future subscriber and puts each one's availability on the producer's critical path. Instead, I'd publish once to a topic and give each subscriber its own consumer group with its own offset.\n\nConcretely, an `order_placed` topic with three consumer groups — billing, shipping, analytics — using SNS-to-SQS fan-out or Kafka consumer groups, lets each one read independently. If analytics falls behind by two hours during a batch job, billing and shipping are completely unaffected because they track their own offsets. When a fourth subscriber, fraud-scoring, needs to be added later, it just subscribes to the existing topic — zero changes to the producer, which is the strongest signal the design is actually decoupled.\n\nI'd close with the cost: the producer can no longer tell at publish time whether every important subscriber actually processed the event, so I'd add per-subscriber monitoring to cover that gap.\n\n**Testing:** whether you know the concrete pub/sub mechanics — one topic, independent consumer groups — instead of just saying \"use pub/sub.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core fan-out design question"
+    },
+    {
+      "id": "iv-designing-fanout-pubsub-iq2",
+      "question": "One subscriber needs the event delivered exactly once, and another can tolerate occasional duplicates — do they need different infrastructure?",
+      "answerMarkdown": "No, same topic for both. Delivery-guarantee strictness is a consumer-side decision, not something that needs separate infrastructure per subscriber. The subscriber that can't tolerate duplicates — say, a billing consumer that charges a card — adds its own idempotent processing: a dedup key checked in the same transaction as the charge. The subscriber that can tolerate duplicates, like an analytics consumer just incrementing a counter, doesn't bother with that machinery at all.\n\nI'd walk through why this works: the topic and the delivery mechanism (at-least-once, typically) are the same for every subscriber — what differs is what each one chooses to do with a possible duplicate. That's a property of the consumer's own code, not something the pub/sub layer needs to know or provision differently for.\n\nI'd contrast this with the wrong instinct of spinning up a separate \"strict\" topic for the billing consumer — that adds operational complexity for no real benefit, since the dedup logic belongs in the consumer either way.\n\n**Testing:** whether you understand that idempotency is a consumer-side concern layered on top of a shared delivery guarantee, not an infrastructure choice.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mixed delivery-guarantee needs on one topic"
+    },
+    {
+      "id": "iv-designing-fanout-pubsub-iq3",
+      "question": "How do you know if the fan-out you designed is actually decoupled, versus secretly still coupled somewhere?",
+      "answerMarkdown": "My test is: does adding a new subscriber require any change to the producer? If the answer is genuinely no — a new service just subscribes to the existing topic with its own consumer group, no producer redeploy, no code change — that's strong evidence the design is decoupled the way it's supposed to be.\n\nIf adding a subscriber does require touching the producer — a new call, an updated list of subscriber addresses, a changed publish rate — that's a sign the coupling pub/sub was meant to remove is still there in some form, just hidden a layer down.\n\nI'd give a concrete failure example: if the producer maintains an allow-list of \"known subscriber topics it publishes filtered copies to,\" adding a subscriber means editing that list — that's not real decoupling, it's direct coupling wearing a pub/sub costume. The genuine version has the producer publish blindly to one topic and never need to know who, or how many, are listening.\n\n**Testing:** whether you can name a concrete, checkable signal for \"is this actually decoupled\" instead of assuming any pub/sub-shaped design automatically is.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Verifying the fan-out is really decoupled"
+    }
+  ]
+}

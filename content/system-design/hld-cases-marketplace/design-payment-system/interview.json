@@ -1,0 +1,29 @@
+{
+  "topicId": "design-payment-system",
+  "interviewQuestions": [
+    {
+      "id": "design-payment-system-iq1",
+      "question": "Design a payment processing system that never double-charges a customer?",
+      "answerMarkdown": "I'd start from the guarantee, not the architecture: every money-moving call must be exactly-once, which means every `charge`, `refund`, and `payout` call takes a client-generated idempotency key, and the server durably records the outcome under that key before responding — a retry after a timeout replays the recorded result instead of re-executing the charge.\n\nI'd model the data as a double-entry ledger rather than a mutable balance column: every transaction writes two balanced, immutable entries, so a balance is always a derived, auditable sum rather than a number that can silently drift from reality. I'd separate the synchronous customer-facing path (client to payment service to processor to ledger) from an async reconciliation job that periodically diffs the ledger against the processor's own records, catching the rare drift that any network-based integration accumulates over time.\n\nI'd close by naming the actual bottleneck as the external processor call, not internal throughput, and how the design treats that as an expected, monitored dependency.\n\n**Testing:** whether you lead with the correctness guarantee and design backward, rather than starting from a generic microservices diagram.",
+      "mostAsked": true,
+      "level": "expert",
+      "subTitle": "The full exactly-once design"
+    },
+    {
+      "id": "design-payment-system-iq2",
+      "question": "Why use a double-entry ledger instead of a simple balance-per-account model?",
+      "answerMarkdown": "I'd explain it through what a plain balance column can't do: it has no memory of how it got to its current value, so a bug, a race condition, or a bad migration can silently push it out of sync with reality, and there's nothing to check it against afterward.\n\nA double-entry ledger fixes this by making every transaction two immutable, balanced entries — a debit and a credit that always sum to zero — so the balance becomes a derived value you compute from history rather than a mutable field you trust blindly. I'd give a concrete example: a $50 charge is a debit on the customer's account and a credit on platform revenue, both written together, never edited afterward; a correction is a new reversing pair of entries, not a rewrite of history.\n\nI'd note this is exactly the model real accounting systems have used for centuries, and payment systems inherit it because the audit and dispute-resolution requirements are the same.\n\n**Testing:** whether you understand the ledger as an auditability mechanism, not just a data-modeling preference.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Why double-entry, not a balance column"
+    },
+    {
+      "id": "design-payment-system-iq3",
+      "question": "How do you handle the case where your system and the payment processor disagree about whether a charge succeeded?",
+      "answerMarkdown": "I'd say this is exactly what reconciliation exists for, and I'd treat it as an expected, ongoing part of the design rather than a rare emergency. On a regular schedule (often daily), I'd pull the processor's authoritative transaction report and diff it line by line against my own ledger, flagging any transaction present in one but not the other.\n\nFor the immediate case — a client-facing timeout where the processor's status is genuinely unknown at the moment of the call — I'd rely on the idempotency-key record and a status query to the processor (most support a lookup by the same idempotency key or their own transaction ID) to resolve the ambiguity as soon as possible, rather than guessing. I'd flag that any mismatch reconciliation finds needs a clear, auditable resolution workflow — not just silently correcting the ledger — since financial discrepancies often need a human decision and a paper trail.\n\n**Testing:** whether you recognize reconciliation as a standing safety net rather than something you'd only build after an incident.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Handling processor/ledger disagreement"
+    }
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "id": "logging-at-scale",
+  "title": "Logging at Scale",
+  "area": "system-design",
+  "group": "observability",
+  "order": 4,
+  "slug": "logging-at-scale",
+  "summary": "Structured, correlated logs aggregated across hundreds of hosts into one searchable store — and why the cheap version leaks secrets.",
+  "level": "intermediate",
+  "slideCount": 7,
+  "estReadMinutes": 5,
+  "slides": [
+    {
+      "id": "logging-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A single server's logs are a file you can `grep`. A hundred servers' logs are a distributed-systems problem: you need structure so machines can parse them, correlation so you can tie one request's lines together, and an aggregation pipeline so \"search all logs from the last hour\" is one query, not a hundred SSH sessions.\n\nThis topic covers structured logging, correlation IDs, volume control, and the PII leak that structured logging makes worse, not better, if you're not careful.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "Structured logging vs free-text logs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **free-text log** reads like `\"User 8821 checkout failed: card declined\"` — fine for a human eyeballing one file, brutal to query across millions of lines, since finding every card-decline error means regex-guessing against inconsistent phrasing.\n\n**Structured logging** emits the same event as a machine-parseable record, typically JSON: `{\"event\": \"checkout_failed\", \"user_id\": 8821, \"reason\": \"card_declined\", \"ts\": \"...\"}`. Now \"show me every checkout failure with reason card_declined\" is an exact field query, not a regex guess, and it aggregates cleanly — counting failures by reason across a million logs is a simple group-by.\n\nThe cost is a small amount of discipline: every log call needs consistent field names, which is worth enforcing with a shared logging wrapper rather than leaving it to each engineer's habits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "logging-at-scale-s02-q1"
+      ]
+    },
+    {
+      "id": "logging-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "Correlation IDs: tying one request's logs together across services",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **correlation ID** (often the same value as a trace ID) is generated once, at the edge, when a request enters the system, and then included as a field on every log line that request produces, across every service it touches.\n\nWithout it, debugging one failed request across five services means guessing which lines in five separate log streams, at roughly the same timestamp, belong together. With it, \"show me everything about this request\" becomes `correlation_id = X`, one query against the aggregated store, returning every line from every service in order.\n\nThe correlation ID needs the same propagation discipline as a trace ID (covered in the tracing topic) — it has to be threaded through every downstream call, or the chain breaks silently at whichever hop drops it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "logging-at-scale-s03-q1"
+      ]
+    },
+    {
+      "id": "logging-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: log aggregation pipeline from many hosts into one searchable store",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Log pipeline from host agents to a searchable store](assets/log-pipeline.svg)\n\nEach host runs a lightweight agent that tails local log files and ships them onward — the app itself never talks to the central store directly, so a slow or unavailable central system doesn't block request handling. A buffering layer absorbs spikes so a burst of errors doesn't overwhelm ingestion. The result is one searchable index across every host, instead of a hundred separate files.",
+      "assets": [
+        {
+          "alt": "Log pipeline from host agents to a searchable store",
+          "path": "assets/log-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "logging-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "Log levels and sampling: keeping volume/cost under control",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Log levels** (`debug`, `info`, `warn`, `error`) let you control volume by filtering what actually ships — `debug` logs are useful locally but would be enormously expensive to store from every production request, so they're typically dropped or sampled before aggregation, while `warn`/`error` are always kept.\n\nAt high enough traffic, even `info`-level logs on a hot path can be too much data to store affordably. **Log sampling** — keeping, say, 1% of successful `info` events but 100% of errors — trades some completeness on the happy path for keeping cost sane, on the reasoning that a repeated successful pattern doesn't need every instance recorded, but a failure does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "logging-at-scale-s05-q1"
+      ]
+    },
+    {
+      "id": "logging-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "Compare: centralized log aggregation vs per-host log files",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Centralized aggregation | Per-host log files |\n|---|---|---|\n| Searching across hosts | One query across everything | SSH into each host and grep manually |\n| Survives host loss | Yes — logs already shipped off-host | No — logs die with the host |\n| Cost | Storage + ingestion infra to run/pay for | Effectively free (local disk) |\n| Scales past a handful of hosts | Yes, by design | No — becomes unworkable fast |\n\n**How to decide:** per-host files are fine for a single-box side project; anything running on more than a handful of hosts, or anything where hosts get replaced/scaled dynamically, needs centralized aggregation — the debugging cost of *not* having it grows faster than the infrastructure cost of having it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "logging-at-scale-s06-q1"
+      ]
+    },
+    {
+      "id": "logging-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: logging PII or secrets into a shared, widely-accessible log store",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Logging the full request payload is fine — it's just for debugging.\"\n\n**Why it's wrong:** a centralized log store is, by design, searchable by a wide set of engineers, sometimes with long retention. Logging a full request payload can mean logging credit card numbers, passwords, or personal data into a system with far broader access and far longer retention than the original request ever had — turning a debugging convenience into a compliance and security incident.\n\n**Correct model:** redact or omit sensitive fields at the point of logging, before they ever leave the service — not as a cleanup step on the aggregated store afterward, by which point the data has already been copied, indexed, and possibly seen.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "logging-at-scale-s07-q1"
+      ]
+    }
+  ]
+}

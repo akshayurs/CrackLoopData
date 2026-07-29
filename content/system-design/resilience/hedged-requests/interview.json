@@ -1,0 +1,29 @@
+{
+  "topicId": "hedged-requests",
+  "interviewQuestions": [
+    {
+      "id": "hedged-requests-iq1",
+      "question": "Your p99 latency is 5x your p50 even though every server is healthy — what do you try?",
+      "answerMarkdown": "I'd first check whether this is a fan-out effect: if the request touches many backend calls, even a small per-call tail probability compounds — with 100 parallel calls each having a 1% chance of hitting their own p99, roughly 63% of aggregate requests hit at least one slow call. That alone can explain a p99 far above p50 with every individual server nominally healthy.\n\nGiven that, I'd reach for hedged requests on the calls that have multiple interchangeable replicas: send the request to one replica, and if it hasn't responded within a short threshold — tuned near that call's own p95 or p98 — fire a duplicate to a second replica and take whichever answers first. This targets exactly the slow-but-not-failed case that's dragging the aggregate tail up.\n\nI'd tune the delay carefully, since too short wastes capacity hedging requests that would've returned fine, and too long doesn't help the tail at all. I'd also confirm the call is safe to duplicate — hedging a non-idempotent write needs extra care.\n\n**Testing:** whether you understand tail latency as a fan-out problem and know a concrete proactive technique beyond just \"add more retries.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Diagnosing and fixing a high p99/p50 ratio"
+    },
+    {
+      "id": "hedged-requests-iq2",
+      "question": "How is a hedged request different from a retry, and when would you use each?",
+      "answerMarkdown": "A retry is reactive — it only fires after the original call has actually failed or timed out, and it happens sequentially, so its full latency stacks on top of the time already spent waiting for the failure. A hedged request is proactive — it fires on a timer while the first call is still in flight, specifically targeting calls that are merely running slow rather than genuinely failed.\n\nI'd use retries for correctness against real failures — a dropped connection, a 5xx response — where the goal is eventually getting a successful response. I'd use hedging for latency against tail behavior in a healthy replica set — the first replica is fine, just unusually slow this time, and racing a second one catches that case without waiting out the full delay.\n\nThey're not mutually exclusive: a system can hedge for tail latency during normal operation and still fall back to retries with backoff if both hedged attempts genuinely fail.\n\n**Testing:** whether you distinguish a latency optimization from a failure-recovery mechanism instead of treating them as the same idea.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Hedging vs retrying"
+    },
+    {
+      "id": "hedged-requests-iq3",
+      "question": "Would you hedge a write request? What would you need to be careful about?",
+      "answerMarkdown": "I'd be cautious by default. Plain hedging doesn't guarantee the losing attempt gets cancelled before it finishes — both the original and the duplicate can genuinely execute. For a non-idempotent write like incrementing a counter or appending an event, that means hedging can cause the write to happen twice, the same double-execution risk a naive retry has on timeout.\n\nSo I'd only hedge a write if it's made idempotent first — an idempotency key the server deduplicates on, so even if both attempts execute server-side, only one effect actually lands. If true cancellation matters more than that, I'd reach for tied requests instead, where both replicas know about each other and the losing one is explicitly told to stop rather than just having its response discarded.\n\nFor a write I couldn't make idempotent and couldn't get tied-request support for, I'd skip hedging entirely and accept the tail latency rather than risk a duplicate side effect.\n\n**Testing:** whether you catch that hedging inherits the same idempotency requirement as retries, rather than assuming it's automatically safe.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Hedging writes safely"
+    }
+  ]
+}

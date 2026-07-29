@@ -1,0 +1,29 @@
+{
+  "topicId": "object-and-blob-storage",
+  "interviewQuestions": [
+    {
+      "id": "object-and-blob-storage-iq1",
+      "question": "Design the storage for a photo/video upload feature.",
+      "answerMarkdown": "I'd split the design into two paths: metadata and bytes. Bytes go to object storage (S3 or equivalent) — never a database column — because it's built for large, mostly-immutable files served over HTTP. Metadata (owner, upload time, size, content type, moderation status, and the object key) goes into the database, so I can query and index it without ever touching the file bytes.\n\nFor the upload path itself, I'd avoid routing bytes through my app servers: the client requests a pre-signed URL from the app, uploads directly to the object store using it, and the app only writes the metadata row once it gets a completion signal. For downloads, I'd put a CDN in front of the object store so reads don't hit origin storage repeatedly.\n\nI'd also mention a processing step if relevant — video transcoding or image resizing — as an asynchronous job triggered off the upload-complete event, not something the upload request waits on.\n\n**Testing:** whether you know the metadata/bytes split and can describe an upload path that never proxies large files through your own servers.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Designing photo/video upload storage"
+    },
+    {
+      "id": "object-and-blob-storage-iq2",
+      "question": "Why would you use a pre-signed URL instead of having the client upload through your API?",
+      "answerMarkdown": "I'd point to what happens without one: every upload streams through the app server, which doubles bandwidth (in from the client, out to the object store) and ties up a server connection and memory for the whole upload duration — expensive at scale and a poor use of app-tier capacity built for short request/response cycles, not long streaming transfers.\n\nA pre-signed URL flips that: the app server's involvement shrinks to issuing a short-lived, scoped permission slip, and the actual bytes travel directly between the client and the object store. I'd note the trade-off honestly — you give up any inline validation the app might have done on the bytes as they streamed through, so validation (file type, size limits, virus scanning) needs to happen either before issuing the URL (checking declared size/type) or after upload completes, as an async step.\n\n**Testing:** whether you understand the bandwidth/connection cost being avoided, and that you haven't forgotten validation just because the app server is out of the data path.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why use pre-signed URLs"
+    },
+    {
+      "id": "object-and-blob-storage-iq3",
+      "question": "An existing system stores user avatars as BLOB columns in Postgres and backups have gotten painfully slow. How would you migrate this, and would you do it live?",
+      "answerMarkdown": "I'd move the actual bytes to object storage and replace the BLOB column with a reference (object key, size, content type), since that's what's bloating backups — every backup copies the full avatar data even though it rarely changes. I would do this live, not as a big-bang cutover: backfill existing avatars from Postgres to the object store in a background job, verify each copy against the original (checksum), then switch reads to the new path once a given row's migration is confirmed, and only then null out or drop the old BLOB column for that row.\n\nI'd keep new writes going to the object store from day one of the migration, so I'm only backfilling historical data, not racing new uploads. I'd also expect backup time and size to drop substantially once the BLOBs are gone, which is a good way to measure the migration's success concretely.\n\n**Testing:** whether you can plan an incremental, verifiable migration instead of proposing a risky one-shot cutover.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Migrating BLOBs out of the database"
+    }
+  ]
+}

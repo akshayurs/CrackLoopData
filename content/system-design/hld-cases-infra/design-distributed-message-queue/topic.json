@@ -1,0 +1,186 @@
+{
+  "id": "design-distributed-message-queue",
+  "title": "Design a Distributed Message Queue",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 8,
+  "slug": "design-distributed-message-queue",
+  "summary": "Building the broker itself, Kafka/SQS-like — the partitioned log and delivery-semantics internals, not how to use a queue.",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-distributed-message-queue-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: build a durable, ordered, at-least-once message broker — think Kafka or SQS internals — that many producers write to and many consumers read from independently. This is a build-the-broker question, not a \"how do I use a queue in my app\" question.\n\nThe core structure that makes everything else possible is the **partitioned append-only log**: instead of a generic queue data structure, the broker is built around a simple, brutally efficient primitive — write to the end, read forward from wherever you left off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** producers publish messages to named topics; consumers subscribe and read them, tracking their own progress.\n\n**Non-functional:** high sustained **throughput**, a defined **ordering scope** (ordering is guaranteed within a partition, not across an entire topic — a distinction that trips up a lot of candidates), a stated **delivery guarantee** (at-least-once is the realistic default), and a **retention window** — how long messages stay available after being read, since unlike a traditional queue, a broker like this doesn't delete a message the instant it's consumed.\n\nThat last point is a genuine departure from \"queue\" intuition: multiple independent consumers can each read the same retained messages at their own pace.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-distributed-message-queue-s02-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-message-queue-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: messages/sec, size, retention storage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At **500,000** messages/sec platform-wide, averaging **1KB** each, that's `500,000 * 1KB = 500MB/sec` of write throughput — roughly **43TB/day**. A **7-day retention window** (a common default) means the broker holds around **300TB** at any time, before replication overhead.\n\nWith 3x replication for durability (covered later), actual disk footprint is closer to **900TB**. This is exactly the kind of number that should make you propose partitioning across many broker nodes from the outset — no single machine holds anywhere near this.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two operations: `produce(topic, key, value)` — publish a message, where `key` determines which partition it lands in — and `consume(topic, partition, offset)` — read messages from a specific partition starting at a specific offset.\n\nNotice that `consume` takes an explicit `offset`, not \"give me the next message.\" That's deliberate: the broker doesn't track per-consumer progress internally the way a traditional queue does — the consumer (or a coordinating layer) owns and advances its own offset, which is what makes replay and independent multi-consumer reads possible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s05",
+      "order": 5,
+      "sectionTitle": "Data model: the partitioned append-only log",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **topic** is split into multiple **partitions**, and each partition is an **append-only log**: messages are written strictly in arrival order, each assigned a monotonically increasing **offset**, and never modified in place. Reads are just \"start at offset N and read forward\" — sequential disk I/O, which is dramatically faster than random access.\n\nThis structure is the reason the whole system works at high throughput: appends are cheap (always writing to the end of a file), and ordering falls out for free within one partition, since offsets are assigned in write order by construction. See [log-based-streaming](log-based-streaming) for the general pattern this broker is one instance of.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: a topic split into ordered, append-only partitions",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A topic split into 4 partitions, each an append-only log with sequential offsets growing independently at its own right end](assets/partitioned-log.svg)\n\nOrdering is a per-partition property, not a per-topic one — messages in partition 0 have no defined ordering relationship to messages in partition 1, even though both belong to the same topic.",
+      "assets": [
+        {
+          "alt": "A topic split into 4 partitions, each an append-only log with sequential offsets growing independently at its own right end",
+          "path": "assets/partitioned-log.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s07",
+      "order": 7,
+      "sectionTitle": "Consumer offset tracking: resuming exactly where you left off",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each consumer (or consumer group) records the last offset it successfully processed, per partition — either committed back to the broker or stored externally. On restart or rebalance, it resumes from that stored offset rather than the beginning or the current end of the log.\n\nThis is what makes the broker's retention model actually useful: because messages aren't deleted on read, a consumer that crashes and restarts simply re-reads from its last committed offset — nothing was lost, and nothing needs to be specially recovered, because the log itself never changed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-distributed-message-queue-s07-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-message-queue-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: producer to consumer group offsets",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A producer hashes a key to pick a partition; a consumer group has one member per partition, each tracking its own committed offset](assets/producer-consumer-group.svg)\n\nSame key always maps to the same partition — this is precisely what preserves ordering **for that key**, since every message with that key lands in the identical, strictly-ordered log.",
+      "assets": [
+        {
+          "alt": "A producer hashes a key to pick a partition; a consumer group has one member per partition, each tracking its own committed offset",
+          "path": "assets/producer-consumer-group.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s09",
+      "order": 9,
+      "sectionTitle": "Delivery semantics internals: at-least-once, at-most-once, exactly-once",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | At-most-once | At-least-once | Exactly-once |\n|---|---|---|\n| Mechanism | Commit offset before processing | Commit offset after processing succeeds | Combine at-least-once delivery with idempotent processing or transactional writes |\n| Failure behavior | A crash before processing means the message is silently lost | A crash after processing but before commit means the message is redelivered | Redelivery still happens, but processing effects are deduplicated so the outcome looks exactly-once |\n| Practical use | Rare — data loss usually unacceptable | The realistic default for most brokers | Achievable at the application layer, not as a broker-level guarantee alone |\n\n**How to decide:** see [message-delivery-semantics](message-delivery-semantics) for the general framework — brokers themselves almost universally offer at-least-once, and true exactly-once is built on top via idempotent consumers, not inside the broker.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s10",
+      "order": 10,
+      "sectionTitle": "Replication within the broker for durability",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each partition is replicated across several broker nodes — one **leader** handling all reads/writes for that partition, and several **followers** continuously copying the leader's log. If the leader node fails, a follower that's fully caught up is promoted to leader, and producers/consumers transparently redirect to it.\n\nThe durability guarantee only holds if a producer's write is acknowledged after it's replicated to enough followers, not just written to the leader alone — an ack-on-leader-only design loses data the instant that one node fails before followers catch up. See [replication-strategies](replication-strategies) for how this leader/follower pattern generalizes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-distributed-message-queue-s10-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-message-queue-s11",
+      "order": 11,
+      "sectionTitle": "The bottleneck: a single hot partition capping throughput",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If message keys are skewed — one key (a viral user ID, a single high-traffic tenant) accounts for a disproportionate share of traffic — every message with that key lands on the **same partition**, since partitioning is key-deterministic. That one partition's single leader becomes the ceiling for that key's throughput, no matter how many total partitions or broker nodes exist.\n\nThe fix isn't adding more partitions in general — it's choosing a **key** with enough natural cardinality to spread load evenly, or, when one entity is unavoidably hot, splitting its traffic across a small sub-key range specifically for that entity.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-message-queue-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: growing partition count silently breaks key-based ordering",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Throughput is climbing, so let's just add more partitions to a topic that's already in production.\"\n\n**Why it's wrong:** which partition a key maps to is typically a function of the **current partition count** (a hash mod N). Changing N changes that mapping for existing keys — messages for the same key that used to all land on partition 3 now split across partition 3 and some other partition, silently breaking the per-key ordering guarantee consumers were relying on, with no error raised anywhere.\n\n**Correct model:** treat partition count as fixed at topic-creation time for any topic where key-based ordering matters, and provision it generously upfront based on projected peak load — resizing later requires a deliberate migration (a new topic plus a controlled cutover), not a live repartition.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

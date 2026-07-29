@@ -1,0 +1,178 @@
+{
+  "id": "iv-design-id-generator-class",
+  "title": "Design an ID Generator Class",
+  "area": "system-design",
+  "group": "interview-lld-design-questions",
+  "order": 11,
+  "slug": "iv-design-id-generator-class",
+  "summary": "Class scope: an in-process, thread-safe ID generator — a building block, distinct from a distributed Snowflake-style service. Scored on naming the needed property before picking a mechanism.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-design-id-generator-class-s01",
+      "order": 1,
+      "sectionTitle": "The question",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Design an ID generator** — but scoped to a single process, a building block distinct from the distributed, Snowflake-style service. This class-scope version is about picking the right property — uniqueness, or uniqueness plus ordering — and the smallest mechanism that gives it, not about cross-machine coordination, which is the harder [distributed unique ID generator](design-unique-id-generator) case study.\n\nThe scoring signal is whether you correctly identify that a plain incrementing counter and a UUID solve different problems, and pick between them based on what's actually needed.\n\nThe 10-minute bar: a thread-safe counter-based generator, a UUID-based generator, and a clear comparison of when each applies.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying question: sortable/monotonic, or just unique?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask whether IDs need to be **sortable or monotonic** — a newer ID always compares greater than an older one, useful for time-ordering or pagination — or just **unique**, with no ordering guarantee needed. This single question determines the whole design: a monotonic counter gives you both uniqueness and order for free within one process, while a UUID gives uniqueness with no ordering at all.\n\nGetting this wrong in either direction costs you: over-engineering a sortable ID when nothing needs order wastes effort, and using a random ID where sort order matters breaks pagination or time-based queries silently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: pick the property, then the smallest mechanism",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The shape is a two-step decision, not a single implementation to memorize. **Step one**: name the property that actually matters for this use case — uniqueness alone, monotonicity, or both. **Step two**: pick the smallest mechanism that provides exactly that property — an atomic counter for monotonic-and-unique within one process, a UUID generator for unique-with-no-coordination, or a composite of timestamp plus counter for rough time-ordering across a small number of processes.\n\nNaming the property before the mechanism is what separates a reasoned answer from picking an ID scheme out of habit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s04",
+      "order": 4,
+      "sectionTitle": "Code: a thread-safe monotonic counter using an atomic long",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class MonotonicIdGenerator {\n    private final AtomicLong counter = new AtomicLong(0);\n\n    public long nextId() {\n        return counter.incrementAndGet();\n    }\n}\n```\n\nAn atomic long gives thread-safe, monotonically increasing IDs with a single instruction on modern hardware — no explicit lock needed, since the increment-and-get operation is itself atomic.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": [
+        "iv-design-id-generator-class-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-design-id-generator-class-s05",
+      "order": 5,
+      "sectionTitle": "Code: a UUID-based generator, contrasted",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\npublic class UuidIdGenerator {\n    public String nextId() {\n        return UUID.randomUUID().toString();\n    }\n}\n```\n\nNo shared counter state at all — any number of threads, or even separate processes with zero coordination, can call this and get IDs that won't collide in practice. The trade: the result carries no ordering information whatsoever; two IDs generated a millisecond apart sort in effectively random order.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s06",
+      "order": 6,
+      "sectionTitle": "Compare: counter vs UUID vs a composite",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Counter (atomic long) | UUID | Composite (timestamp + counter) |\n|---|---|---|---|\n| Sortable | Yes, strictly | No | Roughly, by timestamp prefix |\n| Size | 8 bytes | 16 bytes (36-char string) | Typically 8-16 bytes |\n| Coordination needed | Single shared counter in-process | None | None across processes, some within one |\n| Survives restart as-is | No — resets unless persisted | Yes, inherently | Yes, since the timestamp always advances |\n\n**How to decide:** strict ordering within one process, tolerant of a reset on restart — use a counter. Zero-coordination uniqueness across processes with no ordering need — use a UUID. Rough time-ordering with zero coordination — the composite is the practical middle ground.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-id-generator-class-s06-q1"
+      ]
+    },
+    {
+      "id": "iv-design-id-generator-class-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: what happens to a counter-based generator across a process restart?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A plain in-memory atomic counter resets to zero on restart, which is often fine — uniqueness within a single run is all that's needed — but dangerous if IDs are expected to stay unique **forever**, including across restarts: a restarted process handing out ID 1 again, when a previous run already used it, is a silent collision.\n\nIf cross-restart uniqueness matters, the counter needs to be persisted and reloaded on startup — a database sequence, a checkpoint file — or the process needs to fold in something that changes across restarts, like a boot timestamp, so old and new IDs can't collide even without persisting the counter itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how does this change once more than one process generates IDs?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The moment a second process needs to generate IDs from the same space, a single in-process atomic counter stops being enough — two processes each starting their own counter at zero will both hand out ID 1, with no coordination between them to prevent it.\n\nThis is exactly where the class-scope answer hands off to [the distributed ID generator problem](design-unique-id-generator): options like assigning each process a distinct ID range upfront, or a Snowflake-style scheme that folds a machine ID into the generated value, exist specifically to solve the multi-process coordination this single-process design doesn't need to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: does the ID need to be safe to expose to end users?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "I'd ask this because it changes the calculus on which generator is even acceptable. A **sequential integer ID** exposed publicly leaks information — a competitor watching order IDs tick up can estimate daily order volume, and users can guess adjacent IDs and probe for other records.\n\nAn **internal-only ID**, used purely inside the system — database keys, internal service calls — has no such exposure risk, and a fast monotonic counter is a fine choice. If an ID will be user-facing — an order confirmation number, a public API resource ID — I'd favor something like a UUID or a deliberately obfuscated ID over a raw sequential counter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-id-generator-class-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-design-id-generator-class-s10",
+      "order": 10,
+      "sectionTitle": "Weak answer: a non-thread-safe counter with a plain increment",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Weak answer:** using a plain numeric field with a bare increment operator instead of an atomic type, assuming single-threaded access that isn't actually guaranteed.\n\n**Why it's wrong:** a bare increment is a read-modify-write sequence, not a single atomic operation — under concurrent access, two threads can both read the same value before either writes back, producing a duplicate ID. This is a subtle, hard-to-reproduce bug that only shows up under real concurrency.\n\n**Correct model:** use an atomic type's increment-and-get operation, or an explicit lock around the increment, never a bare shared counter under concurrent access.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-id-generator-class-s11",
+      "order": 11,
+      "sectionTitle": "Wrong answer: a random number generator with no collision check",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just generate a random number for the ID — random numbers are basically unique.\"\n\n**Why it's wrong:** a naive random generator, especially with a small ID space or a weak random source, has a real, non-negligible collision probability that grows with the number of IDs generated — the birthday paradox makes this worse than intuition suggests, and \"basically unique\" silently becomes \"occasionally duplicated\" at scale.\n\n**Correct model:** use a well-specified scheme with known collision properties, like a UUID — 128 bits, specifically designed and analyzed for negligible collision probability — rather than an ad hoc random number of unclear width.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "iv-design-id-generator-class-s11-q1"
+      ]
+    },
+    {
+      "id": "iv-design-id-generator-class-s12",
+      "order": 12,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Decide the property first** — uniqueness alone, or uniqueness plus ordering. **Counter** — atomic, monotonic, unique-and-sortable within one process, resets on restart unless persisted. **UUID** — unique with zero coordination, no ordering, larger. **Composite** — timestamp plus counter for rough ordering with no cross-process coordination. **Close** by flagging exposure: a sequential ID leaks information if shown to end users; prefer a UUID or an obfuscated ID there.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

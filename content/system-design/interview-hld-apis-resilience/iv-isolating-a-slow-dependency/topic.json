@@ -1,0 +1,165 @@
+{
+  "id": "iv-isolating-a-slow-dependency",
+  "title": "One slow dependency is eating your whole thread pool — how do you stop it from taking everything else down?",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 9,
+  "slug": "iv-isolating-a-slow-dependency",
+  "summary": "The bulkhead pattern — isolating resource pools per dependency — as distinct from a circuit breaker, which reacts to failure rather than isolating resource consumption.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-isolating-a-slow-dependency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: why a circuit breaker alone doesn't fix this",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A circuit breaker reacts to failure by stopping new calls once a dependency looks unhealthy — but it doesn't stop calls **already in flight** from holding onto shared resources while it decides. If those in-flight calls fill a shared thread pool, unrelated healthy dependencies stall too, breaker or no breaker.\n\nThe strong answer names the **bulkhead pattern**: give each dependency its own bounded resource pool, so its failure mode is capped to its own allocation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: are calls to this dependency **sharing a thread or connection pool** with calls to other, healthy dependencies? If each dependency already has its own pool, this failure mode may not even apply.\n\nAlso ask: **how many concurrent calls** does the slow dependency typically hold open when it's degraded? That number tells you roughly how much of a shared pool a single bad dependency could consume before anything else even notices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Give each dependency its **own bounded resource pool** — threads, connections, or a semaphore — so one dependency running slow can only exhaust **its own allocation**, never the shared pool other dependencies rely on.\n\nThis is the bulkhead pattern, named after ship compartments: a hole in one compartment floods that compartment, not the whole ship.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "iv-isolating-a-slow-dependency-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: a shared 100-thread pool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A worked example: a service calling both a **fast internal cache** and a **slow third-party enrichment API** from the same 100-thread pool. Normally both calls return in milliseconds, so the pool has plenty of headroom.\n\nWhen the enrichment API starts taking **30 seconds per call instead of 200ms**, all 100 threads fill up waiting on it — and even the cache calls, completely unrelated to the slow dependency, start queuing and timing out, because there are no free threads left to run them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-isolating-a-slow-dependency-s04-q1"
+      ]
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: the fix — a dedicated 15-thread bulkhead",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Bulkhead thread pool split](assets/thread-pool-bulkhead.svg)\n\nThe fix: a dedicated **15-thread bulkhead** for the enrichment API calls. When it degrades, at most 15 threads get stuck waiting — the other 85 keep serving every other dependency's calls normally, completely unaffected by the enrichment API's slowdown.",
+      "assets": [{"alt": "Bulkhead thread pool split", "path": "assets/thread-pool-bulkhead.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: bulkheads at the connection-pool level too",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The same pattern applies below the thread level: a **separate database connection pool per major query pattern or dependency** means one runaway query pattern — say, a poorly-indexed report query holding connections open for minutes — can't starve connections needed by unrelated, healthy queries hitting the same database.\n\nBulkheading isn't one specific mechanism — it's a principle (bound and separate resource consumption per dependency) applied wherever a shared pool exists: threads, connections, semaphores, even separate deployable services.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Bulkheads **waste some capacity by design** — the 15 threads reserved for the enrichment API sit idle when it's healthy and traffic elsewhere is heavy, capacity that a fully shared pool could have used for something else in that moment.\n\nYou're trading **maximum resource utilization** for a **hard ceiling on blast radius** — accepting some average-case waste in exchange for a guaranteed worst-case bound on how much damage one dependency can do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-isolating-a-slow-dependency-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how do you size each bulkhead's pool?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"how do you size each bulkhead's pool?\"** From the dependency's **normal concurrency needs plus enough headroom for expected load** — measure how many concurrent calls it typically needs at peak, then add margin.\n\nNot an **even split across all dependencies** regardless of how much traffic each one actually gets — a low-traffic dependency doesn't need the same allocation as a high-traffic one, and over-allocating to every dependency equally wastes the exact capacity bulkheads are meant to protect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: does a bulkhead replace a circuit breaker?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"does a bulkhead replace the need for a circuit breaker on the same dependency?\"** No — they solve **different problems together**: the bulkhead **caps the damage** while the dependency is failing, limiting how many resources it can consume; the circuit breaker **stops sending it calls** once it's clearly failing, so new requests don't even attempt to use the bulkhead's capacity.\n\nUse both: the bulkhead handles calls already in flight when things go bad, the breaker prevents new calls from making it worse.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-isolating-a-slow-dependency-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: relying on a circuit breaker alone",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have a circuit breaker on this dependency, so the shared thread pool is already protected.\"\n\n**Why it's wrong:** a circuit breaker only stops **new calls** after it trips — it does nothing about calls that are **already in flight** and holding threads or connections when the dependency starts slowing down. The pool can already be exhausted by the time the breaker's failure threshold is even crossed.\n\n**Correct model:** a circuit breaker and a bulkhead solve different halves of the problem — the breaker stops new damage, the bulkhead caps how much damage in-flight calls can do. Relying on the breaker alone leaves the shared-pool exhaustion problem completely unaddressed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-isolating-a-slow-dependency-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A shared thread or connection pool lets one slow dependency exhaust resources needed by unrelated, healthy dependencies. Fix: give each dependency its own bounded pool (a bulkhead), sized to its normal concurrency plus headroom, not an even split. Bulkheads waste some idle capacity by design in exchange for a hard ceiling on blast radius. Pair with a circuit breaker — the bulkhead caps in-flight damage, the breaker stops new calls.\n\nFor the full pattern and sizing guidance, see [Bulkheads and Isolation](bulkheads-and-isolation).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

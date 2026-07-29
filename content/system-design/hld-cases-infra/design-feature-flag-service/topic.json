@@ -1,0 +1,173 @@
+{
+  "id": "design-feature-flag-service",
+  "title": "Design a Feature Flag Service",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 9,
+  "slug": "design-feature-flag-service",
+  "summary": "Millisecond flag evaluation on every request, globally consistent rollout percentages, and instant propagation — without a central bottleneck in every request's path.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-feature-flag-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: turn a feature on or off, or roll it out to X% of users, without a redeploy. Every request checks a flag and gets an instant, consistent answer.\n\nThe trap in this design is treating flag evaluation like any other read — a network call per check. At fleet scale, that call happens on the hot path of nearly every request, so the entire design has to avoid a central service becoming a bottleneck (or a new point of failure) that every request depends on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** evaluate whether a feature is enabled for a given user/request, and let operators update flag configuration (percentage, targeting rules) without redeploying code.\n\n**Non-functional:** **evaluation latency** that must not measurably slow the request it's checked in (sub-millisecond, ideally), **propagation delay** — how quickly a config change reaches every service instance — and support for **targeting rules** beyond a flat percentage (internal employees always see it, a specific country is excluded, and so on).\n\nEvaluation latency is the requirement that eliminates the naive design outright: anything involving a network round-trip per flag check is too slow once it's on a hot path checked dozens of times per request.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: evaluations/sec vs a central service's capacity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At **50,000** requests/sec fleet-wide, and a typical request checking **5** flags along its path, that's `50,000 * 5 = 250,000` flag evaluations/sec. A central evaluation service, even a well-provisioned one, would need to sustain that entire load as pure added latency on every request — and any hiccup there now takes down every service checking a flag.\n\nCompare that to local, in-process evaluation: 250,000 evaluations/sec spread across the fleet's own request-handling processes costs essentially nothing extra, because there's no network hop at all. The volume math is the argument for local evaluation, not just a nice-to-have.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-feature-flag-service-s03-q1"
+      ]
+    },
+    {
+      "id": "design-feature-flag-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two operations, but with very different callers: `isEnabled(flagKey, userContext)` is called constantly, in-process, by application code on the hot path; `updateFlag(config)` is called rarely, by an operator through a dashboard or API, to change a flag's rollout percentage or targeting rules.\n\nThe asymmetry in call frequency is the whole design story: `isEnabled` needs to be nearly free, while `updateFlag` can afford to be comparatively expensive, since it fires orders of magnitude less often.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s05",
+      "order": 5,
+      "sectionTitle": "Stable bucketing: consistent hashing keeps a user in one bucket",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A 30% rollout needs to put the *same* 30% of users in every evaluation, every time — otherwise a user would flicker between seeing the feature and not seeing it on every page load, which is a broken experience and makes A/B results meaningless. This is achieved by hashing `userId + flagKey` into a fixed range (say 0-99) and comparing against the rollout percentage — the same input always hashes to the same bucket.\n\nHashing in the flag key too, not just the user ID, matters: it means a user's bucket for flag A is independent of their bucket for flag B, so multiple simultaneous rollouts don't correlate with each other in ways that would skew results.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-feature-flag-service-s05-q1"
+      ]
+    },
+    {
+      "id": "design-feature-flag-service-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: hash-based bucketing for a percentage rollout",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A hash of userId+flagKey maps onto a 0-99 bucket range, split by a rollout cutoff at 30 into an in region and an out region](assets/hash-bucket-rollout.svg)\n\nRaising the rollout from 30% to 50% only needs to move the cutoff line — every user already in the 0-29 buckets stays in, and new users only get added from the 30-49 range, never removed from what they already saw.",
+      "assets": [
+        {
+          "alt": "A hash of userId+flagKey maps onto a 0-99 bucket range, split by a rollout cutoff at 30 into an in region and an out region",
+          "path": "assets/hash-bucket-rollout.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s07",
+      "order": 7,
+      "sectionTitle": "Local evaluation via a cached SDK config",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rather than calling a central service per check, each service instance runs an SDK that holds a **local, cached copy** of all flag configurations in memory. `isEnabled` becomes a pure in-process function call: look up the flag's config, hash the user, compare to the threshold — no network involved at all.\n\nThis is the mechanism that makes the latency requirement achievable: moving the cost from \"a network round-trip on every check\" to \"an occasional background refresh of the cached config\" is what turns 250,000 evaluations/sec from a scaling problem into a non-issue.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: config propagation to SDKs",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Control plane pushes the source-of-truth config to many SDK instances via streaming or polling, each updating its own local cache](assets/config-propagation.svg)\n\nStreaming push gets updates out in roughly a second; polling (say, every 10 seconds) is simpler to build but trades away propagation speed — the choice here directly answers the propagation-delay requirement from the NFRs.",
+      "assets": [
+        {
+          "alt": "Control plane pushes the source-of-truth config to many SDK instances via streaming or polling, each updating its own local cache",
+          "path": "assets/config-propagation.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s09",
+      "order": 9,
+      "sectionTitle": "The bottleneck: the control plane during a global config push",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Local evaluation removes the bottleneck from the hot request path, but it reintroduces one at a different point: when an operator flips a flag, the control plane has to push that update out to every one of thousands of service instances at once. A global push during a large fleet's peak traffic is itself a burst of fan-out traffic the control plane must absorb.\n\nThe fix is treating this the same way a CDN treats cache invalidation — the control plane pushes to a smaller number of regional/edge relay nodes, which then fan out to the instances in their region, rather than one control plane holding a direct connection to every instance in the fleet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s10",
+      "order": 10,
+      "sectionTitle": "Compare: server-side evaluation vs client-side SDK evaluation",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Server-side (central call) | Client-side SDK (local, cached) |\n|---|---|---|\n| Latency per check | A network round-trip, every time | Near-zero — in-process lookup |\n| Failure mode | Central service outage blocks every flag check fleet-wide | A stale local cache during an outage — degrades gracefully to last-known config |\n| Freshness | Always current | Only as fresh as the last propagated update |\n| Fits | Low-volume, non-hot-path checks | High-volume, hot-path checks — the common case |\n\n**How to decide:** client-side SDK evaluation is the default for anything on a request's hot path; central evaluation is reserved for the rare case where a flag genuinely needs to reflect state that can't be safely cached locally at all (e.g. a live incident kill-switch with zero propagation tolerance).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-feature-flag-service-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: a synchronous network call on the hot request path",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Just call the flag service synchronously wherever we need to check a flag — it's a simple lookup.\"\n\n**Why it's wrong:** on the hot request path, a flag check that requires a network round-trip adds real latency to every single request, multiplied by however many flags that request checks — and worse, it makes every request's success depend on the flag service's availability, turning a feature-toggle system into a new single point of failure for the entire platform.\n\n**Correct model:** evaluate flags from a local, cached SDK config, never a synchronous network call in the request path. If a flag genuinely needs live server-side state, fetch and cache it asynchronously ahead of time — never block the request on it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-feature-flag-service-s11-q1"
+      ]
+    }
+  ]
+}

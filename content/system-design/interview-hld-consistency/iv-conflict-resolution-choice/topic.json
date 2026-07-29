@@ -1,0 +1,165 @@
+{
+  "id": "iv-conflict-resolution-choice",
+  "title": "Two replicas got different writes for the same key — how do you resolve the conflict?",
+  "area": "system-design",
+  "group": "interview-hld-consistency",
+  "order": 5,
+  "slug": "iv-conflict-resolution-choice",
+  "summary": "Tests whether you can pick and justify a concrete conflict-resolution strategy for the specific data type in question, not just recite last-write-wins.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-conflict-resolution-choice-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Last write wins\" is the default answer most candidates reach for, and it's wrong often enough that naming it as *the* answer is a red flag. The real question is which strategy fits the semantics of the specific data in conflict — a shopping cart, an inventory count, and a document each need a different answer.\n\nThis topic walks through picking a strategy — LWW, vector clocks, CRDTs, or app-level merge — based on what the data actually represents, not a system-wide default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask what the data actually represents: is a silent overwrite of one write by the other acceptable, or does the *merge itself* carry meaning — like two people adding different items to the same shopping cart, where the right answer is both items, not one write beating the other?\n\nThis single question splits the whole problem: data where one value cleanly replaces another (a user's display name) is a very different case from data that's really a set or a counter that both concurrent writes contributed to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton: fit the strategy to the data's semantics",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Skeleton: name what the data represents, then pick the strategy that fits — not a strategy that's your team's system-wide default. **Last-write-wins (LWW)** for data where overwriting is genuinely fine (a cached profile field). **Vector clocks** to detect true concurrency before deciding how to merge. **CRDTs** for data with mergeable structure (sets, counters). **App-level merge** when the business logic needed to merge correctly can't be generic.\n\nSaying \"it depends on what this data is\" and then actually answering that question is the whole game here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-conflict-resolution-choice-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s04",
+      "order": 4,
+      "sectionTitle": "Walking it: LWW losing an edit vs a CRDT merging a cart",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Concrete contrast: two users concurrently edit the same shared document field — LWW just keeps whichever write has the later timestamp and silently discards the other user's edit, which is a real, visible data loss. Two users concurrently modify the same shopping cart — a CRDT can merge both changes correctly by taking the union of items added and removed, so neither user's action is lost.\n\n| Case | Strategy | Result |\n|---|---|---|\n| Shared document field | LWW | One edit silently disappears |\n| Shopping cart | CRDT (set-based merge) | Both concurrent changes are preserved |\n\nThe difference isn't the strategy being \"better\" in general — it's that a cart's semantics (a set of items) happen to be mergeable, while a plain field's aren't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: vector clocks detecting true concurrency",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Before deciding how to merge, you need to know whether two writes were truly concurrent (neither caused the other) or sequential (one happened after seeing the other). A vector clock attaches a per-replica counter to each write, and comparing two clocks tells you which case you're in:\n\n```\nwrite_A: {replica1: 2, replica2: 0}\nwrite_B: {replica1: 1, replica2: 1}\n# neither vector dominates the other -> truly concurrent, real conflict\n\nwrite_C: {replica1: 3, replica2: 1}\n# dominates write_B -> C happened after B, no conflict, C simply wins\n```\n\nSkipping this check and merging (or LWW-ing) everything as if it were concurrent risks discarding a write that was actually a deliberate, later correction.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "iv-conflict-resolution-choice-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: a shopping-cart CRDT merging add and remove",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A worked CRDT merge: session A adds item X to the cart while, concurrently, session B removes item Y from the same cart.\n\n```\ncart_A = add(cart, item=X)         # {X, Y}\ncart_B = remove(cart, item=Y)      # {}\n\nmerged = crdt_merge(cart_A, cart_B)\n# {X}   -- both concurrent operations are preserved: X added, Y removed\n```\n\nThe merge doesn't pick one session's cart over the other's — it applies both operations, which is exactly what a shopper would expect: their own add and the other session's remove both survive, with no manual reconciliation needed.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s07",
+      "order": 7,
+      "sectionTitle": "The trade-off to name out loud",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "**CRDTs merge automatically and correctly for specific data shapes, but you can't bolt one onto arbitrary data — it constrains your data model.** Adopting a CRDT means designing the data structure itself (sets, counters, registers) around what a CRDT can merge, not retrofitting one onto an existing arbitrary schema.\n\n| Strategy | Automatic? | Constrains data model? |\n|---|---|---|\n| LWW | Yes | No — works on any field, but can silently drop a write |\n| CRDT | Yes | Yes — data must be a mergeable shape (set, counter, register) |\n| App-level merge | No — needs custom logic | No — but someone has to write and maintain that logic |\n\nName which cost you're accepting: LWW's silent data loss, a CRDT's data-model constraint, or app-level merge's ongoing engineering cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "iv-conflict-resolution-choice-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: how would you detect a conflict if resolution is automatic?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Automatic resolution can hide the fact that a conflict happened at all, which is a problem if you need to audit or debug later. The fix: log every case where a merge or LWW decision actually discarded or combined concurrent writes, even though the automatic path handled it without surfacing an error.\n\nA metric counting \"conflicts resolved per minute,\" tagged by key or data type, turns an invisible automatic process into something you can monitor and investigate if it spikes unexpectedly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: the merge needs business logic no generic strategy supplies",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sometimes the correct merge genuinely depends on business rules a generic strategy can't encode — two concurrent edits to a price field might need a \"lowest wins\" rule, or a rule that flags the conflict for a human instead of auto-resolving. In that case, surface the conflict to the application layer (or a human reviewer) rather than forcing a generic algorithm to guess.\n\nSaying \"this one needs app-level judgment, not an automatic strategy\" is a correct answer, not a cop-out — some conflicts genuinely aren't safe to resolve without domain knowledge.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: LWW on data where a dropped write is a real bug",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just use last-write-wins everywhere — it's simple and it's what most systems default to.\"\n\n**Why it's wrong:** LWW silently discards one of the two concurrent writes. For data where that write mattered — an inventory decrement, a financial ledger entry — silently dropping it isn't a minor consistency nuance, it's a correctness bug that can cost real money or oversell stock.\n\n**Correct model:** reserve LWW for data where a dropped write is genuinely harmless, and reach for a CRDT, vector-clock-aware merge, or app-level resolution wherever a dropped write would be a real, visible defect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "iv-conflict-resolution-choice-s10-q1"
+      ]
+    },
+    {
+      "id": "iv-conflict-resolution-choice-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"I'd start with what the data actually represents, not a default strategy. Last-write-wins is fine where overwriting is genuinely harmless, but it silently drops a write otherwise — a real bug for data like inventory counts. Vector clocks tell me whether two writes were truly concurrent before I decide how to merge them. CRDTs merge automatically and correctly, but only for data shaped like a set, counter, or similar mergeable structure — they constrain the data model. Where the correct merge needs business judgment no generic strategy can supply, I'd surface the conflict to the app layer instead of forcing an automatic answer.\"\n\nSee [conflict-resolution](conflict-resolution) for the full strategy comparison this skeleton draws from.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

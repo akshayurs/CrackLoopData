@@ -1,0 +1,237 @@
+{
+  "id": "design-web-crawler",
+  "title": "Design a Web Crawler",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 1,
+  "slug": "design-web-crawler",
+  "summary": "Crawling a large fraction of the web continuously and politely, without duplicating work, tripping infinite-URL traps, or getting IP-blocked.",
+  "level": "advanced",
+  "slideCount": 16,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "design-web-crawler-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: crawl and index a large fraction of the web, continuously, without hammering any single site into blocking you. It sounds like \"write a script that follows links\" — the interview is really about three things at scale: a **frontier** (what to fetch next, and why), **dedup** (never fetch or store the same thing twice), and **politeness** (never look like an attacker to the sites you crawl).\n\nThis is a build-the-crawler question, not a build-the-search-ranking question — ranking pages by relevance is explicitly out of scope here.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** given a set of seed URLs, discover and fetch reachable pages, extract new links, and store the raw content for downstream indexing.\n\n**Non-functional:** a **freshness target** (how stale can a page be before you re-crawl it — hours for news, weeks for a static reference page) and **politeness constraints** (never overload a single site's servers, and respect `robots.txt`).\n\n**Explicit non-goal:** ranking or scoring pages by relevance — that's a separate search-ranking system that consumes this crawler's output. Stating that boundary up front keeps the interview focused on frontier, dedup, and politeness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "design-web-crawler-s02-q1"
+      ]
+    },
+    {
+      "id": "design-web-crawler-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: corpus size, crawl rate, storage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Say the target corpus is **1 billion pages**, refreshed on average every **30 days**. That's `1e9 / (30 * 86400) ≈ 386` pages/sec sustained just to keep the corpus fresh — before counting new-page discovery.\n\nAt an average **50KB** of raw HTML per page, refreshing the whole corpus moves `1e9 * 50KB = 50TB` of data every cycle, and storing one snapshot of the corpus needs roughly that much disk. Fetchers need to sustain ~400 requests/sec **in aggregate**, but politeness caps each *individual* domain far below that — which is why the fetcher count isn't the limiting factor (more on this later).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s04",
+      "order": 4,
+      "sectionTitle": "The crawl frontier: what to fetch next, and why",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **frontier** is the prioritized queue of URLs waiting to be fetched. Every discovered link that passes dedup gets pushed here; every fetcher pulls its next URL from here.\n\n\"Priority\" isn't first-in-first-out — it blends **page importance** (a link from a high-authority site outranks a random blog), **freshness need** (a page that changes daily should resurface sooner than a static one), and **discovery recency** (brand-new URLs get a first fetch to see what they are).\n\nThe frontier is the single structure that decides the crawler's entire behavior: get its priority function wrong and you'll spend your fetch budget on low-value pages while important ones go stale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s05",
+      "order": 5,
+      "sectionTitle": "Data model: frontier queue plus URL-seen dedup store",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two core structures. The **frontier** is a priority queue (or several, sharded by domain) holding `(url, priority, lastCrawled)`. The **URL-seen store** is a separate set answering one question fast: \"have we already queued or fetched this exact URL?\"\n\nAt corpus scale, the seen-store can't be a plain hash set in memory — a billion URLs at ~100 bytes each is ~100GB, and it's checked on every discovered link, of which there are far more than pages. This sizing pressure is exactly why crawlers reach for a Bloom filter instead of an exact set (next slides).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: crawler architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Crawler pipeline: frontier feeds fetchers, fetchers feed a parser, parser splits into links (through dedup, back to frontier) and content (to storage)](assets/crawler-pipeline.svg)\n\nThe loop is circular: fetchers pull from the frontier, parsers extract new links from what they fetch, dedup filters those links, and survivors rejoin the frontier. Nothing about this pipeline is linear — it feeds itself for as long as the crawl runs.",
+      "assets": [
+        {
+          "alt": "Crawler pipeline: frontier feeds fetchers, fetchers feed a parser, parser splits into links (through dedup, back to frontier) and content (to storage)",
+          "path": "assets/crawler-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s07",
+      "order": 7,
+      "sectionTitle": "Politeness: per-domain rate limits and robots.txt",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Politeness** means never sending a site more concurrent requests than a normal browser-driven user would generate — typically one request per domain every 1-10 seconds, tunable per site. Before fetching a domain for the first time, the crawler fetches and caches its `robots.txt`, which lists paths the site owner disallows crawling.\n\nBoth rules are enforced **per domain**, not globally: the crawler might run 10,000 requests/sec in aggregate while never sending more than one request/sec to any single small site. This is the mechanism, not a nicety — violate it and the site's infrastructure returns errors or bans your IP ranges outright.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-web-crawler-s07-q1"
+      ]
+    },
+    {
+      "id": "design-web-crawler-s08",
+      "order": 8,
+      "sectionTitle": "URL deduplication at scale with Bloom filters",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **Bloom filter** is a probabilistic set: it answers \"have I seen this?\" using a fixed-size bit array and several hash functions, in a fraction of the memory an exact hash set needs. A billion URLs that would take ~100GB as an exact set fit in a few GB of Bloom filter bits at a low false-positive rate.\n\nThe trade-off: it can say \"seen\" for a URL that's actually new (a **false positive**), silently dropping a page you never crawl. It never has false negatives — if it says \"not seen,\" that's certain. Tuning the bit array size and hash count trades memory against that false-positive rate; crawlers accept a small, known miss rate as the price of fitting dedup in memory at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-web-crawler-s08-q1"
+      ]
+    },
+    {
+      "id": "design-web-crawler-s09",
+      "order": 9,
+      "sectionTitle": "Distributing the crawl by partitioning the frontier by domain",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Many worker machines crawl in parallel, but politeness is scoped **per domain** — so the frontier is partitioned by hashing the domain, and every URL for a given domain routes to the same worker shard. That worker alone tracks and enforces that domain's rate limit, with no coordination needed across shards.\n\nWithout domain partitioning, two workers could independently decide \"this domain looks idle\" and both fire off requests simultaneously, silently doubling the effective rate and breaking politeness neither worker can see the other violating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s10",
+      "order": 10,
+      "sectionTitle": "Compare: breadth-first vs priority-based crawl ordering",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Breadth-first | Priority-based |\n|---|---|---|\n| Order | Fetch all depth-1 links, then depth-2, etc. | Fetch highest-priority URL next, regardless of depth |\n| Simplicity | Trivial — a plain queue | Needs a scored, re-sortable structure |\n| Coverage | Good broad coverage early, finds diverse sites fast | Can starve low-priority sites indefinitely |\n| Value focus | Depth is a poor proxy for importance | Directly optimizes for what matters to freshness/importance |\n\n**How to decide:** pure BFS is a fine seed-crawl starting point, but production crawlers use priority so a high-authority page discovered at depth 5 isn't stuck behind a queue of low-value depth-1 pages.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s11",
+      "order": 11,
+      "sectionTitle": "Handling traps: infinite URL spaces and near-duplicate content",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **crawler trap** is a site structure that generates endless distinct URLs — a calendar page with a \"next month\" link that goes on forever, or session IDs appended to every URL making each visit look like a new page. Naive crawlers can sink their entire fetch budget into one such site.\n\nDefenses: cap crawl depth or URL-parameter variations per domain, and detect **near-duplicate content** (the same article reachable via ten URL variants) with a content fingerprint like simhash, so duplicates get recognized even when the URLs differ.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s12",
+      "order": 12,
+      "sectionTitle": "The bottleneck: DNS and per-domain politeness, not fetcher count",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Adding more fetcher machines doesn't raise real throughput once politeness is enforced correctly — each domain is capped at roughly one request every few seconds no matter how many workers exist. The actual ceiling is **DNS resolution latency** (every new domain needs a lookup before the first fetch) and the **sheer number of distinct domains** you can politely serve concurrently.\n\nThis is the sentence that separates a strong answer from a mediocre one: \"add more fetchers\" sounds like scaling but doesn't move the needle if per-domain politeness is the real constraint. The fix is caching DNS aggressively and running enough *distinct domains* in flight at once, not more fetchers per domain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-web-crawler-s12-q1"
+      ]
+    },
+    {
+      "id": "design-web-crawler-s13",
+      "order": 13,
+      "sectionTitle": "Compare: a single central frontier vs domain-partitioned frontiers",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single central frontier | Domain-partitioned frontiers |\n|---|---|---|\n| Politeness enforcement | Needs global coordination to track every domain's last-fetch time | Local to each shard — no cross-shard coordination |\n| Throughput ceiling | One structure becomes a shared bottleneck under many workers | Scales with shard count, each shard independent |\n| Failure blast radius | One frontier failure stalls the whole crawl | One shard failure only stalls its assigned domains |\n| Complexity | Simpler to reason about globally | Needs a stable domain-to-shard hash and rebalancing on resize |\n\n**How to decide:** a central frontier is fine for a small, single-machine crawl; anything at web scale needs domain partitioning purely to keep politeness enforcement local and cheap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s14",
+      "order": 14,
+      "sectionTitle": "Pitfall: no per-domain rate limit",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have plenty of fetcher capacity, so let's just fetch as fast as the network allows.\"\n\n**Why it's wrong:** without a per-domain cap, a burst of newly-discovered links from one site (say, a paginated product catalog) gets fetched at full crawler throughput — hundreds of requests/sec against a single origin. That reads as a denial-of-service attack, and the site's infrastructure responds by rate-limiting or IP-banning the crawler, sometimes for the whole IP range.\n\n**Correct model:** enforce a politeness delay **per domain**, independent of overall crawler capacity, and treat that limit as non-negotiable even when it means fetchers sit idle waiting for a specific domain's turn.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "design-web-crawler-s15",
+      "order": 15,
+      "sectionTitle": "Pitfall: re-crawling on a fixed interval instead of observed change rate",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Re-crawl every page every 7 days — simple and uniform.\"\n\n**Why it's wrong:** a news homepage that changes hourly stays stale for up to a week, while a static reference page that hasn't changed in years gets re-fetched every week for no reason, wasting fetch budget that could go toward pages that actually need it.\n\n**Correct model:** track each page's **observed change rate** from crawl history and set its re-crawl interval adaptively — frequent for volatile pages, sparse for stable ones. This is a direct trade against the freshness requirement from the NFRs, and it's what separates a crawler that scales its freshness budget intelligently from one that wastes it uniformly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-web-crawler-s15-q1"
+      ]
+    },
+    {
+      "id": "design-web-crawler-s16",
+      "order": 16,
+      "sectionTitle": "Summary: frontier, dedup, and politeness bound the whole system",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three structures decide everything a web crawler can and can't do: the **frontier** decides what gets fetched next, the **dedup store** decides what never gets fetched twice, and **per-domain politeness** decides the real throughput ceiling — not fetcher count.\n\nIf you remember one line for the interview: a crawler's bottleneck is almost never raw compute or network bandwidth, it's how considerately it treats each individual site it crawls.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    }
+  ]
+}

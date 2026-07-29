@@ -1,0 +1,29 @@
+{
+  "topicId": "read-repair-and-anti-entropy",
+  "interviewQuestions": [
+    {
+      "id": "read-repair-and-anti-entropy-iq1",
+      "question": "Two replicas in your Dynamo-style store disagree — how does the system notice and fix it?",
+      "answerMarkdown": "I'd describe two complementary paths, since neither alone is a complete answer. If the disagreement surfaces on a read, the coordinator queries R replicas, compares their versions, and pushes the newest value to whichever replica returned a stale one — that's read repair, and it happens as a side effect of a normal read with no extra infrastructure.\n\nBut read repair only fixes replicas that are actually queried. For data nobody happens to read, I'd rely on anti-entropy: a background process that continuously compares replicas, typically using Merkle trees so it can compare a single root hash first and only walk down into the branches that actually diverge, instead of scanning every record.\n\nI'd close by saying a production system needs both — read repair for cheap, immediate fixes on hot data, anti-entropy as the backstop that guarantees cold data converges too.\n\n**Testing:** whether you know both repair mechanisms exist and can explain why relying on just one leaves a real gap.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Detecting and fixing replica disagreement"
+    },
+    {
+      "id": "read-repair-and-anti-entropy-iq2",
+      "question": "Why would a Merkle tree comparison be faster than just diffing two replicas record by record?",
+      "answerMarkdown": "I'd explain it through what each hash level represents: every leaf hashes a small range of the data, and every parent hashes its children's combined hashes, all the way up to a single root hash per replica. Comparing two replicas starts at the root — if the root hashes match, the entire dataset is provably identical and the comparison stops immediately, no further work needed.\n\nWhen the roots differ, only the mismatched branches need to be walked further down, and matching sibling branches are skipped entirely. In practice this means the comparison cost scales with how much data has actually diverged and the tree's depth, not with the total size of the dataset — a huge win when two multi-terabyte replicas differ by only a handful of records.\n\nI'd contrast this with a naive full diff, which has to touch every record on both sides regardless of how little has changed, making it impractical to run continuously at scale.\n\n**Testing:** whether you understand Merkle trees as an efficiency mechanism, not just a term to name-drop.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why Merkle trees speed up anti-entropy"
+    },
+    {
+      "id": "read-repair-and-anti-entropy-iq3",
+      "question": "If read repair already fixes stale replicas on every read, why does a system still need a separate anti-entropy process?",
+      "answerMarkdown": "I'd point out the gap directly: read repair is entirely reactive — it only fixes a replica that's actually part of a read request. Any record that's written once and then rarely or never read again can sit on a replica that missed the original write, with no read ever coming along to trigger a fix. Over time that's not a small edge case; it accumulates as permanently drifted cold data.\n\nAnti-entropy closes exactly that gap by running independent of read traffic, scanning and reconciling replicas on its own schedule regardless of what users are actually querying. It's more expensive to run than read repair (dedicated background work, plus something like Merkle trees to make the comparison tractable), which is exactly why systems don't rely on it exclusively either — read repair handles the common case almost for free, and anti-entropy guarantees the uncommon case doesn't get ignored forever.\n\n**Testing:** whether you can articulate why redundancy between these two mechanisms is intentional, not wasteful.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why anti-entropy is needed alongside read repair"
+    }
+  ]
+}

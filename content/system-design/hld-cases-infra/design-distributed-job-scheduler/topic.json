@@ -1,0 +1,186 @@
+{
+  "id": "design-distributed-job-scheduler",
+  "title": "Design a Distributed Job Scheduler",
+  "area": "system-design",
+  "group": "hld-cases-infra",
+  "order": 6,
+  "slug": "design-distributed-job-scheduler",
+  "summary": "A distributed cron that guarantees every job runs, even as workers and leaders fail — the scheduling guarantee itself is the whole problem.",
+  "level": "expert",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "design-distributed-job-scheduler-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The ask: run millions of scheduled and recurring jobs — nightly reports, retries, cleanup tasks — across a fleet of workers, reliably, even when individual workers or the scheduler itself crash mid-job.\n\nThis isn't \"build a cron syntax parser.\" The interesting problem is the **guarantee**: when a worker dies holding a job, exactly how does another worker know to pick it up, without two workers ever running the same job twice by accident (or a job silently never running at all).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** schedule one-off and recurring jobs, dispatch them to workers when due, and track completion.\n\n**Non-functional:** an explicit choice between **at-least-once** (a job might run twice, but never zero times) and **exactly-once** (harder to guarantee, usually approximated via idempotency rather than true exactly-once delivery); **missed-job handling** (what happens if the scheduler itself was down when a job was due); and **priority** (some jobs — a payment retry — matter more than others — a log-cleanup task — when resources are scarce).\n\nThe at-least-once-vs-exactly-once choice isn't a detail to defer — it shapes the entire lease/lock design that follows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: jobs scheduled, fleet size, jobs in flight",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Say **10 million** jobs scheduled per day, averaging `10e6 / 86400 ≈ 116` jobs/sec, but real workloads cluster — a common pattern is thousands of jobs all scheduled for the same round hour (\"run at midnight\"), producing short, sharp bursts far above the daily average.\n\nWith an average job runtime of **30 seconds** and 116 jobs/sec average dispatch, roughly `116 * 30 ≈ 3,500` jobs are in flight at any moment on average — but a burst at midnight could spike that by 10-50x briefly, which is exactly the **scheduling stampede** the bottleneck slide covers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-distributed-job-scheduler-s03-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-job-scheduler-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three operations: `scheduleJob(cronSpec/runAt)` — register a recurring or one-off job; `cancelJob()` — remove a scheduled job before it fires; and continuous **job status/heartbeat** reporting, where an in-progress job periodically signals \"I'm still alive and working\" back to the scheduler.\n\nThe heartbeat is the quiet load-bearing piece: without it, the scheduler has no way to distinguish \"this job is taking a long time\" from \"the worker running this job has crashed\" — and that distinction is exactly what the lease mechanism (ahead) is built to resolve.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s05",
+      "order": 5,
+      "sectionTitle": "Data model: job table with lease state and retry count",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The job store holds one row per job: `jobId`, `nextRunTime`, current **lease** info (which worker holds it, and until when), and a `retryCount`. `nextRunTime` is what a scheduler query filters on (\"give me all jobs due before now\"); the lease fields are what prevent two workers from grabbing the same due job simultaneously.\n\nThis table is the single source of truth the whole system reasons from — the leader election and lease mechanisms in the following slides both exist purely to keep this table's state correct under concurrent access and node failures.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: architecture — leader, job store, worker pool",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![The scheduler leader polls the job store for due jobs, dispatches to workers via a lease, and workers heartbeat back through the job store to renew their lease](assets/scheduler-architecture.svg)\n\nThe leader decides *what's* due; the lease mechanism decides *who's actually working on it right now* — two separate concerns that map to two separate slides ahead.",
+      "assets": [
+        {
+          "alt": "The scheduler leader polls the job store for due jobs, dispatches to workers via a lease, and workers heartbeat back through the job store to renew their lease",
+          "path": "assets/scheduler-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s07",
+      "order": 7,
+      "sectionTitle": "Leader election: deciding which jobs are due now",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Only one component should be actively deciding \"which jobs are due right now\" at any instant — if two schedulers both poll the job table and both dispatch the same due job, you get accidental duplicate execution before any worker-level lease even comes into play. **Leader election** (via a coordination service like ZooKeeper or etcd) ensures exactly one scheduler instance holds that authority at a time, with automatic failover to a standby if the leader crashes.\n\nSee [distributed-coordination](distributed-coordination) for the general mechanics of how a cluster agrees on a single leader — this scheduler is one concrete consumer of that primitive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-distributed-job-scheduler-s07-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-job-scheduler-s08",
+      "order": 8,
+      "sectionTitle": "Leasing a job to a worker",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When the leader dispatches a due job, it doesn't just hand it off — it grants the worker a **lease**: \"you own this job for the next 60 seconds; renew via heartbeat or lose it.\" If the worker heartbeats on schedule, its lease keeps extending. If it crashes, the lease silently expires, and the job becomes eligible for dispatch to a different worker.\n\nThis is what makes the system self-healing under worker crashes without needing to actively detect the crash — nothing has to notice a worker died; the lease simply times out and the job store reflects \"available again\" on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: worker crash mid-job — lease expiry and re-dispatch",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline: Worker A leases the job, heartbeats stop on crash, the lease expires, and the scheduler re-dispatches to Worker B which starts fresh](assets/lease-expiry-timeline.svg)\n\nWorker B has no idea worker A ever touched this job — it just sees an available due job and takes it. This is exactly why at-least-once semantics (the job might now run twice, if A had actually made partial progress) require the job logic itself to be idempotent.",
+      "assets": [
+        {
+          "alt": "Timeline: Worker A leases the job, heartbeats stop on crash, the lease expires, and the scheduler re-dispatches to Worker B which starts fresh",
+          "path": "assets/lease-expiry-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: the job store under a scheduling stampede",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When thousands of jobs share the exact same scheduled time (\"every job runs at midnight\"), the job store gets hit with a burst of simultaneous due-job reads and lease-writes far above its average load — a **scheduling stampede**. A job store sized for the average 116 jobs/sec chokes if 5,000 jobs all become due in the same one-second window.\n\nThe fix is **jitter**: adding a small random offset to each job's actual dispatch time within its due window (midnight plus up to 60 seconds of jitter, say), spreading a instantaneous spike into a smoother burst the store can actually absorb — a small, deliberate loosening of precision to protect throughput.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "design-distributed-job-scheduler-s10-q1"
+      ]
+    },
+    {
+      "id": "design-distributed-job-scheduler-s11",
+      "order": 11,
+      "sectionTitle": "Compare: at-least-once with idempotent jobs vs true exactly-once",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | At-least-once + idempotent jobs | True exactly-once |\n|---|---|---|\n| Mechanism | Job may run twice; job logic is written to produce the same end state either way | Requires distributed transactions/consensus to guarantee a single execution |\n| Complexity | Moderate — push the burden onto job design (make effects idempotent) | High — coordinating exactly-once across independent workers is a genuinely hard distributed-systems problem |\n| Failure handling | Simple lease expiry and re-dispatch, no special-casing | Needs careful handling of every partial-failure mode |\n| Practical adoption | The overwhelmingly common real-world choice | Rare in practice; usually approximated, not truly achieved |\n\n**How to decide:** see [idempotency-and-exactly-once](idempotency-and-exactly-once) for the general trade-off — nearly every production job scheduler picks at-least-once with idempotent jobs, because true exactly-once is prohibitively complex for the marginal benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-distributed-job-scheduler-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: no lease/lock on dispatched jobs",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Once the leader dispatches a job to a worker, mark it done in the job store — simple and fast.\"\n\n**Why it's wrong:** marking a job done at dispatch time, rather than at actual completion with a lease in between, means a slow worker's job looks indistinguishable from a fast worker's completed job. If that slow worker is also considered available for new work, a second dispatch of the *same* job to another worker can happen concurrently — now two workers run it at once, with no mechanism that even noticed the collision.\n\n**Correct model:** a job is only truly claimed while an active, renewable **lease** is held by exactly one worker; only heartbeated lease renewal — not dispatch — keeps a job out of the pool of available work.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

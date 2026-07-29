@@ -1,0 +1,29 @@
+{
+  "topicId": "design-follow-graph-service",
+  "interviewQuestions": [
+    {
+      "id": "design-follow-graph-service-iq1",
+      "question": "Design the follow/follower system behind a social network.",
+      "answerMarkdown": "I'd start by naming the shape of the data: a directed graph with hundreds of millions to hundreds of billions of edges, read far more often than written. I'd store it as adjacency-list tables rather than a dedicated graph database, since the core operations — follow, unfollow, list followers, list following, mutual-check — don't need deep multi-hop traversal, and mature sharding matters more here.\n\nI'd flag the sharding trade-off directly: no single shard key keeps both \"who do I follow\" and \"who follows me\" as single-shard reads — I'd pick one direction to co-locate based on which query is hotter, and accept the other becomes scatter-gather.\n\nI'd close on the celebrity case: a 100M-follower account's follower list needs its own sub-sharding, since it can't fit efficiently in a normal shard, and I'd precompute follower counts rather than counting edges live so that display cost stays O(1) regardless of follower count.\n\n**Testing:** whether you treat this as a genuine graph/sharding problem instead of reaching for a simple followers table without considering scale, and whether you catch the celebrity case unprompted.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Open-ended: design a follow graph"
+    },
+    {
+      "id": "design-follow-graph-service-iq2",
+      "question": "How would you compute \"people you may know\" via mutual connections at this scale?",
+      "answerMarkdown": "I'd reject computing this live for every profile view — intersecting two users' follower lists synchronously, potentially millions of entries each, doesn't fit in an interactive request budget. Instead I'd treat it as a batch or near-real-time offline computation, refreshed periodically (say, daily or on significant graph changes) and cached per user.\n\nConcretely, I'd describe a MapReduce-style or graph-processing job that, for each user, samples their 2-hop neighborhood (friends of friends) and ranks candidates by mutual-connection count, writing results to a fast-read cache that the product surface queries directly — the expensive computation happens once per refresh cycle, not once per page view.\n\nI'd note the trade-off explicitly: suggestions can be a day stale, which is entirely acceptable for a discovery feature, unlike the follow graph's own core reads which need to reflect the true current state.\n\n**Testing:** whether you recognize this needs an offline/batch computation pattern rather than trying to force it into a synchronous request path.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: mutual-connection recommendations at scale"
+    },
+    {
+      "id": "design-follow-graph-service-iq3",
+      "question": "How does your design change for an account with 100 million followers?",
+      "answerMarkdown": "I'd walk through why the normal design breaks here first: a single shard holding that account's full follower list would be enormous and every read or write against it would hot-spot that one shard, and if the shard key is followee-based, this one account alone can't be treated like an ordinary row.\n\nMy fix is sub-sharding that specific account's follower list across multiple partitions, turning `getFollowers` for it into a deliberate scatter-gather across a known partition set, rather than a single-shard read. I'd also make the follower count itself a precomputed, asynchronously-updated value rather than something derived from scanning those partitions, so displaying \"100M followers\" stays cheap even though listing them all is inherently expensive.\n\nI'd tie this back to the news feed's own celebrity problem — the same account triggers both a follow-graph hot-key and a feed fan-out hot-key, and both get solved the same way: detect the outlier and route it through a special-cased path instead of the default one.\n\n**Testing:** whether you connect this to the broader celebrity-problem pattern instead of treating it as an isolated one-off issue.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Follow-up: celebrity-scale follower counts"
+    }
+  ]
+}

@@ -1,0 +1,169 @@
+{
+  "id": "design-follow-graph-service",
+  "title": "Design a Follow Graph Service",
+  "area": "system-design",
+  "group": "hld-cases-social",
+  "order": 6,
+  "slug": "design-follow-graph-service",
+  "summary": "Storing and querying a directed graph with hundreds of millions of edges — follower lists and mutuals are graph-traversal problems at this scale, not simple row lookups.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "design-follow-graph-service-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Design the system that stores who follows whom: follow, unfollow, list a user's followers, list who they follow, and check whether two users mutually follow each other — at the scale of a directed graph with hundreds of millions of edges.\n\nThink of it like a phone book that also needs to instantly answer \"who has *this* person's number saved\" for any of a billion people — a simple row per relationship works until you need that reverse question at scale, at which point how you store and shard the graph starts to matter as much as what's in it. This service underpins [the news feed](design-news-feed)'s fan-out and [the comment/like system](design-comment-like-system)'s notion of \"who cares about this,\" but has its own scaling story worth isolating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s02",
+      "order": 2,
+      "sectionTitle": "Functional & non-functional requirements",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Functional:** follow/unfollow a user, list followers, list who a user follows, and check whether two users mutually follow each other.\n\n**Non-functional:** the workload is **read-heavy and skewed** — follower-list reads vastly outnumber follow/unfollow writes, and that read load skews hard toward a small number of high-follower accounts. **Celebrity fan-out of edges** means one account's follower list alone can be tens of millions of rows. **Count consistency** can lag slightly — a displayed follower count off by a handful for a few seconds is fine; the underlying edge data being wrong is not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s03",
+      "order": 3,
+      "sectionTitle": "Back-of-envelope: edges and read QPS at billion-user scale",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A billion-user platform where each user follows 200 others on average produces roughly 200 billion directed edges. Storing each edge as a compact row (say, 20-30 bytes for two user IDs plus metadata) puts raw edge storage in the low terabytes before any indexing overhead.\n\nRead QPS for follower/following lists dwarfs write QPS: if 10% of users check a profile's follower list on a given day, and profiles get viewed billions of times/day platform-wide, follower-list reads alone can exceed 100,000 QPS at peak — against a follow/unfollow write rate that's a small fraction of that, since following is a comparatively rare action per user per day.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "design-follow-graph-service-s03-q1"
+      ]
+    },
+    {
+      "id": "design-follow-graph-service-s04",
+      "order": 4,
+      "sectionTitle": "The API surface",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`follow(a, b)` and `unfollow(a, b)` add or remove a directed edge from `a` to `b`. `getFollowers(a)` returns who follows `a`; a separate `getFollowing(a)` (implied by the requirements) returns who `a` follows. `isFollowing(a, b)` checks a single directed edge's existence, and mutual-follow is derived by checking `isFollowing(a, b)` and `isFollowing(b, a)` together.\n\nThe directionality matters enough to call out explicitly: `follow(a, b)` is not symmetric, and the API has to make \"who follows me\" and \"who do I follow\" genuinely separate queries, not two views of the same underlying list.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s05",
+      "order": 5,
+      "sectionTitle": "Compare: adjacency-list tables vs a native graph store",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Adjacency-list tables (relational/wide-column) | Native graph store (e.g. Neo4j-style) |\n|---|---|---|\n| Simple follow/unfollow/list queries | Fast — indexed lookups by follower or followee ID | Fast, same order of magnitude |\n| Multi-hop traversal (mutuals-of-mutuals, recommendation graphs) | Expensive — each hop is a separate join or query | Native strength — traversal is the engine's core operation |\n| Horizontal scaling / sharding maturity | Well-understood, battle-tested at this scale | Less mature for sharding hundreds of billions of edges |\n| Operational familiarity | Most teams already run this kind of store | Smaller talent pool, fewer battle-tested scaling patterns |\n\n**How to decide:** most production follow-graph systems at this scale use adjacency-list tables, not a dedicated graph database — the core queries here (follow, unfollow, list, mutual-check) don't need deep multi-hop traversal, and mature sharding matters more than traversal elegance once you're at hundreds of billions of edges.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "design-follow-graph-service-s05-q1"
+      ]
+    },
+    {
+      "id": "design-follow-graph-service-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: sharding the edge table by follower vs by followee",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Sharding by follower ID keeps a user's following list on one shard but scatters followers; sharding by followee ID does the reverse](assets/sharding-schemes.svg)\n\nThere's no shard key that keeps both directions co-located — you're choosing which query (\"who do I follow\" vs \"who follows me\") stays a single-shard read, and accepting that the other becomes a scatter-gather across shards.",
+      "assets": [
+        {"alt": "Sharding by follower ID keeps a user's following list on one shard but scatters followers; sharding by followee ID does the reverse", "path": "assets/sharding-schemes.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s07",
+      "order": 7,
+      "sectionTitle": "The celebrity problem, from the graph side",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A followee with 100M follower-edges means a single logical entity — one row in a users table — has an edge list too large to fit on, or be served efficiently from, one shard. `getFollowers(celebrityId)` can't be a single-shard read the way it is for an ordinary account with 300 followers.\n\nThe practical answer is to shard that one celebrity's follower list itself across multiple shards or partitions (sometimes called sub-sharding a hot key), turning `getFollowers` for celebrity accounts into an explicit scatter-gather across a known set of partitions — a special case handled deliberately, not an emergent failure discovered in production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s08",
+      "order": 8,
+      "sectionTitle": "Compare: precomputed follower-count vs counting edges live",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Precomputed count | Counting edges live |\n|---|---|---|\n| Read cost | O(1) — read one cached number | O(n) — scan or aggregate all edges for that user |\n| Freshness | Slightly lagging (updated async on follow/unfollow) | Always exact at read time |\n| Cost at celebrity scale | Still O(1) regardless of follower count | Becomes the single most expensive query in the system for a 100M-follower account |\n| Update mechanism | Increment/decrement on each follow/unfollow event | None needed — always recomputed |\n\n**How to decide:** precompute and cache the count, updated incrementally on each follow/unfollow, and accept brief staleness — a follower count is displayed constantly and read far more often than it changes, making live counting a self-inflicted hot path for exactly the accounts that can least afford it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: fan-out of a new post using this graph",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A new post calls the follow graph's getFollowers, then hands the follower list to the feed's fan-out worker for per-follower writes](assets/feed-fanout-handoff.svg)\n\nThis is the literal hand-off point between the two systems: the follow graph doesn't know or care about feeds, and the feed system doesn't store follow relationships itself — it just calls `getFollowers` and fans out over whatever comes back, including the celebrity sub-sharding being invisible to it.",
+      "assets": [
+        {"alt": "A new post calls the follow graph's getFollowers, then hands the follower list to the feed's fan-out worker for per-follower writes", "path": "assets/feed-fanout-handoff.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "design-follow-graph-service-s10",
+      "order": 10,
+      "sectionTitle": "The bottleneck: \"who follows both A and B\" without a full graph engine",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Mutual-follow checks between two specific users are cheap — two `isFollowing` point lookups. But \"list everyone who follows both A and B\" (used for mutual-friends displays, or \"people you may know\") is a set intersection over two potentially enormous follower lists, which an adjacency-list store has no native operator for.\n\nThe practical approach is computing this offline or near-real-time for the common case — precomputed mutual-friend suggestions refreshed periodically — rather than trying to intersect two 10M-entry lists synchronously on every profile view. Exact, always-fresh mutual lists at this scale genuinely need either a specialized index (e.g. a mutuals cache) or accepting it as a batch computation, not a live query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "design-follow-graph-service-s10-q1"
+      ]
+    },
+    {
+      "id": "design-follow-graph-service-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: storing follows only as forward edges",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We only need to store `a follows b` once — we can always find 'who follows me' by scanning for rows where `b` matches.\"\n\n**Why it's wrong:** without an index (or a separate table) on the followee side, \"who follows me\" becomes a full scan of the entire edge table filtered by one value — at hundreds of billions of edges, that's an unusably expensive query for something every user checks constantly (their own follower list).\n\n**Correct model:** store the relationship in a form that supports both directions efficiently — either two indexed tables (one keyed by follower, one by followee) or a single table with indexes on both columns — so \"who do I follow\" and \"who follows me\" are equally cheap, not one fast and one a full-table scan.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "design-follow-graph-service-s11-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "id": "distributed-transactions-and-sagas",
+  "title": "Distributed Transactions & Sagas",
+  "area": "system-design",
+  "group": "microservices",
+  "order": 4,
+  "slug": "distributed-transactions-and-sagas",
+  "summary": "Why two-phase commit doesn't fit microservices, and how the saga pattern coordinates a multi-service write using local transactions plus compensations.",
+  "level": "advanced",
+  "slideCount": 8,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "distributed-transactions-and-sagas-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Once you split data across services (see [shared-data-and-the-database-per-service-problem](shared-data-and-the-database-per-service-problem)), a single business operation — placing an order — can span multiple databases you don't control together. A classic ACID transaction can't span them.\n\nThe **saga pattern** is the standard answer: break the operation into a sequence of local transactions, each with a matching \"undo\" step, so you can roll forward or roll back across service boundaries without a global lock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s02",
+      "order": 2,
+      "sectionTitle": "Why two-phase commit doesn't scale across services",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Two-phase commit (2PC)** is the classic way to make a transaction atomic across multiple databases: a coordinator asks every participant to \"prepare\" (lock its resources and promise it can commit), and only once everyone says yes does it tell them all to \"commit.\"\n\nIt works, but it assumes something microservices don't have: participants that stay reachable and hold locks for the coordinator's convenience. If any service in the prepare phase crashes or is slow, every other participant sits holding locks — on rows, on connections — until it recovers, because the protocol can't safely proceed without a unanimous answer. In a system with many independently-deployed, independently-failing services, that blocking behavior turns one slow service into a lock storm across all of them.\n\nMicroservices need coordination that doesn't require holding locks across a network boundary — which is exactly what sagas provide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "distributed-transactions-and-sagas-s02-q1"
+      ]
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s03",
+      "order": 3,
+      "sectionTitle": "The saga pattern: local transactions plus compensations",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **saga** replaces one distributed transaction with a sequence of local transactions, each committed independently in its own service, plus a **compensating transaction** for each step that can undo its effect if a later step fails.\n\nFor an order: reserve inventory (local commit in Inventory), charge the card (local commit in Payments), schedule shipping (local commit in Shipping). If shipping fails, the saga doesn't roll back a single distributed transaction — it runs compensations in reverse: refund the charge, release the inventory reservation.\n\nThe key mental shift: there's no moment where the whole operation is atomically \"all or nothing\" the way a single-database transaction is — for a window of time, some steps have committed and others haven't, and the system must tolerate being observed in that in-between state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: an order saga with a compensating action on failure",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Saga steps in sequence with a failing step triggering reverse-order compensations](assets/saga-compensation.svg)\n\nThe saga runs forward until a step fails, then runs compensations for every step that already committed, in reverse order — Shipping's failure triggers a refund and an inventory release, not a magic global rollback.\n\nEach compensation is its own local transaction in its own service; nothing here needs a distributed lock spanning all three services at once.",
+      "assets": [{"alt": "Saga steps in sequence with a failing step triggering reverse-order compensations", "path": "assets/saga-compensation.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": [
+        "distributed-transactions-and-sagas-s04-q1"
+      ]
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s05",
+      "order": 5,
+      "sectionTitle": "Compare: choreography-based sagas vs orchestration-based sagas",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Choreography | Orchestration |\n|---|---|---|\n| Coordination | Each service listens for events and reacts, no central controller | A dedicated orchestrator service tells each step what to do and when |\n| Coupling | Services only know the event schema, not each other | Orchestrator knows the whole flow; steps can stay simpler |\n| Visibility into saga state | Scattered — must trace events across services to see progress | Centralized — one place shows exactly which step a saga is on |\n| Scales to more steps | Gets hard to reason about past 3-4 steps (implicit flow) | Stays readable — the flow is explicit code/config in one place |\n\n**How to decide:** choreography suits a small number of steps where services are already event-driven; reach for orchestration once a saga has enough steps that \"who reacts to what\" stops being traceable in your head.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "distributed-transactions-and-sagas-s05-q1"
+      ]
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s06",
+      "order": 6,
+      "sectionTitle": "Designing compensating transactions: what \"undo\" means for a non-reversible step",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Some steps are naturally reversible — release an inventory reservation, cancel a pending hold. Others aren't: you can't \"un-send\" an email, and a refund isn't the same as the charge never happening (fees, exchange-rate movement, and the customer's bank statement all still show it).\n\nA compensating transaction doesn't have to be a perfect mirror-image undo — it has to leave the business in an **acceptable** state. For a non-reversible step like \"sent shipping confirmation email,\" the compensation might be sending a follow-up \"order cancelled, sorry\" email rather than attempting the impossible.\n\nDesigning compensations is a business conversation as much as a technical one: someone has to decide what \"good enough undo\" means for each step, and that decision belongs in the design, not left to whoever writes the code first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s07",
+      "order": 7,
+      "sectionTitle": "Code: a saga step and its compensating handler, sketched",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Each saga step pairs a forward action with a compensation that undoes it, registered together so the saga runner knows what to call on failure:\n\n```python\ndef reserve_inventory(order):\n    reservation_id = inventory_client.reserve(order.sku, order.qty)\n    order.reservation_id = reservation_id\n    return reservation_id\n\ndef release_inventory(order):\n    inventory_client.release(order.reservation_id)\n\nsaga.add_step(\n    action=reserve_inventory,\n    compensation=release_inventory,\n)\n```\n\nIf a later step (say, `charge_payment`) throws, the saga runner walks completed steps in reverse and calls each one's registered `compensation` — here, `release_inventory` — instead of the caller having to hand-write rollback logic for every possible failure point.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-transactions-and-sagas-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a saga with a compensation that itself can fail",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We wrote a compensation for each step, so the saga is guaranteed to reach a consistent end state.\"\n\n**Why it's wrong:** a compensation is still a network call to a service that can be down, slow, or return an error — \"release the inventory reservation\" can itself fail. If you don't handle that, the saga can get stuck in a genuinely bad in-between state: payment refunded, but the inventory reservation never released, silently blocking that stock from being sold to anyone else.\n\n**Correct model:** compensations need the same reliability treatment as forward actions — retries with backoff, idempotency (so a retried compensation doesn't double-refund), and a dead-letter path with alerting for the rare case where a compensation keeps failing and needs a human to intervene.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "distributed-transactions-and-sagas-s08-q1"
+      ]
+    }
+  ]
+}

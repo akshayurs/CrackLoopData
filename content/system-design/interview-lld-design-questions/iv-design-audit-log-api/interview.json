@@ -1,0 +1,29 @@
+{
+  "topicId": "iv-design-audit-log-api",
+  "interviewQuestions": [
+    {
+      "id": "iv-design-audit-log-api-iq1",
+      "question": "Design an audit log API for tracking changes to sensitive records.",
+      "answerMarkdown": "I'd anchor on one property before anything else: audit records must be append-only and immutable. If the API allows editing or deleting a past record, it isn't actually an audit trail, so I'd design that constraint into the types, not just document it as a convention.\n\nConcretely: an immutable `AuditEvent` — actor, action, target, timestamp, and the specific changed fields — with only a constructor, no setters. A single `AuditLogger.record(event)` method, and deliberately no `update()` or `delete()` on the interface at all.\n\nFor durability, I'd write the audit event in the same transaction as the business change where possible, or through an outbox pattern where the systems are separate, so a mid-request failure can't silently drop it. I'd keep queries on a separate read path with their own index, so compliance lookups never require touching the write logic.\n\n**Testing:** whether you treat immutability as a structural guarantee, not a convention, and whether you separate write durability from read query concerns.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The core prompt"
+    },
+    {
+      "id": "iv-design-audit-log-api-iq2",
+      "question": "How do you guarantee an audit event isn't lost if the write fails mid-request?",
+      "answerMarkdown": "I'd start from the failure I'm actually worried about: the business change succeeds but the audit write doesn't, so there's now a state change with no record of it — the worst possible outcome for an audit system.\n\nWhere the audit event and the business change share the same data store, I'd write both in one transaction, so they either both commit or both roll back. Where they're on separate systems — the common case, since audit events often ship to a separate store for compliance retention — I'd use an outbox pattern: write the event to a local table in the same transaction as the business change, then have a separate, retriable process publish it from there.\n\nThe key shift is that durability no longer depends on a network call succeeding in the moment; it depends on a local database write, which is far more reliable and easier to reason about.\n\n**Testing:** whether you reach for a real durability pattern like outbox instead of \"just retry the write.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Guaranteeing durability"
+    },
+    {
+      "id": "iv-design-audit-log-api-iq3",
+      "question": "Should the audit write be synchronous or fire-and-forget?",
+      "answerMarkdown": "I'd lead with the risk fire-and-forget introduces: if the audit call is best-effort, a burst of failures — a downstream outage, a full queue — silently loses audit coverage, often exactly when something suspicious is happening and the trail matters most.\n\nSo I'd default to synchronous for anything compliance-sensitive: the business operation isn't considered complete until its audit event is durably recorded. If latency is a genuine concern, I wouldn't jump straight to fire-and-forget — I'd make the write asynchronous but backed by a durable local buffer, like an outbox table written in the same transaction, so the async part is \"publish later\" rather than \"might not happen at all.\"\n\nI'd close by naming that this is a spectrum, not a binary choice, and the right point depends on how compliance-critical the specific event type is.\n\n**Testing:** whether you recognize fire-and-forget as a durability trade-off, not just a performance optimization.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Sync vs fire-and-forget"
+    }
+  ]
+}

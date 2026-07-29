@@ -1,0 +1,139 @@
+{
+  "id": "retries-timeouts-and-backoff",
+  "title": "Retries, Timeouts & Backoff",
+  "area": "system-design",
+  "group": "resilience",
+  "order": 4,
+  "slug": "retries-timeouts-and-backoff",
+  "summary": "Why naive retries amplify outages instead of fixing them, and the backoff, jitter, and retry-budget discipline that prevents it.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 6,
+  "slides": [
+    {
+      "id": "retries-timeouts-and-backoff-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Retrying a failed request feels obviously safe — the request failed, try again. But naive retries (immediately, without limit) are one of the most common causes of an outage getting *worse* instead of recovering, because every client retries at once and multiplies load on an already-struggling dependency.\n\nThis topic covers the discipline that makes retries safe: exponential backoff, jitter to desynchronize clients, per-hop timeout budgets, and capping total retry volume — plus the one case (non-idempotent writes) where retrying at all is dangerous.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s02",
+      "order": 2,
+      "sectionTitle": "Why naive retries make outages worse, not better",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Picture a dependency that's degraded and returning errors for 30% of requests because it's overloaded. Every client that hits an error immediately retries — which means the dependency now sees the original traffic *plus* a wave of retries, pushing its error rate higher, which triggers more retries. This is a **retry storm**, and it's how a moderate slowdown turns into a full outage.\n\nThe naive mental model — \"a retry either helps this one request or does nothing\" — misses the aggregate effect: at scale, retries are extra load on the exact thing that's already failing because it has too much load.\n\nEvery retry policy has to be designed with this feedback loop in mind, not just \"try again on failure.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "retries-timeouts-and-backoff-s02-q1"
+      ]
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s03",
+      "order": 3,
+      "sectionTitle": "Exponential backoff and why linear/fixed retry intervals fail",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Exponential backoff** doubles (or multiplies) the wait between retries — 100ms, 200ms, 400ms, 800ms — instead of retrying at a fixed interval. The growing delay gives a struggling dependency real breathing room to recover instead of being hit at a constant, unrelenting rate.\n\nA fixed interval (\"retry every 200ms\") doesn't adapt: if the dependency needs 5 seconds to recover, fixed-interval retries just keep arriving every 200ms the whole time, contributing steady load throughout the recovery window instead of backing off.\n\nExponential backoff should also have a **cap** — doubling forever eventually means waiting minutes between retries, which is often worse than just giving up and surfacing an error to the caller.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s04",
+      "order": 4,
+      "sectionTitle": "Jitter: preventing synchronized retry storms",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If every client backs off with the exact same schedule — 100ms, 200ms, 400ms — they stay perfectly **synchronized**: they all retry again at the same instant, just later. That still produces a spike of simultaneous requests, only delayed rather than eliminated.\n\n**Jitter** breaks the synchronization by adding randomness to each wait — instead of waiting exactly 400ms, a client waits somewhere between 200ms and 400ms, picked randomly. Now clients that failed at the same instant retry at spread-out times instead of all at once.\n\n\"Full jitter\" (wait a random amount between 0 and the backoff value) is the strongest desynchronizer; \"equal jitter\" (half fixed, half random) is a gentler middle ground when you still want some floor on the wait.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "retries-timeouts-and-backoff-s04-q1"
+      ]
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: retries without jitter synchronizing into a thundering herd",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Retry timelines: synchronized spikes without jitter vs spread with jitter](assets/jitter-vs-no-jitter.svg)\n\nWithout jitter, every client's backoff schedule lines up, so retries arrive as sharp, synchronized spikes — each one a mini traffic surge hitting the dependency at once. With jitter, the same total number of retries spread across a window instead of landing simultaneously.\n\nThe total retry volume doesn't change between the two timelines — only whether it arrives as a spike or a spread, and that difference is what determines whether the dependency can absorb it.",
+      "assets": [{"alt": "Retry timelines: synchronized spikes without jitter vs spread with jitter", "path": "assets/jitter-vs-no-jitter.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s06",
+      "order": 6,
+      "sectionTitle": "Setting timeouts: per-hop budgets in a multi-service call chain",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a call chain — gateway calls service A calls service B — each hop needs its own timeout, and they have to **fit within the caller's own budget**, not each be set independently. If the gateway promises a client a response in 2 seconds, and service A calls service B with a 3-second timeout, service A can end up waiting past its own deadline to the gateway.\n\nThe practical pattern: decide the total end-to-end budget first, then allocate slices to each hop — leaving room for at least one retry at the *lowest* layer, since that's usually where transient failures are cheapest to absorb.\n\nA timeout set without reference to the caller's own deadline isn't really a timeout — it's just a number that happens to sometimes align.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "retries-timeouts-and-backoff-s06-q1"
+      ]
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s07",
+      "order": 7,
+      "sectionTitle": "Retry budgets: capping total retries as a fraction of traffic",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Per-request backoff and jitter control *when* one client retries, but not the aggregate volume across all clients. A **retry budget** puts a hard ceiling on that: for example, retries may never exceed 10% of the request volume in a given window — tracked centrally (often in the same client library or a sidecar), not per-request.\n\nOnce the budget is exhausted, further failures are surfaced immediately instead of retried, even if an individual client would otherwise retry. This protects the dependency during a real outage: retry volume is capped no matter how many individual clients are failing simultaneously.\n\nThis is the aggregate-level complement to backoff and jitter, which only manage one client's behavior in isolation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s08",
+      "order": 8,
+      "sectionTitle": "Compare: retry-heavy vs fail-fast client behavior",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Retry-heavy client | Fail-fast client |\n|---|---|---|\n| Behavior on error | Retries several times with backoff before giving up | Surfaces the error to the caller quickly, few or no retries |\n| Best for | Idempotent reads, dependencies with brief blips | Non-idempotent writes, dependencies under sustained load |\n| Risk | Can amplify load during a real outage | Can surface transient blips as user-facing errors unnecessarily |\n| Pairs with | Backoff, jitter, retry budgets, circuit breakers | Clear error messages, client-side fallback UI |\n\n**How to decide:** match retry aggressiveness to write-safety and dependency health, not a single global policy — read-heavy calls to a mostly-healthy service can afford more retries than writes to a service already showing signs of overload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "retries-timeouts-and-backoff-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: retrying a non-idempotent write on timeout",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The request timed out, so it must not have gone through — safe to retry.\"\n\n**Why it's wrong:** a timeout only means the client didn't get a response in time; the server may have already fully processed the request and simply hadn't sent the reply back yet. Retrying a **non-idempotent** write — \"charge this card,\" \"increment this counter\" — after a timeout can execute it a second time, double-charging a customer or double-counting an event.\n\n**Correct model:** only retry writes that are idempotent — either naturally (a `SET` to an absolute value) or made so with an [idempotency key](idempotency-and-exactly-once) the server deduplicates on. If a write can't be made idempotent, don't retry it automatically; surface the ambiguity instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "retries-timeouts-and-backoff-s09-q1"
+      ]
+    }
+  ]
+}

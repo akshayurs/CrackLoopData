@@ -1,0 +1,165 @@
+{
+  "id": "iv-design-a-rate-limiter",
+  "title": "Design a rate limiter for this API",
+  "area": "system-design",
+  "group": "interview-hld-apis-resilience",
+  "order": 4,
+  "slug": "iv-design-a-rate-limiter",
+  "summary": "Choosing and defending a rate-limiting algorithm for a stated traffic pattern, then reasoning through where the distributed counter lives and what happens when it fails.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "iv-design-a-rate-limiter-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot: this vs the LLD version of the same prompt",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This is a **deep-dive probe**, distinct from the standalone LLD case study that asks for a full class design. Here the focus is choosing and defending an **algorithm** for a stated API's traffic pattern, and reasoning through the distributed-counting mechanics behind it.\n\nA strong answer picks an algorithm based on the traffic shape described, not a memorized default, and can defend where the shared counter lives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s02",
+      "order": 2,
+      "sectionTitle": "Clarifying questions to ask first",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask: is this limit **per-user, per-IP, or per-API-key**? Each implies a different key for the counter and a different sense of \"fair.\"\n\nAlso ask: does the limit need to **allow bursts**, or be **perfectly smooth**? A client that sends traffic in bursts (batch uploads, background sync) needs a different algorithm than one expected to send a steady trickle — this single answer usually decides between token bucket and sliding window.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s03",
+      "order": 3,
+      "sectionTitle": "The answer skeleton",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pick an algorithm — **token bucket** if bursts should be allowed, **sliding window** if the limit needs to be smooth and hard — then say **where the counter lives**: local to each server (fast, inconsistent across servers) or centralized in a shared store like Redis (consistent, adds a network hop and a dependency).\n\nBoth halves matter: the algorithm decides behavior under a given traffic shape, the counter location decides correctness under a distributed deployment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "iv-design-a-rate-limiter-s03-q1"
+      ]
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s04",
+      "order": 4,
+      "sectionTitle": "Compare: token bucket vs fixed window vs sliding window log",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "At **100 req/min per key**: a **fixed window** resets its counter at each minute boundary — simple, but allows up to 2x the limit in a burst spanning the boundary (100 requests at 0:59, another 100 at 1:00). A **token bucket** refills tokens continuously and lets a client spend saved-up tokens in a burst, up to the bucket's capacity, then throttles smoothly after. A **sliding window log** tracks exact request timestamps in the last 60 seconds — the most precise and burst-resistant, at the cost of storing more state per key.\n\nToken bucket is the common default when some burst tolerance is acceptable; sliding window log when precision matters more than memory cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s05",
+      "order": 5,
+      "sectionTitle": "Walking it: a mobile client that batches requests",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete scenario: a mobile client batches and sends **40 requests in one burst**, then goes quiet for a minute. A fixed-window limiter of 100/min can wrongly reject part of that burst if it lands near a window boundary — say 70 requests already counted just before the reset, leaving only 30 of the next window's budget for a 40-request burst.\n\nA token bucket sized to allow a 50-request burst handles this correctly: the client has accumulated enough tokens during its quiet period to absorb the burst in one shot, without any boundary-dependent rejection.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-a-rate-limiter-s05-q1"
+      ]
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s06",
+      "order": 6,
+      "sectionTitle": "Walking it: where the counter lives at scale",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "At scale, the counter needs to live somewhere all servers agree on. A shared Redis instance with an atomic `INCR` plus `EXPIRE` handles simple fixed-window counting; a Lua script handles token-bucket math atomically in one round trip:\n\n```\n-- Lua script run atomically in Redis\nlocal tokens = tonumber(redis.call('GET', KEYS[1]) or capacity)\nlocal now = tonumber(ARGV[1])\n-- refill based on elapsed time, then check/consume a token\nif tokens >= 1 then\n  redis.call('SET', KEYS[1], tokens - 1, 'EX', ttl)\n  return 1  -- allowed\nend\nreturn 0  -- rate limited\n```\n\nAtomicity matters: without it, 50 app servers each reading-then-writing the same key race and undercount, letting more requests through than the limit allows.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s07",
+      "order": 7,
+      "sectionTitle": "Follow-up: distributed across 50 app servers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"the limiter itself needs to be distributed across 50 app servers — where does the counter state live?\"** Two real answers: **centralized** (Redis) gives correctness — every server sees the same count — at the cost of added latency per request and a new dependency to keep healthy.\n\n**Approximate/local-with-sync** keeps each server's own local counter, periodically reconciled, giving lower latency at the cost of temporarily over-admitting requests during the sync gap. Name the trade-off explicitly rather than picking one without justification.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "iv-design-a-rate-limiter-s07-q1"
+      ]
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s08",
+      "order": 8,
+      "sectionTitle": "Follow-up: Redis is now a single point of failure",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"Redis is now a single point of failure for every API call — how do you protect against that?\"** **Fail open** — allow requests through — rather than **fail closed** — reject everything — if the rate limiter's own dependency is down.\n\nThe reasoning: an outage in your safety net (the limiter) shouldn't become an outage in the product it's protecting. Briefly unlimited traffic during a rare Redis outage is a far smaller cost than the entire API being unreachable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s09",
+      "order": 9,
+      "sectionTitle": "Follow-up: one tenant sending 1000x everyone else's traffic",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Expect: **\"how do you rate-limit fairly when one tenant sends 1000x the traffic of everyone else?\"** **Per-key limits scoped to the tenant or API key**, not a single global counter — each tenant gets their own budget, so one noisy tenant consuming their own limit can't exhaust the headroom every other tenant relies on.\n\nA single global counter shared across all tenants would let one heavy tenant's traffic starve everyone else the moment it approaches the ceiling — naming per-tenant scoping as the fix is the substance of this follow-up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "iv-design-a-rate-limiter-s09-q1"
+      ]
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: the fixed-window edge-boundary burst",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A fixed window counting requests per minute enforces the limit correctly.\"\n\n**Why it's wrong:** a client can send the full limit right before a window resets, then the full limit again right after — up to **2x the intended limit** in a short span straddling the boundary, since the two windows' counters are independent and unaware of each other.\n\n**Correct model:** if boundary bursts matter for this API, use a sliding window or token bucket instead, both of which account for request timing continuously rather than resetting a counter at fixed intervals.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "iv-design-a-rate-limiter-s11",
+      "order": 11,
+      "sectionTitle": "The 60-second version",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ask per-user/IP/key and burst-tolerance first. Pick token bucket for bursty traffic, sliding window for smooth limits — fixed window is simplest but allows a 2x boundary burst. Put the counter in Redis with atomic INCR/EXPIRE or a Lua script for correctness across servers; fail open if Redis itself goes down. Scope limits per tenant so one noisy caller can't starve everyone else.\n\nFor algorithm details see [Rate-Limiting Algorithms](rate-limiting-algorithms); for the distributed-counter mechanics see [Distributed Rate Limiting](distributed-rate-limiting).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    }
+  ]
+}

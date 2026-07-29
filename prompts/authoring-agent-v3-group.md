@@ -20,7 +20,22 @@ Author every topic in your assigned group as real content files under
   *seed* interview question for `interview.json`. It is a floor, not a cap: the brief lists one,
   the spec requires 2-3 per topic, so keep the seed (usually as the `mostAsked: true` one) and add
   the others yourself.
-- `AUTHORING.md` lines 1-140 — the quality bar and voice.
+
+  **Interview-bank groups have no `(interview)` bullets at all** — in `interview-*` groups the
+  *topic title itself is the interview question*. Six independent authors each worked this out from
+  scratch, so it is written down now: make the topic's own question `iq1` with `mostAsked: true`,
+  then promote two of the outline's `Follow-up:` bullets into `iq2`/`iq3`. Write each as a full
+  standalone answer — **do not copy prose from the slides**; the slides teach the material, the
+  interview answers model how to *say* it out loud under time pressure.
+  **Do not also write a slide that restates the seed's scenario.** It reads like a natural closing
+  "worked example" slide and several authors have written one by mistake — the seed belongs in
+  `interview.json` and nowhere else.
+- **Before you write a topic's `mcq.json`, re-count the brief's bullets against the slides you
+  just wrote.** Silently dropping one bullet in a 9-slide topic is the single most common miss.
+- `AUTHORING.md` lines 1-140 — the quality bar and voice. **Read it for the *voice and value
+  filter only*.** It is the v2 doc: its char-band table and its `interview` Card type are stale.
+  `tools/validate_v3.py`'s `BANDS` are the authoritative lengths (they are calibrated higher, and
+  match the shipped corpus). Write to the validator, not to `AUTHORING.md`'s numbers.
 
 ## 2. The schema (a validator enforces all of this)
 
@@ -64,13 +79,18 @@ when the brief doesn't list one — every authored topic in this repo does, and 
 
 - `id` = `"<slideId>-q1"`. `slideId` must be a real slide in this topic.
 - **Exactly 4 options**, all substantive and distinct. No throwaway or joke options.
-- **Spread `correctIndex` roughly evenly across 0-3 within your group.**
-  **Decide the target index BEFORE you write the four options, and cycle it: 0, 1, 2, 3, 0, 1, …**
-  Then write the correct answer into that slot and fill the other three around it. This is
-  prevention, not cleanup: six independent authors of this spec each drifted to ~68% of answers at
-  index 1 when they wrote the options first and let the position fall out — every one of them had
-  to go back and rebalance. `validate_v3.py` warns above 45% on one index (75% for banks under 8
-  MCQs), so verify your own tally before you finish either way.
+- **Spread `correctIndex` roughly evenly across 0-3 within your group.** Do it mechanically —
+  every author who tried to hold a target index in their head while drafting prose got it wrong,
+  including ones consciously trying to follow this rule. Use this procedure instead:
+  1. Write the four options in whatever order reads best, tagging the true one `[CORRECT]`.
+  2. Count that option's position (0-based) and write it into `correctIndex`.
+  3. If your running group tally is drifting toward one index, **swap two options** and recount.
+
+  Two failure modes this prevents, both observed repeatedly: drifting to ~68% of answers at index
+  1, and — worse — writing `correctIndex` for a *different* option than the one you actually made
+  true. That second one is a silently wrong answer key, not a cosmetic imbalance. Counting the
+  position of a `[CORRECT]` tag catches both. `validate_v3.py` warns above 45% on one index (75%
+  for banks under 8 MCQs); check your own tally before you finish either way.
 - `explanation` teaches: why the right answer is right *and* why the most tempting wrong one is
   wrong. 100+ chars. Never reference an option by position ("option B") — positions get shuffled.
 - `difficulty` ∈ `easy|medium|hard`, spread. `level` ∈ the four levels.
@@ -111,6 +131,11 @@ when the brief doesn't list one — every authored topic in this repo does, and 
   write it as plain text, or add the link once that topic is written. Targets in other groups are
   usually unauthored while you run: default to plain text there. Don't spend effort hunting for
   whether some other group exists yet — the orchestrator does one link-backfill pass at the end.
+  **`briefs/parts/_existing-slugs.txt`** lists every topic already authored repo-wide as
+  `area/group/topic` — grep it (`grep -w '<slug>' briefs/parts/_existing-slugs.txt`) before writing
+  a cross-link to another group. It is a snapshot from wave start, so absence is not proof.
+  **The brief sometimes cites `sd-interview-playbook` (Area 17) — that group was RETIRED and merged
+  into `sd-playbook`.** Never link it; link `sd-playbook` if it exists, else plain text.
 
 ## 4. Diagrams are DEFERRED — do not author SVGs
 
