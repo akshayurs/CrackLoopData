@@ -2483,7 +2483,7 @@ Indexing "what's near this point" efficiently — the structures behind every pr
 
 > HLD-view boundary: this group covers what to design **into** a system so it's observable, and how observability data (SLI/SLO, traces) feeds design decisions in an interview. Hands-on tooling and ops practice (Prometheus/Grafana setup, alert-pipeline plumbing, runbooks/on-call rotations) belongs to `observability-ops` in Area 10 — cross-link there, don't duplicate.
 
-### Topic: Observability Fundamentals (observability-fundamentals, beginner)
+### Topic: Observability Fundamentals (observability-in-system-design, beginner)
 Logs, metrics, and traces — the three pillars, and what each one actually answers.
 - Why "is it working?" needs more than a green dashboard (concept)
 - The three pillars: logs, metrics, traces — what each answers (concept)
@@ -2503,7 +2503,7 @@ Turning reliability into a number you can design and negotiate around.
 - Pitfall: an SLO with no teeth — nothing changes when it's breached (pitfall)
 - Interview: "What SLOs would you set for this API?" (interview)
 
-### Topic: Distributed Tracing (distributed-tracing, advanced)
+### Topic: Distributed Tracing (distributed-tracing-design, advanced)
 Following one request across many services to find which hop is actually slow.
 - Why a single request's path across services needs its own tool (concept)
 - Traces, spans, and parent-child relationships (concept)
@@ -2552,7 +2552,7 @@ Building instrumentation into a design from day one instead of bolting it on aft
 Observability data itself becomes a scaling and cost problem — sampling strategy and cardinality
 are design decisions, not a monitoring-team afterthought.
 - Why "instrument everything" stops working once telemetry volume becomes its own bill (concept)
-- Sampling strategies: head-based, tail-based, and adaptive sampling for traces (concept) — cross-link: distributed-tracing
+- Sampling strategies: head-based, tail-based, and adaptive sampling for traces (concept) — cross-link: distributed-tracing-design
 - Diagram: a trace pipeline with a sampling decision point before storage (diagram)
 - Cardinality explosions: how one high-cardinality label multiplies your metrics cost (concept)
 - Compare: sampling to cut volume vs aggregating to cut cardinality — different problems, different fixes (compare)
@@ -6430,7 +6430,7 @@ The live-debugging probe: tests whether you have a systematic narrowing process 
 - Follow-up: "there's no recent deploy and no obvious dependency slowdown — what's left?" — check for a traffic pattern change (a new heavy client, a bot, a viral spike) and infrastructure-level events (an autoscaling lag, a noisy neighbor on shared infra, a certificate/DNS issue) (concept)
 - Pitfall: jumping straight to "scale up the servers" before identifying where the time is actually going, which fixes nothing if the bottleneck is a lock or a single downstream dependency (pitfall)
 - The 60-second version (concept)
-- cross-link: distributed-tracing
+- cross-link: distributed-tracing-design
 
 ### Topic: How do you run an incident and the postmortem after it? (iv-incident-response-and-postmortems, advanced)
 Tests whether you know the shape of a real incident-response process (severity levels, a single incident commander, blameless postmortems with concrete action items) rather than describing an ad hoc scramble.
