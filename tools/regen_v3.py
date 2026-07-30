@@ -41,6 +41,18 @@ AREA_META = {
     "computer-networks": ("network", "#0E8A55"),
     "cs-theory-math": ("function", "#B8305A"),
     "system-design": ("layers", "#2A6FB8"),
+    "databases": ("database", "#0C8F88"),
+    "operating-systems": ("terminal", "#5A6BD8"),
+    # briefed but not yet authored — pre-seeded so a new area never falls back to the
+    # generic ("book", grey) default the way databases/operating-systems silently did.
+    "data-structures-algorithms": ("function", "#B8860B"),
+    "engineering-craft": ("tools", "#1098AD"),
+    "web-frontend": ("devices", "#D6336C"),
+    "languages-compilers": ("terminal", "#7048E8"),
+    "data-engineering": ("analytics", "#4C6EF5"),
+    "security": ("security", "#9B2226"),
+    "mobile": ("devices", "#2A9D8F"),
+    "interview-prep": ("book", "#5A6BD8"),
 }
 
 # Distinct group colours, cycled by global group index so groups within an area
@@ -53,6 +65,22 @@ GROUP_PALETTE = [
 
 # First matching keyword picks the group icon (AppIcons name); else the area icon.
 GROUP_ICON_RULES = [
+    # databases + operating-systems groups (wave 2) — ahead of the generic rules so
+    # "storage-indexing" stops matching a stray ML keyword and the OS groups stop
+    # falling through to the area icon.
+    (("relational-model",), "database"),
+    (("data-modeling", "normalization", "functional-depend"), "function"),
+    (("transactions-concurrency", "database-ops"), "tools"),
+    (("query-optimization",), "speed"),
+    (("data-warehousing", "olap"), "analytics"),
+    (("storage-indexing", "file-systems"), "layers"),
+    (("os-fundamentals",), "chip"),
+    (("processes-threads", "concurrency-sync"), "layers"),
+    (("scheduling",), "speed"),
+    (("deadlocks",), "science"),
+    (("memory-management",), "memory"),
+    (("io-systems",), "devices"),
+    (("linux-internals",), "terminal"),
     # system-design families (first match wins, so these precede the generic rules)
     (("interview-", "playbook", "experience-questions", "round-formats"), "book"),
     (("-cases-", "case-studies"), "layers"),
