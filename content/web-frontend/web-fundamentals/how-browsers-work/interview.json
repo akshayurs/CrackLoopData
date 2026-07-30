@@ -1,0 +1,37 @@
+{
+  "topicId": "how-browsers-work",
+  "interviewQuestions": [
+    {
+      "id": "how-browsers-work-iq1",
+      "question": "Walk me through what's happening inside the browser, at the process level, right now while this page is open.",
+      "answerMarkdown": "I'd start from the outside in. There's one **browser process** coordinating the whole window — tabs, address bar, disk cache — and it isn't doing the heavy lifting itself.\n\nFor this specific page, there's a **renderer process** dedicated to it (or to this origin, if the page embeds cross-site iframes, in which case there could be more than one). That renderer is where my actual work as a frontend engineer lives: it parsed the HTML into a DOM, built a CSSOM from the styles, ran my JavaScript through V8, and produced a render tree that got laid out and painted.\n\nTwo more processes are shared infrastructure rather than tied to this tab: a **GPU process** doing compositing, and a **network process** handling the HTTP requests and cache, independent of which tab asked for them.\n\nInside the renderer itself, there's a **main thread** running my JS and computing layout — single-threaded, so a long task there blocks input — and a **compositor thread** that can animate certain properties like `transform` without going back to the main thread at all.\n\nThe reason I care about this as an engineer, not just trivia: it's exactly why `transform`-based animations stay smooth under load, why one tab crashing doesn't take down my others, and why a renderer can't just reach out and read my filesystem — it's sandboxed and has to ask the browser process through mediated IPC.\n\n**Testing:** whether you have a real architectural model of the browser, or just know it \"renders HTML.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "how-browsers-work-iq2",
+      "question": "Why do browsers use a multi-process architecture instead of one big process, and what does that cost you?",
+      "answerMarkdown": "Two separate reasons, and I'd name both because they're often conflated: **crash isolation** and **security isolation**.\n\nCrash isolation is the older motivation — a renderer bug (an infinite loop, a bad codec) kills only that tab; you see \"Aw, Snap!\" instead of losing every open tab. Security isolation is the stronger one: **site isolation**, which Chrome shipped in response to Spectre in 2018, puts different origins in separate renderer processes specifically so a memory-safety bug or a side-channel attack in one origin's process can't read data belonging to another — because they're never in the same address space to begin with.\n\nThe cost is real and structural: each renderer carries roughly 20–50MB of base overhead — its own V8 heap, its own mapped libraries — before any page content is counted. That's why opening 40 tabs isn't 40x one page's footprint, it's 40x (page memory + per-process overhead), and it's the actual root cause behind \"this browser eats RAM\" complaints.\n\nBrowsers mitigate this at the margins — freezing background renderers, merging same-site frames under memory pressure on constrained devices — but they can't eliminate it, because the isolation and the overhead come from the same design choice. You can't get the security property for free.\n\n**Testing:** whether you understand isolation as a genuine security boundary with a real memory cost, not just \"browsers are multi-process for stability.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "how-browsers-work-iq3",
+      "question": "What's the actual difference between Blink, Gecko, and WebKit, and when does it matter to you as an engineer?",
+      "answerMarkdown": "They're three independently-maintained rendering engine codebases, and \"test in three browsers\" only really exercises all three if you're careful about which platform you're on.\n\n**Blink** ships in Chrome, Edge, Opera, and Brave — it's a 2013 fork of WebKit with its own layout and JS pipeline (V8) and the fastest feature-adoption cadence of the three. **Gecko** is Firefox's own independent engine, with its own CSS and layout implementation that diverges from Blink in real, observable ways — flexbox gap handling and some CSS Grid edge cases have shipped at different times across the two. **WebKit** ships in Safari, and — this is the detail that actually bites people — Apple's App Store policy requires **every** browser on iOS, including \"Chrome for iOS\" and \"Firefox for iOS,\" to embed WebKit under the hood, not their own engine.\n\nThe practical consequence: a bug report that says \"broken on iOS Chrome and iOS Firefox but fine on desktop Chrome\" is almost always a WebKit bug, not a Chrome or Firefox bug, and testing more Chromium browsers won't reproduce it. I keep a real WebKit build (or Safari itself) in my test matrix specifically because iOS makes it unavoidable, regardless of which browser a user says they're using.\n\n**Testing:** whether you know engine diversity is about actual codebases and platform policy, not brand names.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Cross-browser"
+    },
+    {
+      "id": "how-browsers-work-iq4",
+      "question": "You're debugging a Chrome tab using 1.5GB of RAM for what looks like a simple page. How does knowing the process architecture help you investigate?",
+      "answerMarkdown": "I'd stop treating \"the tab\" as one thing to profile, because it isn't — it's at minimum a renderer process plus a share of the GPU and network processes, and `chrome://process-internals` or the Task Manager (Shift+Esc) will show me exactly how many renderer processes back this one tab.\n\nFirst check: **is this really one process, or several?** If the page embeds several cross-origin iframes — ad networks, analytics, a payment widget — site isolation may have spun up a separate renderer per origin, and each one carries its own 20–50MB base overhead before content. What looks like \"one page's memory\" might be five processes' worth.\n\nSecond, inside the main renderer, I'd take a heap snapshot in DevTools rather than trust the OS-level number, looking specifically for **detached DOM nodes retained by closures** — a classic leak where an event listener or a cached reference keeps a whole subtree alive after it's removed from the page.\n\nThird, I'd check for a **JIT deoptimization loop**: a hot function that keeps getting optimized and deoptimized because its argument shapes are inconsistent burns CPU and can bloat memory with duplicate compiled versions of the same function.\n\nThe process model tells me *where* to look first — whether the bloat is architectural (too many origins, too many processes) or a leak inside one renderer's heap — before I spend time in a heap snapshot that's scoped to the wrong process.\n\n**Testing:** whether you can turn architectural knowledge into an actual debugging strategy, not just recite the process diagram.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

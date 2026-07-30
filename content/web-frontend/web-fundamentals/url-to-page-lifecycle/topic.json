@@ -1,0 +1,180 @@
+{
+  "id": "url-to-page-lifecycle",
+  "title": "URL-to-Page Lifecycle",
+  "area": "web-frontend",
+  "group": "web-fundamentals",
+  "order": 2,
+  "slug": "url-to-page-lifecycle",
+  "summary": "The full 'type a URL, hit Enter' journey from parsing to first pixels. It's the most-asked frontend systems question, and the right answer depends on matching depth to the level being asked.",
+  "level": "beginner",
+  "slideCount": 12,
+  "estReadMinutes": 13,
+  "slides": [
+    {
+      "id": "url-to-page-lifecycle-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"What happens when you type a URL and hit Enter?\" is asked in some form at nearly every frontend interview, at every level. It's popular because it's a single question that lets a candidate go as deep as they want — from a two-line summary to a twenty-minute deep dive on TLS handshakes.\n\nThe failure mode isn't ignorance, it's **pacing**: candidates either stop at \"the browser makes a request and shows the page\" (too shallow for anything past a screen) or spiral into TCP sequence numbers for a role that just wants to know you understand the streaming render.\n\nThis topic walks the full pipeline — parsing, DNS, connection, request, streaming response, subresources, redirects — and closes with how to calibrate depth to who's asking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "url-to-page-lifecycle-s02",
+      "order": 2,
+      "sectionTitle": "Step 1 — parsing the URL",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before anything touches the network, the browser parses the string you typed into structured parts: **scheme** (`https`), **host** (`example.com`), **port** (implicit 443 for https), **path** (`/products`), and **query** (`?id=42`).\n\nThis step also decides whether it's even a URL. Type `example` with no dots and most browsers treat it as a **search query** to your default search engine rather than a hostname — the omnibox has to guess intent before the navigation pipeline starts at all. Type something that parses as a valid host, and the browser also normalizes it: adding a default scheme, lowercasing the host, resolving `.` and `..` in the path.\n\nNothing here has hit the network yet — this is pure string processing that determines everything downstream.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "url-to-page-lifecycle-s03",
+      "order": 3,
+      "sectionTitle": "Step 2 — DNS resolution",
+      "subTitle": "At a glance",
+      "type": "concept",
+      "markdown": "The host `example.com` isn't an address the network understands — the browser needs an IP. It checks, in order: its own DNS cache, the OS resolver's cache, then queries out to a recursive resolver (often your router or ISP, or a public one like `1.1.1.1`).\n\nA cache hit costs effectively nothing; a full cold lookup through the DNS hierarchy typically adds **20–120ms** before a single byte of the actual request goes out. That's why production sites use `<link rel=\"dns-prefetch\">` for third-party origins they know they'll need soon — it hides this latency behind other work instead of paying it later.\n\nThe full mechanics of the DNS hierarchy — root, TLD, authoritative servers — are covered in `computer-networks`. What matters here is just that this lookup happens, and that it's a real, measurable delay before connection setup even starts.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "url-to-page-lifecycle-s03-q1"
+      ]
+    },
+    {
+      "id": "url-to-page-lifecycle-s04",
+      "order": 4,
+      "sectionTitle": "Step 3 — connection setup",
+      "subTitle": "TCP handshake + TLS negotiation",
+      "type": "concept",
+      "markdown": "With an IP in hand, the browser opens a transport connection. For a plain HTTP/1.1 or HTTP/2 site over TCP, that's a **three-way handshake** (SYN, SYN-ACK, ACK) — one round trip before any application data moves.\n\nFor HTTPS — nearly everything today — a **TLS handshake** follows on top of that: the browser and server negotiate a cipher suite, the server presents its certificate, and they derive a shared session key. Modern TLS 1.3 does this in **one round trip** instead of TLS 1.2's two, specifically because that extra round trip was costing real page-load time at scale.\n\nSo a fresh HTTPS connection to a new host commonly costs **DNS + TCP round trip + TLS round trip** before the first request byte is sent — on a connection with 50ms latency, that's already 100–150ms gone. This is the direct motivation behind connection reuse (`keep-alive`) and `preconnect` hints.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "url-to-page-lifecycle-s04-q1"
+      ]
+    },
+    {
+      "id": "url-to-page-lifecycle-s05",
+      "order": 5,
+      "sectionTitle": "Step 4 — sending the request",
+      "subTitle": "Headers you didn't write",
+      "type": "concept",
+      "markdown": "The browser builds the HTTP request, and adds a surprising amount you never typed: `Host`, `User-Agent`, `Accept`, `Accept-Encoding` (advertising gzip/br support), `Accept-Language`, and — critically — any **cookies** scoped to that origin and path.\n\nIt also attaches conditional-request headers automatically if it has a cached copy worth revalidating: `If-None-Match` (from a stored `ETag`) or `If-Modified-Since`. This is the browser deciding, before you write a line of fetch code, whether it even needs a full response body or just a \"still fresh\" confirmation — the mechanics of that decision are covered in depth in `http-for-frontend`.\n\nThe request line itself — `GET /products?id=42 HTTP/1.1` — is the part everyone remembers; the automatic headers are the part that actually decides caching behavior and server-side personalization.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "url-to-page-lifecycle-s06",
+      "order": 6,
+      "sectionTitle": "Step 5 — the response starts streaming",
+      "subTitle": "The browser doesn't wait for the whole thing",
+      "type": "concept",
+      "markdown": "This is the detail that separates a shallow answer from a strong one: the browser does **not** wait for the full HTML response before doing anything. As soon as bytes arrive, the HTML parser starts tokenizing and building the DOM **incrementally, on partial data**.\n\nThat's why you can see a page's header render while the rest of the response is still in flight on a slow connection — the parser is working against a stream, not a completed buffer. It's also why a server that's slow to finish the response (but fast to start it) still lets the browser make visible progress, which is the whole idea behind server-side streaming and things like React Server Components' streaming SSR.\n\nParsing can pause, though — a blocking `<script>` tag encountered mid-stream halts tokenization until that script downloads and runs, which is exactly the problem `defer`/`async` solve (covered in `dom-and-cssom`).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "url-to-page-lifecycle-s06-q1"
+      ]
+    },
+    {
+      "id": "url-to-page-lifecycle-s07",
+      "order": 7,
+      "sectionTitle": "Step 6 — fetching subresources",
+      "subTitle": "The preload scanner",
+      "type": "concept",
+      "markdown": "While the main HTML parser is busy — possibly blocked on a synchronous script — a separate, lightweight **preload scanner** races ahead through the raw HTML bytes looking for resources to kick off early: `<img src>`, `<link rel=stylesheet>`, `<script src>`.\n\nIt doesn't build a DOM or execute anything; it just spots URLs and issues requests for them immediately, in parallel with normal parsing. This is why a render-blocking script in the middle of the page doesn't also delay every image below it from starting its download — the preload scanner already queued them.\n\nRequests aren't all equal priority, either: the browser assigns fetch priority (CSS and viewport images high, below-the-fold images low, prefetch hints lowest) so a congested connection serves what's visible first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "url-to-page-lifecycle-s08",
+      "order": 8,
+      "sectionTitle": "The full timeline",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Laid end to end, a cold navigation to a new HTTPS host looks like: parse URL → DNS lookup → TCP handshake → TLS handshake → request sent → TTFB (time to first byte) → HTML streams in and parses incrementally, kicking off the preload scanner → CSSOM built in parallel → first paint once enough of the render tree is ready → remaining subresources and scripts continue loading.\n\nCrucially, several of these steps **overlap** rather than running strictly in sequence — parsing continues while subresources download, paint can happen before the whole document finishes arriving. It is not one long serial chain; it's a pipeline with real parallelism once bytes start flowing.\n\n<<< Image: a horizontal timeline with labeled segments — DNS, TCP handshake, TLS handshake, request, TTFB, HTML streaming+parsing — with a bracket showing \"preload scanner + subresource fetches\" and \"CSSOM build\" running in parallel underneath the HTML streaming segment, and a marker for \"first paint\" appearing partway through, before the timeline ends >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "url-to-page-lifecycle-s08-q1"
+      ]
+    },
+    {
+      "id": "url-to-page-lifecycle-s09",
+      "order": 9,
+      "sectionTitle": "Real numbers, roughly",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rough budgets worth having in your head for a cold navigation on a typical broadband connection (~50ms RTT):\n\n- DNS cold lookup: **20–120ms**\n- TCP handshake: **~1 RTT** (~50ms)\n- TLS 1.3 handshake: **~1 RTT** (~50ms, was 2 RTT pre-TLS-1.3)\n- TTFB (server processing + network): **100ms–1s+**, highly variable and often the biggest single chunk\n- HTML parse to first paint: **tens of milliseconds** once bytes are flowing, assuming no blocking scripts\n\nAdd it up and a \"slow\" 2-second page load is rarely one villain — it's DNS plus a cold connection plus a slow TTFB plus a render-blocking script, each contributing a few hundred milliseconds. Knowing these rough magnitudes is what lets you say *where* to look first in a real performance investigation instead of guessing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "url-to-page-lifecycle-s10",
+      "order": 10,
+      "sectionTitle": "Redirects, HSTS, and cached navigations",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Real navigations rarely hit the happy path unchanged:\n\n- **Redirects** (`301`/`302`) mean the whole pipeline — DNS, connection, request — potentially repeats against a new host, each hop adding a full round trip.\n- **HSTS** (`Strict-Transport-Security`) lets a site tell the browser \"never try me over plain HTTP again\"; once seen, the browser rewrites `http://` to `https://` **before** even attempting a connection, silently skipping what would have been a redirect round trip on every future visit.\n- **Back-forward cache (bfcache)** can skip nearly the entire pipeline: navigating back to a page the browser froze in memory restores it instantly, no network at all — provided nothing on the page (an open WebSocket, an `unload` handler) disqualified it from being cached.\n\nEach of these changes which steps actually run, which is exactly why \"what happens on this navigation\" doesn't have one universal answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "url-to-page-lifecycle-s10-q1"
+      ]
+    },
+    {
+      "id": "url-to-page-lifecycle-s11",
+      "order": 11,
+      "sectionTitle": "Assuming the whole page loads before anything renders",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The single most common wrong mental model in this answer: picturing the browser as downloading the complete HTML document, *then* starting to build and render it.\n\nThat's not how it works, and the difference matters practically. Because parsing and rendering happen against a **stream**, a large document with a slow tail can still show meaningful content quickly — which is the entire premise behind streaming SSR frameworks. Conversely, a render-blocking `<script>` placed early in an otherwise fast document can hold up visible progress far more than its own size suggests, because it pauses the incremental parse for everyone below it.\n\nIf your mental model is \"download completes, then render starts,\" you'll misdiagnose both of these — you'll blame document size for a blocking-script problem, and underestimate how much a slow TTFB (which delays the *start* of streaming) actually costs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "url-to-page-lifecycle-s12",
+      "order": 12,
+      "sectionTitle": "Matching depth to the question",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This question has no single correct length — it has a correct length **for the level being interviewed**. Three calibrated answers:\n\n- **Junior screen:** parse the URL, resolve DNS, open a connection, send the request, browser parses the HTML response and renders it — 30 seconds, no jargon overload.\n- **Mid-level:** add TLS's role, the streaming parse (not \"wait for the whole response\"), and the preload scanner fetching subresources in parallel — shows you understand *why* pages feel fast, not just the request/response shape.\n- **Senior/staff:** volunteer the parts that show judgment without being asked — HSTS avoiding a redirect round trip, bfcache skipping the pipeline entirely, rough TTFB/DNS/TLS numbers, and where you'd look first if this navigation were slow in production.\n\nThe skill being tested is rarely \"do you know DNS\" — it's whether you can read the room and stop at the right depth, then go deeper only if asked.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    }
+  ]
+}

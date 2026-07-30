@@ -1,0 +1,37 @@
+{
+  "topicId": "advanced-git-internals",
+  "interviewQuestions": [
+    {
+      "id": "advanced-git-internals-iq1",
+      "question": "What are the four object types in git's object model, and how do they relate to each other?",
+      "answerMarkdown": "**Blob** stores a file's raw content — no name, no path, just bytes, identified by the hash of that content. **Tree** is a directory listing: named entries, each pointing to a blob (a file) or another tree (a subdirectory). **Commit** points to exactly one tree — the full project snapshot at that moment — plus one or more parent commits and metadata like author and message. **Tag**, when annotated, points at a commit and adds a message and optional signature.\n\nThe relationship is a strict hierarchy: a commit references a tree, a tree references blobs and other trees, and nothing points \"up\" — a blob has no idea which commits or trees reference it. Every object is identified by the hash of its own content, which is why identical file content anywhere in history — even across completely unrelated commits — is stored exactly once.\n\nWhat makes this worth knowing beyond trivia: it explains why a commit isn't a diff. Git computes diffs on the fly by comparing two commits' trees; it doesn't store them. That's also why `git show` and `git diff` between arbitrary commits work symmetrically in both directions — there's no stored \"forward\" diff to reverse.\n\n**Testing:** whether you understand git's storage as snapshots plus structural sharing, not as a sequence of stored diffs — the single most common misconception about how git works underneath.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "advanced-git-internals-iq2",
+      "question": "How does git keep clones of large, old repositories fast despite years of history?",
+      "answerMarkdown": "The core mechanism is the **packfile**. New objects start as individual loose files, but periodically — on push, on `git gc`, or automatically past a threshold — git bundles many objects into one packfile, storing similar objects as small deltas against each other rather than as full copies. Two versions of a large file differing by one line cost close to one copy plus a tiny diff, not two full copies.\n\nOn top of delta compression, content-addressing gives free deduplication: identical blobs anywhere in history are the same object regardless of how many commits or paths reference them, so nothing is ever stored twice for being unchanged.\n\nFor repositories where even packed history is too much to reasonably transfer, git also supports `--depth` shallow clones (only recent history), and partial clone / sparse checkout, which fetch object content lazily as it's actually needed rather than upfront — genuinely necessary tooling at the scale covered in Git at Scale, where the full history and full working tree can be gigabytes each.\n\nSo the honest answer has two layers: packfile delta compression handles the common case efficiently by default, and shallow/partial clone exist for the cases where even that isn't enough.\n\n**Testing:** whether you can name the actual compression mechanism rather than a vague \"git is efficient\" answer.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Performance"
+    },
+    {
+      "id": "advanced-git-internals-iq3",
+      "question": "Walk me through how you'd use git bisect to find which commit introduced a regression across 500 commits.",
+      "answerMarkdown": "I'd start with `git bisect start`, then mark the current commit as bad (`git bisect bad`) and the last known-good state — a previous release tag, usually — as good (`git bisect good v2.1.0`). Git checks out the midpoint of that range automatically.\n\nFrom there it's a loop: run whatever reproduces the bug against the checked-out commit, then tell git `git bisect good` or `git bisect bad` depending on the result. Each answer halves the remaining range, so 500 commits resolves in roughly nine checks — log₂ 500 ≈ 9 — instead of a linear scan through hundreds.\n\nIf the reproduction is scriptable — a specific test failing, a specific error on startup — I'd automate the whole thing with `git bisect run <script>`, where the script exits nonzero on \"bad,\" turning nine manual checkouts into one unattended command that reports the exact culprit commit.\n\nOne practical caveat: this works far better on linear, rebased history. A history full of merge commits can make \"which side of this merge introduced it\" genuinely ambiguous for bisect to reason about, since a merge commit's own diff doesn't cleanly represent either parent's actual change.\n\n**Testing:** whether you know the concrete mechanics (good/bad marking, the log-time complexity, the run automation) rather than just knowing bisect exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "advanced-git-internals-iq4",
+      "question": "When would you use cherry-pick instead of merge or rebase, and what's the risk?",
+      "answerMarkdown": "Cherry-pick applies one specific commit's diff onto my current branch as a new commit — it's the tool for grabbing exactly one change without pulling in everything else the source branch has accumulated. The classic case: a critical fix lands on `main` and needs to reach a release branch supporting an older, already-shipped version immediately, without dragging in unrelated in-progress work that's also on `main`.\n\nThe risk is that cherry-pick applies the commit's diff against whatever the target branch's current version of those lines actually looks like — if the release branch has diverged significantly from where the fix was originally written, that can produce conflicts that have nothing to do with the fix itself, just incidental drift in surrounding code.\n\nThe other operational risk shows up at scale: cherry-picking the same logical fix onto several release branches (common when supporting multiple live versions) means tracking, by hand or with tooling, which branches have actually received it — a fix cherry-picked onto three of five supported branches, with no tracking, is a real, recurring source of \"wait, is this actually fixed everywhere\" incidents.\n\nI'd default to cherry-pick only for genuinely isolated, single-commit fixes, and prefer merge/rebase for anything broader.\n\n**Testing:** whether you can name both the mechanical conflict risk and the operational tracking risk, not just define what cherry-pick does.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

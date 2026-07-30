@@ -1,0 +1,182 @@
+{
+  "id": "xss-fundamentals",
+  "title": "XSS Fundamentals",
+  "area": "web-frontend",
+  "group": "web-security",
+  "order": 1,
+  "slug": "xss-fundamentals",
+  "summary": "Cross-site scripting is attacker code running inside your origin with your user's full privileges. Learn the stored, reflected and DOM-based varieties, and why the third one never touches your server.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "xss-fundamentals-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Cross-site scripting (XSS)** is the bug where data you accepted from a user gets treated as *code* by another user's browser. One unescaped comment field, and a stranger's JavaScript is running on your domain, in your victim's logged-in session.\n\nIt has been in the OWASP Top 10 since the list existed, and it is still the single most common vulnerability class reported through bug-bounty programs. Frontend engineers own it, because almost every fix lives in the rendering layer.\n\nThe thing to internalise first is not the payloads — it's the **boundary**. Every place your app takes a string it did not author and puts it into HTML, an attribute, a URL, or a script context is a boundary, and XSS is what happens when that boundary is crossed without encoding.\n\nThis topic covers what XSS is and its three varieties. The fix — context-aware encoding, framework auto-escaping, and sanitizers — is the next topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 63,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-fundamentals-s02",
+      "order": 2,
+      "sectionTitle": "What XSS actually is",
+      "subTitle": "Attacker code, your origin",
+      "type": "concept",
+      "markdown": "The browser's whole security model is the **same-origin policy**: code from `evil.example` cannot read data belonging to `bank.example`. XSS is the bug that makes that irrelevant, because the attacker's script *is* served by `bank.example` as far as the browser can tell.\n\nMechanically, three things have to line up:\n\n- Your app accepts a string from an untrusted source — a form field, a query parameter, a URL fragment, a header, a value pulled back out of your own database.\n- That string reaches a **sink** that interprets markup or code: `innerHTML`, `document.write`, an attribute value, a `<script>` block, an `href`.\n- Nothing encoded it on the way, so `<script>` arrives as a tag rather than as five printable characters.\n\nOnce that happens the attacker's code inherits the origin. It can read the DOM, call your API with the user's cookies attached, and read anything in `localStorage`. See [same-origin-policy-and-cors](same-origin-policy-and-cors) for the model XSS defeats.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "xss-fundamentals-s02-q1"
+      ]
+    },
+    {
+      "id": "xss-fundamentals-s03",
+      "order": 3,
+      "sectionTitle": "Stored vs reflected vs DOM-based",
+      "subTitle": "Where the payload lives and how it travels",
+      "type": "compare",
+      "markdown": "The three classic varieties differ in **where the untrusted string rests between the attack and the victim** — which changes who is reachable and who can fix it.\n\n| | Stored | Reflected | DOM-based |\n|---|---|---|---|\n| Payload lives in | your database / cache | the request URL or form post | never leaves the browser |\n| Delivery | victim just visits the page | victim must open a crafted link | victim opens a crafted link or fragment |\n| Server sees it? | yes, on write and on read | yes, in the request | **no** — often not even in server logs |\n| Blast radius | everyone who views the record | one victim per link | one victim per link |\n| Fix belongs to | write path or render path | render path | client JavaScript only |\n\nStored is the most severe because it needs no social engineering — a poisoned display name renders for every viewer, which is how self-propagating worms like the 2005 Samy worm on MySpace spread to a million profiles in under a day.\n\nDOM-based is the most often missed, because a server-side scan or a WAF sitting in front of the app never observes the payload at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "xss-fundamentals-s03-q1"
+      ]
+    },
+    {
+      "id": "xss-fundamentals-s04",
+      "order": 4,
+      "sectionTitle": "The path of a stored payload",
+      "subTitle": "Comment field to victim's browser",
+      "type": "diagram",
+      "markdown": "Trace a stored XSS end to end and it becomes obvious why the render path is where the fix belongs.\n\n1. The attacker posts a comment whose body is markup rather than prose. Your API validates it is under 2,000 characters and stores it verbatim.\n2. Days later, an unrelated logged-in user opens the thread. Your server or your client fetches the comment and injects the body into the page.\n3. The browser parses that body as HTML. There is no marker distinguishing it from the markup your template authored, so the attacker's script executes as first-party code.\n4. It now runs with the victim's session. It can call your own API endpoints and the victim's cookies ride along automatically.\n\nNotice the attacker and the victim are never online at the same time, and nothing about step 3 looks unusual in a log. The single moment where the outcome is decided is step 2 — whether the string was encoded for the context it landed in.\n\n<<< Image: a four-stage horizontal flow: (1) attacker's browser posting a comment whose body is shown as a generic script tag glyph, arrow to (2) an app-server + database cylinder labelled \"stored verbatim — validation only checked length\", arrow to (3) the same server rendering a page for a different, logged-in victim with the stored string spliced unencoded into the HTML, arrow to (4) the victim's browser where the injected block is highlighted in a danger colour and labelled \"parsed as markup, runs as first-party code\"; a callout bracket over the arrow between 2 and 3 reading \"the only place the outcome is decided: encode here\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 92,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-fundamentals-s05",
+      "order": 5,
+      "sectionTitle": "A minimal vulnerable render",
+      "subTitle": "innerHTML from user input",
+      "type": "code",
+      "markdown": "The whole bug class fits in one line. This renders a user-supplied display name into a greeting:\n\n```js\n// VULNERABLE — assigns an untrusted string into a markup-parsing sink\nconst name = await fetchProfileName(userId);   // whatever the user typed\ngreeting.innerHTML = 'Welcome back, ' + name;\n```\n\nIf a user sets their display name to `<script>alert(1)</script>`, that `alert` is what everybody viewing the profile gets. `alert(1)` is the harmless canary researchers use to prove execution; what a real attacker substitutes is arbitrary.\n\nThe fix is a one-character-per-line change of **sink**:\n\n```js\n// SAFE — textContent never parses markup, only sets text\ngreeting.textContent = 'Welcome back, ' + name;\n```\n\n`textContent` inserts the same characters as *text*, so `<` shows up as a literal less-than sign on screen. The rule that generalises: reach for a markup-parsing sink only when rendering markup is genuinely the feature, and then sanitize deliberately.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 73,
+      "mcqIds": [
+        "xss-fundamentals-s05-q1"
+      ]
+    },
+    {
+      "id": "xss-fundamentals-s06",
+      "order": 6,
+      "sectionTitle": "Why XSS is devastating",
+      "subTitle": "It runs with the victim's full privileges",
+      "type": "concept",
+      "markdown": "Junior engineers under-rate XSS because the demo is a popup. The correct mental model: **an XSS is a remote code execution inside your user's session**. Injected script can do anything that user could do by clicking, only silently and instantly.\n\nConcretely, script running in your origin can:\n\n- **Call your own API** with the session cookie attached automatically — change the account email, add an OAuth app, transfer funds. It never needs to read the cookie to use it.\n- **Read the DOM**, so anything on screen is exfiltratable: account numbers, a one-time code the user just pasted, the contents of a form mid-typing.\n- **Read `localStorage` and `sessionStorage`**, which is exactly where many apps park a JWT.\n- **Rewrite the page**, including replacing the login form with a look-alike that posts credentials elsewhere. The URL bar and the TLS padlock stay correct, so every signal a careful user checks still says the site is genuine.\n- **Persist**, by registering a service worker or planting itself into stored content so it re-executes.\n\nThat last bullet is why XSS on an authenticated page is routinely triaged as critical rather than medium.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "xss-fundamentals-s06-q1"
+      ]
+    },
+    {
+      "id": "xss-fundamentals-s07",
+      "order": 7,
+      "sectionTitle": "DOM-based XSS",
+      "subTitle": "Sources and sinks, no server involved",
+      "type": "concept",
+      "markdown": "**DOM-based XSS** happens entirely in client JavaScript: untrusted data flows from a *source* to a *sink* without ever making a round trip you control.\n\nCommon **sources** — attacker-influenceable values already in the page:\n\n- `location.search`, `location.hash`, `location.pathname`, `document.referrer`\n- `postMessage` event data from another window\n- values read back out of `localStorage` or a cookie\n\nCommon **sinks** — APIs that parse what you give them:\n\n- `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`\n- `eval`, `new Function`, `setTimeout` with a string argument\n- assigning to `element.src` / `a.href` where a `javascript:` URL executes\n\nThe URL fragment deserves special attention: **everything after `#` is never sent to the server**. A payload in the fragment appears in no access log, is invisible to a WAF, and shows up in no server-side scan — yet reaches any client code that reads `location.hash`. This is why a report of \"XSS on our marketing page\" can be entirely real even when the backend team can find nothing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 79,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-fundamentals-s08",
+      "order": 8,
+      "sectionTitle": "A DOM XSS the server never sees",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A pattern that ships constantly — restoring a tab from the URL fragment:\n\n```js\n// VULNERABLE: location.hash is a source, innerHTML is a sink\nconst tab = decodeURIComponent(location.hash.slice(1));\nheader.innerHTML = 'Section: ' + tab;   // markup-parsing sink\n```\n\nRequest `/dashboard#billing` and it behaves. Put markup after the `#` instead of a section name and it executes — and because fragments are stripped by the browser before the request goes out, your server access logs show a plain `GET /dashboard`.\n\nThe fix is the same shape as before, plus validating that the value is one you recognise:\n\n```js\nconst ALLOWED = new Set(['overview', 'billing', 'team']);\nconst raw = decodeURIComponent(location.hash.slice(1));\nconst tab = ALLOWED.has(raw) ? raw : 'overview';   // allowlist, not blocklist\nheader.textContent = 'Section: ' + tab;\n```\n\nTwo defenses stacked: an **allowlist** of expected values, and a **non-parsing sink**. Either alone would have held; together they survive one of them being edited later by someone who didn't know why it was there.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "xss-fundamentals-s08-q1"
+      ]
+    },
+    {
+      "id": "xss-fundamentals-s09",
+      "order": 9,
+      "sectionTitle": "\"No database, so no stored XSS\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The reasoning sounds airtight and is wrong. \"Stored\" means the payload **persists somewhere between the attacker's visit and the victim's**, and a relational database is only the most obvious somewhere.\n\nStores that have all produced real stored-XSS findings:\n\n- **A CDN or edge cache** holding a rendered page that contained a reflected payload — now every visitor gets it, not just the one who clicked the link.\n- **`localStorage` on a shared or kiosk machine**, replayed into the DOM on the next session.\n- **A log viewer or admin dashboard** rendering a `User-Agent` or username straight from request logs. The victim here is your own support engineer, who is usually the highest-privileged user you have.\n- **Uploaded files served from your origin.** An SVG is XML and can carry a script element; served as `image/svg+xml` from your domain and opened directly, it executes in your origin.\n- **A third-party CMS, feature-flag description, or error-tracking payload** rendered unescaped in an internal tool.\n\nThe generalisation: ask *where does untrusted text come to rest and later get rendered*, not *do we have a database*.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "xss-fundamentals-s09-q1"
+      ]
+    },
+    {
+      "id": "xss-fundamentals-s10",
+      "order": 10,
+      "sectionTitle": "Sinks that don't look like sinks",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Most people learn to distrust `innerHTML` and stop there. The sinks that survive code review are the ones that look like plain data binding.\n\n- **A user-controlled `href`.** `<a href={userUrl}>` looks inert, but `javascript:` is a URL scheme, and clicking it executes. React will warn but historically did not block it. Validate the scheme is `http:` or `https:` before binding.\n- **A user-controlled image or iframe `src`**, same reasoning, plus `data:` URLs which can carry HTML.\n- **An unquoted attribute in a hand-built template string.** With `<div class=%s>`, a value containing a space introduces a whole new attribute — an event handler, for instance — without ever needing an angle bracket. Quoting the attribute closes that path.\n- **`setTimeout('doThing(' + id + ')', 100)`** — the string form of `setTimeout` is `eval` wearing a hat.\n- **Markdown rendering with raw HTML enabled.** Many renderers pass through inline HTML by default; that is a documented feature and an open sink.\n- **Server-rendered JSON dropped inside a `<script>` block.** The sequence that closes a script tag inside a JSON string ends the block early, whatever your JSON encoder thought.\n\nEach of these is safe with the right encoding for *its* context — which is the whole subject of the next topic, Preventing XSS.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 95,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-fundamentals-s11",
+      "order": 11,
+      "sectionTitle": "What HttpOnly does and doesn't buy",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "A common half-truth: \"we set `HttpOnly` on the session cookie, so XSS can't hurt us.\"\n\n`HttpOnly` is genuinely valuable — it stops `document.cookie` from reading the session token, which closes the **exfiltration** path. An attacker cannot lift the cookie and replay it from their own machine tomorrow.\n\nWhat it does not close is the **use** path. The browser attaches that cookie to same-origin requests automatically, so injected script can simply call your API from the victim's page and act as them, right now:\n\n- `POST /api/account/email` to take over the account\n- `POST /api/tokens` to mint a long-lived API key the attacker *can* read\n- read any endpoint's response and ship the data out, which is the same outcome as stealing the cookie, one step later\n\nSo the accurate framing is: `HttpOnly` downgrades XSS from \"permanent account takeover from anywhere\" to \"complete control of the session while the page is open, plus whatever persistence the attacker can bootstrap.\" That is a real reduction and nowhere near a fix. Storage trade-offs get their own topic later in this group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-fundamentals-s12",
+      "order": 12,
+      "sectionTitle": "How XSS is found and rated",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Useful context for the day a report lands in your queue.\n\n**How it gets found.** Researchers spray a canary string through every input and search the rendered DOM for it, then check whether it landed inside a tag, an attribute, a URL, or a script block — the context determines whether it is exploitable. Automated DAST scanners do the same thing at scale; DOM-based cases need a headless browser, which is why server-side scanners miss them.\n\n**How it gets rated.** Severity is driven by three questions, not by cleverness of the payload: does it need authentication, does it need the victim to click something, and does it persist? Stored XSS on an authenticated page with no interaction is typically triaged critical; reflected XSS behind a crafted link on an anonymous marketing page is often medium.\n\n**What actually removes the class.** Individually patching sinks is whack-a-mole. The durable answers are structural: a framework that escapes by default, a sanitizer at the one place raw HTML is genuinely needed, and a strict Content Security Policy as the layer that limits what an injection can *do* even when one slips through. The rest of this group builds each of those.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,169 @@
+{
+  "id": "build-and-deployment-pipeline",
+  "title": "Build and Deployment Pipeline",
+  "area": "web-frontend",
+  "group": "frontend-system-design",
+  "order": 6,
+  "slug": "build-and-deployment-pipeline",
+  "summary": "How source becomes CDN-served chunks — bundler responsibilities, cache-busting with content hashes, feature-flagged rollouts, and the rendering-strategy trade-offs that shape deployment.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "build-and-deployment-pipeline-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Between a developer's `git push` and a user's browser rendering a page sits a pipeline most frontend engineers use daily and understand shallowly: a bundler resolves and transforms source into chunks, those chunks get content-hashed filenames so a CDN can cache them forever without ever serving something stale, and a deployment mechanism decides how a new version reaches users safely.\n\nThis topic walks that pipeline end to end — what the bundler is actually doing, why cache-busting works the way it does, how feature flags let you ship code without releasing it, and the classic bug where a cached `index.html` politely serves users a page that references JS files that no longer exist.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "build-and-deployment-pipeline-s02",
+      "order": 2,
+      "sectionTitle": "The bundler's job: resolve, transform, split, minify",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A bundler (Webpack, Vite/Rollup, esbuild) turns a graph of source modules into the handful of files a browser actually loads, in four phases:\n\n- **Resolve** — starting from an entry file, follow every `import`/`require` to build the full dependency graph, deciding which file each import statement actually points to (including package resolution through `node_modules`).\n- **Transform** — run each file through loaders/plugins: compile JSX and TypeScript to plain JS, process CSS, inline small assets as data URIs.\n- **Split** — group modules into output chunks (see the build-pipeline diagram next) rather than one giant file, following the route/component split points the app declared.\n- **Minify** — strip whitespace and comments, shorten variable names, and tree-shake (remove exported code no importer actually uses) to cut shipped bytes.\n\nUnderstanding these four phases is what lets you reason about *why* a build is slow or a bundle is large — each phase has its own cost and its own tools for inspecting it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "build-and-deployment-pipeline-s02-q1"
+      ]
+    },
+    {
+      "id": "build-and-deployment-pipeline-s03",
+      "order": 3,
+      "sectionTitle": "Code-splitting strategies, revisited for the build",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Performance budgets covered *why* to split; here's what the bundler actually produces. Three common chunk types come out the other end: a **per-route chunk** (checkout's code, only fetched on `/checkout`), a **vendor chunk** (third-party dependencies like React, grouped together since they change far less often than app code), and a **runtime chunk** (the bundler's own module-loading glue, kept tiny and separate so it can be inlined or cached independently).\n\nSeparating the vendor chunk from app code specifically pays off at the caching layer: app code changes on every deploy, but a vendor chunk with a content hash based only on its own contents stays cache-valid across many app deploys, since your dependencies don't change every time your code does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "build-and-deployment-pipeline-s03-q1"
+      ]
+    },
+    {
+      "id": "build-and-deployment-pipeline-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: source to CDN-served chunks",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The end-to-end pipeline, left to right: source files in the repo → CI checks out and runs the bundler → the bundler emits content-hashed chunks (`main.a1b2c3.js`, `vendor.d4e5f6.js`) plus an `index.html` referencing them by their exact hashed name → the build artifacts upload to a CDN/object storage → the CDN serves them to users at the edge, geographically close to each request.\n\nThe critical property this diagram makes visible: only `index.html` needs a short cache lifetime (or none), because it's the one file whose content changes every deploy in a way that must be picked up immediately. Every hashed chunk it references can be cached by the CDN and the browser essentially forever, because a content change would produce a different hash and therefore a different filename.\n\n<<< Image: left-to-right pipeline diagram — \"Source (git)\" → \"CI: bundler runs\" → box showing three output files with hash suffixes (main.a1b2c3.js, vendor.d4e5f6.js, index.html) → \"CDN / object storage\" → \"Browser\", with a small \"cache: forever\" label on the hashed JS files and \"cache: none/short\" label on index.html >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "build-and-deployment-pipeline-s05",
+      "order": 5,
+      "sectionTitle": "Cache-busting: content hashes and long-lived CDN caching",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cache-busting** solves a specific problem: if `main.js` is cached by a browser or CDN for a year (great for repeat-visit speed), how does a user ever get the *new* `main.js` after a deploy without you telling every cache to purge?\n\nThe answer is baking a content hash into the filename: `main.a1b2c3.js` isn't `main.js` with a version query string — the hash is a fingerprint of the file's actual contents. Change one line of code, and the hash changes, producing `main.f7g8h9.js` — a brand-new filename the CDN and browser have never seen, so they fetch it fresh with zero cache-invalidation logic needed anywhere. The old file at its old hash stays valid and cached for anyone still mid-session on the old version.\n\nThis is why `index.html` (the one file whose *references* change every deploy) must be served with a short or no cache lifetime, while every hashed asset it points to can carry a `Cache-Control: max-age=31536000, immutable` header — a full year, safely, because its name changing is the guarantee that its content changing is reflected.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "build-and-deployment-pipeline-s05-q1"
+      ]
+    },
+    {
+      "id": "build-and-deployment-pipeline-s06",
+      "order": 6,
+      "sectionTitle": "Feature flags for frontend rollouts",
+      "subTitle": "Shipping dark code safely",
+      "type": "concept",
+      "markdown": "A **feature flag** decouples *deploying* code from *releasing* it: the new checkout flow's code ships to production behind `if (flags.newCheckout) { ... }`, disabled for everyone, so the deploy itself carries zero user-facing risk. Turning the feature on becomes a config change — instant, and instantly reversible — instead of a new deploy.\n\nThis unlocks rollout patterns a plain deploy can't: a **percentage rollout** (5% of users, then 25%, then 100%, watching error rates at each step), a **targeted rollout** (internal employees first, then beta users), and an **instant kill switch** (a bug shows up at 25%, flip the flag off — no rollback deploy, no waiting for a build to finish).\n\nThe cost is real: flags accumulate, and code with five active flags has up to 2⁵ theoretical execution paths, most untested. Mature teams treat flag removal as mandatory follow-up work once a feature is fully rolled out, not optional cleanup.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "build-and-deployment-pipeline-s06-q1"
+      ]
+    },
+    {
+      "id": "build-and-deployment-pipeline-s07",
+      "order": 7,
+      "sectionTitle": "Compare: client-side rendering vs SSR vs static generation — deploy implications",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "The rendering strategy an app picks changes what \"deploy\" even means:\n\n| | Client-side rendering (CSR) | Server-side rendering (SSR) | Static generation (SSG) |\n|---|---|---|---|\n| What's deployed | Static JS/CSS bundles + one `index.html`, to a CDN | A running server process (or serverless function) that renders HTML per request | Pre-rendered HTML files, built once, deployed as static files |\n| Deploy artifact | Immutable, CDN-cacheable files | A server deployment — needs the usual rollout/rollback machinery (blue-green, canary) | Immutable static files, same as CSR |\n| Rollback | Point the CDN/router back at the previous build's files | Redeploy the previous server version | Point back at the previous static build |\n| New-content latency | Instant once deployed | Instant, computed per request | Only as fresh as the last build — needs a rebuild+redeploy for new content |\n\nSSR's server process is the odd one out here: it needs real deployment infrastructure (health checks, gradual rollout) the same way a backend service does, while CSR and SSG deploys are \"just\" swapping which static files a CDN points to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "build-and-deployment-pipeline-s07-q1"
+      ]
+    },
+    {
+      "id": "build-and-deployment-pipeline-s08",
+      "order": 8,
+      "sectionTitle": "The deploy path, numbers included",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete example ties the pieces together. A typical CSR/SSG deploy pipeline: CI builds in 2–5 minutes, uploads a few hundred hashed files (often 5–15MB total for a mid-sized app) to object storage, then a CDN invalidation or routing switch makes them live — the whole thing often completes in under 10 minutes end to end, and because every asset is content-hashed, there's no cache-purge step needed for the hashed files themselves, only for `index.html`.\n\nCompare that to an SSR deploy: a new server version needs to pass health checks before receiving traffic, typically rolled out gradually (10% of traffic, watch error rate and latency for several minutes, then proceed) rather than switched instantly — closer to a backend deploy's rollout discipline than to CSR's near-instant file swap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "build-and-deployment-pipeline-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a cached index.html serving stale asset references",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong setup:** `index.html` gets the same long-lived `Cache-Control: max-age=31536000` header as the hashed JS files it references, because a config was copy-pasted across all static assets without exception.\n\n**Why it breaks:** after the next deploy, `main.f7g8h9.js` (the new hash) exists on the CDN, but users' browsers and any caching proxy still serve the *old*, cached `index.html` — which references `main.a1b2c3.js`, the previous build's now-deleted file. Depending on retention policy, that old file might 404, or worse, silently serve an old, incompatible version alongside new API responses.\n\n**Correct model:** `index.html` (and any other entry HTML file) must be served with `no-cache` or a very short max-age, forcing a revalidation on every load, while every hashed asset it references can safely carry a year-long immutable cache header. This asymmetry — one file cached never, everything else cached forever — is the entire cache-busting strategy in one sentence.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "build-and-deployment-pipeline-s09-q1"
+      ]
+    },
+    {
+      "id": "build-and-deployment-pipeline-s10",
+      "order": 10,
+      "sectionTitle": "The stale-client problem in long-lived sessions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Even with correct caching, a user who opened a tab before a deploy and hasn't refreshed is still running the old JS, calling a backend that may have moved on — a real problem for apps with long sessions (a dashboard left open all day) hitting a backend that deprecates an API shape.\n\nThe practical mitigations: version-check polling (the client periodically checks a version endpoint and prompts \"a new version is available, refresh to update\" rather than silently breaking), and backend API versioning/backward compatibility windows so an old client doesn't immediately break the moment a new one deploys. Naming this as a distinct problem from cache-busting itself — \"my files are correctly cache-busted, but my *already-loaded* client is still old\" — is the senior-level nuance most candidates miss.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "build-and-deployment-pipeline-s11",
+      "order": 11,
+      "sectionTitle": "Putting the pipeline together",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A strong answer to \"walk me through your deploy pipeline\" covers all four pieces in this topic in order: what the bundler produces and why it's split the way it is, how content hashing makes aggressive CDN caching safe, how feature flags let deploy and release be separate decisions, and which rendering strategy you're deploying (since that decides whether you're swapping static files or rolling out a server).\n\nThe rest of this group's two case studies put this pipeline in service of a real product — a live feed and a collaborative editor — where the deploy and rendering choices interact directly with the data-layer and state decisions covered earlier.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

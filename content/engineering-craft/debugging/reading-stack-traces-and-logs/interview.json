@@ -1,0 +1,37 @@
+{
+  "topicId": "reading-stack-traces-and-logs",
+  "interviewQuestions": [
+    {
+      "id": "reading-stack-traces-and-logs-iq1",
+      "question": "You get a stack trace with 60 frames and an exception message you don't recognize. How do you start?",
+      "answerMarkdown": "I don't read it top to bottom line by line — that wastes time on frames that aren't mine. First I read the **exception type and message**, which usually tells me the category of bug before I look at a single frame: a null reference, a type mismatch, a timeout, a permission error.\n\nThen, if the trace is chained (\"caused by\"), I jump straight to the **innermost cause** — that's the actual failure, and everything above it is just context added as it bubbled up through layers. I've seen people spend an hour in application code when the real problem was three layers down in a database driver's timeout.\n\nFrom the innermost cause, I walk outward frame by frame until I hit the **first frame in my own application's code**, skipping library and framework internals — of 60 frames maybe 3 are mine, and that's almost always where the actual bug or bad assumption lives, since library code is usually doing exactly what it was told.\n\nOnly then do I start forming a hypothesis, because now I know where to look instead of guessing.\n\n**Testing:** whether you have an efficient reading strategy for traces or brute-force read every line in order.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "reading-stack-traces-and-logs-iq2",
+      "question": "How would you design logging for a service so that debugging a production incident six months from now is actually possible?",
+      "answerMarkdown": "I'd start from the two failure modes I've seen cost the most time: no way to reconstruct one request's path, and logs too unstructured to query at incident volume.\n\nFirst, **every log line carries a correlation ID** propagated from the edge through every downstream call, queue message, and async job — minted once at the gateway, not regenerated per service. That's the difference between one grep pulling a request's entire causal history versus stitching timestamps together by hand under incident pressure.\n\nSecond, logs are **structured**, key-value fields rather than free text — `event`, `user_id`, `reason` as real fields, not embedded in a sentence three different engineers phrased three different ways. Structured fields are what let you ask \"how many order failures had reason=timeout in the last hour across all regions\" as a query instead of a fragile regex.\n\nThird, **log levels are disciplined**: routine success never logs at error (it trains people to ignore alerts), and real failures never hide at info. And fourth, sensitive fields are **redacted at the logging layer itself** — allowlisted, not left to individual call sites to remember to scrub.\n\nSix months out, none of this is optional — nobody remembers the incident context, so the logs have to carry it.\n\n**Testing:** whether you think about logging as infrastructure for future-you, not just today's print statements.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "reading-stack-traces-and-logs-iq3",
+      "question": "A teammate says a bug \"doesn't make sense\" because the error is a timeout in the database layer, but they're convinced the bug is in the business logic above it. How do you resolve this?",
+      "answerMarkdown": "I'd start by asking them to show me the full chained exception, not just the top-level message, because this is exactly the shape of the mistake I've seen before: the outer exception names what the application was *trying to do* — \"order lookup failed\" — while the innermost cause names what actually *broke* — a socket timeout talking to the database. If they're reading only the outer wrapper, their mental model of the bug is built on the wrong layer entirely.\n\nOnce we're both looking at the innermost cause, I'd treat \"is this really a business-logic bug\" as a testable hypothesis rather than an argument: check whether the same query pattern times out in isolation, whether it correlates with a deploy or traffic spike, and whether other callers of the same database path show the same symptom around the same time. If the timeout reproduces with the business logic completely bypassed, that settles it — it's infrastructure or a query, not the logic they suspect.\n\nThe underlying point I'd want them to take away is that a stack trace's outer frame is a description of intent, not evidence of cause — the innermost \"caused by\" is the evidence.\n\n**Testing:** whether you can use exception chaining to settle a disagreement with evidence instead of debate.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Root cause"
+    },
+    {
+      "id": "reading-stack-traces-and-logs-iq4",
+      "question": "You discover a log line that included a customer's full auth token, written months ago and still shipping. What do you do?",
+      "answerMarkdown": "This is both a debugging-tooling problem and a security incident, and I'd treat it as the latter first. Immediate steps: confirm which log line and code path, check how long it's been live and how broadly those logs are accessible and retained, and loop in security/compliance rather than quietly patching and moving on — a leaked token needs rotation and an assessment of whether it was actually exposed to anyone, not just a code fix.\n\nFor the code fix itself, I wouldn't just delete that one log statement — the actual bug is structural: something like `log.error(f\"failed: {request}\")` logging a whole object will leak whatever sensitive field lands in that object next, at any call site, forever. The durable fix is redaction or an allowlist enforced at the **logging layer** itself, so individual call sites can't leak a sensitive field even if someone forgets to scrub it by hand.\n\nI'd also grep for the same pattern — logging whole request/response objects — across the codebase, since if it happened once it's very likely happened elsewhere too, and add a lint rule or log-sanitizer test so it can't silently reappear.\n\n**Testing:** whether you treat a logging leak as a security incident with a structural fix, not just a quick patch to one line.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    }
+  ]
+}

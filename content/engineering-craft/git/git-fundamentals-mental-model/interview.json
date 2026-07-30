@@ -1,0 +1,37 @@
+{
+  "topicId": "git-fundamentals-mental-model",
+  "interviewQuestions": [
+    {
+      "id": "git-fundamentals-mental-model-iq1",
+      "question": "How is git's data model fundamentally different from an older version control system like SVN?",
+      "answerMarkdown": "SVN stores a base version of each file plus a chain of diffs, so reconstructing any given revision means replaying patches in order. Git stores something structurally different: **every commit is a complete snapshot** of the whole project tree, addressed by the hash of its content.\n\nThe practical consequences are what I'd lead with:\n\n- **Unchanged files cost nothing extra.** If a commit touches one file out of a thousand, the other 999 tree entries just point at blobs already stored from an earlier commit — no diff computed, no chain to replay.\n- **Checkout speed doesn't depend on history depth.** Checking out commit #4 or commit #40,000 is the same operation: look up a hash, read a tree. SVN-style diff chains get slower and more fragile the further back you go.\n- **Diffs are a view, not storage.** `git diff`, `git show`, and PR review UIs all compute a diff on the fly by comparing two snapshots. That's why git can show you a diff between any two arbitrary commits, not just adjacent ones, with identical cost.\n\nThis is also why branching is cheap in git and was historically expensive in SVN: a branch is just a new pointer into the same snapshot database, not a server-side copy of a directory tree.\n\n**Testing:** whether you actually understand git's storage model, or have only memorized the commands built on top of it.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "git-fundamentals-mental-model-iq2",
+      "question": "What's actually happening in git's three trees when you run `git add` and then `git commit`?",
+      "answerMarkdown": "I'd frame it as three trees, and each command moves content between exactly two of them.\n\n- **Working directory** — the files as they sit on disk, whatever your editor sees.\n- **Staging area (the index)** — a snapshot-in-progress, populated by `git add`.\n- **HEAD** — the last commit git has permanently recorded on the current branch.\n\n`git add path/to/file` copies that file's *current* content from the working directory into the index. It's a copy, not a reference — if you edit the file again after `git add`, the index still holds the old version until you `git add` again. `git commit` then takes whatever is in the index right now, wraps it in a new commit object with a parent pointer to the old HEAD, and moves the branch (and HEAD) to point at that new commit.\n\nThe part people miss: **commit never looks at the working directory directly.** That's the entire reason `git add -p` is powerful — you can stage half of a file's changes and commit exactly that half, leaving the rest sitting as an unstaged, uncommitted edit. It's also why `git diff` right after `git add` shows nothing for that file: `git diff` compares working directory to index, and you just made those equal; the staged content only shows up in `git diff --staged`, which compares index to HEAD.\n\n**Testing:** whether you can reason about staging as a real intermediate state, not treat `git add && git commit` as one atomic action.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Mechanics"
+    },
+    {
+      "id": "git-fundamentals-mental-model-iq3",
+      "question": "You accidentally ran a command that left you in detached HEAD state and made a couple of commits there. Walk me through what's actually at risk and how you'd recover.",
+      "answerMarkdown": "Detached HEAD means HEAD points straight at a commit hash instead of at a branch. Nothing is broken yet — I can still build, test, even commit — but any commit I make there has **no branch pointer keeping it reachable**. The moment I `git switch` to another branch, those commits become orphaned: still physically in `.git`'s object database, but nothing in the ref graph points at them.\n\nWhat's actually at risk: they're not gone, but they're one `git gc` away from being pruned, and gc runs unreachable objects out after a grace period (default 30 days for loose objects, shorter if gc is aggressive). Before that window closes, they're recoverable.\n\nMy recovery, in order:\n\n1. **If I haven't switched away yet** — the cheap fix. `git switch -c rescue-branch` right now plants a branch pointer on the current commit before I go anywhere, and the commits are permanently safe.\n2. **If I already switched away** — `git reflog` shows every position HEAD has been at recently, including the detached commits by hash. `git branch rescue-branch <hash>` from the reflog entry recreates a pointer to them.\n3. **Verify** with `git log rescue-branch` that the commits I expected are actually there before doing anything destructive on the branch I switched to.\n\nThe underlying lesson I'd state explicitly: detached HEAD isn't dangerous by itself — it's exploring a point in history. It only becomes a problem when you forget you're there and start committing real work without a branch under it.\n\n**Testing:** whether you understand reachability as the real safety mechanism in git, not just the reflog as a magic undo button.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Recovery"
+    },
+    {
+      "id": "git-fundamentals-mental-model-iq4",
+      "question": "A junior engineer committed and pushed an AWS key, then immediately pushed a follow-up commit deleting it. They think it's handled. What do you tell them, and what do you actually do?",
+      "answerMarkdown": "I'd tell them the key is not handled, and the deleting commit doesn't change that — it only affects what the *latest* snapshot looks like, not what's reachable in history. The key's blob is still sitting in the earlier commit, permanently, and anyone who already fetched or cloned the repo — including any CI runner, mirror, or fork — already has it whether or not they've looked.\n\nWhat I'd actually do, in order, and I'd be explicit that step one isn't optional:\n\n1. **Rotate the credential immediately** in the cloud provider, treating it as compromised the second it was pushed, regardless of whether the repo is public or an internal private repo — internal exposure is still exposure to everyone with repo access, including departed contractors' cached clones.\n2. **Assess blast radius** — check CloudTrail/access logs for any usage from unfamiliar IPs since the push.\n3. **Only after rotation**, decide whether to rewrite history (`git filter-repo` or BFG) to strip the blob from every commit that has it — this requires a force-push and coordinating with everyone who has a local clone, since their history now diverges. I'd treat this as cleanup, not the fix — the fix already happened at rotation.\n4. **Add a pre-commit or pre-push secret-scanning hook** so this class of mistake gets caught before a push, not after.\n\nThe root cause I'd flag afterward: this is a process gap, not a one-off mistake — the same thing will happen again without a scanning gate, because content-addressed history makes \"just delete it\" structurally impossible to rely on.\n\n**Testing:** whether you understand that git's immutability makes credential rotation mandatory and non-negotiable, versus treating a follow-up delete as sufficient.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    }
+  ]
+}

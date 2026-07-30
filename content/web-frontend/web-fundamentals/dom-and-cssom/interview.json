@@ -1,0 +1,37 @@
+{
+  "topicId": "dom-and-cssom",
+  "interviewQuestions": [
+    {
+      "id": "dom-and-cssom-iq1",
+      "question": "What's the difference between the DOM and 'the HTML' of a page?",
+      "answerMarkdown": "The HTML you write is just the initial recipe; the DOM is the **live, in-memory tree** the browser builds by parsing it, and the two can diverge the moment JavaScript runs.\n\nConcretely: `document.createElement()` plus `appendChild()` adds nodes that never existed in the original markup at all. If you view `view-source:` on a page after JS has mutated it, you'll still see the original response bytes — but DevTools' Elements panel serializes the **current DOM**, which can look completely different if the app has, say, hydrated a client-side framework on top of a mostly-empty server-rendered shell.\n\nThe practical reason this matters: every DOM API — `getElementById`, `classList.add`, `innerHTML =` — reads or writes this live tree, not a text file. That's also why `getComputedStyle()` doesn't return what you wrote in a stylesheet; it returns the CSSOM's fully cascaded, resolved value for that element right now, which can be different again from both the DOM's markup and your CSS source.\n\nI've used this distinction directly when debugging a 'the page shows stale content' bug that turned out to be a stale DOM reference held by a closure — the DOM had moved on, the reference hadn't.\n\n**Testing:** whether you separate the source markup, the live DOM, and the rendered output as three genuinely different things.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "dom-and-cssom-iq2",
+      "question": "Why does putting a <script> tag before your stylesheet, or in the middle of your body, hurt page load performance?",
+      "answerMarkdown": "It hurts because of two separate blocking behaviors stacking on top of each other, and I'd name both.\n\nFirst, a plain (non-`async`/`defer`) `<script src>` **blocks HTML parsing** the moment the parser reaches it — because the script might call `document.write` or otherwise mutate the tree the parser is mid-way through building, the browser has to pause and let it fully download and execute first.\n\nSecond, CSS is itself blocking in a different way: the CSSOM can't be resolved until the **whole stylesheet** is parsed, because a later rule can override an earlier one. If that script sits before your stylesheet finishes loading, and your script reads computed styles or triggers layout, you can end up blocking on both — parsing halted for the script, and the script itself potentially blocked waiting on styles it needs.\n\nThe fix pattern is well established: put CSS in the `<head>` so it starts resolving immediately and in parallel with everything else, and move scripts to the end of `<body>` or mark them `defer` so parsing runs uninterrupted and scripts execute in document order right after. I'd also flag that `document.write` itself is close to deprecated in modern engines specifically because of how badly it interacts with streaming parse.\n\n**Testing:** whether you understand parsing-blocking and CSSOM-blocking as two separate mechanisms that compound, not one vague 'scripts and styles are slow' story.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Performance"
+    },
+    {
+      "id": "dom-and-cssom-iq3",
+      "question": "A loop that appends 500 list items one at a time is visibly janky. How would you fix it, and what's actually happening under the hood?",
+      "answerMarkdown": "The likely cause is **layout thrashing**: if the loop reads a layout-dependent property (`offsetHeight`, `getBoundingClientRect`) right after each write (`appendChild`, a style change), the browser can't batch the layout work — it has to resolve layout synchronously on every iteration because the read demands an up-to-date answer immediately.\n\nMy fix, in order of preference: first, **batch the writes** — build the 500 items into a `DocumentFragment` off-tree and append it once, so the live DOM only takes one mutation instead of 500. Second, if reads are genuinely needed per-element, **separate the read phase from the write phase entirely** — do all writes, then all reads, in two passes instead of interleaved. Third, for anything animation-adjacent, wrap the work in `requestAnimationFrame` so it's synced to the browser's own paint cycle instead of firing eagerly.\n\nA concrete before/after I've measured: replacing a naive per-item `appendChild` + `getBoundingClientRect` loop with a `DocumentFragment` batch took a 500-item render from over 300ms of scripting time (visible as dropped frames) to under 20ms, because layout ran once at the end instead of 500 times.\n\nThe underlying lesson: the DOM doesn't know you're 'about to do 499 more of these' unless you tell it, by batching, so it keeps recomputing layout eagerly to answer your reads.\n\n**Testing:** whether you can name layout thrashing specifically and fix it structurally, not just add a generic 'debounce it' band-aid.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Performance"
+    },
+    {
+      "id": "dom-and-cssom-iq4",
+      "question": "You're removing elements from a live collection while iterating over it and some elements get skipped. What's going on, and how do you avoid this class of bug at a senior level?",
+      "answerMarkdown": "This is the live-versus-static collection distinction biting you. `document.getElementsByClassName()` (and `getElementsByTagName`) return a **live** `HTMLCollection` that re-evaluates on every access — remove the current element inside a `forEach`-style loop and the collection shrinks under you mid-iteration, so indices shift and the next element silently gets skipped.\n\nThe direct fix is to iterate over a **static snapshot** instead: `Array.from(collection)` before looping, or use `querySelectorAll`, which returns a static `NodeList` that doesn't change even as you mutate the DOM it was captured from. Iterating backwards through a live collection also works, since removing an element only shifts indices ahead of the removal point, but a static snapshot is the clearer fix to read and reason about.\n\nAt a senior level, the broader lesson is knowing **which DOM APIs return live versus static results** as a checklist before writing any loop that mutates while iterating — `children`, `getElementsByClassName`, `getElementsByTagName`, and `.attributes` are live; `querySelectorAll` and any array produced by spreading a collection are static. I treat 'am I mutating a collection I'm currently iterating' as a standing code-review flag, because it's exactly the kind of bug that passes in dev with three test items and fails once a real list is long enough for the skip to be noticeable.\n\n**Testing:** whether you can name the live/static distinction precisely and generalize it into a review habit, not just patch this one instance.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

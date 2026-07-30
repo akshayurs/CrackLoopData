@@ -1,0 +1,169 @@
+{
+  "id": "performance-in-frameworks",
+  "title": "Performance in Frameworks",
+  "area": "web-frontend",
+  "group": "frameworks",
+  "order": 7,
+  "slug": "performance-in-frameworks",
+  "summary": "Memoization and list virtualization are the two levers that matter once a UI gets big enough to feel slow — but both are measured fixes, not defaults, and the profiler is what tells you which one, if either, actually applies.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "performance-in-frameworks-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every performance topic before this one in the group has been about **correctness that happens to also affect performance** — a stable `key`, deriving instead of storing, splitting a Context. This topic is about the tools you reach for once correctness is solid and something is still measurably slow: **memoization** (skip re-rendering or recomputing work that didn't need to happen) and **virtualization** (skip rendering DOM nodes that aren't visible).\n\nThe recurring interview trap here isn't knowing the APIs — it's applying them without measuring first. Every framework's advanced-performance question ends the same way: \"this list is janky when scrolling — diagnose and fix it,\" and the strong answers all start with the profiler, not with sprinkling `memo` everywhere and hoping.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-in-frameworks-s02",
+      "order": 2,
+      "sectionTitle": "Why components re-render",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A component re-renders for exactly one of three reasons: **its own state changed**, **its props changed**, or **its parent re-rendered** (and this component isn't memoized, so React re-renders it too even if its own props are identical to last time).\n\nThat third reason is the one people underestimate. In React's default model, a parent re-rendering re-renders every non-memoized child **unconditionally** — not because the child's props actually differ, but because React doesn't know they don't unless something tells it to check. A component with props that are always the literal same values can still re-render dozens of times if its parent re-renders often, purely as a side effect of sitting in that subtree.\n\nThis is the mechanism that makes an unrelated state update elsewhere in a large tree feel like it's \"causing\" slowness in a component that never actually changed — it's not the component's own logic, it's an unmemoized subtree re-rendering along with its parent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "performance-in-frameworks-s02-q1"
+      ]
+    },
+    {
+      "id": "performance-in-frameworks-s03",
+      "order": 3,
+      "sectionTitle": "React.memo, useMemo, useCallback — what each memoizes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three related but distinct tools, frequently confused for one another:\n\n- **`React.memo(Component)`** memoizes a **component**: it skips re-rendering the wrapped component if its props are shallow-equal to last time, even when its parent re-renders.\n- **`useMemo(fn, deps)`** memoizes a **computed value**: it re-runs `fn` only when a dependency changes, returning the cached result otherwise — for an expensive calculation, not for a component.\n- **`useCallback(fn, deps)`** memoizes a **function reference**: it returns the same function identity across renders as long as dependencies haven't changed — its entire purpose is making `React.memo` on a child actually work when that child receives a callback prop, since a new function reference every render would otherwise defeat the shallow-equality check.\n\nThe three are usually used together, not individually: `useCallback` stabilizes a function prop, so that a child wrapped in `React.memo` can actually see \"same props as last time\" and skip its own re-render.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 63,
+      "mcqIds": [
+        "performance-in-frameworks-s03-q1"
+      ]
+    },
+    {
+      "id": "performance-in-frameworks-s04",
+      "order": 4,
+      "sectionTitle": "A re-render cascade before and after memoization",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: two vertical component-tree diagrams side by side. Left labelled \"Before\": a \"Parent (state changes)\" box at top with solid downward arrows to five child boxes, all five highlighted/shaded to indicate they all re-rendered. Right labelled \"After React.memo\": the same tree, but only the one child box whose props actually changed is shaded, the other four are unshaded with a small \"skipped\" label next to each >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-in-frameworks-s05",
+      "order": 5,
+      "sectionTitle": "List virtualization: render only visible rows",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rendering a list of 10,000 rows means creating 10,000 real DOM nodes, even though a typical viewport only shows 15–20 of them at once — the other ~9,980 are pure waste: memory, layout cost, and paint cost for pixels no one can see.\n\n**Virtualization** (also called \"windowing\") renders only the rows currently in or near the visible viewport, plus a small buffer, and swaps their content as the user scrolls rather than creating a DOM node per data item. The scrollable area is given the *correct total height* as if all 10,000 rows existed (so the scrollbar behaves normally), but the actual DOM at any moment holds only the handful of rows near the viewport — repositioned and re-populated with new data as scroll position changes.\n\nThe trade-off: virtualization adds real complexity — variable row heights, keyboard navigation, and browser find-in-page all get harder when most of the list literally doesn't exist in the DOM at any given moment — so it's a tool for lists that are actually long enough to need it, not a default for every list.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 63,
+      "mcqIds": [
+        "performance-in-frameworks-s05-q1"
+      ]
+    },
+    {
+      "id": "performance-in-frameworks-s06",
+      "order": 6,
+      "sectionTitle": "Windowing a 10,000-row list",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal windowing pattern (the core idea behind libraries like `react-window` or `TanStack Virtual`), showing what's actually kept in the DOM:\n\n```jsx\nfunction VirtualList({ items, rowHeight, viewportHeight }) {\n  const [scrollTop, setScrollTop] = useState(0);\n\n  const startIndex = Math.floor(scrollTop / rowHeight);\n  const visibleCount = Math.ceil(viewportHeight / rowHeight) + 2; // +buffer rows\n  const visibleItems = items.slice(startIndex, startIndex + visibleCount);\n\n  return (\n    <div onScroll={(e) => setScrollTop(e.target.scrollTop)} style={{ height: viewportHeight, overflow: \"auto\" }}>\n      <div style={{ height: items.length * rowHeight, position: \"relative\" }}>\n        {visibleItems.map((item, i) => (\n          <div key={item.id} style={{ position: \"absolute\", top: (startIndex + i) * rowHeight }}>\n            {item.label}\n          </div>\n        ))}\n      </div>\n    </div>\n  );\n}\n```\n\nThe outer div's height (`items.length * rowHeight`) gives the scrollbar the correct total size, while the inner absolutely-positioned rows are only ever the ~17 or so actually visible — `visibleItems`, not `items`, is what gets mapped to real DOM nodes.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "performance-in-frameworks-s06-q1"
+      ]
+    },
+    {
+      "id": "performance-in-frameworks-s07",
+      "order": 7,
+      "sectionTitle": "Memoizing everything, with no measured gain",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`React.memo`/`useMemo`/`useCallback` are not free. Each one adds a comparison step (shallow-equality checks on every render) and a small amount of memory to hold the cached value or function — wrapping a component or value that re-renders cheaply and rarely benefits from being skipped can make things **slightly slower**, not faster, while definitely making the code harder to read.\n\nThe overuse pattern looks like wrapping every single component in `memo` and every inline function in `useCallback` reflexively, \"because performance.\" This has a real readability cost — dependency arrays to maintain, and a new failure mode where a missing dependency in `useCallback`/`useMemo` causes the exact same stale-closure bugs covered in the hooks topic — for wins that were never measured and, for a component that renders in under a millisecond regardless, are often literally unmeasurable.\n\nThe rule that actually holds up: memoize where a profiler has shown a real cost, not preemptively across the whole codebase.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "performance-in-frameworks-s07-q1"
+      ]
+    },
+    {
+      "id": "performance-in-frameworks-s08",
+      "order": 8,
+      "sectionTitle": "Using the profiler to find the actual bottleneck",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every mainstream framework ships (or has a widely-used extension providing) a devtools profiler that records **which components rendered, how long each took, and why** — React DevTools' Profiler tab, Vue Devtools' performance panel, and browser-native Performance panels all serve this role.\n\nThe workflow that actually finds the bottleneck: record a profile while performing the slow interaction (typing in a search box, scrolling a list), then look at two things — which components rendered far more often than expected, and which single component's render actually took the most wall-clock time. Those are frequently **different** components: a component re-rendering 200 times but each render taking 0.1ms is not your bottleneck; a component rendering twice but taking 40ms each time almost certainly is.\n\nThe profiler also often reveals the *actual* cause is something other than rendering at all — a synchronous computation inside the render body, an unmemoized expensive `.filter()`/`.sort()` call, or (outside the framework's control entirely) layout thrashing from reading a DOM measurement and writing a style in alternating order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 63,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-in-frameworks-s09",
+      "order": 9,
+      "sectionTitle": "Memoization and virtualization across frameworks",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | React | Vue 3 | Svelte |\n|---|---|---|---|\n| **Manual re-render skip** | `React.memo`, `useMemo`, `useCallback` | rarely needed — fine-grained reactivity already skips unaffected subtrees | rarely needed — compiled reactivity updates only the affected DOM directly |\n| **List virtualization** | `react-window`, `TanStack Virtual` (userland libraries) | `vue-virtual-scroller`, `TanStack Virtual` | `svelte-virtual-list`, `TanStack Virtual` |\n\nThe manual-memoization row is the direct consequence of the reactivity-model topic earlier in this group: React needs explicit opt-outs *because* it doesn't track dependencies, while Vue and Svelte's fine-grained tracking already knows what depends on what, so there's usually nothing to manually skip. Virtualization, by contrast, is needed in every framework equally — it's about DOM node count, which no reactivity model changes; all three ecosystems rely on largely the same userland libraries to solve it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "performance-in-frameworks-s09-q1"
+      ]
+    },
+    {
+      "id": "performance-in-frameworks-s10",
+      "order": 10,
+      "sectionTitle": "When memoization itself becomes the bottleneck",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A senior-level nuance beyond \"measure before memoizing\": memoization has diminishing, sometimes negative, returns as **dependency array size and comparison cost grow.** A `useMemo` with a deep object as a dependency, compared by reference on every render, is cheap. A component wrapped in `React.memo` that receives a dozen props, each requiring its own shallow-equality check, pays a real per-render cost for the check itself — and if most of those props actually do change nearly every render anyway, the memoization never pays off; it's pure overhead on top of a re-render that was going to happen regardless.\n\nThis is why blanket \"wrap every component in memo\" advice breaks down at scale: the right targets are components that are both **expensive to render** and **re-render with unchanged props reasonably often** — not every component in the tree indiscriminately. Profiling for exactly this pair of conditions, rather than assuming either one implies the other, is what separates a measured optimization from cargo-cult memoization.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-in-frameworks-s11",
+      "order": 11,
+      "sectionTitle": "Diagnosing a janky scrolling list",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is one of the most common practical performance questions, and a strong answer moves through diagnosis before reaching for a fix:\n\n1. **Profile first.** Open the framework's devtools profiler, record while scrolling, and check whether the cost is render count, render duration, or something outside rendering entirely (layout thrashing, an expensive computation per row).\n2. **Check the row count against what's actually rendered.** If it's a genuinely long list (thousands of rows) and every row exists as a real DOM node regardless of scroll position, virtualization is very likely the fix — render only the visible window instead.\n3. **Check for unmemoized expensive work per row.** A `.filter()`, a date-formatting call, or a derived computation re-run from scratch on every parent re-render for every row is a common culprit that memoization (not virtualization) solves.\n4. **Check for unstable references defeating existing memoization.** A row wrapped in `React.memo` that still re-renders every time usually means an inline object or callback prop is being recreated each render, silently breaking the shallow-equality check — the same reference-identity issue covered in the hooks topic, here showing up as a performance bug instead of a stale-closure one.\n\nNaming which of these four you'd check, in order, is a far stronger answer than jumping straight to \"I'd add virtualization,\" because half of real jank bugs turn out to be memoization or reference-stability issues instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 63,
+      "mcqIds": []
+    }
+  ]
+}

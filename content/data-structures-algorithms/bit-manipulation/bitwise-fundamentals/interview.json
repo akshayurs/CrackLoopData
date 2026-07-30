@@ -1,0 +1,37 @@
+{
+  "topicId": "bitwise-fundamentals",
+  "interviewQuestions": [
+    {
+      "id": "bitwise-fundamentals-iq1",
+      "question": "Why do computers use two's complement to represent negative numbers instead of a simple sign bit plus magnitude?",
+      "answerMarkdown": "Because it makes addition **free of special cases**. In two's complement, the hardware runs the exact same adder circuit whether the operands are positive, negative, or mixed — there's no separate \"if signs differ, subtract instead\" path the way sign-magnitude needs.\n\nConcretely: to get -5 from 5, flip every bit of `0000 0101` to `1111 1010` and add 1, giving `1111 1011`. Add that to `0000 0101` and you get `1 0000 0000` — drop the overflow carry bit and you're left with exactly `0000 0000`. The circuitry never had to know the numbers were signed at all.\n\nSign-magnitude, by contrast, has two representations of zero (+0 and -0) and needs a comparator and a subtractor bolted onto the adder to handle mixed-sign addition correctly — more silicon, more edge cases, more places for a bug to hide.\n\nThe one asymmetry worth knowing cold: an n-bit two's complement type has one more negative value than positive (`-128` to `127` for 8 bits), because `0` only consumes one of the 256 patterns, leaving one extra slot on the negative side.\n\n**Testing:** whether you understand two's complement as a hardware-simplicity choice, or have only memorized the flip-and-add-one recipe.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "bitwise-fundamentals-iq2",
+      "question": "What's the difference between arithmetic and logical right shift, and when has picking the wrong one caused you a bug?",
+      "answerMarkdown": "Arithmetic right shift (`>>` in Java, C, C++, Python) fills the vacated high bits with a **copy of the sign bit**, so a negative number stays negative and the operation behaves like floored division by a power of two. Logical right shift (`>>>` in Java and JavaScript) always fills with **0**, regardless of sign, treating the bit pattern as unsigned.\n\nOn the same input they diverge hard: `-8 >> 1` gives `-4` (still negative, correct \"divide by 2\" behavior), but `-8 >>> 1` reinterprets the same bit pattern as unsigned and produces a huge positive number close to 2^31, because the sign bit that used to mean \"negative\" is now just another 1 being shifted in as data.\n\nThe bug this causes in practice: someone hashes a value and wants to fold a 32-bit hash into fewer bits by shifting, but uses `>>` out of habit. If the hash happens to have its top bit set, `>>` sign-extends and pollutes the lower bits with 1s instead of 0s, corrupting the hash's distribution — silently, because nothing throws, it just hashes badly. Switching to `>>>` (unsigned shift) fixes it because you want to discard the sign entirely and treat the bits as raw data, not a signed quantity.\n\n**Testing:** whether you know these are genuinely different operators with different results, not two names for the same shift.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "bitwise-fundamentals-iq3",
+      "question": "A teammate writes `if (flags & MASK == EXPECTED)` and the condition never behaves as expected. What's going wrong and how do you explain it?",
+      "answerMarkdown": "The bug is operator precedence: in C, Java, and most C-family languages, `==` binds **tighter** than `&`, so this parses as `flags & (MASK == EXPECTED)`, not `(flags & MASK) == EXPECTED`. `MASK == EXPECTED` evaluates first as a boolean comparison between two constants, producing a plain `0` or `1` — and then `flags` gets ANDed against that lone bit, which is almost never the check anyone intended.\n\nThe insidious part is that this compiles cleanly and runs without crashing; it just silently tests the wrong condition, so it tends to surface as \"this works in some cases and not others\" rather than an obvious break — exactly the kind of bug that survives code review because it reads correctly at a glance.\n\nMy fix is mechanical, not case-by-case: **always parenthesize a bitwise expression before comparing it**, `(flags & MASK) == EXPECTED`, every time, even when you're confident about precedence in that specific language. I'd also flag it in review as a pattern to grep for, since it recurs across a codebase once one person picks up the habit of skipping parens around bitwise expressions.\n\n**Testing:** whether you've internalized precedence as a real production risk, not just an academic footnote from a syntax table.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "bitwise-fundamentals-iq4",
+      "question": "Why does the C or C++ standard leave signed integer overflow as undefined behavior instead of defining it as wraparound, the way it does for unsigned types?",
+      "answerMarkdown": "It's a deliberate trade of predictability for optimization headroom. Because signed overflow is undefined, the compiler is allowed to **assume it never happens** when reasoning about your code — and that assumption enables optimizations like reordering `x + 1 > x` to `true` (which is false if wraparound were guaranteed) or hoisting a loop bound check outside a loop, because \"the sum could have wrapped negative\" is a case the compiler is licensed to ignore entirely.\n\nUnsigned overflow, by contrast, is defined as modular wraparound because unsigned arithmetic is genuinely used as modular arithmetic in real code — hashing, checksums, ring buffer indices — so guaranteeing wraparound is load-bearing, not an edge case to optimize away.\n\nThe production risk: code that \"happens to work\" by relying on signed overflow wrapping — say, `if (a + b < a)` as an overflow check — can be silently miscompiled once you raise the optimization level, because the compiler assumed that branch was unreachable. I've seen exactly this pattern flagged by `-fsanitize=undefined` in CI after a compiler upgrade changed generated code with zero source changes. The fix is to check for overflow *before* it happens (compare against `INT_MAX - b`) rather than after, or use the compiler-provided overflow-checking builtins.\n\n**Testing:** whether you understand UB as an optimizer contract, not just a footnote — the senior signal is knowing it can bite you on a compiler upgrade with no code change.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production nuance"
+    }
+  ]
+}

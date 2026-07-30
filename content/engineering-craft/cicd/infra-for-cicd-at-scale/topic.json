@@ -1,0 +1,182 @@
+{
+  "id": "infra-for-cicd-at-scale",
+  "title": "CI/CD Infrastructure at Scale",
+  "area": "engineering-craft",
+  "group": "cicd",
+  "order": 8,
+  "slug": "infra-for-cicd-at-scale",
+  "summary": "Every technique in this group breaks somewhere between 10 and 10,000 engineers. Learn affected-only builds, distributed caching, self-hosted vs managed runners, and why CI infra becomes a second production system.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "infra-for-cicd-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything earlier in this group — stages, caching, build-once, pinned dependencies — assumes a codebase and team small enough that \"test everything, every time\" is affordable. Past a certain scale, it stops being affordable: a monorepo with thousands of services can't re-run every test on every commit without CI becoming the bottleneck the whole org waits on.\n\nThis topic is about the infrastructure decisions that keep CI/CD fast and correct as scale grows — computing what actually needs testing, caching across the whole fleet instead of per-job, choosing where compute comes from, and orchestrating deploys across many interdependent services at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "Why 'test everything, every time' stops scaling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a small codebase, running the full test suite on every commit is cheap and simple to reason about. In a large monorepo — thousands of packages, hundreds of engineers committing per day — the full suite might take hours, and running the *entire* thing on *every* commit means CI queue time itself becomes the organization's bottleneck: engineers wait longer for feedback than they spend writing the change.\n\nThe naive fixes both fail: skipping tests entirely trades speed for missed regressions, and just adding more CI compute hits diminishing returns once the suite has inherent serial dependencies or shared-resource contention (a single test database, a rate-limited external API). The real fix is running less — but running the *right* less, which is what affected-only testing solves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "infra-for-cicd-at-scale-s02-q1"
+      ]
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "Affected-only builds and tests",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a monorepo, most commits touch a small slice of the dependency graph. **Affected-only** testing computes, from the actual file diff, which packages changed and which packages *depend* on them — transitively — and runs tests only for that affected set, skipping everything provably untouched.\n\nA change to a leaf utility package used by 200 services affects all 200 and correctly triggers a large test run. A change to one service's internal handler that nothing else imports affects exactly one package's tests. The savings come from the common case being much closer to the second than the first — most changes are local, and testing only what could plausibly break turns an hours-long full run into a minutes-long targeted one for the majority of commits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "infra-for-cicd-at-scale-s03-q1"
+      ]
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "The dependency graph that makes this possible",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a directed graph of ~10 package nodes (labelled auth-lib, payments-service, checkout-service, shared-utils, etc.) with dependency arrows between them; one node (shared-utils) is highlighted red as \"changed\", and every node reachable by following arrows backward to it (its transitive dependents) is highlighted orange as \"affected — tests run\", while unrelated nodes stay grey as \"skipped\" >>>\n\nComputing the affected set means walking the dependency graph **backward** from the changed package — not forward. You need every package that *depends on* what changed (they might break), not every package the changed one depends on (those are unaffected by this change). Getting the direction of this traversal wrong is the most common bug in a homegrown affected-only implementation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "Self-hosted vs managed CI runners",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Self-hosted runners | Managed/hosted CI runners |\n|---|---|---|\n| **Control** | Full — custom hardware (GPUs, more RAM), custom network access to internal resources | Limited to what the vendor offers |\n| **Cost model** | Fixed infra cost, can be cheaper at high sustained volume | Pay-per-minute, can get expensive at scale |\n| **Ops burden** | You patch, scale, and secure the runner fleet yourself | Vendor handles runner lifecycle entirely |\n| **Startup latency** | Can pre-warm for near-instant job start | Cold-start delay is common, though vendors mitigate it |\n\nThe crossover point is usually volume and specialization: a team running a modest number of standard builds is almost always better off on managed runners — the ops burden of running your own fleet isn't worth it. A team running thousands of daily jobs needing GPU access or private network reach to internal services often finds self-hosting pays for itself, but only once someone owns that infrastructure's reliability full-time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "infra-for-cicd-at-scale-s05-q1"
+      ]
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "Distributed build caching",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Per-job caching (from Pipeline Design) helps one job avoid redoing its own prior work. **Distributed** caching shares build outputs across the *entire team and CI fleet*: if any engineer or any CI run has already built a given input (same source hash, same dependency versions), every other machine — another engineer's laptop, a different CI job — can fetch that output instead of rebuilding it.\n\nThis is what makes tools like Bazel's remote cache or Nx Cloud valuable at scale: a large monorepo build that would take 20 minutes locally can complete in seconds if someone, somewhere, already built that exact combination of inputs today. The cache key has to be a true content hash of everything that affects the output — get that wrong (miss an input) and the cache serves a stale result across the *entire org* at once, not just one job.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "infra-for-cicd-at-scale-s06-q1"
+      ]
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Deployment orchestration across many services",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Deploying one service is a solved problem by this point in the group. Deploying dozens of interdependent services — where service B needs to be on API version N+1 before service A can safely start calling the new endpoint — needs **orchestration**: ordering constraints, dependency-aware rollout, and often a coordinator that sequences deploys rather than every team deploying independently and hoping for the best.\n\nThe practical technique that avoids most ordering problems entirely: **backward-compatible steps**. Deploy B first with the new endpoint added (but old behavior untouched) — safe regardless of what A is running. Only once B is confirmed live does A start calling the new endpoint. This is the same expand/contract idea from Rollback & Safe Deploys, applied to service APIs instead of database schemas.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "infra-for-cicd-at-scale-s07-q1"
+      ]
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s08",
+      "order": 8,
+      "sectionTitle": "Progressive-delivery infrastructure at scale",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The canary/health-check pattern from Rollback & Safe Deploys, run manually for one service, doesn't scale to hundreds of services deploying independently every day. At that scale, teams adopt **automated canary analysis** — a service mesh (Istio, Linkerd) that can split traffic at the request level between old and new versions, paired with a tool (Kayenta, Flagger) that statistically compares the canary's metrics against the baseline and automatically promotes or rolls back, without a human watching a dashboard per deploy.\n\nThe infrastructure investment here is real — a service mesh and automated analysis are not simple to operate — but it's what lets an org run hundreds of safe, gated deploys a day instead of a human bottleneck approving each one manually.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s09",
+      "order": 9,
+      "sectionTitle": "A homegrown affected-only bug",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team builds their own affected-only test selection by diffing changed files and running tests in the same directory — but nothing that walks the actual **dependency graph**. A change to `shared-utils` (imported by 40 other packages) only triggers `shared-utils`'s own tests, because nothing computed its dependents.\n\nA regression in `shared-utils` ships, breaks three downstream services in production, and the postmortem finds the tests that would have caught it exist and pass — they just never ran, because CI's notion of \"affected\" was file-proximity, not the dependency graph. The fix isn't more tests; it's correctly computing the *transitive dependent* set before deciding what to skip, which any mature build tool (Bazel, Nx, Turborepo) already does — a strong argument against building this yourself from scratch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "infra-for-cicd-at-scale-s09-q1"
+      ]
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s10",
+      "order": 10,
+      "sectionTitle": "CI infra as a second production system",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "As CI/CD infrastructure grows — self-hosted runners, a distributed cache, a deploy orchestrator — it quietly becomes something the entire engineering org depends on every single day, with an outage blocking every team's ability to ship. Yet it's frequently treated as internal tooling nobody specifically owns, with no on-call rotation, no SLO, and no incident process of its own.\n\nThe result: when the runner fleet degrades or the cache starts serving corrupted results, there's no clear owner, no dashboard, and no playbook — just confused engineers in a shared channel, hours into an outage that a dedicated on-call rotation would have caught in minutes. Treat CI/CD infrastructure with the same operational rigor as any other production system it happens to sit upstream of: an owning team, monitoring, and an incident process.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s11",
+      "order": 11,
+      "sectionTitle": "The numbers that justify the investment",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "These techniques aren't free to build, so it's worth being concrete about when they pay off. A monorepo running a naive full-suite CI at, say, 40 minutes per run and 500 commits a day burns roughly 330 CI-hours a day — real infrastructure cost, and real engineer wait-time cost multiplied across the org. Affected-only testing that cuts the *typical* commit's test scope by 90% (most changes are local) can turn that into closer to 35 CI-hours a day for the same commit volume.\n\nThe crossover where this investment is worth building — versus just running the full suite and eating the cost — is roughly where CI queue time starts showing up in engineers' own accounts of what slows them down, not a fixed team-size number. Below that point, the added complexity of affected-only tooling, distributed caching, and orchestration usually isn't worth the maintenance burden it adds.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "infra-for-cicd-at-scale-s12",
+      "order": 12,
+      "sectionTitle": "The pattern underneath all of it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every technique in this topic follows the same shape: **don't do provably unnecessary work, and don't let one team's changes require another team to coordinate manually.** Affected-only testing skips provably-unaffected tests. Distributed caching skips provably-already-done builds. Orchestration and backward-compatible rollout skip the need for humans to manually sequence dozens of interdependent deploys.\n\nThis closes out the CI/CD group: [Pipeline Design](pipeline-design) gave you the shape of one pipeline; [Feature Flags](feature-flags-progressive-delivery) and [Rollback & Safe Deploys](rollback-and-safe-deploys) gave you release-time safety for one service; this topic is what happens when you multiply that by hundreds of services and hundreds of engineers, and the infrastructure itself becomes something that needs the same engineering discipline as the systems it ships.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

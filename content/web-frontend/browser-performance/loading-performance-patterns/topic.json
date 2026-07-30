@@ -1,0 +1,208 @@
+{
+  "id": "loading-performance-patterns",
+  "title": "Loading Performance Patterns",
+  "area": "web-frontend",
+  "group": "browser-performance",
+  "order": 6,
+  "slug": "loading-performance-patterns",
+  "summary": "Load time is decided by the order the browser discovers and prioritises resources, not just by how many bytes you ship. Resource hints, lazy loading, and image and font strategy are the levers.",
+  "level": "intermediate",
+  "slideCount": 14,
+  "estReadMinutes": 14,
+  "slides": [
+    {
+      "id": "loading-performance-patterns-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A page's load time is less about total bytes than about **when the browser finds out it needs each byte**. A 90KB hero image discovered two seconds late is worse for [core-web-vitals](core-web-vitals) than a 400KB one discovered immediately.\n\nThat reframing drives every technique in this topic:\n\n- **Resource hints** (`preconnect`, `preload`, `prefetch`) change *when* a fetch starts.\n- **Lazy loading** removes work from the critical path entirely.\n- **Modern image formats and correct sizing** shrink what's on the path.\n- **Font strategy** stops text from being invisible or shifting.\n\nThe unifying picture is the **loading waterfall**: a chart of what got requested, when, and what was waiting on what. Read that chart and the fix is usually obvious. Optimise without reading it and you'll compress an image that was never the bottleneck.\n\nThe mechanics of how the browser turns HTML into a first paint are covered in [critical-rendering-path](critical-rendering-path); this topic is about shortening it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 75,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s02",
+      "order": 2,
+      "sectionTitle": "The loading waterfall",
+      "subTitle": "What blocks first paint and what doesn't",
+      "type": "concept",
+      "markdown": "The browser can't paint until it has the HTML and everything the HTML says is required to render. That set is smaller than people assume:\n\n**Blocks first paint:**\n\n- The HTML document itself.\n- Stylesheets in `<head>` without a non-matching `media` attribute. CSS is render-blocking by design — painting with unstyled content then restyling would flash.\n- Synchronous `<script>` tags, which block HTML *parsing* as well as rendering, because a script can `document.write`.\n\n**Does not block first paint:**\n\n- `<script defer>` and `<script type=\"module\">` — downloaded in parallel, executed after parsing.\n- `<script async>` — downloaded in parallel, executed whenever it arrives (so it can still interrupt).\n- Images, video, and fonts — these delay *content* appearing, not the paint itself.\n- Stylesheets with `media=\"print\"` or a non-matching media query.\n\nThe browser also runs a **preload scanner**: a lightweight parser that races ahead of the main parser looking for `src` and `href` attributes so downloads can start early, even while a synchronous script is blocking. This is genuinely important — it's why a resource written in HTML is discovered far sooner than one injected by JavaScript or referenced from a CSS file, and it explains most \"why is my hero image so late\" bugs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": [
+        "loading-performance-patterns-s02-q1"
+      ]
+    },
+    {
+      "id": "loading-performance-patterns-s03",
+      "order": 3,
+      "sectionTitle": "Resource hints compared",
+      "subTitle": "Four keywords that do genuinely different things",
+      "type": "compare",
+      "markdown": "| Hint | What it does | Cost if wrong | Typical use |\n|---|---|---|---|\n| `dns-prefetch` | resolves DNS for a host | tiny (a few KB, one lookup) | third-party domains you'll probably use |\n| `preconnect` | DNS + TCP + TLS handshake | a held connection, wasted RTTs | the CDN serving your LCP image |\n| `preload` | actually downloads a resource at high priority, now | full bytes downloaded, competes with real needs | the LCP image, a critical font |\n| `prefetch` | downloads at lowest priority for a *future* navigation | full bytes, but idle-time only | the next page in a known flow |\n| `modulepreload` | fetches *and* parses an ES module graph | full bytes plus parse cost | critical route modules |\n\nThe distinctions that actually get tested:\n\n- **`preconnect` saves round trips, not bytes.** A cross-origin connection costs DNS + TCP + TLS — commonly **100-300ms** on mobile, sometimes more. Preconnecting to your image CDN removes that from the critical path. Use it for **2-4 origins at most**; each held connection has a cost, and browsers close unused ones after ~10 seconds anyway.\n- **`preload` is for this navigation; `prefetch` is for the next one.** Mixing them up is the classic error — a `prefetch` for your LCP image is nearly useless, because it's fetched at lowest priority and may arrive after paint.\n- **`preload` needs `as`.** Without the correct `as` value the browser can't set the right priority or apply the right CORS mode, and may fetch the resource twice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "loading-performance-patterns-s03-q1"
+      ]
+    },
+    {
+      "id": "loading-performance-patterns-s04",
+      "order": 4,
+      "sectionTitle": "A waterfall, before and after",
+      "subTitle": "What a preload actually moves",
+      "type": "diagram",
+      "markdown": "Picture two request waterfalls for the same page, stacked.\n\n**Before.** Row one is the HTML document, finishing at 0.6s. Row two is a render-blocking stylesheet, 0.6s to 1.1s. Row three is a JavaScript bundle, 0.6s to 1.4s, and only *after* it executes does row four appear — the hero image, starting at 1.6s and finishing at 2.4s, because it was referenced by a CSS `background-image` the browser couldn't see until the stylesheet was parsed and applied. LCP lands at **2.5s**.\n\n**After.** The document and stylesheet rows are unchanged, but a new row two starts at **0.62s**: the hero image, pulled forward by a `preload` in the head with `fetchpriority=\"high\"`. It finishes at 1.3s and now sits *before* the JavaScript bundle in priority order. LCP lands at **1.4s**.\n\nThe crucial detail the picture shows: the image download itself takes the same 700ms in both charts. Nothing got smaller. **The entire 1.1s saving came from starting earlier** — which is why waterfall shape, not payload size, is usually the first thing to fix.\n\n<<< Image: two stacked request-waterfall charts sharing a 0-3s time axis. Top chart labelled \"before\": row 1 document 0-0.6s, row 2 styles.css 0.6-1.1s marked render-blocking, row 3 bundle.js 0.6-1.4s, row 4 hero.avif 1.6-2.4s with a dashed \"discovered by CSS background-image\" arrow from the end of styles.css, and an LCP marker at 2.5s. Bottom chart labelled \"after: preload + fetchpriority=high\": row 1 document 0-0.6s, row 2 hero.avif 0.62-1.3s highlighted, row 3 styles.css 0.6-1.1s, row 4 bundle.js 0.7-1.5s, LCP marker at 1.4s. Annotate the gap between the two LCP markers \"1.1s saved with zero bytes removed\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 102,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s05",
+      "order": 5,
+      "sectionTitle": "Lazy loading",
+      "subTitle": "Three levels: images, components, routes",
+      "type": "code",
+      "markdown": "Lazy loading defers work until it's needed. It applies at three scales, and all three matter.\n\n```html\n<!-- 1. Images. Native, one attribute, no JS. -->\n<img src=\"below-fold.avif\" width=\"800\" height=\"450\"\n     loading=\"lazy\" decoding=\"async\" alt=\"...\">\n\n<!-- NEVER on the LCP image - it delays the fetch until layout runs -->\n<img src=\"hero.avif\" width=\"1200\" height=\"600\" fetchpriority=\"high\" alt=\"...\">\n\n<!-- iframes too: third-party embeds are often the heaviest thing on a page -->\n<iframe src=\"https://www.youtube.com/embed/...\" loading=\"lazy\"></iframe>\n```\n\n```js\n// 2. Routes. The single biggest bundle win in most SPAs.\nconst Settings = lazy(() => import('./routes/Settings'));\nconst Reports  = lazy(() => import('./routes/Reports'));\n\n// 3. Heavy below-the-fold components, loaded on approach rather than on mount\nconst io = new IntersectionObserver((entries) => {\n  for (const e of entries) {\n    if (!e.isIntersecting) continue;\n    import('./charts/HeavyChart').then(m => m.mount(e.target));\n    io.unobserve(e.target);\n  }\n}, { rootMargin: '200px' });   // start 200px early so it is ready on arrival\n\ndocument.querySelectorAll('[data-chart]').forEach(el => io.observe(el));\n```\n\nRoute splitting is usually the largest single win: a dashboard with eight routes typically ships one 1.2MB bundle, and splitting it means a first visit downloads 250KB instead. The `rootMargin: '200px'` detail is what makes lazy loading feel invisible — the work starts before the user reaches the element.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "loading-performance-patterns-s05-q1"
+      ]
+    },
+    {
+      "id": "loading-performance-patterns-s06",
+      "order": 6,
+      "sectionTitle": "Images",
+      "subTitle": "Format, size, and priority",
+      "type": "concept",
+      "markdown": "Images are typically **50-70% of a page's bytes**, so this is where weight reduction actually pays.\n\n**Format.** For the same visual quality, rough relative sizes against a baseline JPEG:\n\n- **JPEG** — the baseline, universally supported.\n- **WebP** — around **25-35% smaller**, supported everywhere that matters since 2020.\n- **AVIF** — around **50% smaller** than JPEG, now broadly supported. Slower to encode (a build-time concern, not a runtime one) and slightly slower to decode.\n\nA 2MB hero JPEG commonly becomes ~90KB as a well-tuned AVIF. That is not a marginal gain.\n\n**Size.** The most common real-world waste isn't format, it's serving a 4000px-wide image into a 400px-wide slot. Use `srcset` and `sizes` so each device downloads roughly what it displays — and remember a DPR 3 phone genuinely wants ~1200 device pixels for that 400px slot, so \"just serve small images\" is also wrong.\n\n**Priority.** `fetchpriority=\"high\"` on the LCP image and `fetchpriority=\"low\"` on decorative ones reorders the queue without changing bytes. Browsers assign images a low initial priority until layout proves they're in the viewport, so this hint is doing real work.\n\n**Decoding.** `decoding=\"async\"` lets image decode happen off the main thread. Decoding a large image can itself cost **20-50ms** of main-thread time on a phone — a genuine source of jank people never look for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 108,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s07",
+      "order": 7,
+      "sectionTitle": "Responsive images in practice",
+      "subTitle": "srcset, sizes, and picture",
+      "type": "code",
+      "markdown": "```html\n<!-- Same image, multiple widths. The browser picks using sizes + DPR. -->\n<img src=\"photo-800.jpg\"\n     srcset=\"photo-400.avif 400w,\n             photo-800.avif 800w,\n             photo-1600.avif 1600w\"\n     sizes=\"(max-width: 600px) 100vw, 50vw\"\n     width=\"800\" height=\"450\"\n     alt=\"...\">\n\n<!-- Format negotiation with a fallback chain: first supported type wins -->\n<picture>\n  <source type=\"image/avif\" srcset=\"hero-800.avif 800w, hero-1600.avif 1600w\"\n          sizes=\"100vw\">\n  <source type=\"image/webp\" srcset=\"hero-800.webp 800w, hero-1600.webp 1600w\"\n          sizes=\"100vw\">\n  <img src=\"hero-800.jpg\" width=\"1600\" height=\"900\"\n       fetchpriority=\"high\" alt=\"...\">\n</picture>\n```\n\nThe `sizes` attribute is the part people get wrong. It tells the browser **how wide the image will be laid out**, and it has to be supplied in the HTML because the browser's preload scanner picks a candidate *before* CSS is applied. Get it wrong and the browser downloads the wrong file — usually a much bigger one than needed.\n\nThe `width` and `height` attributes stay on the `<img>` even with `srcset`: they give the aspect ratio so space is reserved and CLS stays at zero.\n\nAnd `<picture>` is only for **art direction or format negotiation** — different crops at different breakpoints, or serving AVIF with a JPEG fallback. For \"same image, different sizes,\" plain `srcset` is simpler and does the job.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s08",
+      "order": 8,
+      "sectionTitle": "Fonts",
+      "subTitle": "Invisible text, flashing text, and shifting text",
+      "type": "concept",
+      "markdown": "Web fonts create three distinct failure modes, and `font-display` picks which one you get:\n\n| Value | Block period | Swap period | Result |\n|---|---|---|---|\n| `auto` | ~3s | infinite | browser default, usually like `block` |\n| `block` | ~3s | infinite | **FOIT** — invisible text for up to 3s |\n| `swap` | 0 | infinite | **FOUT** — fallback shows, then swaps whenever it arrives |\n| `fallback` | ~100ms | ~3s | brief FOIT, swap only if fast |\n| `optional` | ~100ms | none | fallback stays for this visit if the font is late |\n\nThe trade is between three bad outcomes: **invisible text** (block), **a visible font change** (swap), and **never seeing your brand font** (optional). There's no free option, so pick per context — `swap` for body copy where reading matters most, `optional` for a site where layout stability is critical.\n\nWhat actually removes the trade-off:\n\n- **Self-host and preload.** `<link rel=preload as=font type=\"font/woff2\" crossorigin>`. The `crossorigin` attribute is mandatory even for same-origin fonts — omit it and the font is fetched twice.\n- **Match the fallback's metrics** with `size-adjust`, `ascent-override`, and `descent-override`, so the swap causes no reflow. This turns FOUT from a layout shift into an almost invisible restyle, and it's the single highest-leverage font technique available.\n- **Subset and use WOFF2.** A full variable font can be 200KB+; subsetted to Latin it's often 20-30KB.\n- **Use `unicode-range`** so non-Latin subsets are only downloaded when actually used.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 110,
+      "mcqIds": [
+        "loading-performance-patterns-s08-q1"
+      ]
+    },
+    {
+      "id": "loading-performance-patterns-s09",
+      "order": 9,
+      "sectionTitle": "Shrinking the JavaScript",
+      "subTitle": "The cost that isn't measured in kilobytes",
+      "type": "concept",
+      "markdown": "JavaScript is uniquely expensive because you pay for it three times: **download, parse/compile, and execute**. Bytes are the smallest of the three costs on a slow device.\n\nRough numbers worth carrying:\n\n- A mid-tier Android phone processes roughly **1MB of JavaScript per second** end-to-end (parse plus compile plus execute). A 1MB gzipped bundle — which decompresses to 3-4MB — is therefore *seconds* of CPU before anything is interactive.\n- The same bundle on a modern laptop takes a few hundred milliseconds, which is why this problem is invisible in development.\n- A reasonable target for a content site's initial bundle is **under ~170KB gzipped**; for an app, under ~300KB. Beyond that, interactivity on real mobile hardware suffers regardless of network speed.\n\nThe levers, in order of typical payoff:\n\n- **Route-level code splitting.** Almost always the biggest single win.\n- **Audit dependencies.** The Coverage tab in DevTools shows unused bytes per file. A date library at 300KB where you needed one format function, or a whole icon set imported for six icons, are extremely common.\n- **Defer third parties.** Analytics, chat widgets, A/B testing, and tag managers frequently exceed first-party JavaScript. Load them after interaction or on idle.\n- **Ship modern syntax.** Transpiling to ES5 for browsers you don't support inflates bundles by 15-30% and adds polyfills nobody needs.\n\nThe reframing: a bundle's real cost is **main-thread time on the slowest device you support**, and that's what INP and TBT are measuring.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 110,
+      "mcqIds": [
+        "loading-performance-patterns-s09-q1"
+      ]
+    },
+    {
+      "id": "loading-performance-patterns-s10",
+      "order": 10,
+      "sectionTitle": "Caching and delivery",
+      "subTitle": "The fastest request is the one you don't make",
+      "type": "concept",
+      "markdown": "Everything above optimises the first visit. Caching and delivery decide the rest.\n\n- **Immutable hashed assets.** Build with content hashes (`app.8f3a2b.js`) and serve them with `Cache-Control: public, max-age=31536000, immutable`. A returning user fetches nothing. The HTML that references them stays short-lived or `no-cache`, so a deploy is picked up immediately.\n- **CDN edge caching.** A request that terminates 20ms away instead of 200ms away removes latency from every round trip on the critical path, and TTFB is pure LCP budget.\n- **Compression.** Brotli at level 11 for static assets beats gzip by roughly **15-20%** on text. It's a build-time cost paid once.\n- **HTTP/2 and HTTP/3.** Multiplexing removes the old six-connections-per-origin limit, so bundling everything into one file is no longer required — though very fine-grained splitting still costs per-request overhead. HTTP/3 over QUIC additionally removes head-of-line blocking on lossy mobile networks, which is exactly where it matters.\n- **Service workers.** A cache-first strategy for the app shell makes repeat loads near-instant and gives you offline capability. It also adds real complexity around cache invalidation and update flows — worth it for app-like products, overkill for a marketing page.\n\nThe judgement to show: caching strategy should be decided by **how often the asset changes**, not by how big it is. An immutable-hashed 500KB bundle is cheaper over a user's lifetime than a 50KB file that's revalidated on every navigation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 110,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s11",
+      "order": 11,
+      "sectionTitle": "Prefetching everything",
+      "subTitle": "When hints compete with what actually matters",
+      "type": "pitfall",
+      "markdown": "Resource hints work by changing priority, and priority is **zero-sum**. Marking everything high-priority marks nothing high-priority.\n\nThe failure patterns:\n\n- **Preloading a dozen resources.** Each `preload` competes for the same bandwidth as the LCP image. Teams routinely add preloads for fonts, icons, and analytics and make LCP *worse* than before. Preload the LCP image and at most one or two critical fonts.\n- **Preconnecting to eight origins.** Each connection costs DNS, TCP and TLS work and holds a socket. Chrome effectively limits how many it will honour, and the excess ones are pure waste. Two to four, for origins on the critical path.\n- **Prefetching every link on the page.** A framework that prefetches all visible route chunks can pull megabytes on a mobile data plan. Constrain it: prefetch on hover or on viewport entry with `rootMargin`, respect `navigator.connection.saveData` and `effectiveType`, and skip it on `2g`/`slow-2g`.\n- **Preloading something already discoverable.** If the resource is a plain `<img src>` or `<script src>` in the HTML, the preload scanner already found it. The preload adds nothing and can even cause a duplicate fetch when `as` or `crossorigin` don't match.\n- **Preloading resources you don't use.** Chrome logs a console warning about unused preloads within a few seconds. Free to check, and frequently reveals stale hints left over from a redesign.\n\nThe test before adding any hint: **which specific request am I trying to move earlier, and what am I willing to delay in exchange?** If there's no answer to the second half, don't add it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 112,
+      "mcqIds": [
+        "loading-performance-patterns-s11-q1"
+      ]
+    },
+    {
+      "id": "loading-performance-patterns-s12",
+      "order": 12,
+      "sectionTitle": "Third parties",
+      "subTitle": "The bytes you don't control",
+      "type": "pitfall",
+      "markdown": "On a typical commercial site, third-party code is a large share of total JavaScript and an even larger share of the problems — tag managers, analytics, chat widgets, consent platforms, A/B testing, ad tech.\n\nWhy they hurt disproportionately:\n\n- **They're loaded early and synchronously**, often via a tag manager whose contents Marketing can change without a deploy. A single added tag can regress LCP with no code review.\n- **They connect to origins the browser has never seen**, paying full DNS + TCP + TLS on the critical path.\n- **Their failure modes are yours.** A slow third-party script loaded synchronously can block your page's rendering entirely.\n- **They inject content**, which is a leading cause of CLS — a consent banner or promo bar appearing above existing content shifts everything down.\n\nWhat actually works:\n\n- **`async` or `defer` everything third-party**, without exception. If a vendor insists on a synchronous tag, treat that as a procurement problem.\n- **Load on interaction or idle.** Chat widgets in particular can be loaded when the user clicks a placeholder button — visually identical, several hundred KB off the critical path.\n- **Facades for embeds.** Replace a YouTube iframe (which pulls ~1MB+) with a thumbnail that loads the real player on click.\n- **Reserve space** for anything that will be injected, so it costs no CLS.\n- **Budget and review them.** A recurring audit of what the tag manager is actually loading is one of the highest-value performance activities on a commercial site, and it's usually nobody's job.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 112,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s13",
+      "order": 13,
+      "sectionTitle": "Rendering strategy",
+      "subTitle": "The choice that outweighs every hint",
+      "type": "compare",
+      "markdown": "Before micro-optimising, the architectural decision — where the HTML comes from — dominates everything else.\n\n| Strategy | First paint | LCP potential | Interactivity cost | Fits |\n|---|---|---|---|---|\n| **Static (SSG)** | immediate, from CDN edge | best | small hydration, or none | marketing, docs, blogs |\n| **Server-rendered (SSR)** | after TTFB | good, bounded by server time | full hydration on the client | content with personalisation |\n| **Streaming SSR** | first chunk arrives early | very good | progressive hydration | mixed static/dynamic pages |\n| **Client-rendered (CSR)** | after bundle downloads and runs | worst | everything on the client | logged-in app shells |\n\nThe number that decides it: a client-rendered page's LCP cannot be earlier than **TTFB + bundle download + parse + execute + data fetch + paint**. On a mid-tier phone that chain is routinely 3-5 seconds even with a fast network, because the parse-and-execute segment is CPU-bound and immune to bandwidth.\n\nStatic or streamed HTML puts content on screen while the JavaScript is still downloading, which is why the same product rebuilt on Next.js or Astro often halves LCP without a single image being recompressed.\n\nThe honest caveat: this is a large architectural change, and for a logged-in dashboard behind an auth wall — where nothing is cacheable and the user has already committed — CSR's costs land in a place users tolerate. Recommending a rewrite for a marketing site is right; recommending one for an internal admin tool usually isn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 110,
+      "mcqIds": []
+    },
+    {
+      "id": "loading-performance-patterns-s14",
+      "order": 14,
+      "sectionTitle": "An order of operations",
+      "subTitle": "Where to start on a slow page",
+      "type": "concept",
+      "markdown": "Given \"this page is slow,\" the sequence that finds the biggest win fastest:\n\n1. **Look at the waterfall first**, throttled to Slow 4G with 4x CPU and a cold cache. The shape tells you which of the next steps applies. Skipping this is how people spend a week compressing images on a page whose problem was a 1.9s TTFB.\n2. **Fix TTFB if it's over ~800ms.** Caching, CDN, get database work off the render path. Nothing on the frontend can recover time spent here.\n3. **Unblock the critical path.** `defer` every script that isn't essential, inline the small amount of CSS needed for the first viewport, and stop shipping render-blocking CSS for below-the-fold components.\n4. **Fix LCP discovery.** Make sure the LCP element is a plain `<img>` in the HTML with `fetchpriority=\"high\"` and *not* `loading=\"lazy\"`. Add a `preconnect` to the image host.\n5. **Fix LCP weight.** AVIF/WebP at the displayed size via `srcset`.\n6. **Cut JavaScript.** Route splitting, dependency audit, defer third parties.\n7. **Then fonts, then caching**, then the finer hints.\n\nTwo meta-rules that make this hold up under pressure: **measure between every step**, because the bottleneck moves and step 5 may be unnecessary once step 4 is done. And **fix the discovery problem before the size problem** — starting a download a second earlier is usually cheaper than making it a second faster.\n\n\"The homepage is slow on 3G\" has this exact answer, and giving it in order is what distinguishes a systematic engineer from someone listing techniques.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 115,
+      "mcqIds": []
+    }
+  ]
+}

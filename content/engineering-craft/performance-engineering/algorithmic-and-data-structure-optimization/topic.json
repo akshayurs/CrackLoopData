@@ -1,0 +1,169 @@
+{
+  "id": "algorithmic-and-data-structure-optimization",
+  "title": "Algorithmic & Data Structure Optimization",
+  "area": "engineering-craft",
+  "group": "performance-engineering",
+  "order": 4,
+  "slug": "algorithmic-and-data-structure-optimization",
+  "summary": "Applying complexity and data-layout knowledge to make a real hot path faster: picking the right structure for the access pattern, why cache locality can dominate Big-O at real-world sizes, and cutting allocations on the hot path.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "algorithmic-and-data-structure-optimization-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Profiling ([Profiling Techniques](profiling-techniques)) told you which function dominates the time budget. This topic is what you do once you're standing there: pick the right data structure, respect how the hardware actually reads memory, and stop allocating on paths that run a million times a second.\n\nThis assumes you already know what Big-O means — the goal here is applying that knowledge to a real hot path, not re-deriving it. The twist that surprises engineers who only know the theory: at real-world input sizes, cache locality and allocation patterns routinely beat asymptotic complexity. A \"worse\" algorithm that reads memory sequentially can outrun a \"better\" one that chases pointers, and knowing when that's true is the actual skill this topic teaches.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s02",
+      "order": 2,
+      "sectionTitle": "Big-O tells you scaling, not speed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "[What Big-O actually claims](what-big-o-actually-claims) is a growth bound past a crossover point — it says nothing about wall-clock time at a specific input size, and nothing about the constant factor multiplying that growth. Two algorithms with the same Big-O can differ 10x in real speed; two with different Big-O can have the faster one lose below the crossover.\n\nFor optimization work specifically, this means \"switch to the asymptotically better algorithm\" is not automatically the right move. A hash map is O(1) average-case lookup versus a sorted array's O(log n) binary search — but for a collection of 8 items that fits in one or two cache lines, the array wins outright: no hashing, no pointer indirection, and the linear scan is often faster than the hash computation itself.\n\nThe practical question before optimizing a hot path is never just \"what's the Big-O\" — it's \"what's the Big-O, and what's my actual n, and what's the constant factor at that n.\" All three matter; this topic is mostly about the second and third.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "algorithmic-and-data-structure-optimization-s02-q1"
+      ]
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s03",
+      "order": 3,
+      "sectionTitle": "Picking the right structure for the access pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The right data structure is determined by which operation runs most often on the hot path, not by which structure is most familiar or most \"correct\" in the abstract. The same logical collection needs a different structure depending on the dominant access:\n\n- **Frequent lookups by key, order doesn't matter** → hash map. O(1) average, at the cost of no ordering and per-entry overhead.\n- **Frequent range queries or ordered iteration** → a sorted array or a balanced tree/skip list. A hash map can't answer \"give me everything between X and Y\" without a full scan.\n- **Frequent membership checks on a large set, false positives tolerable** → a Bloom filter. Sub-linear space at the cost of rare false positives, no false negatives.\n- **Frequent insert/remove at both ends** → a deque, not a singly-linked list or a plain array (which pays O(n) for front-removal).\n- **Mostly appended, rarely searched, iterated in bulk** → a plain array/vector — cache-friendly and simple beats a fancier structure nobody needed.\n\nThe failure mode is choosing the structure that matches the *data's shape* (\"it's a graph, so adjacency list\") without checking which *operation* the hot path actually calls most — the right choice is about the query pattern, not the data model alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "algorithmic-and-data-structure-optimization-s03-q1"
+      ]
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s04",
+      "order": 4,
+      "sectionTitle": "Cache locality: array-of-structs vs struct-of-arrays",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Array-of-structs (AoS):** one array where each element is a full struct — `[{x,y,z,color}, {x,y,z,color}, ...]`. Natural to write, and fine when you typically read the whole struct at once.\n\n**Struct-of-arrays (SoA):** separate parallel arrays per field — `xs[], ys[], zs[], colors[]`. Looks less natural, but wins decisively when a hot loop only touches one or two fields across many elements — e.g., summing every `x`. In AoS, the CPU pulls a whole cache line (typically 64 bytes) per element but uses only 4-8 bytes of it, wasting most of the bandwidth on `y`, `z`, and `color` you didn't need. In SoA, every byte fetched into cache is a field you actually use, so a loop that only reads `x` runs several times faster purely from better cache utilization — no algorithmic change at all.\n\nThis is a real production pattern in game engines, numerical/scientific computing, and columnar databases (which are SoA at the storage-format level, precisely because analytical queries touch a few columns across many rows). The rule: if your hot loop touches a small subset of fields across a large collection, lay memory out by field, not by record.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "algorithmic-and-data-structure-optimization-s04-q1"
+      ]
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s05",
+      "order": 5,
+      "sectionTitle": "Sequential access vs pointer-chasing",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Contrast two traversals of logically-equivalent data. A **contiguous array** traversal reads memory addresses in order, so the CPU's hardware prefetcher predicts the pattern and pulls the next several cache lines in before they're needed — the CPU is rarely waiting on memory. A **linked-list** traversal follows a pointer to wherever that node was allocated, which could be anywhere in the heap; the prefetcher can't predict a random address, so nearly every node access is a cache miss, each one costing roughly 100x an L1 hit.\n\nThis is why an O(n) array scan frequently outruns an O(n) linked-list traversal by a wide margin despite identical Big-O, and why the same effect shows up whenever a \"logically equivalent\" structure trades contiguity for indirection — a tree of heap-allocated nodes versus a flattened array-backed tree, a graph of scattered node objects versus a compact adjacency-list encoded in arrays.\n\n<<< Image: two side-by-side memory diagrams — left shows a contiguous array with a CPU cache-line window sliding smoothly across sequential addresses labeled \"prefetcher predicts this\"; right shows a linked list with nodes scattered at random heap addresses connected by arrows, each hop labeled \"cache miss, ~100ns\", captioned \"same O(n), very different reality\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s06",
+      "order": 6,
+      "sectionTitle": "Reducing allocations on the hot path",
+      "subTitle": "Reuse and pooling vs allocate-per-call",
+      "type": "concept",
+      "markdown": "Every allocation has a real, non-zero cost: finding free space, updating heap metadata, and — in managed languages — creating another object the garbage collector will eventually have to trace and reclaim (this group's Memory & GC Performance topic covers that side in depth). On a hot path invoked thousands of times per second, allocating a fresh buffer, list, or object on every call turns a computation cost into a computation-plus-allocator-plus-GC cost.\n\nThe standard fix is **reuse**: keep a pre-allocated buffer or object and clear/overwrite it on each call instead of allocating a new one, or use an explicit **pool** — a fixed set of reusable objects checked out and returned rather than allocated and freed. Connection pools, thread pools, and buffer pools are all instances of this same idea applied to different resources.\n\nThe trade-off is real and worth stating plainly: pooling adds code complexity (checkout/return discipline, and a bug class where an object is used after being returned to the pool) and a fixed memory footprint even when idle. It's worth it specifically on measured hot paths — applying it everywhere \"for performance\" is premature optimization in different clothing (Performance Mindset & Measurement).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "algorithmic-and-data-structure-optimization-s06-q1"
+      ]
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s07",
+      "order": 7,
+      "sectionTitle": "Theoretically-optimal vs simpler-but-faster",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Theoretically-optimal algorithm | Simpler algorithm |\n|---|---|---|\n| **Asymptotic complexity** | Better (e.g., O(n log n), or a lower constant factor bound) | Worse (e.g., O(n²)) |\n| **Constant factor / implementation cost** | Often higher — more bookkeeping, more allocation, harder to vectorize | Often lower — simple loop, sequential memory, easy for the compiler to optimize |\n| **Wins at** | Large n, past the crossover point | Small-to-moderate n, below the crossover point |\n| **Real examples** | Strassen's matrix multiply (O(n^2.81)) vs naive O(n³); Fibonacci heaps vs binary heaps for Dijkstra | Naive multiply beats Strassen below roughly n=100 in most implementations; binary heaps beat Fibonacci heaps almost always due to lower overhead |\n\nThe senior move, echoing [What Big-O actually claims](what-big-o-actually-claims), is naming both sides: \"asymptotically X wins, but at our actual n we're well below the crossover, so I'd ship the simpler one and revisit if n grows.\" Shipping the theoretically-optimal choice by default, without checking where the crossover actually sits for your data, is a common way to add complexity for a win you'll never realize.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "algorithmic-and-data-structure-optimization-s07-q1"
+      ]
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s08",
+      "order": 8,
+      "sectionTitle": "The asymptotic swap that made things worse",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team replaces a linear scan over a small in-memory list (typically under 20 items) with a hash map lookup, expecting an obvious win because O(1) beats O(n). Instead, the hot path gets measurably slower.\n\nWhat happened: at n=15, the linear scan touches one or two cache lines sequentially and does simple integer/pointer comparisons — often faster in absolute terms than computing a hash, probing a bucket, and following a pointer to the actual value, especially when the hash map is per-call-constructed rather than reused. The asymptotic win only materializes past a crossover point that, for this workload, sits well above 15 — the swap was correct in the limit and wrong at the actual n.\n\nThe fix isn't \"never use hash maps\" — it's checking the real, measured n before assuming the asymptotically better structure wins, and benchmarking the swap (Benchmarking Methodology) rather than trusting Big-O intuition alone. This is the same crossover-point trap as §7, but specifically framed as a regression a team actually shipped: a well-intentioned complexity-driven optimization that a five-minute benchmark would have caught before it reached production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "algorithmic-and-data-structure-optimization-s08-q1"
+      ]
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s09",
+      "order": 9,
+      "sectionTitle": "Seeing it in code",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Both loops below are O(n). One runs multiple times faster on real hardware purely due to memory layout — no algorithmic difference at all:\n\n```c\n// Cache-friendly: contiguous array, sequential access\nstruct Point { float x, y, z; float color; };\nPoint points[100000];\n\nfloat sum_x_aos(Point* pts, int n) {\n    float total = 0;\n    for (int i = 0; i < n; i++) total += pts[i].x;  // pulls a full 16-byte struct per x needed\n    return total;\n}\n\n// SoA layout: only the field you need is contiguous\nfloat xs[100000], ys[100000], zs[100000], colors[100000];\n\nfloat sum_x_soa(float* xs, int n) {\n    float total = 0;\n    for (int i = 0; i < n; i++) total += xs[i];      // every fetched byte is used\n    return total;\n}\n```\n\n`sum_x_soa` typically runs several times faster than `sum_x_aos` for large n, because it wastes none of each fetched cache line on unused fields, and the sequential access pattern lets the CPU prefetch aggressively and often auto-vectorize the loop. Both are Θ(n) — this is a constant-factor win, invisible to complexity analysis, decided entirely by memory layout.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": []
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s10",
+      "order": 10,
+      "sectionTitle": "Branch prediction and vectorization",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "Two more constant-factor effects that complexity analysis is blind to, and that separate a hot-path rewrite that works from one that doesn't:\n\n- **Branch prediction.** A CPU speculatively executes past a conditional branch, guessing which way it'll go, and pays a real penalty (often 10-20 cycles) when it guesses wrong. A loop with an unpredictable branch (`if (data[i] > threshold)` on random data) runs slower than the identical branch on *sorted* data, purely because the predictor learns the pattern once it's monotonic. This is a genuine, measurable effect — sorting data before a branch-heavy filter can be a real win even though sorting adds work.\n- **Auto-vectorization.** Compilers can turn a simple loop into SIMD instructions that process 4-8 elements per instruction, but only when the loop has no data dependencies between iterations, no unpredictable branches, and (per §4) contiguous memory access. A loop with a branch inside it, or one that reads scattered pointers, usually can't be vectorized — an SoA layout is often exactly what unlocks it.\n\nNeither effect changes an algorithm's Big-O. Both can be the actual reason a \"correctly\" optimized hot path is still slow, and they're the kind of detail that separates a mid-level fix from a staff-level one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": []
+    },
+    {
+      "id": "algorithmic-and-data-structure-optimization-s11",
+      "order": 11,
+      "sectionTitle": "Optimizing a hot path in practice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In order: confirm the real n and the actual access pattern (§2, §3) before picking a structure; check whether memory layout is fighting you (§4, §5, §9) before reaching for a different algorithm at all — a layout fix is often bigger and cheaper than an algorithmic one; only then consider an asymptotically better algorithm, and check where its crossover point actually sits for your n (§7, §8); cut allocations if the path runs hot enough that GC or allocator overhead shows up in the profile (§6); and if the loop is simple and hot, check whether branch predictability or vectorization is leaving performance on the table (§10).\n\nEvery step here should be validated with the rigor from Benchmarking Methodology — a memory-layout change or a data-structure swap is exactly the kind of \"obviously faster\" change that occasionally isn't, and the only way to know is to measure it under realistic conditions, not to trust the theory alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

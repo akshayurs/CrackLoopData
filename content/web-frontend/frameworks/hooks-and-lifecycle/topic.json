@@ -1,0 +1,169 @@
+{
+  "id": "hooks-and-lifecycle",
+  "title": "Hooks and Lifecycle",
+  "area": "web-frontend",
+  "group": "frameworks",
+  "order": 5,
+  "slug": "hooks-and-lifecycle",
+  "summary": "Hooks map mount/update/unmount onto a small set of primitives, but the dependency array is the part that actually determines behavior — get it wrong and you get stale closures or leaked subscriptions, not a compile error.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "hooks-and-lifecycle-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Class components had named lifecycle methods you could grep for: `componentDidMount`, `componentDidUpdate`, `componentWillUnmount`. Hooks replaced that with a smaller, more composable set of primitives — but collapsed three distinct lifecycle moments into one function, `useEffect`, that behaves differently depending entirely on its **dependency array**.\n\nThat collapse is exactly why hooks confuse people who learned lifecycle methods first: there's no `componentDidMount` method to find, there's a `useEffect(fn, [])` call whose behavior depends on a detail (the empty array) that's easy to overlook while scanning code.\n\nThis topic maps the old lifecycle vocabulary onto hooks, then spends most of its time on the two bugs that account for the majority of hook-related interview questions: stale closures from an incomplete dependency array, and leaked subscriptions from a missing cleanup function.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "hooks-and-lifecycle-s02",
+      "order": 2,
+      "sectionTitle": "Mapping class lifecycle to hooks",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Class lifecycle method | Hook equivalent |\n|---|---|\n| `componentDidMount` | `useEffect(fn, [])` — runs once, after the first render |\n| `componentDidUpdate` | `useEffect(fn, [dep1, dep2])` — runs after any render where a listed dependency changed |\n| `componentWillUnmount` | the function returned from inside `useEffect` — runs right before the effect re-runs or the component unmounts |\n| `constructor` (initial state) | the initial value passed to `useState` |\n\nThe mapping isn't perfect, and that's the point of this topic: class lifecycle methods were distinct named hooks into distinct moments, while `useEffect` is **one function** whose behavior at each of those moments is entirely determined by what you put in its second argument — an empty array, a populated array, or no array at all (which reruns after every single render).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "hooks-and-lifecycle-s02-q1"
+      ]
+    },
+    {
+      "id": "hooks-and-lifecycle-s03",
+      "order": 3,
+      "sectionTitle": "The dependency array: what \"reactive\" really means",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The dependency array isn't an optimization hint you can approximate — it's the literal list of every reactive value the effect's body reads. `useEffect` re-runs its function whenever any value in that array differs from the previous render (compared by `===`, so a new object or array literal counts as \"different\" even if its contents look the same).\n\nThree distinct behaviors depending on the array:\n\n- **No array at all**: the effect runs after **every** render, unconditionally. Rarely what you want — almost always a sign of a missing array, not a deliberate choice.\n- **Empty array `[]`**: the effect runs **once**, after the first render, and never again in response to renders. Correct only when the effect genuinely reads no reactive values, or deliberately ignores their changes (a choice, not a default).\n- **Populated array `[a, b]`**: the effect re-runs whenever `a` or `b` changes between renders, and otherwise is skipped.\n\nThe rule that keeps this from becoming a guessing game: the array should list **every value from component scope that the effect's function body reads** — not a curated subset chosen to control how often it runs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "hooks-and-lifecycle-s03-q1"
+      ]
+    },
+    {
+      "id": "hooks-and-lifecycle-s04",
+      "order": 4,
+      "sectionTitle": "Effect timing relative to render and paint",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "<<< Image: a horizontal timeline showing four stages in order: \"Render (compute JSX)\" -> \"Commit (DOM updated)\" -> \"Browser paints screen\" -> \"useEffect callbacks run (async, after paint)\" — with a separate branch labelled \"useLayoutEffect callbacks run\" placed between \"Commit\" and \"Browser paints screen\", annotated \"blocks paint until it finishes\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "hooks-and-lifecycle-s05",
+      "order": 5,
+      "sectionTitle": "Cleanup functions preventing leaks",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "An effect that subscribes to something external must return a function that undoes it, or every unmount (and every re-run) leaks the previous subscription:\n\n```jsx\nfunction ChatRoom({ roomId }) {\n  useEffect(() => {\n    const connection = createConnection(roomId);\n    connection.connect();\n\n    return () => connection.disconnect();   // cleanup\n  }, [roomId]);\n\n  // ...\n}\n```\n\nThe cleanup function runs **twice in practice**: once right before the effect re-runs (if `roomId` changes, disconnecting the old room before connecting to the new one), and once when the component unmounts entirely. Skip the `return` statement and switching rooms rapidly leaves every previous connection still open in the background — a leak that's invisible in a quick manual test and shows up as memory growth or duplicate event handling under real usage.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "hooks-and-lifecycle-s05-q1"
+      ]
+    },
+    {
+      "id": "hooks-and-lifecycle-s06",
+      "order": 6,
+      "sectionTitle": "The Rules of Hooks",
+      "subTitle": "Why hooks can't be conditional",
+      "type": "concept",
+      "markdown": "Hooks must be called **in the same order on every render**, unconditionally — never inside an `if`, a loop, or after an early `return`. This isn't a style preference; it's how the mechanism works.\n\nReact doesn't track hooks by name — it tracks them by **call order**, in a linked list attached to the component's fiber. The first `useState` call is always slot 0, the second is always slot 1, and so on. If a hook call is skipped on some render (because it was inside an `if` that evaluated differently), every hook call *after* it shifts into the wrong slot — React ends up handing `useState`'s state back to what used to be a different hook's slot entirely, silently corrupting state with no error thrown.\n\nThis is why the rule is enforced by a lint plugin rather than a runtime check for every case: the bug is often invisible until the conditional branch actually changes between two consecutive renders, which can be rare enough to pass a casual test but break in production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "hooks-and-lifecycle-s06-q1"
+      ]
+    },
+    {
+      "id": "hooks-and-lifecycle-s07",
+      "order": 7,
+      "sectionTitle": "Custom hooks: extracting reusable stateful logic",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A custom hook is just a function whose name starts with `use` and that calls other hooks internally — it lets you package a piece of stateful behavior once and reuse it across components without repeating the wiring:\n\n```jsx\nfunction useWindowWidth() {\n  const [width, setWidth] = useState(window.innerWidth);\n\n  useEffect(() => {\n    const onResize = () => setWidth(window.innerWidth);\n    window.addEventListener(\"resize\", onResize);\n    return () => window.removeEventListener(\"resize\", onResize);\n  }, []);\n\n  return width;\n}\n\n// Usage in any component:\nfunction Layout() {\n  const width = useWindowWidth();\n  return width < 768 ? <MobileNav /> : <DesktopNav />;\n}\n```\n\nEach component that calls `useWindowWidth()` gets its **own** independent `width` state and its own subscription — custom hooks share the *logic*, not the state itself, unlike a shared store. This is the modern replacement for the render-props and higher-order-component patterns from the composition topic earlier in this group: same goal (share stateful behavior), far less boilerplate.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "hooks-and-lifecycle-s08",
+      "order": 8,
+      "sectionTitle": "A missing dependency causing a stale closure",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "```jsx\nfunction Counter() {\n  const [count, setCount] = useState(0);\n\n  useEffect(() => {\n    const id = setInterval(() => {\n      setCount(count + 1);   // reads `count` — but which `count`?\n    }, 1000);\n    return () => clearInterval(id);\n  }, []);   // missing dependency: count\n\n  return <p>{count}</p>;\n}\n```\n\nThis increments once, then **freezes at 1 forever**. The empty array means the effect runs only on mount, so the closure captured inside `setInterval` permanently references `count` as it was **at that one render** — `0`. Every subsequent tick calls `setCount(0 + 1)`, over and over, because that closure was never recreated with a fresh `count`.\n\nThe fix is either to add `count` to the dependency array (which tears down and recreates the interval every time `count` changes — wasteful for something like this) or, better, to use the updater-function form `setCount(c => c + 1)`, which reads the latest state directly from React rather than from a closed-over variable, so the effect's dependency array can correctly stay `[]`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "hooks-and-lifecycle-s08-q1"
+      ]
+    },
+    {
+      "id": "hooks-and-lifecycle-s09",
+      "order": 9,
+      "sectionTitle": "Debugging \"why does this effect re-run every render\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The mirror-image bug to a stale closure: an effect that's *supposed* to run only when meaningful data changes, but fires on every single render instead. The near-universal cause is an **object or array literal recreated on every render** sitting in the dependency array.\n\n```jsx\nuseEffect(() => {\n  fetchResults(filters);\n}, [filters]);   // filters = { category, sort } created fresh every render\n```\n\nIf `filters` is built inline as `{ category, sort }` in the render body (or via `.map()`/`.filter()` without memoization), it's a **new object reference** every render, even when `category` and `sort` themselves didn't change — and `useEffect`'s dependency comparison is `===`, reference equality, not deep equality. The fix is to depend on the primitive values directly (`[category, sort]`) instead of the wrapping object, or to memoize the object with `useMemo` if it genuinely needs to be a single value elsewhere too.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "hooks-and-lifecycle-s09-q1"
+      ]
+    },
+    {
+      "id": "hooks-and-lifecycle-s10",
+      "order": 10,
+      "sectionTitle": "Effects are for synchronization, not every side effect",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A senior-level distinction that goes beyond the mechanics above: `useEffect` exists specifically to **synchronize a component with something outside React** — a subscription, a DOM measurement, a network request, browser storage. It is not a general-purpose \"run this code when X happens\" tool, and reaching for it by default causes most of the bugs earlier in this topic.\n\nTwo litmus tests worth applying before writing an effect:\n\n- **Could this be computed during render instead?** If the goal is deriving one piece of state from another, it belongs in the render body, not an effect — covered in [State Management Fundamentals](state-management-fundamentals).\n- **Is this responding to a specific user action, like a button click?** If so, it usually belongs directly in the event handler, not in an effect watching for a state change that the handler itself just caused. An effect that only exists to react to your own component's state update is often the sign that the logic belongs in the handler that set that state in the first place.\n\nApplying both tests before reaching for `useEffect` eliminates a large share of the stale-closure and unnecessary-re-run bugs earlier in this topic, because most of them start from using an effect where render logic or an event handler would have done the job with no dependency array to get wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 63,
+      "mcqIds": []
+    },
+    {
+      "id": "hooks-and-lifecycle-s11",
+      "order": 11,
+      "sectionTitle": "Answering \"why does this effect re-run every render\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A complete debugging answer for this recurring interview exercise walks the same checklist every time:\n\n1. **Read the dependency array literally** — every value the effect's body reads should be in it; anything missing risks a stale closure, exactly like the frozen-counter example.\n2. **Check whether any dependency is a fresh object/array/function created during render** — `===` comparison means a new reference looks like a change even when the underlying values are identical.\n3. **Ask whether this needs to be an effect at all** — a value derivable from existing state/props should be computed inline; logic reacting to a specific user action belongs in the handler, not in an effect watching for the state that handler already set.\n4. **Confirm cleanup exists for anything that subscribes** — a missing `return () => ...` doesn't cause extra runs, but it does mean each extra run leaks whatever the previous one set up.\n\nThe rest of this group moves from a single component's own update cycle to how state flows once several components need to share it — the next topic covers what happens once local lifting alone stops scaling.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    }
+  ]
+}

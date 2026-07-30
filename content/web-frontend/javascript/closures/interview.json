@@ -1,0 +1,37 @@
+{
+  "topicId": "closures",
+  "interviewQuestions": [
+    {
+      "id": "closures-iq1",
+      "question": "Write a counter function using closures — one that returns an object with `increment`, `decrement`, and `getValue` methods sharing private state.",
+      "answerMarkdown": "```javascript\nfunction createCounter(start = 0) {\n  let value = start; // private — no property on the returned object holds it\n\n  return {\n    increment() { value += 1; return value; },\n    decrement() { value -= 1; return value; },\n    getValue() { return value; },\n  };\n}\n\nconst counter = createCounter();\ncounter.increment(); // 1\ncounter.increment(); // 2\ncounter.getValue();  // 2\ncounter.value;       // undefined — no such property\n```\n\nThe mechanism: `value` lives in `createCounter`'s variable environment. Normally that environment would be discarded the moment `createCounter` returns, but all three returned methods hold a live reference into it, so the engine keeps it reachable. Each method reads and writes the **same** `value`, which is why `increment` followed by `getValue` sees the updated number — they're not three isolated functions, they're three views onto one shared closure.\n\nCalling `createCounter()` again creates a **completely separate** `value` — that's what makes this pattern safe to reuse as a factory, unlike a single shared module-level variable would be.\n\nI'd mention the modern alternative too: a class with a `#value` private field gives the same encapsulation with different syntax — the interview value here is showing you understand *why* the closure achieves privacy, not that it's the only way to get it.\n\n**Testing:** whether you can produce working private-state code live, not just describe closures in the abstract.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Live coding"
+    },
+    {
+      "id": "closures-iq2",
+      "question": "Three buttons on a page should each log their own index when clicked, but they're wired up inside a `for (var i = ...)` loop and all log the same final number. How do you fix it, and why did it break in the first place?",
+      "answerMarkdown": "It breaks because `var` creates **one** binding for `i` across the entire loop, so all three click handlers close over the same variable. By the time any handler fires — after the loop has finished attaching all three listeners — `i` holds its final value, and every handler reads that one shared number.\n\nThe cleanest fix is swapping `var` for `let`:\n\n```javascript\nconst buttons = document.querySelectorAll(\"button\");\nfor (let i = 0; i < buttons.length; i++) {\n  buttons[i].addEventListener(\"click\", () => console.log(i));\n}\n```\n\n`let` gives the loop a **fresh binding per iteration**, so each handler's closure captures its own copy of `i` at the time it was attached, not a shared mutable variable.\n\nIf I couldn't touch the loop's variable declaration — say it's forced to stay `var` for compatibility — I'd pass the index in explicitly instead of relying on the closure:\n\n```javascript\nbuttons.forEach((btn, i) => btn.addEventListener(\"click\", () => console.log(i)));\n```\n\n`forEach`'s callback parameter `i` is a fresh function parameter on every call, which sidesteps the shared-variable problem entirely — it's the same fix in spirit as the IIFE pattern, just built into the array method.\n\n**Testing:** whether you can both diagnose the shared-binding root cause and produce more than one working fix.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "closures-iq3",
+      "question": "What's the trade-off between using a closure for private state versus using a class with a `#private` field?",
+      "answerMarkdown": "Both hide state from outside code; they differ in **memory shape** and **tooling**, and I'd pick based on how many instances get created.\n\n**Closures (factory function):**\n- Every instance gets its **own copies** of the methods, because each call to the factory creates new function objects. For a million instances, that's a million separate `increment` functions living in memory.\n- No prototype chain involved, so there's nothing to accidentally shadow or override via inheritance.\n- Private state is genuinely unreachable — not even `Object.getOwnPropertyNames` or a debugger \"expand object\" view can casually surface it, unlike `#private` fields which some tooling does show.\n\n**Classes with `#private` fields:**\n- Methods live **once**, on the prototype, and are shared across every instance — far cheaper at scale.\n- `#field` syntax is enforced by the engine, not just convention, and integrates with `instanceof`, inheritance, and static analysis tools that understand classes.\n- Slightly newer (widely supported since ~2022), so older-runtime code still leans on closures.\n\nMy rule of thumb: closures for a handful of long-lived singletons (a module, a cache, a single service object) where the per-instance method cost doesn't matter; classes for anything instantiated many times, because the shared-prototype methods are the meaningful memory win.\n\n**Testing:** whether you understand the memory and tooling trade-off, not just that both \"hide state.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design trade-offs"
+    },
+    {
+      "id": "closures-iq4",
+      "question": "A single-page app's memory usage climbs steadily the longer a user stays on one screen, and a heap snapshot shows thousands of retained closures. How do you find which one is leaking and fix it?",
+      "answerMarkdown": "I'd start from the heap snapshot, not the source code — closures are cheap to reason about wrong from memory alone, but a snapshot shows exactly what's retained and why.\n\n**Finding it:** in Chrome DevTools, take two heap snapshots a few minutes apart while repeating the same user action, then use the comparison view to find object types growing between them. Closures show up as `(closure)` entries; the \"retainers\" panel for one shows the exact chain keeping it alive — usually a detached DOM node, an event listener never removed, or a timer never cleared.\n\n**The usual root cause:** a component sets up a listener or interval that closes over `this`/component state and registers it globally (`window.addEventListener`, a global event bus, `setInterval`), but the teardown/cleanup path — `useEffect`'s return function, `componentWillUnmount`, a router-change hook — either doesn't exist or doesn't call the matching `removeEventListener`/`clearInterval`. Every mount adds another closure, and none are ever released, so the retained set grows monotonically with navigation.\n\n**The fix** is always symmetric: every subscription needs a matching unsubscription tied to the same lifecycle event, and it has to reference the **same function instance** — `removeEventListener` silently no-ops if you pass a different (even structurally identical) arrow function than the one you added.\n\nThe general lesson: a closure keeps everything in its lexical scope reachable for as long as anything holds a reference to it, so a leak is almost always a missing teardown, not a mysterious language behavior.\n\n**Testing:** whether you can turn closure semantics into an actual memory-leak diagnosis workflow, which is the senior version of \"I know what a closure is.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production debugging"
+    }
+  ]
+}

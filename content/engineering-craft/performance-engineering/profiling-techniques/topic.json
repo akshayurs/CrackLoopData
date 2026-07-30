@@ -1,0 +1,169 @@
+{
+  "id": "profiling-techniques",
+  "title": "Profiling Techniques",
+  "area": "engineering-craft",
+  "group": "performance-engineering",
+  "order": 2,
+  "slug": "profiling-techniques",
+  "summary": "Using profilers to find where time actually goes instead of guessing: sampling vs instrumenting, reading a flame graph, telling CPU-bound from I/O-bound, and profiling safely in production.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "profiling-techniques-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Performance Mindset & Measurement](performance-mindset-and-measurement) established the rule: measure before you optimize. A profiler is the tool that turns that rule into a concrete answer — which function, which line, how much of the total time.\n\nThere are two fundamentally different ways a profiler collects that answer (sampling vs instrumenting), one dominant way to read the result (the flame graph), and a set of judgment calls about *where* to profile — a laptop running a debug build tells you something different from production traffic under real load.\n\nGet the technique wrong and you get a confident, precise, wrong answer: a profiler that reports the truth about a scenario nobody's system actually runs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "profiling-techniques-s02",
+      "order": 2,
+      "sectionTitle": "Sampling vs instrumenting profilers",
+      "subTitle": "Overhead vs precision",
+      "type": "concept",
+      "markdown": "A **sampling profiler** interrupts the program periodically (say, every 1ms) and records which line or function is executing at that instant. Do this thousands of times and the frequency of each function in the samples approximates how much time it consumes. Overhead is low — often under 5% — because most of the program runs undisturbed between samples.\n\nAn **instrumenting profiler** inserts timing code around every function call (or every call the language runtime supports hooking) and records exact entry/exit timestamps. This gives you exact call counts and exact per-call timing, but the instrumentation itself adds overhead — sometimes 2-10x slowdown — and that overhead is uneven: a function called a million times pays the instrumentation tax a million times, distorting the very numbers you're trying to measure.\n\nThe practical rule: reach for a sampling profiler first, especially for anything running under real load or in production — the overhead is low enough not to change the behavior you're measuring. Reach for instrumentation when you need exact call counts (e.g., \"is this function called once or a thousand times per request?\") and you can afford to run it somewhere the slowdown doesn't matter, like a dev environment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "profiling-techniques-s02-q1"
+      ]
+    },
+    {
+      "id": "profiling-techniques-s03",
+      "order": 3,
+      "sectionTitle": "Self time vs total time",
+      "subTitle": "The number that actually points at the fix",
+      "type": "concept",
+      "markdown": "Every profiler reports two numbers per function, and confusing them sends you to the wrong fix. **Total time** (also called inclusive time) is the time spent in a function *and everything it calls*. **Self time** (exclusive time) is time spent in that function's own code, excluding its callees.\n\nA `handle_request` function might show 95% total time — unsurprising, since it calls almost everything. Its self time might be 1%, because it does almost no work itself; it just dispatches to other functions. The function actually worth optimizing is the one with high **self time** — that's where CPU cycles are genuinely being spent, not just passed through.\n\nA common mistake is to sort a profile by total time and start optimizing the top entries, which are usually just high-level orchestration functions that call the real bottleneck several layers down. Sort by self time instead, and the function at the top is where you should actually look first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "profiling-techniques-s03-q1"
+      ]
+    },
+    {
+      "id": "profiling-techniques-s04",
+      "order": 4,
+      "sectionTitle": "Reading a flame graph",
+      "subTitle": "Width is time, stacks show call hierarchy",
+      "type": "diagram",
+      "markdown": "A flame graph stacks call frames vertically — the bottom is the entry point (e.g., `main` or a request handler), and each frame above it is a function called by the frame below. **Width represents time spent** (including callees, i.e., total time), so a wide frame consumed a lot of the profile's samples; a narrow one barely registered.\n\nThe frame you're looking for is a wide bar with **no wide children stacked on top of it** — that's a frame whose width is mostly self time, meaning the work happens right there, not in something it calls. A tall stack of narrow frames means deep call chains that don't individually matter; a short, wide plateau near the top means one function is dominating.\n\nColor in most flame graph tools is cosmetic (often randomized or hashed from the function name) — don't read meaning into it. The x-axis position is also not time-ordered in the classic flame graph; frames are typically sorted alphabetically for merging across samples, so two adjacent wide bars aren't necessarily sequential in wall-clock time.\n\n<<< Image: a flame graph — a stack of horizontal bars widening toward the bottom (call stack depth on y-axis, time on x-axis), with one wide bar partway up highlighted and labeled \"wide bar, no wide children above it = the actual bottleneck\", contrasted with a tall thin stack of narrow bars labeled \"deep call chain, none of these matter individually\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": []
+    },
+    {
+      "id": "profiling-techniques-s05",
+      "order": 5,
+      "sectionTitle": "Profiling a slow function",
+      "subTitle": "Reading the hot path from real output",
+      "type": "code",
+      "markdown": "A sampling profiler's text output ranks functions by self time. Here's a simplified real shape (Python's `cProfile`/`pstats`, but every language's profiler reports the same fields):\n\n```\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n   500000    2.104    0.000    2.104    0.000 parser.py:88(tokenize_line)\n        1    0.031    0.031    2.190    2.190 parser.py:12(parse_file)\n   500000    0.055    0.000    0.055    0.000 {method 'strip' of 'str'}\n```\n\n`tottime` is self time; `cumtime` is total/inclusive time. Reading this: `tokenize_line` has 2.104s of self time across 500,000 calls — the real cost. `parse_file` has only 0.031s self time but 2.190s cumulative, because it's the caller that invokes `tokenize_line` 500,000 times — it's orchestration, not the bottleneck.\n\nThe fix this output points to isn't \"optimize `parse_file`\" — it's either speeding up `tokenize_line` itself, or questioning why it's called 500,000 times for one file. `ncalls` at 500,000 for a single-file parse is itself a signal: that's likely once per line or per character, and batching that work (§ Algorithmic & Data Structure Optimization) may beat micro-optimizing the function body.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "profiling-techniques-s05-q1"
+      ]
+    },
+    {
+      "id": "profiling-techniques-s06",
+      "order": 6,
+      "sectionTitle": "CPU, memory, and I/O/wait-time profiling",
+      "subTitle": "Different bottlenecks need different tools",
+      "type": "concept",
+      "markdown": "A standard CPU profiler only sees what's true when it samples: **the function currently executing on-CPU.** If your service spends 90% of wall-clock time blocked waiting on a database or a lock, a naive CPU profiler can be nearly empty — there's very little \"on-CPU\" work to sample, because the thread is asleep, not computing.\n\nThis is why three different profiling modes exist:\n\n- **CPU profiling** — samples on-CPU execution. Right tool when the service is compute-bound (heavy serialization, hashing, computation).\n- **Memory profiling** — tracks allocations and retained objects over time (heap snapshots, allocation counters). Right tool for high GC pressure or suspected leaks (this group's Memory & GC Performance topic).\n- **Off-CPU / wait-time profiling** — samples or traces time spent blocked: lock waits, I/O, network calls, scheduler delay. Right tool when CPU profiling shows \"nothing\" but the service is still slow — the tell-tale sign the bottleneck is a wait, not computation.\n\nDiagnosing which mode you need starts with a system-level check: is CPU utilization actually high during the slow period? If it's low while the service is slow, you're I/O- or lock-bound, and a CPU profiler is the wrong instrument entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "profiling-techniques-s06-q1"
+      ]
+    },
+    {
+      "id": "profiling-techniques-s07",
+      "order": 7,
+      "sectionTitle": "Profiling in production safely",
+      "subTitle": "Low-overhead sampling, continuous profiling",
+      "type": "concept",
+      "markdown": "Local profiling is safe to run aggressively because nothing depends on it staying up. Production profiling has to survive contact with real user traffic without becoming the outage it was meant to prevent — an instrumenting profiler that adds 5x overhead to a live payments service is not an acceptable price for visibility.\n\nThe practice that makes this safe is **continuous profiling**: an always-on, low-overhead sampling profiler (typically well under 1% CPU overhead) running across the fleet, sampling a small fraction of processes or a small fraction of time, and aggregating results centrally. Tools like this (Pyroscope, Google's Cloud Profiler, Datadog Continuous Profiler) trade per-snapshot precision for the ability to always have an answer when something goes wrong, and to compare \"today's profile\" against \"last week's profile\" to catch a slow regression before it becomes an incident.\n\nThe rule of thumb: never attach a heavyweight instrumenting profiler directly to a production process serving live traffic. Use always-on low-overhead sampling in production, and reserve instrumentation-level precision for a reproduction in staging or a canary instance carrying a small, expendable slice of traffic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "profiling-techniques-s08",
+      "order": 8,
+      "sectionTitle": "Local vs production profiling",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Profiling locally | Profiling in production |\n|---|---|---|\n| **Reproducibility** | High — same input every run | Low — traffic shape varies constantly |\n| **Realism** | Limited — no real user data, cache is cold or empty differently than prod | High — real payload sizes, real concurrency, real cache state |\n| **Safety of heavy tools** | Safe — instrumenting profilers, debuggers, anything | Requires low-overhead, always-on sampling only |\n| **What it catches** | Algorithmic issues, obvious hot loops | Contention, cache effects, traffic-shape-dependent bugs, tail latency |\n| **What it misses** | Anything that only appears under concurrent load or real data skew | Nothing structural, but less reproducible per-run |\n\nNeither replaces the other. A common workflow: reproduce a suspected issue locally with instrumentation to nail the exact line, then confirm against production continuous-profiling data that the same function is actually significant under real traffic — some local hot spots turn out to be a rounding error in production because real inputs never hit that code path at scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "profiling-techniques-s08-q1"
+      ]
+    },
+    {
+      "id": "profiling-techniques-s09",
+      "order": 9,
+      "sectionTitle": "What a single-process profiler can't see",
+      "subTitle": "The senior-level gap",
+      "type": "concept",
+      "markdown": "A profiler, no matter how good, only sees inside one process. In a service with several downstream dependencies, a request can spend 400ms of its 500ms total latency waiting on a call to another service — and that 400ms shows up in your profiler as an unremarkable, thin \"waiting on socket\" frame, telling you almost nothing about *why* the downstream call was slow.\n\nThis is the gap that **distributed tracing** (spans tagged with a shared request ID across service boundaries) fills, and it's a different tool solving a different problem: a profiler tells you where *your process* spends time; a trace tells you where the *request* spends time across every process it touches. Senior engineers reach for tracing first when the profiler shows a suspiciously large \"blocked\" or \"I/O wait\" segment, because that's the signal the real bottleneck lives in a different service entirely.\n\nThe practical implication: if your profile is dominated by wait time, don't keep re-profiling your own process expecting a different answer — pull the trace and find out which downstream call is actually slow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "profiling-techniques-s10",
+      "order": 10,
+      "sectionTitle": "Debug builds and cold caches lie",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Profiling a debug build and drawing production conclusions is one of the most common profiling mistakes. Debug builds routinely disable compiler optimizations (inlining, dead-code elimination, bounds-check removal), so a function that's fast once inlined and vectorized in a release build can show up as a huge, distinct frame in a debug profile — one that will simply vanish once you build for release.\n\nCold caches cause the same kind of false signal in the other direction: the *first* request after a process starts pays for JIT warm-up, cold CPU/OS caches, unpopulated application-level caches, and lazy initialization. Profiling that first request and concluding \"this is slow\" describes a state production almost never sits in, because production processes stay warm under continuous traffic.\n\nThe fix for both: profile a release/production-equivalent build, and profile *after* a warm-up period — run enough requests first to reach steady state, then start the profiling window. A profile of the first request or a debug binary is a profile of a system that doesn't resemble the one users actually hit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "profiling-techniques-s10-q1"
+      ]
+    },
+    {
+      "id": "profiling-techniques-s11",
+      "order": 11,
+      "sectionTitle": "Choosing your profiling approach",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Putting it together, the decision tree looks like: is the service CPU-bound or waiting? Check utilization first (§6). If waiting, check whether the wait is inside your process (lock, GC) or across the network to another service (§9 — reach for tracing). If CPU-bound, sample locally with low overhead (§2), sort by self time not total time (§3), and read the flame graph for a wide bar with no wide children (§4).\n\nOnce you have a suspect, validate it two ways: reproduce it locally with an instrumenting profiler for exact numbers, and confirm it against production's always-on sampling data (§7, §8) to make sure it's not an artifact of a cold cache or a debug build (§10).\n\nThe next topic, Benchmarking Methodology, is what you reach for once profiling has told you *where* to look and you need to prove a fix actually helped, rigorously enough to trust the number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

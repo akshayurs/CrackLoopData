@@ -1,0 +1,167 @@
+{
+  "id": "csrf-from-the-frontend",
+  "title": "CSRF from the Frontend",
+  "area": "web-frontend",
+  "group": "web-security",
+  "order": 3,
+  "slug": "csrf-from-the-frontend",
+  "summary": "Cookies are attached automatically, which is convenient and is also the entire vulnerability. Learn why ambient authority enables forged requests, and how SameSite plus tokens shut it down.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "csrf-from-the-frontend-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Cross-site request forgery (CSRF)** is the attack where a page you don't control causes the victim's browser to send a real, authenticated request to your app. The attacker never sees the response and never steals a credential — they don't need to. They only need the browser to do what it always does: attach the cookie.\n\nThat automatic attachment is called **ambient authority**, and it is the root cause. The credential travels with the request based on *where the request is going*, not *who caused it*.\n\nThe defenses fall out of that framing. Either stop the cookie riding along on cross-site requests (`SameSite`), or require something on the request that a cross-site page cannot know or read (a CSRF token, a custom header). Modern apps generally do both.\n\nCSRF is also the one security topic where the right answer has genuinely changed in the last few years, which is why interviewers like it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-from-the-frontend-s02",
+      "order": 2,
+      "sectionTitle": "The mechanism",
+      "subTitle": "Ambient authority, not stolen credentials",
+      "type": "concept",
+      "markdown": "Cookies are scoped to a **domain**, not to a page. When any page in the browser causes a request to `bank.example`, the browser looks up cookies for `bank.example` and attaches them — regardless of which site initiated it.\n\nSo an attacker's page can contain a form that posts to your transfer endpoint and submit it with JavaScript on load. The browser sends it, sees a cookie for your domain, attaches the session, and your server processes a fully authenticated request that the user never intended.\n\nTwo properties make it awkward to spot:\n\n- **It's a write-only attack.** The same-origin policy still stops the attacker reading the response. That does not help, because the damage — transfer money, change email, delete a project, add an admin — is done by the request itself.\n- **Nothing was stolen.** The session cookie stays in the browser, `HttpOnly` is irrelevant, and TLS is irrelevant. Every credential control you have is working correctly.\n\nThat's why CSRF needs its own defense rather than being covered by the ones you already have.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "csrf-from-the-frontend-s02-q1"
+      ]
+    },
+    {
+      "id": "csrf-from-the-frontend-s03",
+      "order": 3,
+      "sectionTitle": "The attack, end to end",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The full sequence, with the victim doing nothing unusual:\n\n1. The victim logs into `bank.example` in the morning. A session cookie is set and stays valid for the day.\n2. In another tab, they open an unrelated page — a forum post, a link from an email, an ad iframe.\n3. That page contains a form targeting `https://bank.example/transfer` with the attacker's chosen fields, auto-submitted on load. No user click is required.\n4. The browser issues the POST. It is going to `bank.example`, so the session cookie is attached, exactly as the cookie spec says it should be.\n5. The server sees a well-formed, authenticated request from a valid session and performs the transfer.\n6. The response comes back to the attacker's page, where the same-origin policy blocks reading it. The attacker doesn't care — step 5 already happened.\n\nThe only place the chain can be broken is between 3 and 5: either the cookie doesn't get attached (SameSite), or the server can tell the request didn't originate from its own pages (token or Origin check).\n\n<<< Image: a six-step sequence diagram with three vertical lanes — victim's browser, attacker page, bank.example server. Show the session cookie being set in step 1 and stored as a small key glyph in the browser lane; step 3 the attacker page delivering an auto-submitting form; step 4 an arrow from browser to server annotated \"cookie attached automatically — destination-based, not origin-based\" highlighted in a danger colour; step 5 the server performing the state change; step 6 the response arrow back to the attacker page struck through and labelled \"blocked by same-origin policy — attacker doesn't need it\". Mark the gap between steps 3 and 5 with a bracket labelled \"the only place a defense can act\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 111,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-from-the-frontend-s04",
+      "order": 4,
+      "sectionTitle": "Why token-in-header auth is immune",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "CSRF is a **cookie** problem, and specifically a problem with credentials the browser sends *automatically*. Anything the browser attaches without being asked is CSRF-able: cookies, HTTP Basic auth, NTLM/Kerberos on an intranet, and TLS client certificates.\n\nA bearer token kept in JavaScript and set explicitly is not:\n\n- The attacker's page cannot read your `localStorage` or your in-memory variable — that's the same-origin policy, and it holds here.\n- The attacker's page can still *send* a request to your API, but it will arrive with no `Authorization` header, so it's just an unauthenticated request and gets a 401.\n- Setting a custom header also forces a **CORS preflight** for cross-origin requests, and your server simply doesn't approve the attacker's origin.\n\nThis is the actual trade-off behind \"cookies vs localStorage\": token-in-header trades CSRF exposure for XSS exposure, since script running in your origin *can* read that token. Neither storage choice is free; see [same-origin-policy-and-cors](same-origin-policy-and-cors) for the boundary both rely on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "csrf-from-the-frontend-s04-q1"
+      ]
+    },
+    {
+      "id": "csrf-from-the-frontend-s05",
+      "order": 5,
+      "sectionTitle": "SameSite cookies",
+      "subTitle": "The modern first line of defense",
+      "type": "concept",
+      "markdown": "The `SameSite` attribute tells the browser whether to attach a cookie on requests that originate from a different site. It attacks the root cause directly — no ambient authority, no CSRF.\n\n```\nSet-Cookie: session=abc123; HttpOnly; Secure; SameSite=Lax; Path=/\n```\n\nThe three values:\n\n- **`Strict`** — never sent on any cross-site request. Maximum safety, and it breaks a real workflow: following a link from an email or a search result arrives logged-out, because that navigation is cross-site too. Users read that as \"the site logged me out.\"\n- **`Lax`** — sent on **top-level navigations that use a safe method** (clicking a link), not on cross-site POSTs, iframes, images, or `fetch`. This blocks the classic auto-submitted-form attack while keeping the email-link experience intact.\n- **`None`** — always sent, i.e. the old behaviour. Requires `Secure`, and is required for genuine cross-site use cases.\n\nChrome now treats cookies without an explicit `SameSite` as `Lax` by default, so much of the web got a baseline defense without changing any code. That default is a safety net, not a decision — set the attribute explicitly so behaviour doesn't depend on the browser.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 106,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-from-the-frontend-s06",
+      "order": 6,
+      "sectionTitle": "Choosing a SameSite value",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | `Strict` | `Lax` | `None` |\n|---|---|---|---|\n| Cross-site link click | not sent | **sent** | sent |\n| Cross-site POST / form submit | not sent | not sent | sent |\n| Loaded in a third-party iframe | not sent | not sent | sent |\n| Cross-origin `fetch` with credentials | not sent | not sent | sent |\n| Classic CSRF blocked? | yes | yes, for the common shapes | **no** |\n| Requires `Secure`? | no | no | yes |\n| Typical use | admin consoles, banking, step-up actions | general session cookies | embedded widgets, SSO, third-party checkout |\n\nThe practical default for a session cookie is **`Lax`**, because it blocks the attack shapes that matter while preserving inbound links.\n\n`Strict` is worth it for high-value surfaces — an internal admin tool, or a second cookie that gates only destructive actions. A common pattern is two cookies: a `Lax` one that keeps you logged in, and a `Strict` one that's required for state-changing requests.\n\nOne subtlety: **\"site\" is not \"origin\".** SameSite compares registrable domains, so `app.example.com` and `blog.example.com` are the same site, and requests between them are not cross-site. SameSite therefore does nothing against an attacker who controls a subdomain of your own domain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 96,
+      "mcqIds": [
+        "csrf-from-the-frontend-s06-q1"
+      ]
+    },
+    {
+      "id": "csrf-from-the-frontend-s07",
+      "order": 7,
+      "sectionTitle": "Attaching a CSRF token",
+      "subTitle": "What the frontend actually does",
+      "type": "code",
+      "markdown": "A CSRF token is a secret the server issues that only *your own pages* can read. A cross-site attacker can cause a request but cannot read your DOM or your response bodies, so they cannot supply it.\n\nThe common **double-submit cookie** pattern, and the frontend half of it:\n\n```js\n// Server sets a readable token cookie alongside the HttpOnly session cookie:\n//   Set-Cookie: csrfToken=<random>; SameSite=Lax; Secure   (no HttpOnly — JS must read it)\n\nfunction csrfToken() {\n  return document.cookie\n    .split('; ')\n    .find((c) => c.startsWith('csrfToken='))\n    ?.split('=')[1] ?? '';\n}\n\nawait fetch('/api/transfer', {\n  method: 'POST',\n  credentials: 'include',\n  headers: {\n    'Content-Type': 'application/json',\n    'X-CSRF-Token': csrfToken(),   // server compares header against the cookie\n  },\n  body: JSON.stringify({ to, amount }),\n});\n```\n\nThe server rejects the request unless the header matches the cookie. The attacker's page can make the browser *send* the cookie but has no way to *read* it, so it cannot set a matching header.\n\nThe stronger variant is the **synchronizer token**: the server stores a per-session token and compares against that, rather than trusting the cookie to be its own witness. Prefer it when a subdomain you don't fully control could set cookies on your domain.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 108,
+      "mcqIds": [
+        "csrf-from-the-frontend-s07-q1"
+      ]
+    },
+    {
+      "id": "csrf-from-the-frontend-s08",
+      "order": 8,
+      "sectionTitle": "SameSite, tokens, or both",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | `SameSite` cookies | CSRF tokens | Origin / Sec-Fetch-Site check |\n|---|---|---|---|\n| Where enforced | browser | your server | your server |\n| Effort | one cookie attribute | token issue, transport, validation, rotation | a few lines of middleware |\n| Works if the browser is old or odd | no | yes | header may be absent |\n| Protects against a hostile **subdomain** | no — same site | yes | yes |\n| Breaks legitimate cross-site embedding | yes, that's the point | no | no |\n| Failure mode | one attribute set wrong, silently | token missing on one endpoint | header absent, must decide fail-open or closed |\n\n**Use both.** They fail differently, which is the whole argument for layering: `SameSite` is a single attribute that someone can flip to `None` for one integration and quietly disable site-wide, while a token is per-endpoint and survives that. Conversely a token can be forgotten on a newly added route, where `SameSite` still covers you.\n\nThe emerging third layer is **Fetch Metadata**: modern browsers send `Sec-Fetch-Site: cross-site` and `Sec-Fetch-Mode` on every request, so a few lines of middleware can reject cross-site state-changing requests generically, before any handler runs. Treat it as defense in depth, since the header is absent on older browsers and you must choose a policy for that case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 106,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-from-the-frontend-s09",
+      "order": 9,
+      "sectionTitle": "When `SameSite=None` is unavoidable",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Some products genuinely require the cookie on cross-site requests: an embeddable chat widget, a payment iframe, a support tool loaded inside a customer's own site, an SSO flow that POSTs back across domains. Those need `SameSite=None; Secure`, and that puts you back to the pre-SameSite world.\n\nThe failure isn't setting it — it's what usually happens next:\n\n- **It gets applied to the main session cookie** because one integration needed it, disabling CSRF protection for the entire product, not just the embedded surface.\n- **Nothing replaces it.** The team treats SameSite as \"the CSRF fix,\" so when it's turned off there is no second layer.\n- **It's set without `Secure`**, and browsers reject the cookie entirely — which shows up as a mysterious logged-out state on some browsers and not others.\n\nWhat to do instead: **scope the exception**. Issue a separate, narrowly-privileged cookie for the embedded context rather than relaxing the main session cookie. Keep CSRF tokens mandatory on every state-changing endpoint. Add an `Origin` allowlist check for the embedded flows so you know which parent sites are legitimate. And write down in the code why `None` is there, because the next engineer will otherwise assume it was a mistake or, worse, copy it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 106,
+      "mcqIds": [
+        "csrf-from-the-frontend-s09-q1"
+      ]
+    },
+    {
+      "id": "csrf-from-the-frontend-s10",
+      "order": 10,
+      "sectionTitle": "Three beliefs that leave you exposed",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**\"CORS protects us.\"** It does not. CORS governs whether JavaScript may *read* a cross-origin response; it says nothing about whether the request is *sent*. A cross-site form POST or an image load isn't subject to CORS at all, and CSRF only needs the request to arrive. A permissive CORS config is a separate bug — but a restrictive one is not a CSRF defense.\n\n**\"It's a GET, so it's safe.\"** Only if GET is genuinely read-only. An endpoint like `/admin/users/42/delete` reached by GET is CSRF-able from a plain `<img>` tag, and `SameSite=Lax` deliberately allows top-level GET navigations — so `Lax` protects you *only because* your safe methods really are safe. Keeping state changes out of GET is a correctness rule that happens to be a security rule.\n\n**\"We check the Referer header.\"** Better than nothing and genuinely used, but `Referer` is stripped by privacy settings, by `Referrer-Policy: no-referrer`, and on some HTTPS-to-HTTPS transitions. That forces you to choose: reject requests with no `Referer` and break real users, or allow them and hand the attacker a bypass. `Origin` is the more reliable header for this, and `Sec-Fetch-Site` more reliable still.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 104,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-from-the-frontend-s11",
+      "order": 11,
+      "sectionTitle": "Where CSRF stands today",
+      "subTitle": "Reduced, not solved",
+      "type": "concept",
+      "markdown": "Browser defaults have changed the shape of this risk, and knowing where it landed is the senior-level part of the topic.\n\n**What improved.** Chrome's default of treating unspecified cookies as `Lax` removed the easiest version of the attack from most of the web. Fetch Metadata headers give servers a reliable signal of request provenance. Together, textbook CSRF reports on a modern stack have become rare.\n\n**What still bites.**\n\n- **Subdomains.** SameSite works at site granularity, so a compromised or unclaimed subdomain — an abandoned marketing host, a dangling DNS record pointing at a takeover-able service — is same-site with you and bypasses SameSite entirely.\n- **`SameSite=None` islands.** Any surface that needs embedding is back to square one.\n- **Login CSRF.** An attacker forges a login *as themselves*, so the victim is silently signed into the attacker's account and their subsequent activity — searches, payment methods, uploaded files — lands there. This is why login forms need CSRF protection even though the user has no session yet.\n- **Non-browser clients** and older browsers that never enforced the default.\n\nThe defensible position in a design review: `SameSite=Lax` plus tokens on every state-changing endpoint plus an `Origin` check, with `None` scoped to a separate cookie for exactly the embedded surface that needs it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 116,
+      "mcqIds": []
+    }
+  ]
+}

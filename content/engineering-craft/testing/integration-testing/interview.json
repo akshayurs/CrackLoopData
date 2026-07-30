@@ -1,0 +1,37 @@
+{
+  "topicId": "integration-testing",
+  "interviewQuestions": [
+    {
+      "id": "integration-testing-iq1",
+      "question": "What do integration tests verify that unit tests structurally cannot?",
+      "answerMarkdown": "A unit test with a mocked dependency can only ever prove that your code *calls* that dependency correctly — the right method, the right arguments. It cannot prove the real dependency actually behaves the way the mock was scripted to, because nothing real is involved. An integration test replaces the mock with the real thing — a real database, a real filesystem, a real third-party API — specifically to check whether the assumption baked into that mock or fake actually holds.\n\nConcretely: a stub that returns `None` for a missing key is only a correct stand-in if the real dependency does the same thing rather than throwing an exception or timing out. Nothing about a unit test can catch that mismatch, because the unit test's whole point is isolating away from exactly the thing that would reveal it.\n\nThis is why a fully green unit test suite can still ship a broken integration — every mock did exactly what it was told, and none of them were checked against reality. Integration tests exist to close specifically that gap, which is also why they're a smaller, slower layer: you don't need to re-verify every unit-level scenario against the real dependency, only the assumptions that are actually load-bearing.\n\n**Testing:** whether you can articulate the specific gap (assumption verification) rather than a vague \"integration tests test more of the system.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "integration-testing-iq2",
+      "question": "How would you set up integration tests against a real database without them interfering with each other or leaving the database in a dirty state?",
+      "answerMarkdown": "My default is a containerized, per-run database instance — a real Postgres spun up fresh for the test run via something like Testcontainers or a docker-compose file, then torn down after. That avoids the failure mode of a shared, long-lived test database that accumulates state from other people's runs and eventually produces flaky, order-dependent failures nobody can reliably reproduce.\n\nWithin that instance, each individual test needs its own isolation from the others. My preferred mechanism is **transactional rollback**: wrap each test in a database transaction and roll it back at the end, so whatever the test inserted or modified never actually persists past that one test — zero manual cleanup, and tests remain independent of execution order or parallelism.\n\nFor constructing the test data itself, I'd use **builders** with sensible defaults (`OrderBuilder().with_total(50).build()`) over static fixture files — fixtures tend to drift out of sync with schema changes silently, while a builder fails loudly (a compile or runtime error) the moment the schema changes underneath it.\n\nThe combination — fresh container, transactional rollback per test, builders for data — is what lets integration tests run in CI reliably and in parallel without becoming a source of flaky, hard-to-reproduce failures themselves.\n\n**Testing:** whether you have concrete, combinable practices rather than one vague answer like \"use a test database.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "integration-testing-iq3",
+      "question": "Your microservices architecture has dozens of services calling each other. Full end-to-end integration tests across all of them are too slow and flaky to run on every commit. What would you do instead?",
+      "answerMarkdown": "I'd introduce consumer-driven contract testing specifically to avoid needing every service live simultaneously just to verify they agree with each other. Each consumer's test suite runs against a mock of the provider it depends on, recording exactly what it expects — a specific endpoint returning a specific shape — as a contract, published to a shared broker.\n\nThe provider's own CI then fetches every consumer's contract and replays each one against its real, current implementation. If the provider's actual behavior no longer matches what any consumer expects, that's caught on the provider's build, immediately, rather than discovered when a consumer's production traffic starts failing after a deploy.\n\nThis gets most of the confidence a full live integration test would give — that the two sides actually agree — without either side needing the other running during its own test suite. I'd keep a much smaller number of genuine end-to-end tests for the handful of critical user journeys that need real, full-system confidence, and rely on contracts for the bulk of cross-service verification, since that scales far better than N-services-squared live integration tests.\n\nThe trade-off worth naming: contract tests only catch what the consumer explicitly encoded as an expectation — a provider change that breaks something the contract never specified can still slip through.\n\n**Testing:** whether you know a specific, real technique (contract testing) for this exact problem, not just \"add more integration tests.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "integration-testing-iq4",
+      "question": "How many integration tests does a codebase actually need? Is more always better?",
+      "answerMarkdown": "No — the right number tracks the number of genuinely risky seams, not the number of unit tests or the size of the codebase. A seam is risky when there's a real assumption about a dependency's behavior that could be wrong in a way a unit test structurally can't catch: an unusual database feature, a third-party API with thin or ambiguous documentation, a filesystem interaction with platform-specific quirks.\n\nOver-investing inverts the test pyramid's economics — a suite with as many slow integration tests as fast unit tests takes forever to run and gives diffuse, hard-to-localize failures, without a proportional increase in the risk actually being covered. I've seen teams write an integration test mirroring every unit test's scenario against a real database, which mostly just re-verifies logic the unit tests already covered, slower.\n\nUnder-investing leaves the over-mocking blind spot: a green unit suite that never actually exercises a real dependency, shipping integration bugs unit tests can't see by design.\n\nMy practical heuristic: for each external dependency, ask \"what's the one or two things about its real behavior that, if wrong, would break production in a way nothing else would catch\" — and write integration tests targeting exactly those, not a proportional multiple of the unit test count.\n\n**Testing:** whether you can reason about integration test sizing as a risk-allocation problem rather than assuming more tests are unconditionally better.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

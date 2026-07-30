@@ -1,0 +1,169 @@
+{
+  "id": "reading-stack-traces-and-logs",
+  "title": "Reading Stack Traces & Logs",
+  "area": "engineering-craft",
+  "group": "debugging",
+  "order": 2,
+  "slug": "reading-stack-traces-and-logs",
+  "summary": "A stack trace and a log line are both compressed evidence, not noise to scroll past. Learn to extract the throw site from the root cause, follow exception chains, and trace one request across services.",
+  "level": "beginner",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "reading-stack-traces-and-logs-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A stack trace looks like a wall of noise the first hundred times you see one. It isn't — it's a precise record of exactly which function called which, in what order, at the moment of failure. Learning to read it fast is one of the highest-leverage skills in debugging, because it's free: the runtime hands it to you before you write a single line of diagnostic code.\n\nLogs are the same idea spread over time instead of one moment. A stack trace tells you *where* something broke; a well-instrumented log tells you *what led up to it* across requests, threads, and services.\n\nThis topic is about extracting signal fast: which frame actually matters, how to follow an exception back to its origin, and how to keep logs useful instead of a scrolling wall of noise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s02",
+      "order": 2,
+      "sectionTitle": "Anatomy of a stack trace",
+      "subTitle": "Frames, the throw site, and the root cause",
+      "type": "concept",
+      "markdown": "A stack trace is a snapshot of the **call stack** at the moment an exception was raised — one **frame** per function call still active, from the throw site down to wherever execution started.\n\n```\nTraceback (most recent call last):\n  File \"app.py\", line 44, in handle_request\n    result = process_order(order)\n  File \"orders.py\", line 12, in process_order\n    total = compute_total(order.items)\n  File \"pricing.py\", line 7, in compute_total\n    return sum(item.price * item.qty for item in items)\nAttributeError: 'NoneType' object has no attribute 'price'\n```\n\nThe **throw site** — where the exception actually fired — is `pricing.py:7`. But the **root cause** is further up: something upstream produced an `item` with `price=None`, likely in whatever built the `order.items` list. The trace tells you exactly *where* it broke, not *why* a bad value got there — that's the hypothesis you build next.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "reading-stack-traces-and-logs-s02-q1"
+      ]
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s03",
+      "order": 3,
+      "sectionTitle": "Bottom-up vs top-down",
+      "subTitle": "Finding \"your code\" among library frames",
+      "type": "concept",
+      "markdown": "Most conventions print the trace **innermost-frame-last** (Python, JavaScript) or **innermost-frame-first** (Java, most JVM logs) — check which before you start reading, or you'll walk the stack backwards.\n\nEither way, the useful reading strategy is the same: start at the throw site and walk *outward* until you hit the first frame that's **your application code**, not a library or framework internal. That frame is almost always where the actual bug — or at least the bad assumption — lives, because library code is usually well-tested and doing exactly what it was told.\n\nIn a trace with 40 frames, maybe 3 are yours; the rest are ORM internals, HTTP client plumbing, or the framework's request dispatch. Skimming for your own file paths first, then reading carefully from there, is far faster than reading top to bottom in order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "reading-stack-traces-and-logs-s03-q1"
+      ]
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s04",
+      "order": 4,
+      "sectionTitle": "Exception chaining",
+      "subTitle": "The wrapped \"caused by\" trail",
+      "type": "concept",
+      "markdown": "Frameworks often **wrap** a low-level exception in a higher-level one to add context — a database driver's timeout gets wrapped by an ORM's \"query failed\" exception, which gets wrapped by your service's \"order lookup failed\" exception. Each layer adds a `caused by:` (Java) or `__cause__` / \"during handling of the above exception\" (Python) link back to the original.\n\n```\nOrderLookupError: order lookup failed for id=884\nCaused by: QueryTimeoutException: statement exceeded 5000ms\nCaused by: SocketTimeoutException: connect timed out\n```\n\nThe outer exception tells you *what the application was trying to do*; the innermost one tells you the *actual failure*. Reading only the top-level message — \"order lookup failed\" — and stopping there is how people spend an hour looking at application code for a bug that's actually a database connection timeout three layers down. Always follow the chain to the bottom before forming a hypothesis.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "reading-stack-traces-and-logs-s04-q1"
+      ]
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s05",
+      "order": 5,
+      "sectionTitle": "Log levels as a filter",
+      "subTitle": "debug / info / warn / error",
+      "type": "concept",
+      "markdown": "Log levels exist so you can dial signal-to-noise up or down without changing code. The convention, roughly consistent across languages:\n\n- **debug** — verbose, developer-only detail, off by default in production (too much volume, sometimes too sensitive).\n- **info** — normal operational milestones: request received, job started, cache warmed.\n- **warn** — something unexpected happened but the system recovered or degraded gracefully (a retry succeeded, a fallback was used).\n- **error** — an operation failed and the caller needs to know; typically what pages someone or fails a request.\n\nThe discipline that matters: log at the level that matches what a reader needs to *act* on. Logging routine success at `error` trains everyone to ignore error-level alerts; logging a real failure at `info` means it silently scrolls past whoever's watching. Both mistakes make production debugging slower for the next person, not just you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s06",
+      "order": 6,
+      "sectionTitle": "Structured logging",
+      "subTitle": "Key-value fields vs free-text messages",
+      "type": "compare",
+      "markdown": "| | Free-text logging | Structured logging |\n|---|---|---|\n| Format | `\"User 884 order 12 failed: timeout\"` | `{\"event\":\"order_failed\",\"user_id\":884,\"order_id\":12,\"reason\":\"timeout\"}` |\n| Querying | Regex/grep over strings | Filter/aggregate on real fields |\n| Consistency | Wording drifts between call sites | Field names enforced by schema/convention |\n| At scale | Fine for a few hundred lines | Necessary once you have millions of lines/day across services |\n\nFree-text is fine for a single process you're tailing live. It breaks down the moment you need to ask \"how many order failures had `reason=timeout` in the last hour, broken down by region\" across a fleet of services — that's a database query on structured fields, not a regex on prose that three different teams phrased three different ways.\n\nStructured logging costs a little more discipline per log line and pays it back every time someone needs to query logs instead of just read them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "reading-stack-traces-and-logs-s06-q1"
+      ]
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s07",
+      "order": 7,
+      "sectionTitle": "Correlation IDs",
+      "subTitle": "Tracing one request across services",
+      "type": "concept",
+      "markdown": "A single user action can fan out across a dozen services, each writing its own logs. Without a shared identifier, reconstructing \"what happened for this one request\" means guessing by timestamp — unreliable the moment two requests overlap.\n\nA **correlation ID** (or request ID / trace ID) is generated once at the edge — the load balancer or API gateway — and threaded through every downstream call: passed in an HTTP header, included in every log line each service emits, and propagated into any message queue payload or async job it triggers.\n\nWith it, one grep or one query — `correlation_id=\"a1b2c3\"` — pulls every log line touched by that single request, in causal order, across every service it passed through. Without it, you're stitching together an incident from timestamps and hope. Almost every production observability stack (distributed tracing included) is built on this one primitive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "reading-stack-traces-and-logs-s07-q1"
+      ]
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s08",
+      "order": 8,
+      "sectionTitle": "A correlation ID threading through services",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Following one request's correlation ID end to end makes the fan-out concrete: the gateway mints it, and every hop — the order service, the payment service, the async fulfillment worker consuming off a queue — tags its log lines with the same ID even though they run in different processes, on different hosts, minutes apart in the async case.\n\nThat's the property that makes it powerful: causally related log lines stay joined by an identifier even when they're nowhere near each other in time or in the raw log stream, which is exactly the situation stack traces can't help with — a stack trace only ever shows you one process's call stack, never a request's journey across several.\n\n<<< Image: a horizontal timeline showing one HTTP request entering an API gateway which mints correlation_id=a1b2c3, then arrows to three boxes labelled Order Service, Payment Service, and Fulfillment Worker (queue), each box showing a log line snippet tagged with correlation_id=a1b2c3, with a dashed arrow showing the Fulfillment Worker's log line occurring several minutes after the other two >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s09",
+      "order": 9,
+      "sectionTitle": "Logging sensitive data by default",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The fastest way to turn a debugging aid into a compliance incident: logging **PII or secrets** because they happened to be in scope when an error fired.\n\nCommon ways this sneaks in:\n\n- Logging an entire request or object (`log.error(f\"failed: {request}\")`) that happens to contain a password field, an auth token, or a customer's full profile.\n- Exception messages from third-party libraries that echo back the input that caused them, including whatever sensitive value was in it.\n- Debug-level logging left enabled in production \"just to help investigate,\" dumping full payloads nobody scoped for sensitive fields.\n\nLogs typically have looser access control and longer retention than the primary datastore, so sensitive data that leaks into them is now sitting somewhere less protected, for longer. The fix is structural, not vigilance: redact or allowlist fields at the logging layer itself, so a careless `log.error(request)` can't leak a token even when someone forgets to scrub it by hand.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "reading-stack-traces-and-logs-s09-q1"
+      ]
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s10",
+      "order": 10,
+      "sectionTitle": "Reading a real trace fast",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Put it together as a five-second checklist for any new stack trace:\n\n1. **Read the exception type and message first** — often that alone tells you the category of bug (null reference, timeout, permission denied).\n2. **Find the innermost \"caused by\"** if the trace is chained — that's the real failure, not the wrapper.\n3. **Walk to the first frame in your own code**, skipping library/framework internals.\n4. **Check the log line right before it** for context — what request, what user, what correlation ID — using the level (warn/error) to judge how serious the surrounding events were.\n5. **Pull the correlation ID** if this is one hop of a larger request, and search for the full journey before assuming this service is where the bug lives.\n\nThis is the \"observe\" step of the debugging loop done well — most of a good hypothesis is already sitting in the trace and the surrounding log lines, if you read them in this order instead of top to bottom.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "reading-stack-traces-and-logs-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Reading traces and logs well is the foundation the rest of this group builds on: [systematic-debugging-method](systematic-debugging-method) needs a sharp observation before it can form a hypothesis, and interactive debuggers and profilers in the next topic pick up exactly where a stack trace's static snapshot leaves off — letting you watch state change instead of only seeing it at one frozen moment.\n\nIn production, where you often can't attach a debugger at all, logs and traces frequently *are* the entire investigation — which is why the next few topics spend real time on the tools and the workflow for that constraint specifically.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

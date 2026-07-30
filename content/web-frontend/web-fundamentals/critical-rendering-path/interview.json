@@ -1,0 +1,37 @@
+{
+  "topicId": "critical-rendering-path",
+  "interviewQuestions": [
+    {
+      "id": "critical-rendering-path-iq1",
+      "question": "Walk me through what happens between the browser having a DOM and CSSOM, and actual pixels appearing on screen.",
+      "answerMarkdown": "Four stages, each building on the last: **render tree**, **layout**, **paint**, **composite**.\n\nThe render tree combines the DOM and CSSOM, but only for elements that will actually be painted — `display: none` elements and non-visual nodes like `<script>` are excluded entirely, while `visibility: hidden` elements stay in the tree, just unpainted. Layout then walks that tree and computes an exact box — position and size — for every node; this is comparatively expensive because one element resizing can shift everything after it. Paint fills in actual pixels per element, often split across multiple layers. Composite is the GPU assembling those layers into the final frame.\n\nThe part I'd emphasize because it's the actionable insight: not every change walks all four stages. A color change skips layout but still repaints. A `transform` or `opacity` change on a composited layer can skip straight to composite, needing no main-thread layout or paint at all — which is the entire reason 'animate transform, not top/left' is standard advice; it's not a style preference, it's which stages get skipped.\n\nA width or `display` change is the expensive case: it forces the full chain, layout included, on every affected frame.\n\n**Testing:** whether you know these are four distinct, sometimes-skippable stages, or think of 'rendering' as one undifferentiated step.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "critical-rendering-path-iq2",
+      "question": "How would you speed up first paint on a page that currently takes 2.5 seconds to show anything?",
+      "answerMarkdown": "I'd walk the pipeline stage by stage rather than reach for a generic checklist, because the fix depends entirely on which stage is actually the bottleneck — I'd confirm with a DevTools Performance trace before changing anything.\n\nFirst, check the **render-blocking resources**: is a large stylesheet in `<head>` holding up the render tree while the user only needs styles for the first screen? If so, inline critical CSS for above-the-fold content and async-load the rest — this alone commonly buys 200-500ms on a 3G-class connection, because it removes a full network round trip from the blocking path.\n\nSecond, check for a **synchronous script** mid-document blocking HTML parsing before the render tree can even be built — move it to `defer` or the end of `<body>`.\n\nThird, if resources aren't the issue, look at **layout cost itself**: an unusually large or deeply nested DOM (thousands of nodes, deep flex/grid nesting) can make even the first layout pass slow, independent of any resource loading.\n\nFourth, check paint: DevTools' paint-flashing overlay will show if a surprisingly large area is being repainted for what should be a small change.\n\nWithout a trace, I'd default to suspecting render-blocking CSS or a blocking script first, since those are the most common real-world causes of a genuinely slow first paint — but I wouldn't ship a fix without confirming which one it actually is.\n\n**Testing:** whether you diagnose before prescribing, and can name the specific mechanism each fix addresses.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Performance"
+    },
+    {
+      "id": "critical-rendering-path-iq3",
+      "question": "What's the difference between render-blocking and parser-blocking resources, and why does that distinction matter in practice?",
+      "answerMarkdown": "They sound similar but describe different stages being held up. **Parser-blocking** means HTML tokenization and tree construction itself pauses — a plain `<script src>` mid-document does this, because the script might call `document.write` or mutate the DOM the parser is still building. **Render-blocking** means the render tree, and therefore first paint, has to wait — a CSS `<link>` in `<head>` does this, because the CSSOM must be fully resolved before styles can be assigned, but it does **not** pause HTML parsing itself.\n\nThe practical difference: a page with a large blocking stylesheet but no blocking scripts will still finish building its full DOM quickly — the parser never stopped — but won't paint anything until the CSSOM resolves. A page with a blocking script mid-document, by contrast, has both problems stacked: parsing is paused (so the DOM itself is incomplete) and the render tree can't proceed either, since it depends on that incomplete DOM.\n\nI've used this distinction directly when a stakeholder assumed 'minifying our HTML' would fix a slow first paint — the actual blocker was a 200KB unsplit stylesheet, which is a render-blocking problem that minifying HTML does nothing for. Correctly categorizing the blocker (parser vs render) is what pointed at the right fix — splitting critical CSS out, not touching the markup at all.\n\n**Testing:** whether you can name the distinct mechanism each blocking type affects, not just that 'CSS and JS can be slow.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "critical-rendering-path-iq4",
+      "question": "Your team added will-change: transform to dozens of cards to make hover animations smoother, and now low-end Android devices are janky and the page occasionally crashes the tab. What's happening and how do you fix it?",
+      "answerMarkdown": "This is the compositing trade-off showing up: `will-change` promotes an element to its **own composited layer**, and each layer is a full rasterized bitmap the GPU holds in memory at its rendered size. Promoting dozens of full cards — especially on a high-DPI mobile screen — can add tens of megabytes of GPU memory that a low-end Android device's GPU simply doesn't have to spare, which explains both the jank (the GPU is thrashing, not the CPU) and, in the worst case, the renderer crashing under memory pressure.\n\nThe fix isn't to remove compositing — it's to promote **only what genuinely needs it, only while it needs it**. Concretely: apply `will-change` on `:hover` or just before the animation starts (via JS, adding the property dynamically) rather than statically on every card at all times, and remove it again once the animation ends. That way only the one or two cards actively animating hold a layer, not all forty sitting idle.\n\nI'd verify the fix with Chrome's Layers panel in DevTools, which shows exactly how many composited layers exist and each one's memory footprint — confirming the count drops from 'all cards, always' to 'the one being hovered, only while hovered.'\n\nThe senior lesson: compositing shifts cost from CPU (layout/paint) to GPU (layer memory) — it doesn't eliminate cost, and blanket-applying it can trade one bottleneck for a worse one on constrained hardware.\n\n**Testing:** whether you understand compositing as a trade-off with a real cost, not a free performance switch.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "event-loop-and-async",
+  "interviewQuestions": [
+    {
+      "id": "event-loop-and-async-iq1",
+      "question": "```javascript\nconsole.log(\"1\");\nsetTimeout(() => console.log(\"2\"), 0);\nPromise.resolve().then(() => console.log(\"3\"));\nconsole.log(\"4\");\n```\nWhat does this print, and walk me through why?",
+      "answerMarkdown": "It prints **1, 4, 3, 2**.\n\nThe walkthrough, mechanically:\n\n- **`console.log(\"1\")` and `console.log(\"4\")`** are synchronous — they run immediately, in source order, while the call stack executes top to bottom. Nothing defers them.\n- **`setTimeout`** hands its callback off to the browser's timer API. Even with a 0ms delay, the callback doesn't run inline — it's placed on the **macrotask queue** once the delay elapses.\n- **`Promise.resolve().then(...)`** schedules its callback on the **microtask queue**, since the promise is already resolved.\n- Once the synchronous code finishes and the stack is empty, the event loop's rule kicks in: **drain the entire microtask queue before running a single macrotask.** So \"3\" logs next.\n- Only once the microtask queue is completely empty does the loop take \"2\" off the macrotask queue and run it.\n\nThe one-line summary I'd give: synchronous code always runs first, then microtasks always beat macrotasks, regardless of registration order or how small a timer's delay is set to.\n\n**Testing:** whether you know there are two separate queues with a strict priority, not just that \"promises are faster than setTimeout.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "event-loop-and-async-iq2",
+      "question": "Why does `setTimeout(fn, 0)` not run `fn` immediately, and what's actually true about its timing guarantee?",
+      "answerMarkdown": "`setTimeout`'s delay is a **minimum**, not a promise of exact timing — \"run `fn` no sooner than roughly this many milliseconds from now, and only once the call stack is empty and the microtask queue has fully drained.\" A 0ms delay just means \"as soon as those conditions are met,\" which in a busy environment can still be tens or hundreds of milliseconds later.\n\nThree concrete reasons the real delay is often much longer than requested:\n\n- **The call stack has to be empty first.** Any synchronous code still running — even an unrelated long loop — blocks every pending timer, however long its delay already elapsed.\n- **Every pending microtask drains first**, every single loop iteration, not just once. A promise chain that keeps generating more `.then()` callbacks can push a timer back repeatedly.\n- **Browsers enforce a minimum clamp**, historically 4ms for nested timeouts past a certain depth, and background/inactive tabs are throttled far more aggressively (some browsers cap timers at roughly one per second in a backgrounded tab) to save battery and CPU.\n\nSo the honest framing for an interview: `setTimeout(fn, ms)` schedules `fn` to run **no earlier than** `ms` from now, contingent on the stack and microtask queue being clear — never a guaranteed exact-time execution.\n\n**Testing:** whether you understand timers as a lower bound scheduled against a shared, busy event loop, rather than a hard real-time guarantee.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "event-loop-and-async-iq3",
+      "question": "A page feels laggy — clicks are slow to respond and animations stutter — even though no network requests are slow. How would you use your event loop knowledge to find the cause?",
+      "answerMarkdown": "I'd start from the fact that user input, rendering, and JS execution all compete for the **same single call stack** — so a laggy UI with no slow network calls almost always means something is either running too long synchronously, or the microtask queue is never fully draining.\n\nWhat I'd check, in order:\n\n- **Long tasks on the main thread.** Chrome DevTools' Performance panel flags any task over 50ms as a \"long task\" — a heavy synchronous computation, a huge array `.map`/`.filter` chain, or a poorly-memoized re-render blocks input handling and rendering for its entire duration, since nothing else can run until the stack empties.\n- **A microtask queue that never fully empties.** A recursive `.then()` retry with no terminating condition, or a `MutationObserver` callback that triggers the mutation it observes, keeps re-queuing microtasks — and since the loop won't advance to a repaint or the next macrotask until that queue is empty, the page can visibly freeze or stutter even with zero slow network calls.\n- **Layout thrashing disguised as JS slowness.** Reading a layout property (`offsetHeight`) right after writing a style, repeatedly in a loop, forces synchronous layout recalculation on the main thread — it shows up as \"script\" time in profiling but is really a rendering-pipeline cost triggered by JS.\n\nThe unifying diagnostic question is always: **what is occupying the call stack, or the microtask queue, for long enough to delay the next paint or the next input event?** That's the frame I'd apply before touching the network tab at all.\n\n**Testing:** whether you can connect event-loop mechanics to a real perceived-performance bug, not just recite queue priority in the abstract.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production debugging"
+    },
+    {
+      "id": "event-loop-and-async-iq4",
+      "question": "How does Node.js's event loop differ from the browser's, and why does it matter when reasoning about `setImmediate` vs `setTimeout`?",
+      "answerMarkdown": "The browser's loop is effectively flat: stack, then drain microtasks, then one macrotask, repeat. Node's loop, via libuv, is broken into an ordered set of **phases** that run in a fixed cycle every pass: `timers` → `pending callbacks` → `idle/prepare` → `poll` (I/O) → `check` (`setImmediate`) → `close callbacks`, then back to `timers`.\n\nThe part that matters practically: Node drains the **entire microtask queue between every phase**, not just once per full cycle — so a `.then()` callback queued inside a `poll`-phase I/O callback runs before Node even reaches the `check` phase, exactly the same microtask-first guarantee as the browser, just applied at finer granularity.\n\nThe `setImmediate` vs `setTimeout(fn, 0)` ordering question falls straight out of this: at the **top level** of a script, their order is technically unspecified and can flip between runs, because it depends on how long process startup took relative to the timer's minimum delay. But **inside an I/O callback**, `setImmediate` always fires before `setTimeout(fn, 0)`, because you're already past the `timers` phase for this cycle and sitting in `poll` — the loop reaches `check` (`setImmediate`'s phase) before it would cycle all the way back around to `timers`.\n\nI'd frame the takeaway as: don't reason about Node timing from the browser's flat model — know which phase you're currently executing in, because that's what actually decides the next callback's order.\n\n**Testing:** whether you know Node's loop has real internal structure beyond \"it's like the browser but for the backend.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Node vs browser"
+    }
+  ]
+}

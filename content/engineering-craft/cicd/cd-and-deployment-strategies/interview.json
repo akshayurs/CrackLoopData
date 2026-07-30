@@ -1,0 +1,37 @@
+{
+  "topicId": "cd-and-deployment-strategies",
+  "interviewQuestions": [
+    {
+      "id": "cd-and-deployment-strategies-iq1",
+      "question": "What's the difference between continuous delivery and continuous deployment?",
+      "answerMarkdown": "Both assume every change that passes CI is automatically built, tested, and packaged into something you *could* ship. The difference is the last step.\n\n**Continuous Delivery** keeps a human (or a scheduled process) in charge of the actual release — the artifact sits ready, and someone decides when it goes to production, often batching several changes into a planned release window. **Continuous Deployment** removes that gate: every change that passes the pipeline goes live automatically, sometimes within minutes of merging.\n\nMost teams I've worked on land on delivery rather than deployment, and that's usually the right call rather than a shortcoming — deployment only makes sense once you trust your automated checks, your monitoring, and your rollback speed enough to replace a human's judgment entirely. I'd treat continuous deployment as something you earn: start with delivery, invest in fast automated rollback and strong health-check-driven promotion, and only remove the human gate once a bad deploy reliably self-corrects before it does real damage.\n\nA concrete marker of that maturity: if your team can already say \"any rollback happens automatically within 5 minutes of a metric breach,\" continuous deployment is a safe next step. If rollback still means paging someone, delivery is the right stopping point for now.\n\n**Testing:** whether you understand these as a maturity spectrum with a real trade-off, not just two synonyms for \"automated shipping.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "cd-and-deployment-strategies-iq2",
+      "question": "How would you choose between rolling, blue-green, and canary deployment for a given service?",
+      "answerMarkdown": "I'd start from what failure mode I'm most worried about for this specific service, because each strategy is really optimized against a different one.\n\nIf the service is low-traffic, stateless, and I mostly want simplicity with no extra infra cost, **rolling** is the default — it reuses existing capacity and Kubernetes-style orchestrators do it for free. I'd accept its slower rollback because the blast radius during a bad rollout is naturally limited by how far the rollout's progressed.\n\nIf the service sits on a critical, high-traffic path — a checkout flow, an auth service — where I want rollback to be **instant**, not \"wait for a reverse rollout,\" I'd reach for **blue-green**, and eat the roughly 2x infrastructure cost during the switch window as the price of that speed.\n\nIf my real concern is a bug that only shows up under genuine production load or specific user segments — something a staging environment can't reproduce — **canary** is the right tool, because it's the only one of the three that limits exposure to a *slice* of real traffic while gathering real signal. That needs traffic-splitting infrastructure and automated metric comparison to be worth doing at all; without the automation it's just a slower rolling deploy.\n\nIn practice I've combined them: canary the first 1–5% to catch production-scale surprises, then finish the rollout as a standard rolling update once the canary stage is healthy.\n\n**Testing:** whether you reason about trade-offs from the service's actual risk profile, rather than reciting definitions.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "cd-and-deployment-strategies-iq3",
+      "question": "During a rolling deploy, old and new app versions run concurrently against the same database. How do you make a schema change safely under that constraint?",
+      "answerMarkdown": "The core constraint is that for the whole rollout window, both the old and new app code are querying the same schema, so the schema has to be valid for both versions simultaneously — you can't just ship a breaking migration alongside the code that needs it.\n\nThe pattern I'd use is **expand/contract**: split what feels like one migration into several backward-compatible deploys. Expand first — add the new column or table without removing or renaming anything old, and deploy code that can write to both old and new shapes. Once every instance is on that dual-write code (rollout complete), backfill existing data into the new shape. Only then, in a later deploy, switch reads fully to the new shape, stop writing the old one, and finally drop the old column — the **contract** step — once you're confident no old code path depends on it anymore.\n\nA concrete example: renaming a column isn't safe as a single step. Add the new column, dual-write both, backfill, cut reads over, then drop the old column — four small deploys instead of one dangerous one, each individually rollback-safe because at every point in between, both app versions still work against the current schema.\n\nThe trade-off is speed: this takes several deploys instead of one, and requires discipline to actually come back and do the contract step rather than leaving dead columns forever.\n\n**Testing:** whether you understand that deployment strategy and schema migration have to be co-designed, not treated as separate concerns.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Schema migration"
+    },
+    {
+      "id": "cd-and-deployment-strategies-iq4",
+      "question": "You're designing the deployment pipeline for a payments service with essentially zero tolerance for extended downtime or silent bad behavior. What does that pipeline look like?",
+      "answerMarkdown": "I'd start from the failure I'm most afraid of: a subtle correctness bug — wrong amount charged, duplicate charge — that doesn't crash anything and so doesn't trip a naive health check, but causes real financial harm before anyone notices.\n\nThat points me at **canary as the primary strategy**, not blue-green, because canary is the only pattern that limits exposure to a genuinely small slice of *real* traffic while it's being watched — blue-green exposes 100% the instant you switch. I'd start at a very small percentage (well under 1% for a payments path) and hold each stage longer than a typical service, because payment correctness metrics — chargeback rate, reconciliation mismatches — often lag the request itself by minutes or hours, so a 10-minute error-rate check alone isn't enough.\n\nOn top of the traffic-splitting mechanics, I'd add payments-specific safeguards: idempotency keys on every write so a retried or duplicated request during a rollback can't double-charge, a synchronous reconciliation check comparing canary vs baseline transaction outcomes (not just error rates), and a kill switch independent of the deployment pipeline that can halt the payment path entirely without needing a redeploy.\n\nFor schema changes I'd insist on expand/contract with no exceptions, and for rollback I'd require it to be regularly and deliberately exercised in staging — for a system this sensitive, the first real rollback should never be the first *tested* one.\n\n**Testing:** whether you can adapt general deployment-strategy knowledge to a domain where the cost of a quiet failure is unusually high.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "System design"
+    }
+  ]
+}

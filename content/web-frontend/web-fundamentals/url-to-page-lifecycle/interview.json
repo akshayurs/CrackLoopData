@@ -1,0 +1,37 @@
+{
+  "topicId": "url-to-page-lifecycle",
+  "interviewQuestions": [
+    {
+      "id": "url-to-page-lifecycle-iq1",
+      "question": "What happens when you type a URL into the browser and hit Enter?",
+      "answerMarkdown": "At a high level: the browser parses the URL, resolves the host to an IP via DNS, opens a connection (TCP, plus a TLS handshake for HTTPS), sends the HTTP request, and starts parsing the response as it streams in rather than waiting for it to finish.\n\nI'd walk it in that order because each step gates the next: parsing tells you what to look up, DNS gives you an address to connect to, the connection has to exist before a request can go out. Concretely, on a cold connection to a new HTTPS host with ~50ms latency, that's roughly DNS (20-120ms) + a TCP round trip (~50ms) + a TLS round trip (~50ms) before the request is even sent — call it 150-250ms of setup before the server does any work.\n\nThe part I'd make sure to include, because it's the detail that separates a shallow answer: the browser doesn't wait for the whole HTML document. It parses and renders **incrementally** as bytes arrive, and a separate preload scanner races ahead through the raw markup to kick off image and stylesheet downloads in parallel, even while the main parser is blocked on a script tag.\n\nIf asked to go deeper, I'd bring up HSTS (skips the redirect round trip on repeat visits), bfcache (skips almost the whole pipeline on back navigation), and where I'd look first if this navigation were slow — TTFB is usually the biggest single variable.\n\n**Testing:** whether you understand this as a pipeline with real parallelism, not a strict waterfall, and whether you can pace the answer to the question asked.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "url-to-page-lifecycle-iq2",
+      "question": "A page's Time to First Byte is 800ms and stakeholders are asking why the site 'feels slow.' How do you use the navigation timeline to investigate?",
+      "answerMarkdown": "TTFB sitting at 800ms means the delay is happening **before** the browser has anything to parse or render, so I wouldn't start by profiling client-side rendering — I'd start by splitting TTFB into its own components using the Navigation Timing API or the waterfall in DevTools' Network panel.\n\nTTFB itself decomposes into DNS lookup, connection setup (TCP + TLS), request send, and server processing time before the first response byte. I'd check each: is DNS cold on every visit (missing `dns-prefetch` for a third-party host)? Is this a fresh TLS handshake every time (no `keep-alive`, no HTTP/2 connection reuse, or a CDN not terminating TLS close to the user)? Or is the bulk of the 800ms genuinely server-side compute — a slow database query, a cold serverless function, an origin far from the user?\n\nIn practice, server processing dominates more often than the network legs — a concrete example: a Lambda-backed API with a cold start can alone add 300-500ms before any network latency is counted. So I'd look at server-side APM traces for this specific route before assuming it's a network problem.\n\nOnce TTFB is fixed, only then would I look at what happens after the first byte — streaming parse, render-blocking resources — because none of that matters until the first byte actually arrives faster.\n\n**Testing:** whether you can decompose 'slow' into the specific stage that's actually responsible, instead of guessing at a generic fix.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "url-to-page-lifecycle-iq3",
+      "question": "How would you calibrate your answer to 'what happens when you navigate to a URL' differently for a junior screen versus a staff-level interview?",
+      "answerMarkdown": "I'd treat the underlying facts as fixed and vary only what I choose to emphasize and how deep I go unprompted, because over-answering a junior screen reads as much worse as under-answering a staff loop.\n\nFor a **junior-level** answer, I'd keep it to the shape everyone should know in 30 seconds: parse the URL, DNS resolves it, the browser connects and sends a request, gets a response, and renders it. Clean, correct, no unrequested tangents into TLS versions.\n\nFor **mid-level**, I'd add the mechanism details that show real understanding rather than memorized steps: that TLS negotiation is a separate cost from the TCP handshake, and — the one I'd always volunteer — that the browser parses and paints incrementally as the response streams in, not after it finishes.\n\nFor **staff-level**, I'd volunteer judgment without being asked: rough latency budgets (DNS 20-120ms, TLS ~1 RTT), how HSTS and bfcache change which steps actually run on repeat visits, and I'd connect it to something I've actually debugged — like a TTFB regression traced to a cold serverless function rather than the network. Staff interviews are listening for whether you can turn the mechanism into diagnosis, not just recite it more completely.\n\nThe biggest miscalibration I've seen is a mid-level candidate reciting TLS cipher suite negotiation in a junior screen — technically impressive, but it signals you can't read what's actually being asked.\n\n**Testing:** whether you can adjust depth to audience, which staff interviewers explicitly watch for as a communication signal.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Communication"
+    },
+    {
+      "id": "url-to-page-lifecycle-iq4",
+      "question": "Your app makes users click a link that goes through an HTTP URL first before landing on HTTPS. How would you eliminate that redirect, and what's the trade-off?",
+      "answerMarkdown": "The direct fix is **HSTS**: have the server send `Strict-Transport-Security: max-age=31536000; includeSubDomains` on the HTTPS response. Once a browser has seen that header for a host, it rewrites any future `http://` request to that host to `https://` locally, before attempting a connection at all — no redirect round trip, no plaintext request ever leaving the browser.\n\nThe trade-off is the **first visit problem**: HSTS only takes effect after the browser has already seen it once over a successful HTTPS connection. The very first request to a host that a user reaches via a bare `http://` link (or by typing the domain without a scheme) still goes out in plaintext and is vulnerable to an interception attack on that one request, before the redirect (or HSTS) can even apply.\n\nThe fix for that gap is the **HSTS preload list**: submitting your domain to be baked into browsers themselves, so the very first visit ever made from that browser already knows to go straight to HTTPS, with no bare HTTP request at all. The cost is operational rigidity — once preloaded, backing out is slow (it ships in browser binary updates) and painful if you ever need to run an HTTP-only subdomain again, since `includeSubDomains` applies HSTS everywhere under that domain.\n\nSo: HSTS header for near-term wins, preload list if you can commit to HTTPS everywhere permanently.\n\n**Testing:** whether you know the header alone doesn't fully close the gap, and can name the actual trade-off of the stronger fix.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Security"
+    }
+  ]
+}

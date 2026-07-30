@@ -1,0 +1,37 @@
+{
+  "topicId": "git-at-scale",
+  "interviewQuestions": [
+    {
+      "id": "git-at-scale-iq1",
+      "question": "Why does git get slower to work with as a repository grows into the tens of gigabytes with a huge file count?",
+      "answerMarkdown": "Two different costs grow independently, and it helps to separate them. **History size** grows with every commit ever made — a full clone transfers that entire packed, delta-compressed history by default, so a repo with years of commits can mean tens of gigabytes even if the current working tree is modest. **Working tree size** grows with the number of files present *right now* — commands like `git status` or `git add .` have to stat every file on disk to detect changes, so that cost scales with total file count, not with how much actually changed.\n\nA monorepo can hit both simultaneously: massive history from thousands of contributors over years, plus hundreds of thousands of files in the current tree because it holds every team's code. Neither problem is really about git being inefficient — it's that git's default behavior (fetch everything, materialize everything) assumes a repository size where that's cheap, and stops being a safe assumption well before you reach genuinely large scale.\n\nThe fix is scoping what any one clone actually needs: partial clone for history (fetch blobs lazily), sparse checkout for the working tree (materialize only relevant paths), often combined.\n\n**Testing:** whether you can separate the two distinct cost dimensions (history vs working tree) rather than giving one vague \"big repos are slow\" answer.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "git-at-scale-iq2",
+      "question": "How would you scope a clone for an engineer who only works in one small part of a huge monorepo?",
+      "answerMarkdown": "I'd combine two orthogonal tools, because they solve different halves of the problem. **Partial clone** (`--filter=blob:none` or similar) fetches the full commit graph and metadata immediately but defers fetching actual file content until it's needed — so the initial clone is fast, and only the blobs you actually touch get pulled down lazily. **Sparse checkout** then limits which paths are materialized into the working directory at all, so `git status`, `git add`, and IDE indexing only have to deal with the slice of the tree that engineer's team owns.\n\nNeither alone is sufficient at real scale: partial clone without sparse checkout still leaves a working directory with every path present (just with lazily-fetched content); sparse checkout without partial clone still pays the full history-transfer cost upfront.\n\nThe caveat I'd flag to the team: sparse checkout changes what \"a normal clone\" means locally, so any tooling or script that assumes the full tree is present (a global search, a build step that walks the whole repo) needs to be scale-aware too — an engineer expanding their sparse-checkout cone to debug something outside their usual area should be an easy, well-documented operation, not a surprise.\n\n**Testing:** whether you know these are two separate, combinable mechanisms rather than treating \"scale tooling\" as one undifferentiated thing.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Tooling"
+    },
+    {
+      "id": "git-at-scale-iq3",
+      "question": "A junior engineer accidentally committed and pushed a large database dump, then deleted it in the next commit. Is the problem solved?",
+      "answerMarkdown": "No, and this is a common misunderstanding of how git actually stores things. Deleting the file in a later commit only removes it from *that commit's tree* — the blob object itself is still fully present and still reachable from the earlier commit that added it. Every future clone of the repository still has to transfer that object, because git's model is additive: a later commit can't retroactively shrink an earlier one's content.\n\nThe actual fix requires rewriting history with a tool built for it — `git filter-repo` or BFG Repo-Cleaner — which walks every commit, strips the object out entirely, and recomputes every downstream commit's hash as a result. That's a real, disruptive operation: everyone with an existing clone needs to re-clone or carefully re-base their local work, because every commit hash after the point of the large file has changed. It needs to be coordinated with the whole team, scheduled deliberately, and communicated clearly — it's the golden rule violation done on purpose, at team scale.\n\nGoing forward, prevention is cheaper than the cure: a pre-receive hook rejecting pushes over a size threshold, and Git LFS for legitimate large binary assets that genuinely need version control without living in the main object store.\n\n**Testing:** whether you understand git's additive object model well enough to know that \"delete it in the next commit\" doesn't actually remove anything from history.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "git-at-scale-iq4",
+      "question": "Would you recommend a 30-engineer startup adopt monorepo scale tooling like sparse checkout and CODEOWNERS-enforced review routing?",
+      "answerMarkdown": "Generally no, and I'd push back on adopting it preemptively. Sparse checkout, partial clone, and heavy CODEOWNERS enforcement exist to solve problems — slow clones, review routing nobody can track by memory — that only actually exist once a repository and team reach real scale. A 30-engineer team with a repo well under a gigabyte doesn't have a clone-speed problem, and everyone plausibly still knows who owns what without a machine-enforced mapping.\n\nAdopting the tooling anyway adds real cost: sparse checkout configuration that has to be maintained and explained to every new hire, a CODEOWNERS file that needs upkeep as teams reorganize, and scripts or CI steps that now have to be scale-aware even though scale isn't actually a problem yet. That's operational surface with no corresponding benefit — a form of premature optimization applied to tooling instead of code.\n\nWhat I would recommend regardless of size: lightweight hooks for fast local feedback (linting, commit message format) and basic branch protection requiring review — those pay for themselves at any team size and cost little to set up.\n\nThe actual judgment call is knowing the threshold: revisit this once clone times or review routing genuinely start causing pain, not on a fixed schedule or because a larger company's blog post recommended it.\n\n**Testing:** whether you can reason about when infrastructure investment is warranted rather than reflexively recommending best-in-class tooling regardless of actual scale.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Judgment"
+    }
+  ]
+}

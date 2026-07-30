@@ -1,0 +1,195 @@
+{
+  "id": "review-process-and-tooling",
+  "title": "Review Process & Tooling",
+  "area": "engineering-craft",
+  "group": "code-review",
+  "order": 4,
+  "slug": "review-process-and-tooling",
+  "summary": "Most bad code review is a process problem, not a people problem. PR size, ownership routing, turnaround SLAs and automation decide whether reviewers spend their attention on substance or on semicolons.",
+  "level": "intermediate",
+  "slideCount": 13,
+  "estReadMinutes": 13,
+  "slides": [
+    {
+      "id": "review-process-and-tooling-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "You can teach every engineer on a team to write kind, specific review comments and still have a review process that fails — because the change was 2,000 lines, nobody knew they were the reviewer, and the first eleven comments were about import ordering.\n\nThose are **process** failures, and they're fixable with structure: keep PRs small enough to actually read, route them to a named owner automatically, put a clock on turnaround, and let machines own everything a machine can decide.\n\nThis topic is the mechanics — PR size, splitting strategy, `CODEOWNERS`, SLAs, automation, and the approver-count trade-off. Get these right and the human part of review gets easier by default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "review-process-and-tooling-s02",
+      "order": 2,
+      "sectionTitle": "Why small PRs get reviewed better",
+      "subTitle": "Attention is the scarce resource",
+      "type": "concept",
+      "markdown": "Review quality falls off a cliff with diff size, and it is not linear. The widely cited SmartBear study at Cisco found defect-detection rates drop sharply past roughly **200–400 changed lines**, and past ~400 the reviewer is skimming whether they admit it or not.\n\nThe mechanism is working memory. To judge a change you have to hold the old behavior, the new behavior, and the call sites in your head at once. Past a few hundred lines that stops fitting, so the reviewer silently switches strategies — from *evaluating* the change to *pattern-matching* it for things that look wrong.\n\nThe visible symptom is counterintuitive: **big PRs get fewer comments than small ones.** A 60-line PR gets four substantive questions; a 1,500-line PR gets \"LGTM.\" Reviewers aren't lazier on the big one, they're overwhelmed by it, and approving is the only way out.\n\nA practical target most teams converge on: under ~400 lines, ideally under 200, reviewable in one sitting of 30–60 minutes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "review-process-and-tooling-s03",
+      "order": 3,
+      "sectionTitle": "Splitting a large change",
+      "subTitle": "Each piece ships on its own",
+      "type": "concept",
+      "markdown": "\"Make it smaller\" is useless advice without a splitting rule. The one that works: **each PR must be independently mergeable and safe to deploy alone**, even if it changes no user-visible behavior yet.\n\nTake \"migrate checkout from the legacy pricing service to the new one\" — one 1,800-line PR becomes five:\n\n1. **Add the new client** plus its tests. Nothing calls it. Merges and deploys as dead code.\n2. **Add the feature flag**, defaulted off. Behavior identical in production.\n3. **Wire the new path behind the flag.** Both paths exist; the flag picks one.\n4. **Flip the flag** in config, ramped 1% to 100%. This PR is three lines and gets real scrutiny.\n5. **Delete the legacy client** once the flag has been on for a week.\n\nEach piece is 100–400 lines with one clear question for the reviewer. Step 4 — the risky one — is reviewed in isolation instead of buried on line 1,400 of a mega-diff.\n\nThe enabling trick is that dead code and dark launches are cheap. Ship the scaffolding early and separately; it costs nothing in production and buys you five readable reviews.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "review-process-and-tooling-s03-q1"
+      ]
+    },
+    {
+      "id": "review-process-and-tooling-s04",
+      "order": 4,
+      "sectionTitle": "Stacked PRs",
+      "subTitle": "When the pieces genuinely depend on each other",
+      "type": "code",
+      "markdown": "Sometimes the pieces can't be independent — step 3 literally needs the client from step 1. **Stacking** lets you keep small reviewable units without waiting for each to merge: branch each PR off the previous one instead of off `main`.\n\n```bash\ngit checkout -b pricing-client main\n# ... PR #1: add the client\ngit checkout -b pricing-flag pricing-client\n# ... PR #2, based on #1 — its diff shows only the flag work\ngit checkout -b pricing-wire pricing-flag\n# ... PR #3, based on #2\n```\n\nOpen #2 with base branch `pricing-client`, not `main` — GitHub and GitLab then show only that PR's own changes rather than the union of all three.\n\nThe cost is real: rebasing the whole stack after review comments on #1 (`git rebase --update-refs` handles this in Git 2.38+), and merges must happen bottom-up. Tools like Graphite, `spr` and Gerrit's change-chains exist because that bookkeeping is annoying enough to automate.\n\nUse stacking when the work is genuinely sequential. When pieces *can* be independent, plain small PRs are cheaper.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": []
+    },
+    {
+      "id": "review-process-and-tooling-s05",
+      "order": 5,
+      "sectionTitle": "The description is part of the change",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A reviewer's first ten minutes go to reconstructing *why* the change exists. A good description hands that over for free and measurably speeds up turnaround.\n\nFour things worth writing, every time:\n\n- **Why now** — the bug, ticket or incident. One line: \"p99 checkout latency regressed to 1.4s after the Sept 12 deploy; this is the fix.\"\n- **The approach, and the one you rejected** — \"cached the price lookup rather than adding a read replica, because the hit rate should be ~95% and a replica adds ops cost.\" This pre-empts the reviewer's biggest question.\n- **How it was verified** — \"unit tests for the eviction path; ran the checkout load test locally, p99 back to 240ms.\"\n- **Where to start reading** — \"the real logic is in `PriceCache.get`; the other 300 lines are generated protobuf.\"\n\nThat last one is the highest-leverage sentence in code review and almost nobody writes it. Reviewers arrive at a 400-line diff with no idea which 40 lines matter.\n\nIf your team has a PR template, these four should be it — not a checkbox list nobody reads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "review-process-and-tooling-s05-q1"
+      ]
+    },
+    {
+      "id": "review-process-and-tooling-s06",
+      "order": 6,
+      "sectionTitle": "Automate every nit away",
+      "subTitle": "Machines decide style; humans decide design",
+      "type": "code",
+      "markdown": "Every comment a human writes about formatting is attention stolen from correctness. The rule: **if a machine can decide it, a human must never review it.**\n\nThe standard setup is a formatter plus linters wired into a pre-commit hook and enforced again in CI, so the diff a reviewer opens is already conformant:\n\n```yaml\n# .pre-commit-config.yaml\nrepos:\n  - repo: https://github.com/psf/black\n    rev: 24.8.0\n    hooks: [{id: black}]\n  - repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.6.9\n    hooks: [{id: ruff, args: [--fix]}]\n```\n\nThe key move is picking an **opinionated, non-configurable formatter** — `black`, `gofmt`, `prettier`, `rustfmt`. Their value isn't that their output is beautiful; it's that there's nothing left to argue about, which kills the entire category of style debate.\n\nPush the same way further: type checkers, `govulncheck` or `npm audit` for known-vulnerable deps, coverage thresholds, and a bot that flags PRs over 400 lines. Each one converts a judgement call into a red check.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "review-process-and-tooling-s07",
+      "order": 7,
+      "sectionTitle": "CODEOWNERS and required reviewers",
+      "subTitle": "Routing to expertise, automatically",
+      "type": "code",
+      "markdown": "\"Who should review this?\" is a question that should never be asked out loud. A `CODEOWNERS` file maps paths to owners, and the platform auto-requests them:\n\n```text\n# .github/CODEOWNERS — last matching rule wins\n*                       @acme/backend-guild\n/services/payments/     @acme/payments-team @rita\n/infra/terraform/       @acme/platform\n/services/**/*.sql      @acme/dba-team\n*.md                    @acme/docs\n```\n\nCombine it with a branch protection rule requiring owner approval, and a schema migration physically cannot merge without a DBA looking at it. That's the real value: it encodes \"who must not be bypassed\" as configuration rather than as tribal knowledge someone forgets at 6pm on a Friday.\n\nTwo failure modes to watch. **Owning too much** — a rule pointing everything at one senior turns them into a bottleneck (next topic). **Owning too little** — teams listed as owners but with no rotation, so the request lands in a group inbox nobody watches.\n\nPrefer a *team* as the owner over an individual, so vacations don't stall merges, and pair it with a round-robin assignment bot so one human's name is actually on it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": [
+        "review-process-and-tooling-s07-q1"
+      ]
+    },
+    {
+      "id": "review-process-and-tooling-s08",
+      "order": 8,
+      "sectionTitle": "The PR lifecycle",
+      "subTitle": "Where each gate belongs",
+      "type": "diagram",
+      "markdown": "A PR moves through a fixed set of gates, and the order matters — cheap automated checks run before you spend human attention.\n\n1. **Draft** — open early, CI runs, no reviewer notified. Signals \"in progress, feedback welcome, don't spend a full review yet.\"\n2. **Ready for review** — you mark it ready; `CODEOWNERS` auto-requests reviewers.\n3. **Automated checks** — format, lint, types, unit and integration tests, security scan. A red build should never reach a human.\n4. **Human review** — one or more approvals, comment rounds, pushed fixups.\n5. **Approval** — plus any required-owner approvals satisfied.\n6. **Merge queue** — re-runs tests against the *current* `main` before merging.\n7. **Merge and deploy.**\n\nThe common mistake is inverting 3 and 4: a reviewer reads 300 lines carefully, then CI goes red and the author rewrites half of it. Every review comment on the discarded half was wasted.\n\n<<< Image: horizontal PR lifecycle pipeline with seven stages left to right — Draft, Ready for review, Automated checks, Human review, Approval, Merge queue, Merge and deploy — with the automated stages shaded one colour and the human stages another; a feedback arrow loops from Human review back to Draft labelled \"changes requested\", and a red X branch off Automated checks labelled \"never reaches a reviewer\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": []
+    },
+    {
+      "id": "review-process-and-tooling-s09",
+      "order": 9,
+      "sectionTitle": "Review SLAs",
+      "subTitle": "Why slow review compounds",
+      "type": "concept",
+      "markdown": "A slow review doesn't cost the wait time — it costs the wait time multiplied by everything queued behind it.\n\nWatch a two-day turnaround play out. You open a PR Monday, switch to task B. Review lands Wednesday; you now have to **reload the entire context** of a change you stopped thinking about 48 hours ago, and `main` has drifted so you rebase and re-resolve conflicts. Meanwhile task B is blocked on the same PR, so you started task C. Three half-finished branches, and each round trip on the original costs another two days.\n\nA realistic SLA most teams can hold:\n\n- **First response within 4 business hours** — even just \"looking this afternoon.\"\n- **Full review within 24 hours.**\n- **Follow-up rounds same day**, because re-review is cheap once the context is loaded.\n\nFirst *response* matters more than first *approval*: it's the unbounded wait that makes people start a third branch.\n\nEnforce it with visibility, not blame — a daily bot post of PRs open past the SLA, and treat reviewing an existing PR as higher priority than starting new code. Your teammate is blocked; your new branch isn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": [
+        "review-process-and-tooling-s09-q1"
+      ]
+    },
+    {
+      "id": "review-process-and-tooling-s10",
+      "order": 10,
+      "sectionTitle": "One approver or two?",
+      "subTitle": "Speed against safety",
+      "type": "compare",
+      "markdown": "Approver count is a dial, not a policy. Turning it up buys scrutiny and spends latency:\n\n| | Single approver | Two or more |\n|---|---|---|\n| **Turnaround** | fast — one available person unblocks | slower; waits on the least-available reviewer |\n| **Catch rate** | good; most defects are found by the first reader | marginally better, with sharply diminishing returns |\n| **Diffusion of responsibility** | reviewer knows it's on them | \"the other approver probably read it closely\" |\n| **Knowledge spread** | narrow | two people now know the change |\n| **Fits** | most application code | payments, auth, migrations, infra, security |\n\nThe non-obvious risk of requiring two is **social loafing**: each approver reads less carefully believing the other is being thorough, so two shallow reviews can beat one careful one on paper and lose in practice.\n\nThe usual answer is one required approver by default, with `CODEOWNERS` adding a second *specific* owner only on high-blast-radius paths. Targeted depth beats a blanket rule that taxes every trivial PR.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "review-process-and-tooling-s10-q1"
+      ]
+    },
+    {
+      "id": "review-process-and-tooling-s11",
+      "order": 11,
+      "sectionTitle": "Merge queues",
+      "subTitle": "Green on your branch is not green on main",
+      "type": "concept",
+      "markdown": "Your PR's CI passed against `main` as it was when you branched. By the time you merge, `main` has moved. Two PRs that are each individually green can break the build together — your PR renames a function, mine adds a new caller of the old name, and neither CI run saw the other.\n\nThis is **semantic conflict**: no textual merge conflict, a broken `main` anyway. It gets more likely the more parallel PRs a repo has, which is why it feels like a big-team problem and is invisible on a team of three.\n\nA **merge queue** (GitHub merge queue, Bors, Zuul, GitLab merge trains) fixes it by serializing: it takes approved PRs in order, rebases each onto the current tip, re-runs the full suite, and merges only if green — bouncing the offender back to its author instead of breaking `main` for everyone.\n\nThe cost is throughput, since checks run again per PR. High-volume repos speculate — testing several queued PRs together and only splitting them apart on failure.\n\nSmall repos rarely need one. The signal you do: `main` goes red more than about once a week from merges that were each green.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": []
+    },
+    {
+      "id": "review-process-and-tooling-s12",
+      "order": 12,
+      "sectionTitle": "The PR nobody owns",
+      "subTitle": "Diffusion of responsibility",
+      "type": "pitfall",
+      "markdown": "A PR is opened with a whole team as reviewer. Eight people see it. Each assumes someone else is on it. It sits for four days and the author is too polite to nag.\n\nThis is diffusion of responsibility, and it's the single most common review-latency bug. It is entirely a routing problem — nobody refused, nobody was asked.\n\nThe fixes are mechanical:\n\n- **Always assign a named human**, not just a team. Round-robin bots (GitHub's team auto-assignment, Pull Reminders, `reviewpad`) pick a name so the request lands in one person's queue.\n- **A daily standup line for the review queue**: \"PR #421 has been open 3 days, who's got it?\" Twenty seconds, and it makes the stall visible.\n- **Make nagging structural, not personal.** A bot that pings the channel at 48 hours means the author never has to.\n- **Rotating review duty** — one person per day whose first job is draining the queue, which also protects everyone else's focus time.\n\nSo: the author's own habit is to ask a specific person directly after a few hours. \"Hey, could you take PR #421 today?\" beats waiting on a team mention every time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "review-process-and-tooling-s12-q1"
+      ]
+    },
+    {
+      "id": "review-process-and-tooling-s13",
+      "order": 13,
+      "sectionTitle": "Measuring whether the process works",
+      "subTitle": "The senior-level view",
+      "type": "concept",
+      "markdown": "If you own the process, you need signals — and the obvious metrics are the dangerous ones. Comments per PR, review count and approval rate are all trivially gamed and reward the wrong behavior. Track flow instead:\n\n- **Time to first review comment** (target: under 4 hours) — the number that actually correlates with developer frustration.\n- **PR size distribution**, specifically the p90. If your p90 is 900 lines, no amount of reviewer coaching will help.\n- **Round trips to merge.** Consistently 4+ usually means unclear requirements or missing design agreement *before* the code was written, not a review problem.\n- **Change failure rate** — the DORA metric. If review is thorough and CFR is still high, review isn't catching what you think it is.\n\nThe interpretive skill is knowing which lever a bad number points at. Slow turnaround plus large PRs is a size problem. Fast turnaround plus a high change failure rate is a rubber-stamping problem — the subject of [code review anti-patterns](code-review-anti-patterns).\n\nAnd never set a target on a metric an engineer can move directly: \"comments per review\" instantly produces a lot of comments about nothing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "pipeline-design",
+  "interviewQuestions": [
+    {
+      "id": "pipeline-design-iq1",
+      "question": "Walk me through how you'd structure a CI/CD pipeline for a typical backend service, stage by stage.",
+      "answerMarkdown": "I'd break it into build, test, package, and deploy, wired so each stage consumes the previous one's output instead of regenerating it.\n\n**Build** compiles or bundles the source into a runnable form and publishes it as a stage artifact. **Test** runs against *that* artifact — never re-checks-out and recompiles, because if test recompiles you can silently end up validating different bits than what actually gets deployed. **Package** wraps the built app into the deployable unit — usually a container image — tagged with an immutable identifier like the commit SHA, and pushes it to a registry. **Deploy** then references that exact tag, first to staging, then — after a gate, often manual for production — promoting the *same* tag forward.\n\nThe detail that matters most is that last promotion: I build the artifact **once** and promote the identical bytes through every environment, rather than rebuilding per environment. That's what makes \"staging passed\" mean anything about production.\n\nI'd also fan out the test stage into parallel shards if the suite is large enough that serial execution meaningfully hurts feedback speed, with a single fan-in gate before packaging.\n\n**Testing:** whether you design pipelines around a coherent handoff of one artifact, or just chain scripts together.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "pipeline-design-iq2",
+      "question": "Why is 'build once, promote everywhere' considered a best practice, and what breaks if you don't follow it?",
+      "answerMarkdown": "It's the difference between testing the thing you're going to ship and testing a lookalike. If you rebuild from source for staging and again for production, both builds compile the same commit — but \"same commit\" doesn't guarantee \"same binary.\" A floating dependency version can resolve differently an hour apart, a build-time environment variable can bake in different config, and compiler or base-image versions can drift.\n\nWhen that happens, a green staging run gives you **false confidence**: it validated an artifact that isn't the one running in prod. I've seen this manifest as \"it worked in staging\" bugs that take an hour to debug because the instinct is to suspect the code, when the actual defect is that two different artifacts were treated as one.\n\nThe fix is mechanical: build once, tag by commit SHA or version, push to a registry, and every environment deploys that same immutable tag. Environment-specific behavior belongs in runtime config, injected via environment variables or a config service — never baked into the build.\n\nThe one legitimate exception is genuinely different compile targets, like cross-compiling a mobile app per platform — that's not the same artifact with different config, it's actually different output.\n\n**Testing:** whether you can articulate *why* this practice exists, not just recite it as a rule.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "pipeline-design-iq3",
+      "question": "Your CI pipeline takes 45 minutes and developers have started batching commits to avoid running it too often. How would you speed it up?",
+      "answerMarkdown": "Batching commits to dodge a slow pipeline is a symptom worth taking seriously — it means CI has stopped giving fast feedback, which is the entire point of it existing. I'd profile the pipeline first rather than guessing: most 45-minute pipelines have one or two stages eating most of the time, usually the test suite or a cold dependency install.\n\nFor the test suite, I'd fan it out into parallel shards behind a single fan-in gate — an hour of serial tests split across 8 runners can often finish in under 10 minutes, assuming the shards are balanced by historical runtime rather than naive file-count splitting. For dependency install and build steps, I'd add caching keyed on the lockfile hash (not branch name, which risks staleness) and check Docker layer ordering — dependencies copied and installed before source, so unrelated source edits don't invalidate the dependency layer.\n\nI'd also separate what has to block a merge from what can run async — a full end-to-end suite might run post-merge or nightly rather than gating every PR, while a fast unit-test subset gates the PR itself.\n\nThe metric I'd actually track is time-to-first-signal on a PR, not total pipeline duration — that's what determines whether people trust and use CI instead of working around it.\n\n**Testing:** whether you diagnose before optimizing, and whether you understand caching and parallelism as the real levers rather than throwing more compute at the whole pipeline uniformly.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production"
+    },
+    {
+      "id": "pipeline-design-iq4",
+      "question": "What's the difference between pipeline-as-code and configuring a CI pipeline through a web UI, and why does it matter?",
+      "answerMarkdown": "Pipeline-as-code means the pipeline definition — stages, triggers, jobs — lives as a file in version control (`.gitlab-ci.yml`, a `Jenkinsfile`, `.github/workflows/*.yml`) right next to the application code it builds. A UI-configured pipeline lives in whatever the CI tool's database holds, edited by clicking through settings pages.\n\nThe practical difference shows up the moment something goes wrong with the release process itself. With pipeline-as-code, a bad change to the pipeline shows up as a diff in a PR, gets reviewed like any other code change, and can be reverted with `git revert` the same way an application bug can. With UI config, there's no diff, no review gate, and often no history — someone edited a checkbox six months ago and nobody remembers why a stage behaves the way it does.\n\nIt also lets the pipeline evolve **with** the code instead of lagging behind it: a feature branch that needs a new test stage or a different deploy target can add that change in the same PR as the feature, rather than someone manually reconfiguring shared UI settings that affect every branch simultaneously.\n\nThe cost is mostly in migration — moving a mature UI-configured pipeline to code takes real effort — but for anything greenfield, pipeline-as-code is close to a strict upgrade.\n\n**Testing:** whether you see the pipeline itself as something requiring the same engineering discipline as application code.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Process"
+    }
+  ]
+}

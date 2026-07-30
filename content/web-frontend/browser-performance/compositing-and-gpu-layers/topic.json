@@ -1,0 +1,180 @@
+{
+  "id": "compositing-and-gpu-layers",
+  "title": "Compositing and GPU Layers",
+  "area": "web-frontend",
+  "group": "browser-performance",
+  "order": 3,
+  "slug": "compositing-and-gpu-layers",
+  "summary": "Layers let the GPU move pixels it has already rasterised, which is why some animations cost nothing per frame. Promote too much and you trade jank for memory pressure.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "compositing-and-gpu-layers-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A page is not drawn as one flat image. The browser splits it into **compositor layers** — separate textures, each rasterised once and uploaded to the GPU — and then assembles the final frame by drawing those textures in the right order with the right transforms.\n\nThat split is what makes a `transform` animation cheap. The pixels already exist in GPU memory; moving them is a matrix multiply the hardware does in microseconds, with no layout and no repaint.\n\nIt is also what makes over-promotion expensive. Every layer is a texture, and a full-screen layer on a 1080p device costs roughly **8MB** of GPU memory. Sprinkle `will-change: transform` across a component library and you can turn a smooth page into a memory-thrashing one.\n\nThis topic is about controlling that trade deliberately: what creates a layer, what a layer buys you, and when it starts costing more than it saves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "compositing-and-gpu-layers-s02",
+      "order": 2,
+      "sectionTitle": "Why layers exist",
+      "subTitle": "Rasterise once, reuse many times",
+      "type": "concept",
+      "markdown": "Without layers, any change to any element would mean repainting the region of the page it occupies and everything overlapping it. Layers exist so that **content whose pixels haven't changed doesn't have to be redrawn**.\n\nThe flow, once an element has its own layer:\n\n1. **Paint** — the browser records draw commands for the layer's content.\n2. **Rasterise** — those commands become an actual bitmap, usually on a raster thread, then uploaded to GPU memory as a texture.\n3. **Composite** — every frame, the GPU draws the textures in z-order, applying each layer's transform matrix and alpha.\n\nSteps 1 and 2 happen once. Step 3 happens every frame and is nearly free. So an element that only *moves* or *fades* costs one rasterisation plus a per-frame GPU draw.\n\nThis is also why compositing can run **off the main thread**. The compositor thread holds the layer textures and their transforms; it can produce frames on its own while the main thread is busy with JavaScript. That's the difference between an animation that survives a 200ms script block and one that freezes — see [layout-reflow-and-repaint](layout-reflow-and-repaint) for the pipeline stages this sits at the end of.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": [
+        "compositing-and-gpu-layers-s02-q1"
+      ]
+    },
+    {
+      "id": "compositing-and-gpu-layers-s03",
+      "order": 3,
+      "sectionTitle": "What creates a layer",
+      "subTitle": "Compositing triggers",
+      "type": "concept",
+      "markdown": "The browser decides layer boundaries itself — you can only nudge it. The reliable triggers in Chromium:\n\n- **3D transforms** — `transform: translateZ(0)`, `translate3d(...)`, `rotate3d(...)`. The historical \"hack,\" still effective.\n- **`will-change: transform`** or **`will-change: opacity`** — the modern, explicit way to ask.\n- **`<video>`, `<canvas>` (accelerated), and WebGL contexts** — these produce their own pixels on a different schedule.\n- **`position: fixed`** in many cases, and `position: sticky` while stuck.\n- **Animated `transform` or `opacity`** via CSS animation or the Web Animations API — the browser promotes for the duration automatically.\n- **`backdrop-filter`**, and elements with certain `filter` values.\n- **`iframe`** content in some configurations.\n- **Overlap** — this is the one people miss. If an element visually overlaps a composited layer and paints above it, the browser may have to promote it too, to preserve correct paint order.\n\nThat last rule is why layer counts explode unexpectedly: promoting one element can force implicit promotion of everything stacked on top of it. Chromium calls these **implicit compositing** layers, and they are invisible in your CSS.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "compositing-and-gpu-layers-s03-q1"
+      ]
+    },
+    {
+      "id": "compositing-and-gpu-layers-s04",
+      "order": 4,
+      "sectionTitle": "The layer tree",
+      "subTitle": "What a page actually decomposes into",
+      "type": "diagram",
+      "markdown": "Picture a typical app page exploded into stacked planes, viewed at an angle — which is exactly how the DevTools **Layers** panel renders it.\n\nAt the bottom sits the **root layer**: the document background, the article text, most of the static content. It is viewport-sized and covers everything.\n\nAbove it, a small number of promoted planes float separately: a **fixed header** (promoted by `position: fixed`), a **video player** (its own layer by nature), a **sidebar drawer** carrying `will-change: transform` so it can slide in, and a **modal overlay** that was promoted because it animates opacity.\n\nThen the instructive part: a **tooltip that overlaps the video**, promoted implicitly — nothing in its CSS asked for a layer, but it paints above a composited layer, so the compositor had no choice.\n\nEach plane is a texture with its own memory cost. Reading the panel, you're looking for two things: layers you didn't ask for, and layers far larger than the element that caused them.\n\n<<< Image: an exploded 3D stack of translucent rectangular planes seen at an angle, bottom to top: a large \"root layer (document)\" plane, then \"fixed header\", \"video element\", \"sidebar drawer - will-change: transform\", \"modal overlay - animating opacity\", and a small \"tooltip\" plane labelled \"implicitly promoted - overlaps the video\"; annotate each plane with an approximate memory cost and draw a dashed arrow from the video to the tooltip labelled \"overlap forces promotion\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": []
+    },
+    {
+      "id": "compositing-and-gpu-layers-s05",
+      "order": 5,
+      "sectionTitle": "What a layer costs",
+      "subTitle": "Real memory numbers",
+      "type": "concept",
+      "markdown": "A layer's texture is `width × height × 4 bytes` (RGBA), multiplied by the **device pixel ratio squared**. That last factor is what catches people out.\n\nConcrete numbers:\n\n- A 300 × 200 CSS-pixel card on a DPR 1 screen: 300 × 200 × 4 ≈ **240KB**.\n- The same card on a DPR 3 phone: 900 × 600 × 4 ≈ **2.1MB**. Nearly nine times the memory for the identical element.\n- A full-viewport layer at 1920 × 1080, DPR 1: ≈ **8MB**.\n- A full-viewport layer on a DPR 3 phone at 390 × 844 CSS px: 1170 × 2532 × 4 ≈ **11.8MB**.\n\nMobile GPUs commonly have a few hundred megabytes of usable texture memory shared with everything else the device is doing. Thirty full-screen layers is not a theoretical limit — it's a crash on a low-end Android device.\n\nWhen memory runs short the browser evicts textures, which means re-rasterising them on demand. That produces exactly the stutter you were trying to avoid, except now it happens unpredictably instead of consistently.\n\nThe practical guidance: layers are a **scarce, deliberately-allocated resource**. Chrome will start refusing to promote past internal limits, and the fallback behaviour is worse than never promoting at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": [
+        "compositing-and-gpu-layers-s05-q1"
+      ]
+    },
+    {
+      "id": "compositing-and-gpu-layers-s06",
+      "order": 6,
+      "sectionTitle": "Promoting a drawer for a slide-in",
+      "subTitle": "The disciplined way to use will-change",
+      "type": "code",
+      "markdown": "The right pattern is to promote **just before** the animation and release **just after** — not to leave the hint on permanently.\n\n```css\n.drawer {\n  position: fixed;\n  inset: 0 auto 0 0;\n  width: 320px;\n  transform: translateX(-100%);\n  transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1);\n}\n\n/* Only while the interaction is live or imminent */\n.drawer.is-animating,\n.drawer-trigger:hover ~ .drawer {\n  will-change: transform;\n}\n\n.drawer.is-open { transform: translateX(0); }\n```\n\n```js\nconst drawer = document.querySelector('.drawer');\n\nfunction openDrawer() {\n  drawer.classList.add('is-animating');   // promote\n  requestAnimationFrame(() => drawer.classList.add('is-open'));\n}\n\ndrawer.addEventListener('transitionend', () => {\n  drawer.classList.remove('is-animating'); // release the layer\n});\n```\n\nTwo details that make this work. The `rAF` before adding `is-open` gives the browser a frame to create and rasterise the layer, so the first animation frame isn't the one paying for rasterisation. And removing the hint on `transitionend` returns roughly 3-12MB of GPU memory rather than holding it for the rest of the session.\n\nApplying `will-change` on hover of the trigger is the classic refinement: the promotion happens during the ~100ms before the user actually clicks.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 92,
+      "mcqIds": []
+    },
+    {
+      "id": "compositing-and-gpu-layers-s07",
+      "order": 7,
+      "sectionTitle": "will-change is a hint, not a switch",
+      "subTitle": "How to misuse it",
+      "type": "pitfall",
+      "markdown": "`will-change` tells the browser \"I am about to change this property, prepare.\" It is advisory, and it is easy to get wrong in both directions.\n\n- **`will-change: transform` on every card in a list.** Each one gets a texture. A 200-card feed can allocate hundreds of megabytes and either crash the tab or trigger constant eviction. This is the single most common misuse.\n- **Leaving it on permanently in a stylesheet.** The spec explicitly says it should be applied and removed around the change. Permanent hints mean permanently-held memory for an animation that runs once.\n- **`will-change: all`** — meaningless, and the browser ignores it or does something pessimistic.\n- **Expecting it to fix a layout-property animation.** Promoting an element does not make animating `width` cheap; layout still runs on the main thread every frame. `will-change` only helps for `transform`, `opacity`, and a few filters.\n- **Adding it in the same frame as the change.** Then the browser has no time to prepare, and you've paid the memory cost without the benefit.\n\nThe honest summary: `will-change` is a scheduling hint with a memory bill. If you can't say which property you're about to animate and when you'll remove it, you shouldn't be adding it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 90,
+      "mcqIds": [
+        "compositing-and-gpu-layers-s07-q1"
+      ]
+    },
+    {
+      "id": "compositing-and-gpu-layers-s08",
+      "order": 8,
+      "sectionTitle": "Layer explosion",
+      "subTitle": "When more layers make things slower",
+      "type": "pitfall",
+      "markdown": "Past a certain count, layers stop helping and start hurting. Three distinct costs stack up:\n\n- **Memory.** Covered already — textures are large, and mobile GPU memory is small and shared.\n- **Compositing time.** Assembling the frame is cheap per layer but not free. Hundreds of layers means hundreds of draw calls per frame, and the compositor itself starts missing the 16.7ms budget.\n- **Layer management on the main thread.** Building and updating the layer tree, computing overlap, and deciding what to promote is main-thread work that scales with layer count. Chrome traces show this as **\"Update Layer Tree\"** and it can become one of the biggest entries in a frame.\n\nThe mechanism that turns a small mistake into an explosion is **implicit compositing**. Promote one element low in the stack and every element that overlaps and paints above it may need its own layer to preserve ordering. One `will-change` on a background element can cascade into dozens of layers you never asked for.\n\nThe fix for that specific case is usually **z-order**, not CSS removal: give the promoted element a high `z-index` so nothing paints above it, and the implicit promotions disappear.\n\nRule of thumb: on a content page, a handful of layers is normal, dozens deserve investigation, hundreds is a bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 92,
+      "mcqIds": []
+    },
+    {
+      "id": "compositing-and-gpu-layers-s09",
+      "order": 9,
+      "sectionTitle": "Composited vs main-thread animation",
+      "subTitle": "The properties that qualify, and what disqualifies them",
+      "type": "compare",
+      "markdown": "Not every `transform` animation actually runs on the compositor. The browser silently falls back to the main thread when it can't guarantee correctness:\n\n| Situation | Runs on compositor? | Why |\n|---|---|---|\n| CSS transition on `transform` | yes | property maps to a layer matrix |\n| CSS animation on `opacity` | yes | per-layer alpha |\n| `transform` driven by JS in `requestAnimationFrame` | no | each frame needs main-thread JS |\n| Animating `width` or `top` | no | requires layout every frame |\n| `transform` on an element with `background-attachment: fixed` | often no | forces main-thread scroll handling |\n| Web Animations API on `transform` | yes | same pipeline as CSS animations |\n| `transform` where the element also changes text each frame | partly | layer must be re-rasterised |\n\nThe distinction worth internalising is the third row: **a `transform` set from JavaScript every frame is not a composited animation.** You get the cheap paint characteristics, but the animation still stops dead whenever the main thread blocks, because your rAF callback can't run.\n\nIf you need the animation to survive main-thread jank, it has to be declarative — a CSS transition/animation or the Web Animations API — so the compositor owns the timeline. That's the property that actually makes drawer and scroll animations feel native.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 92,
+      "mcqIds": []
+    },
+    {
+      "id": "compositing-and-gpu-layers-s10",
+      "order": 10,
+      "sectionTitle": "Inspecting layers",
+      "subTitle": "Finding out what was actually promoted",
+      "type": "concept",
+      "markdown": "Never guess about promotion — Chrome will tell you exactly what happened and why.\n\n- **Layers panel** (⋮ → More tools → Layers). Shows the layer tree in 3D. Select any layer and the details pane gives its **size in pixels**, **estimated memory**, **paint count**, and — the genuinely valuable field — **\"Compositing reasons\"**, which lists things like `willChange`, `overlap`, `has3DTransform`, or `videoElement`. Seeing `overlap` on a layer you didn't create is how you catch implicit compositing.\n- **Rendering tab → Layer borders.** Draws an orange border around every compositor layer directly on the page. Fast way to eyeball whether a list of cards has 1 layer or 200.\n- **Rendering tab → Frame rendering stats.** Live FPS plus a **GPU memory** readout, so you can watch memory jump when a promotion lands.\n- **Performance panel.** Look for **\"Update Layer Tree\"** and **\"Composite Layers\"** entries. If Update Layer Tree is a large fraction of the frame, layer count is your problem, not paint.\n\nThe workflow: turn on layer borders, do the interaction, and if you see more orange rectangles than you can count on one hand, open the Layers panel and read the compositing reasons for the ones you didn't intend.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 90,
+      "mcqIds": [
+        "compositing-and-gpu-layers-s10-q1"
+      ]
+    },
+    {
+      "id": "compositing-and-gpu-layers-s11",
+      "order": 11,
+      "sectionTitle": "Rasterisation and blurry scaling",
+      "subTitle": "The texture was drawn at one size",
+      "type": "concept",
+      "markdown": "A layer's texture is rasterised at a specific resolution and then reused. Two consequences follow that surprise people.\n\n**Scaling up looks blurry.** Animating `transform: scale(1)` → `scale(3)` stretches a texture rasterised at the original size, so text and edges soften during the animation. Chromium re-rasterises at the new scale once the animation settles, which is why the element snaps into focus at the end. The workaround is to rasterise at the *largest* size and scale **down**: start at `scale(1)` on an element sized for the final state, animate to a smaller scale, or accept the softness for a fast transition where nobody reads the text.\n\n**Rasterisation is not instant.** Promoting a large element means producing a multi-megabyte bitmap. On a mid-range phone that can be **5-20ms** for a full-screen layer — a dropped frame right at the start of the interaction. This is precisely why the drawer pattern promotes a frame early rather than in the same frame as the animation.\n\nRelated, and useful to know: Chromium rasterises large layers in **tiles** (commonly 256×256 or 512×512), so only the visible tiles of a huge layer are rasterised. That's what makes a 20,000px-tall scrolling page workable, and it's why a very tall promoted element isn't quite as catastrophic as the naive `w × h × 4` maths suggests.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 95,
+      "mcqIds": []
+    },
+    {
+      "id": "compositing-and-gpu-layers-s12",
+      "order": 12,
+      "sectionTitle": "A decision procedure",
+      "subTitle": "When to promote, and what to do instead",
+      "type": "concept",
+      "markdown": "A checklist that holds up under interview pressure:\n\n1. **Is the animation `transform`/`opacity` only?** If not, fix that first — promotion cannot rescue a `width` animation.\n2. **Is it declarative?** CSS transition, CSS animation, or Web Animations API, so the compositor owns the timeline and it survives main-thread blocking.\n3. **Is the element small enough to be worth a texture?** A 320px drawer at ~3MB on a phone, yes. Every row of a 200-item list, no.\n4. **Can I promote just-in-time?** Add `will-change` on hover or on interaction start, remove it on `transitionend`.\n5. **Did I check what actually got promoted?** Layers panel, compositing reasons, layer count.\n6. **Is anything promoted implicitly?** If so, try raising the intended layer's `z-index` so nothing paints above it.\n\nAnd the honest caveat to offer unprompted: **the browser is already good at this.** Chromium auto-promotes elements with running `transform`/`opacity` animations for their duration and releases them afterwards, which is better behaviour than most hand-written hints. `will-change` earns its keep mainly when the promotion needs to happen *before* the animation starts — a drawer opening on click, a modal appearing — where the first-frame rasterisation cost would otherwise be visible.\n\nDefault to trusting the browser; promote deliberately, narrowly, and temporarily when you can name the frame you're saving.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 95,
+      "mcqIds": []
+    }
+  ]
+}

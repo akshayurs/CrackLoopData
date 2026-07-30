@@ -1,0 +1,37 @@
+{
+  "topicId": "clickjacking-and-framing",
+  "interviewQuestions": [
+    {
+      "id": "clickjacking-and-framing-iq1",
+      "question": "How would you stop this page from being embedded on someone else's site?",
+      "answerMarkdown": "Two response headers, set at the edge so every response gets them:\n\n```\nContent-Security-Policy: frame-ancestors 'none'\nX-Frame-Options: DENY\n```\n\n`frame-ancestors` is the one that does the work — it's the current standard, it accepts an origin list, and where both are present browsers honour it. `X-Frame-Options` costs a line and covers any client that ignores CSP.\n\n**Two details decide whether this actually works.** First, it must be on *every* HTML response, including error pages and anything a CDN or storage bucket serves directly — that's where real findings come from, not from teams not knowing the header. Second, `frame-ancestors` **cannot be delivered in a `<meta>` tag**; the browser silently ignores it there, so a meta-only CSP looks protected and isn't.\n\nIf some routes genuinely need embedding — a payment widget, a support chat — I'd default the site to `'none'` and open specific routes with an explicit per-tenant allowlist, keeping settings and destructive actions on non-framable pages. `ALLOW-FROM` is not an option; it never shipped in Chrome or Safari.\n\nWhat I wouldn't do is frame-busting JavaScript. A sandboxed iframe can deny top-level navigation, so the script runs and its escape is simply refused.\n\n**Testing:** whether you name the modern header, know its delivery constraint, and think about coverage rather than just syntax.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Defense"
+    },
+    {
+      "id": "clickjacking-and-framing-iq2",
+      "question": "What is clickjacking, and why don't CSRF tokens stop it?",
+      "answerMarkdown": "Clickjacking — UI redress — is where the user clicks a real button on your real page while seeing something else entirely.\n\nThe mechanism is plain CSS. The attacker frames your page, makes the frame near-invisible while leaving it interactive (invisible and clickable are independent properties), and aligns their bait button exactly under your consequential one. The user clicks the bait; the event goes to your page.\n\n**Why every request-level control passes:** the click genuinely happened on your page, in the user's real session. So the request carries a valid CSRF token that your own page issued, satisfies `SameSite`, and has an `Origin` header naming you. At the HTTP layer it *is* a legitimate action — the subversion happened at the pixel level, before the request existed.\n\nThat's why the defense has to be \"refuse to be framed,\" via `frame-ancestors`.\n\nOn severity, I'd rate it by the most consequential single-click action on the page. An OAuth consent screen is the worst case: one stolen click grants an attacker-controlled app durable API access that survives logout. A page with no state-changing controls is genuinely low risk, and I'd say so rather than treating every finding as critical.\n\n**Testing:** whether you can reason about an attack that defeats controls operating at a different layer than the attack itself.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "clickjacking-and-framing-iq3",
+      "question": "Our product is an embeddable checkout widget, so we can't just set DENY. How do you secure it?",
+      "answerMarkdown": "The framing header becomes a **per-page** decision rather than a per-site one, and the design work is splitting the surface.\n\n- **Only the widget route is framable.** Everything else — account settings, saved payment methods, anything destructive — gets `frame-ancestors 'none'`. This is the highest-value move, because it caps what a stolen click can reach.\n- **Per-tenant allowlist.** Generate `frame-ancestors` from the parent origins that customer registered, so merchant A's page cannot frame the widget in merchant B's session context. A wildcard like `https://*` is the same as no protection.\n- **Require interaction a click can't fake.** Typing an amount, re-entering the card's security code, or a step-up auth cannot be harvested by aligning one button. This is why real payment flows feel deliberately slow — it's not bad UX, it's the control.\n- **`postMessage` discipline.** Validate `event.origin` against the allowlist on every message, and never trust a parent-supplied claim about who it is.\n- **`SameSite=Strict` on a cookie gating the final confirm.** A framed page is a cross-site context, so a `Strict` cookie isn't sent — the stolen click degrades to an unauthenticated request.\n\nI'd also assert the headers in an automated test that crawls real URLs, since the realistic failure is a new route shipping without them.\n\n**Testing:** whether you can secure a feature you can't simply turn off, which is most real security work.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design"
+    },
+    {
+      "id": "clickjacking-and-framing-iq4",
+      "question": "A pentest reports clickjacking, but we set `frame-ancestors 'none'` in our Express middleware. How do you investigate?",
+      "answerMarkdown": "**Get the exact URL from the report and check the response headers on that URL**, not on the app's home page. Nearly every finding of this shape is a coverage gap, not a wrong directive.\n\nWhere the header goes missing, in the order I'd check:\n\n- **Responses that never reach the middleware.** HTML served straight from a CDN, an S3 bucket, or the load balancer. An uploaded or exported HTML page in an assets bucket is framable and is exactly what a tester looks for.\n- **Error templates.** Middleware often runs on the success path only, so the `404` and `500` pages — still branded, sometimes carrying a login form — ship bare.\n- **A meta-tag CSP.** If the policy is in a `<meta>` tag rather than a header, `frame-ancestors` is silently dropped. It reads as configured and does nothing.\n- **A proxy stripping or duplicating the header.** Two layers each setting `X-Frame-Options` can produce a conflicting header that browsers discard entirely.\n- **A recently added subdomain or acquired service** on a stack that never inherited the standard header set.\n\nThe durable fix is to set framing headers **at the edge for everything**, then treat any framable route as an explicit exception — and add a test that crawls real URLs asserting the header, rather than unit-testing the middleware that already works.\n\n**Testing:** whether you debug the deployed system or defend the code, which is a meaningful seniority signal.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

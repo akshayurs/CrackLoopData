@@ -1,0 +1,37 @@
+{
+  "topicId": "third-party-scripts-and-supply-chain",
+  "interviewQuestions": [
+    {
+      "id": "third-party-scripts-and-supply-chain-iq1",
+      "question": "Our analytics vendor's script was compromised and served malicious code for a day. What would have limited the blast radius?",
+      "answerMarkdown": "A stack of partial controls, because none of them prevents the compromise — they bound it.\n\n- **A tight CSP `connect-src`.** Whatever the script steals has to leave the browser, and that directive is the chokepoint every variant passes through. It also generates a violation report, so it's usually how you *find out*, from real user traffic, before the vendor's status page says anything.\n- **The vendor not being on the sensitive pages at all.** No third-party script on checkout, login, or account settings is the cheapest and strongest control here, and it's an architectural decision rather than a technology. Magecart-style skimming at British Airways worked because payment-page script could read the form.\n- **`HttpOnly` cookies and no bearer token in `localStorage`**, so there's nothing readable sitting there to take.\n- **SRI**, if the vendor serves a stable versioned URL — the browser hashes the response and refuses to execute a mismatch, fail-closed, before parsing a single line.\n- **A sandboxed iframe on a separate origin**, if the widget doesn't need our DOM. That's real isolation rather than policy.\n\nAnd the operational half: **how fast can we remove a vendor's script from production?** If that needs a full release cycle, that's the gap. BA ran roughly two weeks; a kill switch behind a flag makes it minutes.\n\n**Testing:** whether you think in layers and detection time, or expect one control to solve it.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    },
+    {
+      "id": "third-party-scripts-and-supply-chain-iq2",
+      "question": "What is Subresource Integrity and when does it not help?",
+      "answerMarkdown": "SRI pins a resource to a hash. You put `integrity=\"sha384-...\"` on the tag, the browser fetches the file, hashes the bytes, and refuses to execute it on a mismatch — before parsing, so zero lines run.\n\n```html\n<script src=\"https://cdn.example.com/lib@3.2.1/lib.js\"\n        integrity=\"sha384-…\" crossorigin=\"anonymous\"></script>\n```\n\n`crossorigin=\"anonymous\"` is mandatory cross-origin — without it the response is opaque, can't be verified, and the script is blocked. That's the usual reason \"SRI broke the site.\"\n\n**Where it doesn't help**, which is the more interesting half:\n\n- **Scripts loaded by scripts.** Tag managers and ad stacks fetch further files at runtime; everything past the first is unpinned.\n- **Intentionally dynamic endpoints.** A service tailoring its response per browser has no fixed hash — that's the Polyfill.io shape, where a domain changed hands and started serving malicious code to sites that had pasted the tag years earlier.\n- **Your own build.** A poisoned npm dependency is compiled into your bundle, which you hash yourself, so the check passes perfectly.\n- **A legitimate malicious update.** SRI checks identity, not intent.\n\nIt also costs availability: fail-closed means a vendor's routine minifier change takes your widget offline. I'd automate hash updates, because teams that get burned twice tend to remove SRI rather than maintain it.\n\n**Testing:** whether you know a control's coverage boundary rather than just its syntax.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanisms"
+    },
+    {
+      "id": "third-party-scripts-and-supply-chain-iq3",
+      "question": "Why is adding a third-party script riskier than adding a backend dependency?",
+      "answerMarkdown": "Because the browser's unit of trust is the **origin**, not the file. A script's privileges come from the document that loaded it, so a vendor's script executes with exactly your first-party authority — there is no permission model, no partial trust, no read-only mode.\n\nConcretely it can read your whole DOM including form fields as the user types, read `localStorage` and any non-`HttpOnly` cookie, call your API with the session attached, replace your submit handler, load further scripts, and register a service worker for persistence across sessions.\n\nA backend dependency is at least inside a system you operate, with logs, network egress rules, and a review process. A runtime script tag has none of that: it's fetched fresh on every page load from infrastructure you don't control, so the vendor can change what executes on your users' machines at any moment, with no deploy on your side.\n\nWhich means \"we only use reputable vendors\" is a procurement statement, not a control. The question isn't whether they're trustworthy today — it's what happens when their CDN, their build pipeline, or one of their transitive dependencies is compromised, and whether that becomes your incident or your breach.\n\nAnd the practical scale: a typical production page loads code from five to twenty organisations, so your posture is the union of all of theirs.\n\n**Testing:** whether you understand the browser's trust model well enough to explain why this is structural, not a matter of vendor quality.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "third-party-scripts-and-supply-chain-iq4",
+      "question": "Marketing wants to add three new tags to the checkout page. How do you handle that?",
+      "answerMarkdown": "I'd push back on the *page*, not the tags. **No third-party script on checkout** is the single highest-value control available here, and it's a one-time architectural decision rather than an ongoing negotiation. Everything a skimmer needs is on that page.\n\nThe counter-offer I'd make so marketing still gets their data:\n\n- **Server-side tagging.** Emit the conversion event from our backend after the order is confirmed. It's more accurate than client-side anyway, since it isn't lost to ad blockers, and it removes the vendor from the browser entirely.\n- **Fire the tags on the confirmation page**, which has no payment fields, if a client-side event is genuinely required.\n- **A sandboxed iframe on a separate origin** for anything that must render, communicating over `postMessage` with `event.origin` validated.\n\nFor the site generally, the governance I'd want: an **inventory** from a recurring production crawl listing every script origin — most teams are surprised the first time — an **owner and review date per tag**, and **CSP as the enforcement point** so adding a new vendor requires a policy change that goes through engineering. That converts a social process into a technical gate without blocking marketing day-to-day.\n\nThe thing to name explicitly: a tag manager is a remote code execution channel by design. Anyone with container access ships arbitrary JS to production, bypassing review, CI and release. That's usually the least-governed deploy path a company has.\n\n**Testing:** whether you can say no in a way that solves the requester's actual problem.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Governance"
+    }
+  ]
+}

@@ -1,0 +1,182 @@
+{
+  "id": "concurrency-bugs-and-heisenbugs",
+  "title": "Concurrency Bugs & Heisenbugs",
+  "area": "engineering-craft",
+  "group": "debugging",
+  "order": 5,
+  "slug": "concurrency-bugs-and-heisenbugs",
+  "summary": "Some bugs vanish the instant you try to observe them. Learn why timing-dependent bugs are the hardest class to debug, the tools built specifically for them, and why \"just add a sleep\" is never the fix.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every technique so far assumes a bug is stable — reproduce it, shrink it, binary-search to it, and it stays put while you investigate. Concurrency bugs break that assumption: they depend on the precise interleaving of threads, and the interleaving changes every run, sometimes every observation.\n\nA **Heisenbug** is named for exactly this: a bug whose behavior changes when you try to measure it, the way adding a `print` statement or a debugger breakpoint can shift timing just enough to make a race stop happening — or start happening somewhere new.\n\nThis is the class of bug where the standard toolkit from [debugging-tools-techniques](debugging-tools-techniques) is least reliable, and where specialized tools and a different mental model earn their keep.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s02",
+      "order": 2,
+      "sectionTitle": "What makes a bug a Heisenbug",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **Heisenbug** is a bug whose behavior changes — often disappears — under the very act of observation. The name is a nod to the Heisenberg uncertainty principle: measuring the system perturbs it.\n\nWhy this happens: most concurrency bugs depend on a specific, narrow window of timing where two threads touch shared state in the wrong order. Any observation tool — a `print`, a breakpoint, a profiler sampling stack traces — adds overhead and changes exactly the timing that window depends on. Slow one thread down by a few microseconds with a log statement, and the race that was happening every hundred runs stops happening at all while you're watching.\n\nThe practical consequence: **the absence of the bug while you're debugging it is not evidence the bug is fixed.** It may just mean your instrumentation nudged the timing out of the failure window, and it'll be back in production the moment you remove the logging you added to find it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "concurrency-bugs-and-heisenbugs-s02-q1"
+      ]
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s03",
+      "order": 3,
+      "sectionTitle": "Race conditions",
+      "subTitle": "Shared state without ordering guarantees",
+      "type": "concept",
+      "markdown": "A **race condition** exists when two or more threads access shared state, at least one write is involved, and the program's correctness depends on an ordering between them that isn't actually guaranteed.\n\n```python\n# counter starts at 0, two threads run this concurrently:\ndef increment():\n    temp = counter        # read\n    temp = temp + 1       # modify\n    counter = temp        # write\n```\n\nEach thread's read-modify-write is three separate steps, not one atomic operation. If both threads read `counter` as 0 before either writes back, one increment is silently lost — the final value is 1 instead of 2. Nothing crashes; the program just produces a wrong answer, and which runs hit it depends on the scheduler's whims that day.\n\nThe fix is always the same shape: make the operation atomic (a lock, a compare-and-swap, an atomic type), not \"make the race less likely.\" Less likely still means it happens — just at 2am on the busiest day of the year instead of in your test suite.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "concurrency-bugs-and-heisenbugs-s03-q1"
+      ]
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s04",
+      "order": 4,
+      "sectionTitle": "An interleaving diagram",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Seeing two threads' operations interleaved on a timeline makes it obvious why the outcome depends on scheduling: **Thread A** reads `counter=0`, then before it writes back, the scheduler switches to **Thread B**, which also reads `counter=0`, increments, and writes `counter=1`. Control returns to Thread A, which still has `temp=1` from its earlier read, increments to `1`, and writes `counter=1` again — overwriting Thread B's update. Two increments, one survives.\n\nA different interleaving — where Thread A completes its full read-modify-write before Thread B starts — produces the correct result, `counter=2`. Same code, same inputs, two different outcomes purely from scheduling order, which is exactly why this bug is intermittent rather than deterministic.\n\n<<< Image: a two-lane swimlane diagram with \"Thread A\" and \"Thread B\" as parallel timelines; Thread A's lane shows boxes \"read counter=0\", then a gap, then \"write counter=1\"; Thread B's lane shows \"read counter=0\", \"increment\", \"write counter=1\" occurring entirely within Thread A's gap; a dashed vertical line connects Thread B's write to a callout \"overwritten\" pointing at Thread A's later write of the same value >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s05",
+      "order": 5,
+      "sectionTitle": "Deadlocks and livelocks",
+      "subTitle": "Recognizing the symptom and the resource-ordering cause",
+      "type": "concept",
+      "markdown": "A **deadlock**: two or more threads each hold a lock the other needs, and neither will release what it holds. The symptom is unmistakable once you know it — the process is alive but frozen, CPU usage often near zero, and it never recovers on its own.\n\nThe classic cause is **inconsistent lock ordering**: Thread A acquires Lock 1 then tries for Lock 2; Thread B acquires Lock 2 then tries for Lock 1. If both acquire their first lock before either reaches for the second, neither can proceed — forever. The fix is a global convention: always acquire locks in the same order everywhere in the codebase, so this circular wait can't form.\n\nA **livelock** is the more confusing cousin: threads aren't frozen, they're actively running, but they're stuck responding to each other in a loop that never makes progress — two threads each repeatedly backing off and retrying in a way that keeps re-colliding. CPU usage is high, unlike a deadlock, which is often the first clue that distinguishes the two.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "concurrency-bugs-and-heisenbugs-s05-q1"
+      ]
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s06",
+      "order": 6,
+      "sectionTitle": "The probe effect",
+      "subTitle": "Why adding a log statement can hide a timing bug",
+      "type": "concept",
+      "markdown": "The **probe effect** is the general name for any observation changing the behavior being observed — Heisenbugs are the symptom, the probe effect is the mechanism. Every debugging tool has a cost, and for timing-sensitive bugs that cost can be the whole story.\n\nConcretely: a `print` statement does I/O, which is orders of magnitude slower than an in-memory operation — inserting one inside a tight race window can push the two threads' operations far enough apart in time that they simply stop colliding. A breakpoint pauses one thread while others continue, which can either mask a race (the paused thread stops competing for the resource) or, just as often, *create* a new one by holding a lock far longer than the code normally would.\n\nThe practical implication: for suspected timing bugs, **prefer the lowest-overhead observation available** — an atomic counter incremented on each access, a log written to an in-memory ring buffer flushed later, or a specialized tool built to minimize this exact distortion — over a debugger or naive logging.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "concurrency-bugs-and-heisenbugs-s06-q1"
+      ]
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s07",
+      "order": 7,
+      "sectionTitle": "Tools built for concurrency bugs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because standard tools distort timing, concurrency bugs have their own specialized toolkit:\n\n- **Thread sanitizers** (ThreadSanitizer / TSan) instrument memory accesses at compile time to detect data races directly — two threads touching the same memory without synchronization — even if the race never actually produces a visibly wrong result on that run. This catches races before they manifest as a Heisenbug at all.\n- **Deterministic replay** tools record a program's actual thread-scheduling decisions during one run, then let you replay that *exact* interleaving repeatedly — turning a bug that happens once in a thousand runs into one you can reproduce on demand.\n- **Stress testing** deliberately runs concurrent code under heavy, varied load (more threads than cores, artificial delays inserted at random points) specifically to widen the odds of hitting a rare interleaving, rather than hoping normal testing stumbles onto it.\n\nOf these, running a thread sanitizer in CI is the highest-leverage habit for a team writing concurrent code — it turns \"this will probably be fine\" into a build failure before the race ever ships.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "concurrency-bugs-and-heisenbugs-s07-q1"
+      ]
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s08",
+      "order": 8,
+      "sectionTitle": "Memory corruption bugs",
+      "subTitle": "Use-after-free and buffer overruns are non-deterministic too",
+      "type": "concept",
+      "markdown": "Memory-safety bugs share the Heisenbug property even though they aren't strictly concurrency bugs: a **use-after-free** writes to memory that's already been reclaimed, and whether that write corrupts something you'll notice depends entirely on what the allocator happened to put in that freed slot next — which can differ run to run, build to build, or with something as small as adding a log statement that changes allocation patterns.\n\nA **buffer overrun** similarly corrupts whatever memory happens to sit past the buffer's end — sometimes unused padding (silent, no symptom), sometimes a critical pointer (a crash far from the actual bug).\n\nThis is why these bugs are notorious for \"disappearing\" when you add debug output or run under different build flags: you haven't fixed anything, you've changed the memory layout enough that the corruption now lands somewhere harmless instead of somewhere visible. The sanitizers from [debugging-tools-techniques](debugging-tools-techniques) exist specifically because normal testing can't reliably catch this class of bug at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s09",
+      "order": 9,
+      "sectionTitle": "\"Fixing\" a race with a sleep",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Under deadline pressure, a common \"fix\" for a race condition is adding a `sleep()` or delay so one thread reliably finishes before another starts. This is not a fix — it's placing a bet on a specific timing that has no guarantee behind it.\n\nWhy it fails: the sleep duration was tuned against today's hardware, today's load, and today's scheduler behavior. A busier production server, a slower CI runner, a different cloud instance type, or simply more contention next quarter can all shrink or eliminate the margin the sleep depended on — and the race comes back, usually somewhere that's harder to reproduce than the original report, since now there are two timing-dependent factors instead of one.\n\nIt also actively hides the bug from detection tools: a race \"papered over\" with a sleep often no longer triggers in a thread sanitizer's default test run, so it can silently pass CI while remaining exploitable under the exact conditions the sleep didn't anticipate.\n\nThe actual fix is always synchronization that provides a *guarantee*, not a probabilistic delay: a lock, an atomic operation, or a well-defined happens-before relationship (a queue, a future, a barrier).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "concurrency-bugs-and-heisenbugs-s09-q1"
+      ]
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s10",
+      "order": 10,
+      "sectionTitle": "A different investigative posture",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Debugging a suspected concurrency bug calls for adjustments to the standard loop: treat \"it stopped happening when I added logging\" as inconclusive, not as evidence of a fix. Prefer thread sanitizers and stress testing over stepping through with a debugger, since detection tools built for races don't rely on catching the bug in the act the way a breakpoint does. When you do need to observe, prefer the lowest-overhead method available.\n\nAnd hold the bar higher for \"verified\" — a race that didn't reproduce in 100 stress-test runs isn't proven fixed; it may need 100,000 runs, or a sanitizer that detects the race statically regardless of whether it manifested. The absence of a symptom is weak evidence for a Heisenbug in a way it isn't for most other bug classes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s11",
+      "order": 11,
+      "sectionTitle": "Why this matters beyond the bug itself",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concurrency bugs are disproportionately expensive not because they're hard to fix once found — the fix is usually a lock or an atomic — but because they're hard to *find*, hard to *reproduce on demand*, and easy to *falsely believe fixed*. A team that ships a sleep-based patch and closes the ticket has, in a very real sense, made the bug worse: it's now hidden behind a false sense of resolution instead of an open, known issue.\n\nThis is also why concurrency bugs are a favorite interview topic at the advanced end — they test whether a candidate reasons about correctness from guarantees (what does the language or library actually promise?) rather than from observed behavior (it worked when I ran it), which is precisely the trap a Heisenbug sets.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-s12",
+      "order": 12,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the hardest single-engineer debugging problem in the group; the next two topics shift from individual technique to team process. [on-call-and-incident-response](on-call-and-incident-response) covers what happens when a bug like this manifests as a live incident before anyone has diagnosed it — how a team detects and triages under uncertainty. [postmortems-and-incident-learning](postmortems-and-incident-learning) covers turning a hard-won diagnosis like a rare race condition into organizational knowledge, so the next engineer who hits a similar symptom doesn't start from zero.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

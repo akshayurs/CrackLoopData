@@ -1,0 +1,37 @@
+{
+  "topicId": "difference-arrays",
+  "interviewQuestions": [
+    {
+      "id": "difference-arrays-iq1",
+      "question": "You need to apply k range-increment updates to an array, then return the final array. How do you do it faster than O(n·k)?",
+      "answerMarkdown": "I'd use a difference array: convert every range update into two point writes, then materialize the final array with a single prefix-sum pass.\n\nFor an update \"add v to arr[l..r]\", I don't touch the range at all — I do `diff[l] += v` and `diff[r+1] -= v` on a separate array sized n+1 (the extra slot handles r = n-1 safely). The `+v` means every index from l onward will pick up the extra v once I reconstruct; the `-v` cancels that exact amount starting one past r, so the increment stops there.\n\nAfter applying all k updates this way — O(1) each, O(k) total — I reconstruct the real array with one prefix-sum pass: `result[i] = result[i-1] + diff[i]`. That's O(n). Total cost is **O(n + k)**, versus O(n·k) for looping over each update's range directly, which matters a lot once either k or the typical range width is large.\n\nThe one condition that makes this valid: all the updates have to happen before the read. If the caller needs the true value at some index *between* updates, this technique doesn't apply as-is — I'd reach for a Fenwick tree or segment tree with range-update support instead, since those support point reads interleaved with range writes.\n\n**Testing:** whether you can derive the two-point-write trick and its size, not just recite it, and whether you flag the batch-then-read precondition unprompted.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "difference-arrays-iq2",
+      "question": "What's the relationship between a prefix sum and a difference array?",
+      "answerMarkdown": "They're inverse operations on the same underlying idea, applied to opposite problems.\n\nA prefix sum answers **range reads** fast: build once in O(n) by accumulating (`prefix[i] = prefix[i-1] + arr[i]`), then any `sum(l, r)` is one subtraction, O(1).\n\nA difference array answers **range writes** fast: instead of accumulating, it records deltas (`diff[i] = arr[i] - arr[i-1]`), so applying a range update becomes two point writes, O(1) each, deferring the actual reconstruction to one final prefix-sum pass over the diff array.\n\nThe inverse relationship is literal: taking the difference array of an array and then taking the prefix sum of that difference array gets you back the original array exactly — one operation undoes the other. That's not a coincidence; it's the same reason subtracting an earlier prefix removes exactly what you don't want in a range query, and adding-then-cancelling with +v/-v inserts exactly what you do want in a range update.\n\nPractically, this means recognizing which one a problem needs comes down to a single question: is the workload read-heavy over a fixed array (reach for prefix sums), or write-heavy with reads batched at the end (reach for a difference array)? Mixed read-and-write workloads need neither directly — that's what a Fenwick tree or segment tree is for.\n\n**Testing:** whether you see these as one idea used in two directions, rather than two unrelated tricks to memorize separately.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Conceptual link"
+    },
+    {
+      "id": "difference-arrays-iq3",
+      "question": "You built a difference array, applied k range updates, but the final reconstructed array has values that are wrong only near the end of the array. What would you check first?",
+      "answerMarkdown": "My first suspect is a boundary bug in the r+1 write, not the reconstruction pass itself, since \"wrong only near the end\" is the classic symptom of a mishandled edge.\n\nTwo specific things I'd check:\n\n- **Did every update actually write its cancelling -v?** If some update's range ends at the very last index (r = n-1), then r+1 = n — one past a plain size-n array. If the diff array wasn't sized n+1 up front, that write either silently goes out of bounds (crashing, or worse, wrapping/overwriting something unrelated depending on the language) or gets skipped by a guard that was added defensively but incorrectly. Either way, that update's increment leaks past its intended range and inflates every index after it, including all the way to the end — which matches \"wrong near the end\" exactly.\n- **Was the diff array sized n or n+1?** The clean fix is allocating n+1 slots from the start so index n always exists as a safe sink for the cancellation, removing the conditional entirely. If the code instead has an `if r+1 < n` guard, I'd check that every call site respects it — it's very easy to add that guard once, forget it in a second code path, and get exactly this class of bug.\n\nI'd write a quick test with an update whose r is exactly n-1 and confirm the reconstructed array matches a brute-force reference beyond that point — that isolates the boundary immediately rather than guessing.\n\n**Testing:** whether you can localize a difference-array bug to its most likely mechanical cause instead of re-deriving the whole technique from scratch.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "difference-arrays-iq4",
+      "question": "A teammate wants to use a difference array inside a service that also needs to answer \"what's the current value at index i\" on every request, interleaved with range updates. Would you approve that design?",
+      "answerMarkdown": "No, and I'd explain the specific reason rather than just objecting on principle.\n\nA difference array's O(1)-per-update claim rests on deferring all real values to a single reconstruction pass — nothing at any index is \"current\" until that prefix-sum pass runs. If reads need to be interleaved with writes, one of two bad things happens: either you re-run the full O(n) reconstruction before every read (which erases the whole benefit — you're back to O(n) per operation), or you read stale, unreconstructed diff values that don't represent the true state at all.\n\nThe right structure for interleaved point-reads and range-updates is a **Fenwick tree (binary indexed tree)** with range-update, point-query support, or a **segment tree with lazy propagation** — both give O(log n) for range updates and O(log n) for point (or range) reads, without needing to batch. That's a real cost — O(log n) instead of O(1) per update — but it's the price for supporting reads at any point in the sequence, which a difference array fundamentally cannot do.\n\nSo my answer to the teammate: keep the difference array if the actual access pattern really is \"apply a batch of updates, then compute the result once\" — a scheduling system finalizing capacity before rendering one view, for instance. If the real requirement is a live, queryable value after every write, that's a different data structure, not a variation on this one.\n\n**Testing:** whether you can match a technique's actual constraints to a real system's access pattern rather than reaching for a familiar tool regardless of fit.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "System design"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "string-immutability-and-concatenation-cost",
+  "interviewQuestions": [
+    {
+      "id": "string-immutability-and-concatenation-cost-iq1",
+      "question": "Why is building a string with += inside a loop slow, and what would you do instead?",
+      "answerMarkdown": "It's slow because strings are immutable, so `+=` doesn't append — it allocates a brand new string, copies everything built so far plus the new piece, and reassigns the variable. The copy grows with every iteration, so n appends do 1+2+3+...+n units of copying, which is Θ(n²) instead of the O(n) the loop looks like it should be.\n\nThe fix is to accumulate into something mutable and convert once at the end: collect pieces into a list and call `\"\".join(parts)` in Python, or use `StringBuilder` in Java/C# and call `.toString()` once. Both give O(n) total — each character gets written once and read once, instead of being recopied on every subsequent iteration.\n\nConcretely, on 100,000 short words, the naive `+=` version does on the order of billions of character copies; the join version does on the order of the total character count. That's the difference between a script that finishes instantly and one that visibly hangs, and it's purely from choosing where to accumulate.\n\nI'd also flag the exception: C++'s `std::string` is mutable with its own amortized-growth buffer, so this specific bug doesn't apply there — the pattern is a consequence of immutability, not of concatenation in general.\n\n**Testing:** whether you can name the mechanism (immutability → copy-on-write) rather than just reciting \"use StringBuilder.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "string-immutability-and-concatenation-cost-iq2",
+      "question": "Why are strings immutable in most languages in the first place?",
+      "answerMarkdown": "Three practical reasons, and I'd give all three rather than one:\n\n- **Hash-key safety.** A string used as a dict/hash-map key gets hashed once on insertion. If it could change afterward, its hash would go stale relative to its bucket, silently corrupting the map. Immutability makes strings safe to use as keys without defensive copying.\n- **Safe sharing without copying.** Passing a string into a function, another thread, or a cache doesn't need a defensive copy, because nothing downstream can mutate it and affect the caller. This is also what makes **string interning** possible — identical literals can safely point at one shared object, since no one can change one copy and affect the other.\n- **Predictable equality and caching.** Once hashed or cached, a string's identity and content stay in sync forever, which a lot of runtime optimizations quietly depend on.\n\nThe trade-off is exactly the concatenation cost we started from: every \"edit\" is a full rebuild. Languages that need in-place string editing at scale — C++, or Java/C# via `StringBuilder` — provide an explicit mutable buffer type instead of making the everyday string type mutable, keeping the safety properties for the common case and opting into mutability only where it's asked for.\n\n**Testing:** whether you see immutability as a deliberate trade-off with real payoffs, not an arbitrary language restriction.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design rationale"
+    },
+    {
+      "id": "string-immutability-and-concatenation-cost-iq3",
+      "question": "You inherit a recursive tree-serialization function that returns left_str + node_str + right_str at every level. It's slow on deep, wide trees. What's going on?",
+      "answerMarkdown": "This is the quadratic concatenation bug wearing a disguise — no `for` loop in sight, but the same mechanism. At every internal node, the function concatenates its two children's already-fully-built strings. A node near the root ends up re-copying nearly the entire output string's worth of characters, and that happens again one level up, and again above that.\n\nFor a tree with n nodes producing a final string of length proportional to n, the total copying across all the concatenation-at-every-level calls can degrade toward O(n²) in the worst case (a heavily skewed or wide tree), even though it reads like a clean, idiomatic recursive traversal.\n\nThe fix mirrors the loop case: instead of returning built strings and concatenating them at each level, pass a single mutable buffer (a list, or a `StringBuilder`) down through the recursion by reference, and have each call `append` its own piece directly into it rather than returning and re-joining. The buffer accumulates once; nothing gets copied twice.\n\nI'd call this out as the general lesson: **any repeated extension of an immutable value across an unbounded number of calls is a candidate, whether or not there's an obvious loop** — recursive string-building, log-line assembly in a hot path, and report generation all hit the identical bug.\n\n**Testing:** whether you can recognize the quadratic pattern outside its most obvious for-loop shape.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "string-immutability-and-concatenation-cost-iq4",
+      "question": "Is there ever a case where += in a loop over strings is not actually O(n²)?",
+      "answerMarkdown": "Yes, two real ones, and I'd name both because giving a flat \"always O(n²)\" answer misses a genuine nuance.\n\nFirst: some interpreters optimize the special case `s = s + x` (or `s += x`) when they can statically prove `s` has exactly one live reference and isn't aliased anywhere else — CPython does this for certain bytecode patterns, rewriting it into an in-place resize instead of a full copy. It's real, but fragile: storing the string in a list, passing it to another function, or taking a reference to it anywhere breaks the single-reference guarantee and the optimization silently stops applying. I wouldn't rely on it, and I wouldn't assume an interviewer wants to hear it as the primary answer — it's a footnote, not a strategy.\n\nSecond, and more robust: languages where the everyday string type is itself mutable with an amortized-growth buffer — C++'s `std::string` is the clean example — don't have this bug at all, because `+=` there is the same amortized-O(1) append a dynamic array gets, not a rebuild-from-immutable-source operation.\n\nSo the honest framing: the O(n²) risk is a property of *immutability*, not of concatenation itself, and it disappears wherever that precondition doesn't hold. The safe default in any language is still to write the explicit buffer-and-join version — it's correct everywhere and costs nothing to write, so there's no reason to gamble on either exception.\n\n**Testing:** whether you understand the bug's actual root cause well enough to know exactly where it does and doesn't apply.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Nuance"
+    }
+  ]
+}

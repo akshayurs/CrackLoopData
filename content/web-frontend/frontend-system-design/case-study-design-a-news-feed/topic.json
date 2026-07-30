@@ -1,0 +1,182 @@
+{
+  "id": "case-study-design-a-news-feed",
+  "title": "Case Study — Design a News Feed",
+  "area": "web-frontend",
+  "group": "frontend-system-design",
+  "order": 7,
+  "slug": "case-study-design-a-news-feed",
+  "summary": "A worked frontend design round for an infinite-scroll feed — cursor pagination, virtualization for long sessions, and handling live posts without losing scroll position.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "case-study-design-a-news-feed-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a news feed\" is the frontend equivalent of \"design a URL shortener\" — common enough that the framework matters more than novelty. This case study applies the five-step method from earlier in this group to a concrete feed: infinite scroll, mixed content types (text, image, video posts), and updates arriving while the user reads.\n\nThree technical decisions carry the whole design: how you paginate (cursor vs offset), how you keep the DOM light after a user has scrolled through hundreds of posts (virtualization), and how you handle new content arriving without yanking the user's scroll position out from under them. Get those three right and the rest of the design is straightforward composition.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-news-feed-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: infinite scroll, mixed content, real-time-ish updates",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Applying step 1 of the framework: clarify before designing. A reasonable scope for this prompt: mobile-first, feed grows unbounded as the user scrolls (no traditional pagination controls), each post can be one of several types (text, single image, image carousel, video) with different render costs, and new posts from people you follow should appear without a manual refresh — but a few seconds of staleness is fine, this isn't a trading terminal.\n\nTwo numbers worth asking for explicitly: how many posts does a typical session scroll through (tens vs thousands changes whether virtualization is optional or mandatory), and how often do new posts actually arrive for an active user (a few per minute changes the \"new posts\" UX from earlier). Naming these assumptions out loud, even when the interviewer doesn't push back, shows you know they change the design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-news-feed-s02-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-news-feed-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: component breakdown",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Step 2 of the framework, applied here: a `FeedContainer` owns the fetched post list and pagination cursor; it renders a `FeedList` (the scrollable region) containing repeating `FeedItem` components, one per post, each dispatching to a type-specific renderer (`TextPost`, `ImagePost`, `VideoPost`); and a `LoadMoreSentinel` — an invisible element near the bottom whose visibility (via `IntersectionObserver`) triggers the next page fetch.\n\nThe boundary worth deciding now: `FeedContainer` owns data-fetching and the post-ID list; individual `FeedItem`s own only their own local UI state (a video's play/pause, an image carousel's current slide) and read post content from the shared cache by ID — exactly the server-truth/client-truth split from the data-layer topic, applied concretely here.\n\n<<< Image: box diagram — FeedContainer at top containing FeedList, which contains repeating FeedItem boxes each branching to TextPost/ImagePost/VideoPost, plus a LoadMoreSentinel box at the bottom of FeedList with a dashed arrow labelled \"IntersectionObserver triggers fetch\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-news-feed-s04",
+      "order": 4,
+      "sectionTitle": "Data fetching: cursor-based pagination",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A feed is the canonical case for cursor-based pagination over offset-based: `GET /feed?after=<postId>&limit=20` returns the 20 posts after a specific post, regardless of what's been inserted or removed before it. An offset-based `?page=3` breaks the moment a new post gets inserted at the top between two fetches — every subsequent page's offset now points at the wrong posts, causing skipped or duplicated items.\n\nThe cursor itself should be an opaque token the client doesn't interpret (often an encoded post ID plus a tiebreaker like a timestamp for posts created in the same instant), not something the client reconstructs — that keeps the pagination scheme's internals free to change server-side without a client update. Each page response should include the `nextCursor` to request the following page, and a way to signal \"no more posts\" distinctly from \"transient fetch error,\" since the UI needs to render those two states differently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-news-feed-s04-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-news-feed-s05",
+      "order": 5,
+      "sectionTitle": "Virtualizing the feed for long sessions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "After a long scroll session, a naive feed has rendered every post ever fetched as a live DOM node — thousands of nodes, most scrolled far out of view, still costing memory and slowing down every subsequent layout/paint. **Virtualization** (windowing) renders only the posts currently near the viewport, plus a small overscan buffer, and recycles DOM nodes as the user scrolls past them.\n\nThe core mechanism: track each item's estimated height, compute which range of items falls within (viewport position ± overscan), render only that range, and use a spacer element (or `transform: translateY`) to hold the scrollbar's correct total height as if every item were rendered. Libraries like `react-window` or `@tanstack/react-virtual` implement this so teams don't hand-roll the height math, which gets subtle fast once posts have variable, dynamically-measured heights (a text post and a video post are very different sizes).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "case-study-design-a-news-feed-s05-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-news-feed-s06",
+      "order": 6,
+      "sectionTitle": "Code: a minimal virtualized list shape",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The essential shape virtualization libraries provide, simplified to show the core idea:\n\n```javascript\nfunction useVirtualRange(scrollTop, viewportHeight, itemHeights, overscan = 5) {\n  // Find the first item whose bottom edge is below scrollTop\n  const startIndex = findFirstVisible(itemHeights, scrollTop);\n  const endIndex = findLastVisible(itemHeights, scrollTop + viewportHeight);\n\n  return {\n    renderStart: Math.max(0, startIndex - overscan),\n    renderEnd: Math.min(itemHeights.length, endIndex + overscan),\n    // Total height keeps the scrollbar accurate even though\n    // most items aren't actually mounted in the DOM\n    totalHeight: itemHeights.reduce((sum, h) => sum + h, 0),\n    offsetTop: sumHeightsBefore(itemHeights, startIndex - overscan),\n  };\n}\n```\n\nOnly `renderEnd - renderStart` `FeedItem`s ever mount at once — typically 15–30 regardless of whether the user has scrolled through 50 posts or 50,000. The `overscan` buffer exists so a fast scroll doesn't flash empty space while new items mount just outside the viewport.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-news-feed-s07",
+      "order": 7,
+      "sectionTitle": "Handling new posts arriving while scrolled down",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A user three screens deep in the feed shouldn't have new posts silently shove their current view down — that's disorienting and can cause an accidental tap on the wrong post. The standard pattern: new posts arriving (via a periodic poll or a push event) do **not** get inserted into the rendered list automatically. Instead, they accumulate in a pending buffer, and a small \"12 new posts\" banner appears pinned near the top of the viewport.\n\nOnly when the user taps that banner (or scrolls to the very top themselves) do the pending posts get prepended to the list — at a moment the user explicitly chose, so the scroll position they were at is preserved exactly. This is a UI-state decision layered on top of the data-layer decisions from earlier: the pending posts are fetched and cached like any other data, but deliberately withheld from the *rendered* list until the interaction that makes inserting them safe.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-news-feed-s07-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-news-feed-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: full data flow, scroll to rendered page",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Tracing one full cycle: the user scrolls near the bottom → the `LoadMoreSentinel`'s `IntersectionObserver` fires → `FeedContainer` requests the next page using its stored cursor → the response's posts get normalized into the shared entity cache and appended to the container's ordered ID list → the virtualization layer recomputes which range of that (now longer) list falls in the viewport → only that range's `FeedItem`s mount, each reading its post content from the cache by ID.\n\nSeparately and concurrently: a push event delivers a new post at the top of the feed → it's cached but held in the pending buffer, not appended to the rendered ID list → the \"N new posts\" banner's count increments → only a user tap moves those IDs from the pending buffer into the rendered list's front.\n\n<<< Image: flowchart with two parallel paths sharing a \"post cache\" box in the middle — path 1: Scroll → Sentinel intersects → Fetch next page (cursor) → Cache → Append to rendered ID list → Virtualizer recomputes range; path 2: Push event → New post → Cache → Pending buffer (not rendered) → Banner count increments → User taps → Prepend to rendered ID list >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-news-feed-s09",
+      "order": 9,
+      "sectionTitle": "Numbers: what real feed scale looks like",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete numbers make the design decisions defensible rather than assumed. A typical feed page fetches **15–25 posts per request** — small enough that a slow network doesn't stall the scroll, large enough to not trigger a fetch on every few pixels scrolled. An active session commonly renders **hundreds to low thousands of posts total** over its lifetime, which is exactly the regime where virtualization stops being a nice-to-have and becomes necessary — un-virtualized, a thousand mixed-media posts can push a mobile device's DOM node count into the tens of thousands, visibly degrading scroll framerate.\n\nOn the live-update side, an account following a few hundred people might see **1–5 new posts per minute** during peak hours — frequent enough that auto-inserting every one would be constantly disruptive, confirming the pending-banner pattern over silent insertion.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "case-study-design-a-news-feed-s09-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-news-feed-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: re-fetching page one and losing scroll position",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong pattern:** a new post arrives, and the naive implementation just re-fetches page one from the cursor's start and re-renders the feed from scratch to \"pick up\" the new content. The user, scrolled three screens down, gets yanked back to the top.\n\n**Why it happens:** re-fetching from the beginning is the simplest mental model — \"just get fresh data\" — and it's easy to reach for without considering that the rendered list's *order and position*, not just its content, is something the user has an expectation about.\n\n**Correct model:** never re-fetch or re-render the already-loaded portion of the list to incorporate new data. New posts are additive — they get appended to a pending buffer (previous slide) and only merged into the rendered list at a moment the user chooses. The already-rendered posts and the user's scroll offset within them should be untouched by anything happening at the top of the feed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "case-study-design-a-news-feed-s10-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-news-feed-s11",
+      "order": 11,
+      "sectionTitle": "Compare: virtualization approaches",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Fixed-height virtualization | Variable-height (dynamic measurement) |\n|---|---|---|\n| Assumption | Every item is the same height | Items have different, often unknown-until-rendered heights |\n| Fits this feed | Poorly — text, image, and video posts differ wildly in height | Well — matches mixed content types directly |\n| Implementation cost | Simple index-to-offset math | Needs a measurement pass (`ResizeObserver` or render-then-measure) and a height cache, since a post's height often isn't known until its content (especially an image) loads |\n| Common pitfall | N/A — not applicable here | An unmeasured item assumes an estimated height, causing a scroll-position jump once the real height is measured after mount |\n\nFor a mixed-content feed, variable-height virtualization is the only reasonable choice — but flagging the scroll-jump pitfall it introduces (and that libraries mitigate it by keeping a growing height cache and recalculating scroll offset on re-measurement) is the deeper answer an advanced round rewards.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-news-feed-s12",
+      "order": 12,
+      "sectionTitle": "The senior nuance: ordering guarantees under concurrent inserts",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A subtlety worth raising unprompted: cursor pagination guarantees you won't skip or duplicate posts that existed at the time of your first request, but it says nothing about *global* ordering once posts from multiple sources (people you follow, an algorithmic ranking service, ads) interleave. Two users scrolling the \"same\" feed at slightly different times can legitimately see posts in a different relative order — and that's usually fine, but it's worth naming as a deliberate trade-off rather than an oversight.\n\nThe deeper point: a feed's ordering is rarely pure reverse-chronological in production — it's typically a ranking service's output, re-scored periodically, which means the client's cursor is paginating through a ranking that can itself shift between page fetches. A staff-level answer notes this and asks whether the interviewer wants pure chronological (simpler, stable pagination) or ranked (realistic, but pagination stability becomes the ranking service's problem to guarantee, not the client's).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

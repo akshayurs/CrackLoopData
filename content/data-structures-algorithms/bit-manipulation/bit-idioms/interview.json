@@ -1,0 +1,37 @@
+{
+  "topicId": "bit-idioms",
+  "interviewQuestions": [
+    {
+      "id": "bit-idioms-iq1",
+      "question": "How do you get, set, clear, and toggle bit i of an integer?",
+      "answerMarkdown": "All four come from the same building block: `1 << i`, a mask with a single 1 at position `i`.\n\n- **Get:** `(x >> i) & 1` — shift bit `i` down to position 0, then AND with 1 to isolate it from everything above it.\n- **Set:** `x | (1 << i)` — OR-ing with a mask that has a 1 only at position `i` forces that bit to 1 and leaves every other bit untouched, since OR with 0 is a no-op.\n- **Clear:** `x & ~(1 << i)` — invert the mask to get all 1s except a 0 at position `i`, then AND; every other bit survives (AND with 1 is a no-op) and position `i` is forced to 0.\n- **Toggle:** `x ^ (1 << i)` — XOR-ing with a mask flips exactly the positions where the mask has a 1, so position `i` flips and everything else is untouched.\n\nThe pattern worth internalizing rather than memorizing per-operator: **the mask marks which positions change, and the choice of AND/OR/XOR decides what \"change\" means** — force to 0, force to 1, or flip. Once that clicks, the four idioms stop being four things to remember and become one idea applied three ways.\n\n**Testing:** whether you understand *why* each operator is chosen, not just whether you can recite the four formulas.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "bit-idioms-iq2",
+      "question": "You need to set bit i to a value that could be 0 or 1, not just force it on. Why can't you just use OR, and what do you do instead?",
+      "answerMarkdown": "OR can only ever turn a bit **on** — it has no way to turn a bit off, because OR-ing any bit with 1 leaves it (or makes it) 1, and OR-ing with 0 never changes an existing 1 back to 0. So `x |= (v << i)` works fine when `v` is 1, but when `v` is 0 it silently does nothing if the bit was already set — no error, no exception, just a stale bit that should have flipped to 0 and didn't.\n\nThe fix is to separate the two steps that OR conflates: **clear the bit unconditionally, then set it conditionally.** `x = (x & ~(1 << i)) | (v << i)`. The clear step forces the bit to 0 regardless of its prior state; the OR step then writes in whatever `v` actually is, `0` or `1`. Because the bit is guaranteed 0 going into that OR, writing a 0 leaves it 0 and writing a 1 sets it — no case is silently skipped.\n\nI've hit this exact bug in a real codebase: a config-flags integer where a feature toggle used `flags |= (enabled << bit)` — flipping a flag off in config had no effect at runtime because the stale 1 from a previous deploy never got cleared. Adding the explicit clear fixed it immediately.\n\n**Testing:** whether you can spot a bug that produces no error and only shows up as \"this config change didn't take effect.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "bit-idioms-iq3",
+      "question": "How would you pack four independent 8-bit values — say RGBA color channels — into a single 32-bit integer, and read one channel back out?",
+      "answerMarkdown": "Packing is shift-and-OR: place each channel at a different multiple-of-8 offset and OR the results together. `packed = (r << 24) | (g << 16) | (b << 8) | a` puts red in the top byte, alpha in the bottom byte, with no overlap since each channel occupies its own 8-bit lane.\n\nReading a channel back out is the range-read idiom from this topic: **shift the target byte down to position 0, then mask off everything above it.** To read green: `(packed >> 16) & 0xFF` — the shift moves green's byte into the lowest 8 bits, and ANDing with `0xFF` (eight 1s) discards anything shifted down from the red byte above it. Skipping the mask is the most common bug here: without `& 0xFF`, reading green also drags along whatever was in the red byte, now shifted into the upper bits of your result.\n\nThis is exactly how real color formats work — a 32-bit ARGB pixel in most graphics APIs is packed this way — and the same shift-then-mask idiom is how you'd read any bit-packed protocol header field: a version number in the top 4 bits of a byte, a flags nibble in the bottom 4, both extracted the same way.\n\n**Testing:** whether you can generalize get/set past a single bit to a byte-wide field, which is the actual skill interviewers are checking for here.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied"
+    },
+    {
+      "id": "bit-idioms-iq4",
+      "question": "Your team represents a set of up to 20 user permissions as bits in an integer column. What edge cases would you specifically test before shipping the get/set/clear logic?",
+      "answerMarkdown": "I'd test the boundaries the idioms are most likely to get subtly wrong, not just the happy path of setting and reading a middle bit.\n\n- **Off-by-one on range width.** If any operation touches a contiguous range of permission bits, I'd verify `hi - lo + 1` bits are affected, not `hi - lo` — a range [2, 4] must touch exactly 3 bits, and a fencepost bug here tends to pass small hand-checked tests while silently dropping the top bit on real data.\n- **Bit 0 vs 1-indexing confusion.** If the permission list is defined as \"permission 1 through 20\" anywhere in a spec or database schema, I'd nail down explicitly whether that maps to bit 0 or bit 1, and add a test that sets permission 1 and asserts the exact integer value, not just \"a bit got set somewhere.\"\n- **Set-to-value vs set-to-1.** If any code path takes a boolean and writes it into a bit — rather than unconditionally setting it — I'd verify clearing works, specifically feeding a value of `false` into a bit that starts `true`, since OR-based \"set\" code silently no-ops in exactly that case.\n- **The top bit and sign.** If the column is a signed 32-bit int and someone eventually needs bit 20+ for a new permission, I'd check whether the 32nd bit accidentally makes the stored integer negative in languages without unsigned types, which can break naive comparisons or serialization.\n\nEach of these is a real bug class from this topic, not a hypothetical — that's exactly why I'd write a table-driven test enumerating a handful of specific bit positions and range boundaries rather than one generic \"set a bit\" test.\n\n**Testing:** whether you can translate topic-level pitfalls into a concrete test plan, which is the staff-level version of \"do you know the idioms.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Testing"
+    }
+  ]
+}

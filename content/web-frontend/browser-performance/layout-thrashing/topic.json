@@ -1,0 +1,195 @@
+{
+  "id": "layout-thrashing",
+  "title": "Layout Thrashing",
+  "area": "web-frontend",
+  "group": "browser-performance",
+  "order": 2,
+  "slug": "layout-thrashing",
+  "summary": "Reading a layout property right after writing one forces the browser to lay out immediately. Do it in a loop over 200 items and you turn one layout pass into 200.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "layout-thrashing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "There is a class of jank where nothing in the code looks wrong. No huge loop, no giant payload, no expensive algorithm — just a tidy `for` loop that measures each item and sets its style. And the page locks up for 300ms.\n\nThis is **layout thrashing**: interleaving DOM reads and writes so that the browser is forced to run layout synchronously, over and over, inside a single frame.\n\nThe browser normally batches your style writes and lays out **once** before painting. Reading a geometric property mid-loop breaks that batching, because the browser must produce an up-to-date answer right now — which means running layout right now.\n\nThe fix is a two-line reordering: **read everything first, then write everything.** It's one of the highest-leverage performance patterns in frontend, and one of the most reliably asked senior interview questions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-thrashing-s02",
+      "order": 2,
+      "sectionTitle": "How the browser normally batches",
+      "subTitle": "The dirty flag and the lazy flush",
+      "type": "concept",
+      "markdown": "When you change a style, the browser does **not** immediately recompute geometry. It marks the affected part of the tree **dirty** and moves on. Layout is deferred until something actually needs the result — normally the end of the frame, just before paint.\n\nThat laziness is why this is fine:\n\n- Set `el.style.width` on 500 elements in a loop.\n- The browser marks 500 subtrees dirty.\n- At the end of the task, it runs layout **once** over the whole document and paints.\n\nThe browser has absorbed 500 writes into one layout pass. This is the same idea as batching writes to a database instead of committing each one: the work is proportional to the number of *flushes*, not the number of *writes*.\n\nCrucially, the dirty flag is global-ish, not per-element. There is one pending layout for the document, and any read of a layout-dependent value has to resolve **all** of it.\n\nUnderstanding this batching is the whole topic — thrashing is simply what happens when you defeat it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 75,
+      "mcqIds": [
+        "layout-thrashing-s02-q1"
+      ]
+    },
+    {
+      "id": "layout-thrashing-s03",
+      "order": 3,
+      "sectionTitle": "Forced synchronous layout",
+      "subTitle": "The read that can't wait",
+      "type": "concept",
+      "markdown": "Some DOM properties can only be answered with current geometry. When you read one while layout is dirty, the browser has no choice: it must run layout **synchronously, right there in your JavaScript**, before the property access can return.\n\nChrome calls this **forced synchronous layout** or *layout thrashing* when it repeats; the DevTools trace labels it with a warning triangle and the phrase \"Forced reflow.\"\n\nThe properties that force it — worth actually knowing, because the list is short and the consequences are large:\n\n- `offsetTop`, `offsetLeft`, `offsetWidth`, `offsetHeight`\n- `clientTop`, `clientLeft`, `clientWidth`, `clientHeight`\n- `scrollTop`, `scrollLeft`, `scrollWidth`, `scrollHeight`\n- `getBoundingClientRect()`, `getClientRects()`\n- `getComputedStyle()` for any layout-dependent property\n- `el.focus()`, `window.getComputedStyle()`, `document.scrollingElement.scrollTop`\n- On some engines, even `innerText` (it depends on layout to know what is rendered)\n\nA single forced layout is not a crime — it's a few milliseconds. The problem is doing it **N times in a loop**, which is exactly what a well-meaning \"measure each item\" pattern produces.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "layout-thrashing-s03-q1"
+      ]
+    },
+    {
+      "id": "layout-thrashing-s04",
+      "order": 4,
+      "sectionTitle": "The thrash cycle",
+      "subTitle": "Read, write, read, write",
+      "type": "diagram",
+      "markdown": "Picture one frame as a timeline. In the healthy version, the JavaScript task is one solid block of writes, and a single Layout block sits at the end just before Paint.\n\nIn the thrashing version, the same timeline is shredded. The task alternates: a read that forces a Layout block, then a write that dirties the tree again, then another read that forces another Layout block. The frame becomes a comb of tiny JavaScript slices separated by layout bars — and the number of bars equals the number of loop iterations.\n\nThe key structural point the picture makes: **the write is what re-dirties the tree, and the read is what forces the flush.** Either one alone is harmless. It's the alternation that multiplies the cost, and the multiplier is the loop length.\n\n<<< Image: two stacked frame timelines. Top, labelled \"batched\": one long yellow JavaScript block containing W W W W W, followed by a single purple Layout block, then a green Paint block, all fitting inside a 16.7ms marker. Bottom, labelled \"thrashing\": alternating small yellow slices marked R and W with a purple Layout bar forced after every R, repeated eight times, overflowing well past the 16.7ms marker; annotate one Layout bar with \"forced synchronous layout - the read cannot wait\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-thrashing-s05",
+      "order": 5,
+      "sectionTitle": "A thrashing loop",
+      "subTitle": "The code that looks completely reasonable",
+      "type": "code",
+      "markdown": "The canonical example — make every card as tall as the tallest one:\n\n```js\n// THRASHES: read and write alternate on every iteration\nfunction equalizeHeights(cards) {\n  for (const card of cards) {\n    const h = card.offsetHeight;        // READ  -> forces layout\n    card.style.height = h + 20 + 'px';  // WRITE -> dirties layout again\n  }\n}\n```\n\nTrace what the browser does with 200 cards:\n\n1. Iteration 1 reads `offsetHeight`. Layout is clean, so this is fast.\n2. Iteration 1 writes `height`. The tree is now dirty.\n3. Iteration 2 reads `offsetHeight`. Layout is dirty, so the browser **runs a full layout pass** to answer.\n4. Iteration 2 writes. Dirty again. Repeat.\n\nThat's **199 forced layout passes** in one task. If each costs 2ms on a mid-range phone, the loop takes ~400ms and the main thread is frozen for the whole time — no scrolling, no clicks, no rendering.\n\nThe same loop with 20 cards takes 40ms and nobody notices in development. The bug scales with data, which is why it reliably ships to production and then shows up only for the customer with the biggest account.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": [
+        "layout-thrashing-s05-q1"
+      ]
+    },
+    {
+      "id": "layout-thrashing-s06",
+      "order": 6,
+      "sectionTitle": "The fix: batch reads, then writes",
+      "subTitle": "Two loops instead of one",
+      "type": "code",
+      "markdown": "Split the single interleaved loop into a read phase and a write phase:\n\n```js\n// BATCHED: one layout for all reads, one layout at end of frame\nfunction equalizeHeights(cards) {\n  // Phase 1 - read everything. Layout runs at most once, on the first read.\n  const heights = cards.map(card => card.offsetHeight);\n\n  // Phase 2 - write everything. Nothing reads, so nothing forces a flush.\n  cards.forEach((card, i) => {\n    card.style.height = heights[i] + 20 + 'px';\n  });\n}\n```\n\nNow the browser runs layout **once** during the read phase (or zero times if it was already clean), and **once** at the end of the frame after all writes. Two layouts instead of 199. The 400ms freeze becomes roughly 5ms.\n\nNothing about the algorithm changed — same reads, same writes, same result. Only the *ordering* changed, and the cost dropped by two orders of magnitude. That's what makes this such a satisfying fix, and why interviewers like it: it tests whether you understand the browser's execution model rather than whether you can micro-optimise JavaScript.\n\nThe rule generalises: **within one frame, do all your measuring before any of your mutating.**",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-thrashing-s07",
+      "order": 7,
+      "sectionTitle": "Scheduling with requestAnimationFrame",
+      "subTitle": "Doing the work at the right moment",
+      "type": "code",
+      "markdown": "`requestAnimationFrame` runs your callback **just before the browser paints the next frame**, which is the correct place for visual work. Used carelessly, though, it doesn't fix thrashing — it just relocates it.\n\nThe standard pattern separates the phases across the frame boundary:\n\n```js\n// Measure now, mutate in the next frame's callback\nconst rects = items.map(el => el.getBoundingClientRect());\n\nrequestAnimationFrame(() => {\n  items.forEach((el, i) => {\n    el.style.transform = `translateY(${rects[i].top}px)`;\n  });\n});\n```\n\nThree things worth knowing:\n\n- **Never read layout inside a rAF callback that also writes.** rAF runs before layout for that frame, so a read there forces the layout you were about to get for free.\n- **rAF is throttled in background tabs** (down to roughly once per second, or paused entirely), which makes it the right choice for animation and the wrong choice for work that must run regardless of visibility.\n- **Libraries formalise this.** `fastdom` queues reads and writes into separate rAF-aligned phases so unrelated components can't thrash each other — genuinely useful when the interleaving is spread across a component tree rather than one function.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": [
+        "layout-thrashing-s07-q1"
+      ]
+    },
+    {
+      "id": "layout-thrashing-s08",
+      "order": 8,
+      "sectionTitle": "Spotting it in a trace",
+      "subTitle": "What thrashing looks like in the Performance panel",
+      "type": "concept",
+      "markdown": "Layout thrashing has an unmistakable signature once you know it.\n\nRecord the interaction in the **Chrome DevTools Performance panel** and look at the main-thread flame chart:\n\n- A **long yellow task** with a red triangle in its corner — the long-task warning.\n- Inside it, a **stack of repeated purple Layout bars**, dozens or hundreds of them, evenly spaced. Healthy frames have exactly one.\n- Hovering a Layout bar shows a **\"Forced reflow is a likely performance bottleneck\"** warning, plus the count of nodes that needed layout.\n- The **Summary** tab shows an unusually high Rendering percentage for what should be a scripting-bound task.\n\nThe most useful detail: clicking one of those Layout entries reveals **\"First invalidated\"** and the JavaScript stack that triggered it, pointing at the exact line doing the read. That takes you from \"something is slow\" to \"line 47 reads `offsetHeight`\" in about thirty seconds.\n\nChrome's console also logs `[Violation] Forced reflow while executing JavaScript took NNms` for individual offenders above a threshold, which is a free early warning during development.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-thrashing-s09",
+      "order": 9,
+      "sectionTitle": "Reads that don't look like reads",
+      "subTitle": "Where thrashing hides",
+      "type": "pitfall",
+      "markdown": "In real code the read and the write are rarely adjacent lines. The interleaving is usually created by abstraction:\n\n- **A helper function.** `positionTooltip(el)` internally calls `getBoundingClientRect()`. Call it in a loop over 100 elements and you've thrashed without a single `offsetHeight` in sight.\n- **A React `useLayoutEffect` per component.** Each child measures itself and sets a style. Individually fine, collectively a thrash across the whole subtree — and it's invisible because no single component's code is wrong.\n- **A third-party library.** Chart libraries, tooltip positioners, masonry layouts, and older sticky-header polyfills are frequent offenders.\n- **`scrollTop` in a scroll handler that also writes.** Scroll fires often enough that even a small thrash compounds into visible stutter.\n- **`getComputedStyle()` for something innocuous.** Reading any layout-dependent computed property forces the flush, even if you only wanted the colour.\n\nThe diagnosis habit that catches all of these: don't scan for the read, scan the **trace** for repeated Layout bars, then let the \"First invalidated\" stack tell you which abstraction is doing it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-thrashing-s10",
+      "order": 10,
+      "sectionTitle": "The long-list disaster",
+      "subTitle": "When a measure loop meets real data",
+      "type": "pitfall",
+      "markdown": "The failure that reaches production most often: a component that measures each row to decide something per-row — truncate the text, size a tooltip, decide whether to show a \"read more\" link.\n\n```js\n// Ships fine. Dies at scale.\nrows.forEach(row => {\n  if (row.scrollHeight > row.clientHeight) {   // READ\n    row.classList.add('truncated');            // WRITE\n  }\n});\n```\n\nWhy it survives review and then breaks:\n\n- **In development the list has 10 items.** 10 forced layouts, ~15ms, invisible.\n- **The demo account has 50.** Still under 100ms, feels slightly heavy, nobody files a bug.\n- **The largest customer has 2,000.** ~2,000 forced layouts on a document that's now also much bigger, so each one costs more too. The cost is worse than linear, and the tab hangs for seconds.\n\nThat superlinear behaviour is the thing to internalise: layout cost grows with document size **and** the number of forced passes grows with list length, so the two multiply.\n\nThe fixes, in order: batch the reads; then question whether you need per-item measurement at all — `line-clamp` in CSS, `ResizeObserver`, or `IntersectionObserver` solve many of these cases with zero synchronous reads.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": [
+        "layout-thrashing-s10-q1"
+      ]
+    },
+    {
+      "id": "layout-thrashing-s11",
+      "order": 11,
+      "sectionTitle": "Observers instead of measurements",
+      "subTitle": "The modern way to avoid reading at all",
+      "type": "concept",
+      "markdown": "The best fix for a forced layout is often to **not measure**. Browsers ship observer APIs that deliver geometry asynchronously, computed by the engine at a point in the frame where layout is already clean:\n\n- **`ResizeObserver`** — fires when an element's box size changes, handing you `contentRect` with no synchronous read. It's the correct replacement for polling `offsetWidth`, and it fires after layout, so reading inside it is cheap. Beware writing sizes inside the callback in a way that re-triggers it — that's the `ResizeObserver loop limit exceeded` error.\n- **`IntersectionObserver`** — tells you when an element enters or leaves the viewport, replacing `getBoundingClientRect()` inside scroll handlers. Lazy loading, infinite scroll, and analytics impressions should all use it.\n- **`PerformanceObserver`** — surfaces long tasks and layout shifts without instrumenting anything yourself.\n\nThe common thread: these push geometry to you at a safe moment rather than making you pull it at an unsafe one.\n\nOne more structural escape hatch: **CSS often removes the need entirely.** `-webkit-line-clamp` truncates without measuring, `position: sticky` replaces scroll-handler math, and CSS Grid or `align-items: stretch` gives equal-height cards without a single `offsetHeight`. The fastest read is the one you deleted.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "layout-thrashing-s11-q1"
+      ]
+    },
+    {
+      "id": "layout-thrashing-s12",
+      "order": 12,
+      "sectionTitle": "Batched vs interleaved, side by side",
+      "subTitle": "The numbers on 200 elements",
+      "type": "compare",
+      "markdown": "Same work, two orderings, on a list of 200 items on a mid-range device:\n\n| | Interleaved (thrashing) | Batched (read then write) |\n|---|---|---|\n| Forced layout passes | ~199 | 0-1 |\n| End-of-frame layouts | 1 | 1 |\n| Typical total cost | 300-500ms | 3-8ms |\n| Scales with list length | yes, superlinearly | no, layout count is constant |\n| Main thread blocked | entire duration | negligible |\n| DevTools signature | stacked purple Layout bars | one Layout bar |\n\nThe row that matters most is the second-to-last one: batching makes the number of layout passes **independent of the list length**. That's not an optimisation of a constant factor, it's a change in how the cost grows — which is why the fix holds up when the data grows tenfold and micro-optimisations don't.\n\nAnd it's worth being precise about what batching does *not* do. It doesn't make layout cheaper; a single layout over a 5,000-node document is still expensive. It only stops you paying for it repeatedly. If one layout pass is itself over budget, the answer is containment, virtualisation, or a shallower tree — a different topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-thrashing-s13",
+      "order": 13,
+      "sectionTitle": "The senior version of the rule",
+      "subTitle": "When one forced layout is the right call",
+      "type": "concept",
+      "markdown": "\"Never force layout\" is a junior-level rule. The accurate version is: **never force layout N times when once will do.**\n\nCases where a single forced read is genuinely correct:\n\n- **Triggering a CSS transition from a newly-inserted element.** You insert the node with the start class, read `offsetHeight` once to flush layout, then add the end class. Without that read the browser batches both style changes and no transition runs. This is a deliberate, well-known one-line forced layout.\n- **Measuring once before an animation.** The FLIP technique (First, Last, Invert, Play) reads positions before and after a DOM change, then animates the difference with `transform`. Two reads total, and it buys a fully composited animation.\n- **A one-off measurement on mount.** One `getBoundingClientRect()` at 2ms is not a problem worth engineering around.\n\nThe judgement to demonstrate in an interview is proportionality: name the cost as *number of forced passes × cost per pass*, note that the second factor grows with document size, and then say which one you're attacking. Candidates who recite \"reads before writes\" without being able to say why one forced read is fine are usually pattern-matching rather than reasoning.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": []
+    }
+  ]
+}

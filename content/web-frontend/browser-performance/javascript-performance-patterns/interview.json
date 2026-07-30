@@ -1,0 +1,37 @@
+{
+  "topicId": "javascript-performance-patterns",
+  "interviewQuestions": [
+    {
+      "id": "javascript-performance-patterns-iq1",
+      "question": "What is the difference between debounce and throttle, and how do you decide which to use?",
+      "answerMarkdown": "**Debounce** runs the function once, `delay` after the events *stop*. **Throttle** runs it at most once per interval *while* events continue.\n\nThe deciding question: **what should happen during a continuous ten-second stream of events?**\n\n- \"Nothing until it stops\" → debounce. A search box firing a network request: only the final value matters, so ~300ms debounce turns eleven keystrokes into one request.\n- \"Keep updating\" → throttle. A scroll-position progress bar must move *during* the scroll. Debounce it and during a continuous scroll it runs **zero times** — the bar freezes and only jumps when the user stops. That's the classic wrong-tool bug, and it reads as \"the feature is broken\" rather than \"the page is slow.\"\n\nThe inverse mistake is throttling a search: typing \"performance\" fires four or five requests instead of one, and they can resolve out of order.\n\nFor anything visual I'd use **rAF-throttling** rather than a time interval — one execution per frame, aligned to vsync, adapting to 120Hz displays, and pausing in background tabs where a timer keeps burning battery.\n\nImplementation details that matter: use `fn.apply(this, args)` so context isn't lost, include a **trailing call** in throttle or the last event is dropped, and expose `cancel()` so a React component can clear the pending timer on unmount.\n\n**Testing:** whether you can pick correctly from the behaviour required, not just define both terms.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "javascript-performance-patterns-iq2",
+      "question": "What is a long task, and why does breaking one up help when the total work is unchanged?",
+      "answerMarkdown": "A **long task** is any main-thread task over **50ms**. The threshold comes from responsiveness: RAIL says a response should land within about 100ms, and a task can't be interrupted, so input arriving at the start of a 300ms task waits the full 300ms before your handler even begins.\n\nBreaking it up helps because **Total Blocking Time counts only the portion of each task beyond 50ms**. One 300ms task contributes 250ms of TBT. Six 50ms tasks contribute zero — doing precisely the same work.\n\nWhat actually changed is that five yield points now exist. At each one the browser can dispatch a queued click, render a frame, and update the UI. Total CPU time is identical; perceived responsiveness is transformed. **For responsiveness, task granularity matters more than total work.**\n\nIn practice I'd yield on a **time budget, not a count** — measure elapsed time and yield at ~40ms, because per-item cost varies:\n\n- `scheduler.yield()` where available, since it resumes at high priority so your work doesn't lose its place.\n- `setTimeout(0)` as the universal fallback.\n- `requestIdleCallback` (always with a `timeout`) for genuinely optional work like analytics flushes.\n\nThe caveat: if the work doesn't touch the DOM, a Web Worker is better than chunking — it removes the cost from the main thread entirely rather than spreading it.\n\n**Testing:** whether you understand the TBT formula and the uninterruptible-task model behind it.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "javascript-performance-patterns-iq3",
+      "question": "When would you reach for a Web Worker, and when is it the wrong tool?",
+      "answerMarkdown": "A worker runs on a real OS thread, so it's the only way to do heavy computation with **zero** main-thread cost. Good fits: parsing a large CSV or JSON payload, image processing, cryptography, search indexing, diffing large datasets.\n\nIt's the wrong tool in three situations:\n\n- **Anything DOM-related.** A worker has no `document` or `window`. If the expensive work is rendering, chunked yielding or virtualisation is the answer instead.\n- **Small work.** Spawning costs a few milliseconds and a few megabytes, and the round trip adds latency. Below roughly **50ms of computation** the overhead exceeds the benefit — I've seen a 30ms function get slower after being moved.\n- **Large data sent frequently.** Messages are structured-cloned by default, and **that copy happens on the main thread** — exactly what you were trying to avoid. Sending a 50MB object per keystroke is worse than doing the work inline.\n\nThe mitigations for that last one are the real expertise: **transferables** (`postMessage(buf, [buf])`) hand an `ArrayBuffer` over in O(1), and `SharedArrayBuffer` gives true shared memory at the cost of requiring COOP/COEP cross-origin isolation headers.\n\nProduction details I'd mention: reuse a long-lived worker rather than spawning per request, send the large dataset once at init and keep it inside the worker, and tag requests so stale replies from an earlier query are discarded rather than overwriting fresher results.\n\n**Testing:** whether you know the cost model — thread plus serialisation — rather than treating workers as free parallelism.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "javascript-performance-patterns-iq4",
+      "question": "A search-as-you-type field over 50,000 client-side rows freezes the UI on every keystroke. How would you fix it?",
+      "answerMarkdown": "I'd resist debouncing as the first move, because that only makes the freeze **less frequent** — the user still gets a 400ms frozen page, just occasionally. The hierarchy I work through is **eliminate > move > split > reduce frequency.**\n\n**Eliminate.** Is the filter O(n) per keystroke over an unchanged array? Build an index once — a `Map` or a prefix structure — and each keystroke becomes a lookup instead of a scan. Memoise on a stable key. And if the result list is long, **virtualise** it: rendering 30 rows instead of 50,000 usually removes more time than the filtering did.\n\n**Move.** If the scoring genuinely needs to be computed, put it in a **Web Worker**. Send the 50,000 rows once at init, then only the query per keystroke, and guard against out-of-order replies by tagging each request.\n\n**Split.** If it must stay on the main thread and touch the DOM, chunk with a 40ms time budget and `scheduler.yield()`.\n\n**Then reduce frequency.** A ~300ms debounce on the *network or worker call* — never on the input's own displayed value, or typing feels laggy.\n\nIn React specifically, `useTransition` or `useDeferredValue` is often the cleanest version: the input stays instant, the expensive list renders as a non-urgent update, and obsolete renders are abandoned rather than delayed. That's typically a 300ms → 80ms INP change. But it slices React's rendering only — a 400ms synchronous filter call inside the handler is invisible to it.\n\n**Testing:** whether you attack the work itself before reaching for scheduling, and know what concurrent rendering can and can't see.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Applied"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "concurrency-bugs-and-heisenbugs",
+  "interviewQuestions": [
+    {
+      "id": "concurrency-bugs-and-heisenbugs-iq1",
+      "question": "What's a Heisenbug, and why can't you just add logging to find one?",
+      "answerMarkdown": "A Heisenbug is a bug whose behavior changes — often disappears — the moment you try to observe it, named after the idea that measuring a system perturbs it. In practice it's almost always a concurrency or memory-corruption bug that depends on precise timing.\n\nThe reason logging is risky here specifically: a print statement does I/O, which is dramatically slower than an in-memory operation. If a race depends on two threads hitting a narrow timing window, inserting a log line inside that window can push the operations far enough apart that they simply stop colliding — the bug looks fixed, but nothing about the actual code changed.\n\nSo the practical rule is: for a suspected timing bug, the *absence* of the symptom while instrumented is weak evidence, not proof of a fix. I'd reach for tools built to not disturb timing as much — a thread sanitizer that detects the unsynchronized access directly rather than waiting to observe a wrong answer, or a deterministic replay tool that records the actual interleaving once and lets me inspect it after the fact without needing to catch it live.\n\n**Testing:** whether you understand the probe effect specifically, or just know the word \"Heisenbug\" without the mechanism behind it.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-iq2",
+      "question": "How would you diagnose an intermittent deadlock in production that happens maybe once a week?",
+      "answerMarkdown": "First I'd confirm it's actually a deadlock and not something else that looks similar: a deadlocked process is alive but frozen, with CPU usage typically near zero and no recovery without intervention — that's different from a livelock (high CPU, actively spinning) or a slow leak (gradual degradation, not a sudden freeze).\n\nOnce confirmed, the goal is to see the exact state at the moment it froze — thread dumps are the key artifact. Most runtimes support triggering one on demand (a signal, an admin endpoint, or a scheduled dump if I can predict the timing). I'm looking for two or more threads each blocked waiting on a lock the other holds — that's the deadlock signature, and the thread dump shows exactly which locks and in what order.\n\nThe fix is almost always inconsistent lock ordering: thread A takes lock 1 then wants lock 2, thread B takes lock 2 then wants lock 1. Once I see the two lock names, the fix is a global convention — always acquire locks in a fixed, documented order everywhere in the codebase — not a targeted patch to just this one code path, since the same ordering mistake is often duplicated elsewhere.\n\nGiven it's rare (once a week), I'd also add monitoring that pages on a stuck-thread pattern so the next occurrence gets a thread dump automatically instead of relying on being lucky enough to catch it live.\n\n**Testing:** whether you can diagnose a deadlock from its signature and fix the systemic cause, not just the specific stuck threads.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production debugging"
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-iq3",
+      "question": "A teammate fixes a flaky test by adding a sleep(500) before an assertion, and it passes reliably now. What's your reaction?",
+      "answerMarkdown": "My first instinct is that this almost certainly isn't fixed, it's timing-tuned — and I'd want to know what race the flakiness was actually revealing before accepting the sleep. A flaky test that passes with a fixed delay is usually exposing a real missing synchronization: something the test depends on hasn't necessarily finished by the time the assertion runs, and the sleep is a bet that 500ms is always enough.\n\nThat bet has no guarantee behind it. A busier CI runner, a slower machine, added load from other tests running in parallel, or the underlying operation getting marginally slower over time can all eat into that margin, and the flakiness returns — usually described as \"this test is randomly flaky again\" rather than connected back to the original race.\n\nWorse, it can actively hide the bug from tools built to catch it: a race that no longer manifests because the sleep changed timing may not trip a thread sanitizer either, so the underlying missing synchronization can ship to production, where the real workload doesn't have the same generous timing margin the sleep assumed.\n\nWhat I'd push for instead is finding the actual synchronization primitive the test needs — a way to wait for the specific event (a future resolving, a queue receiving a message) rather than waiting for time to pass. That's deterministic regardless of load.\n\n**Testing:** whether you recognize a sleep as masking a bug rather than fixing it, and can name what a real fix looks like.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "concurrency-bugs-and-heisenbugs-iq4",
+      "question": "How would you convince a team to invest in running a thread sanitizer in CI, given it adds build time and complexity?",
+      "answerMarkdown": "I'd frame it around what it uniquely catches: a thread sanitizer detects unsynchronized concurrent memory access directly, at the moment it happens, regardless of whether that particular test run produced a visibly wrong answer. That's fundamentally different from normal testing, which only catches a race if it happens to manifest as a wrong result on that specific run — and races can pass a thousand normal test runs and still be present, waiting for production load and scheduling to trigger them.\n\nThe cost argument I'd make concrete: a race caught in CI is a build failure with a stack trace pointing at the exact unsynchronized access. The same race caught in production is an intermittent, hard-to-reproduce incident that might take days to diagnose, precisely because Heisenbugs resist observation — the debugging tools we'd normally reach for can hide the very behavior we're trying to catch. I'd point to a recent example if we have one: an incident that took multiple days to root-cause down to a data race is a strong argument for a tool that would have caught it in minutes, pre-merge.\n\nThe added build time is real but bounded — sanitized builds typically run 2-10x slower, which is acceptable for a dedicated CI job that doesn't block every commit, run on a schedule or on PRs touching concurrent code specifically.\n\n**Testing:** whether you can make a cost-benefit case for prevention tooling, connecting it to the specific pain concurrency bugs cause once they reach production.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Advocacy"
+    }
+  ]
+}

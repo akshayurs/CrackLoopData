@@ -1,0 +1,37 @@
+{
+  "topicId": "measuring-performance",
+  "interviewQuestions": [
+    {
+      "id": "measuring-performance-iq1",
+      "question": "How would you know if a performance regression shipped to real users?",
+      "answerMarkdown": "You cannot know from lab data alone, so the answer has to start with **RUM**.\n\n**What I'd have in place:** the `web-vitals/attribution` library reporting LCP, INP and CLS via `navigator.sendBeacon` on `pagehide`, tagged with route, device class, and `navigator.connection.effectiveType`. Reported at **p75 and p95**, never the mean — performance distributions have long right tails, and an average hides the 25% of users having a bad time.\n\n**Why `pagehide` and not `load`:** beaconing on load systematically drops users who abandoned because the page was slow. That's survivorship bias biting exactly where the data matters most.\n\n**How the alert becomes an action:** RUM tells me *which metric, which route, which segment*. Attribution tells me the LCP element, the CLS `largestShiftTarget`, or the INP `interactionTarget` and phase. Then scheduled synthetic runs (WebPageTest or Lighthouse CI on each deploy) tell me *which release* — that's the piece RUM can't give me, because it's noisy and lags by hours.\n\n**And the layer that prevents most of it:** a bundle-size budget hard-failing in CI. It's deterministic, so it can be strict, and it catches the accidental 400KB import in the PR rather than a month later.\n\nThe trap I'd name explicitly: a single Lighthouse score dropping from 91 to 87 is noise, not a regression. Run-to-run variance is several points on identical code.\n\n**Testing:** whether you think in terms of a measurement system with real-user data at the centre, rather than reaching for Lighthouse.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Monitoring"
+    },
+    {
+      "id": "measuring-performance-iq2",
+      "question": "What's the difference between lab data and field data, and when do you use each?",
+      "answerMarkdown": "**Lab (synthetic)** is running the page yourself under controlled conditions — Lighthouse, WebPageTest, the DevTools Performance panel. Reproducible, richly detailed, and available before you ship.\n\n**Field (RUM)** is recording what real users experienced — your own `web-vitals` beacons, or Google's CrUX. Messy, aggregate, and only available after release.\n\nThe rule I work by: **debug with lab, decide with field.**\n\nThey diverge for concrete reasons, not mysterious ones:\n\n- **Lab doesn't interact with the page**, so it can't produce INP at all — it reports TBT as a proxy. A page can have low TBT and a 900ms INP on the one interaction users actually perform.\n- **Lab loads a clean page.** No consent banner, no ad auction, no scrolling into lazy-loaded content, warm CDN. That's why lab CLS is often near zero while field CLS is 0.3.\n- **Lab hardware is fast**, and it's one run rather than the 75th percentile of a distribution that includes four-year-old Android phones.\n\nSo when they disagree, the field is right and my lab config is missing a real-world condition. What I do then is reproduce the field condition in the lab — cold cache, 4x CPU throttle, consent flow included — until the lab reproduces the problem, and only then start fixing.\n\n**Testing:** whether you treat these as complementary tools with defined jobs, or think a green Lighthouse score means the site is fast.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "measuring-performance-iq3",
+      "question": "You open a DevTools Performance recording of a janky interaction. How do you read it?",
+      "answerMarkdown": "I'd narrow the recording first — 3-5 seconds around the one interaction, not a minute of everything.\n\n**Confirm the jank is real.** The **Frames** track shows dropped and partially-presented frames. If there's a gap with no frames delivered, that's the freeze the user reported, and it gives me the time range to zoom into.\n\n**Find the widest block on the Main track**, then descend. Flame charts read top-down: the top bar is the task, everything nested below is what it called. Keep descending into the widest child until the bars are code I own.\n\n**Use the colours as a first diagnosis.** Yellow is scripting, purple is style and layout, green is paint and composite. That alone routes the investigation:\n\n- Wide yellow with a red corner triangle → a long task over 50ms; the fix is yielding or moving work to a worker.\n- Repeated purple Layout bars stacked inside one task → forced synchronous layout from interleaved DOM reads and writes.\n- Lots of green → paint area or expensive paint properties; I'd cross-check with Paint flashing in the Rendering tab.\n\n**Cross-reference the other tracks.** The Interactions track shows the input event and how long it waited, which localises INP. Timings shows LCP and my own `performance.mark()` labels. Network shows which request unblocked which paint.\n\nThe habit that matters most: form the hypothesis from the trace, then verify by fixing and re-recording — not by guessing from source.\n\n**Testing:** whether you've actually used the panel, or only read about it.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Tooling"
+    },
+    {
+      "id": "measuring-performance-iq4",
+      "question": "You are asked to set performance budgets for a large team. How would you design the process so it doesn't get ignored?",
+      "answerMarkdown": "The failure mode is social, not technical: a flaky gate that blocks merges gets disabled within a month. So I'd design for **signal quality before strictness**.\n\n**Layer 1 — bundle size, hard-fail.** `size-limit` on entry points: \"main bundle ≤ 180KB gzipped.\" It's deterministic, so it can be strict without being flaky, and it catches the accidental 400KB date library in the PR that added it. Highest signal per unit of effort by a wide margin.\n\n**Layer 2 — Lighthouse CI, warn-only at first.** Run against a preview deploy, **median of 5-9 runs**, and assert on metric values (`largest-contentful-paint ≤ 2500`, `total-blocking-time ≤ 200`) rather than the composite score, which is unstable. Tighten to hard-fail once a few weeks of data show where the noise floor actually sits.\n\n**Layer 3 — RUM as the source of truth**, with budgets expressed at p75 by route. This is what determines whether the budgets are the *right* numbers.\n\nTwo process decisions I'd insist on. Budgets are owned by the team that owns the route, not by a central performance team — otherwise nobody feels accountable. And each budget needs a documented escape hatch: a PR can exceed it with an explicit approval and a follow-up ticket, because an unbreakable budget just gets deleted the first time a launch depends on it.\n\n**Testing:** whether you can make performance stick organisationally, which is the actual senior problem.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Process"
+    }
+  ]
+}

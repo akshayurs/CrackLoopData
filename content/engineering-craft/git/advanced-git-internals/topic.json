@@ -1,0 +1,182 @@
+{
+  "id": "advanced-git-internals",
+  "title": "Advanced Git Internals",
+  "area": "engineering-craft",
+  "group": "git",
+  "order": 6,
+  "slug": "advanced-git-internals",
+  "summary": "Underneath every command is a content-addressed object store of four simple types. Learn how commits actually reference their contents, how git compresses history into packfiles, and the power tools — bisect, cherry-pick — that separate fluency from literacy.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "advanced-git-internals-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every git command you've used so far — branch, merge, rebase, reset — is a convenience layer over a genuinely simple storage model underneath: a content-addressed object store with exactly four object types. Understanding that model is what turns \"I know the commands\" into \"I know why the commands work,\" and it's what makes power tools like `bisect` and `cherry-pick` feel obvious instead of magic.\n\nThis topic covers the object types themselves, how git compresses and stores them at scale, and the tools that a genuinely fluent git user reaches for that a merely literate one doesn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "advanced-git-internals-s02",
+      "order": 2,
+      "sectionTitle": "The four object types",
+      "subTitle": "blob, tree, commit, tag — all content-addressed",
+      "type": "concept",
+      "markdown": "Every piece of data git tracks is one of exactly four object types, each identified by the SHA-1 (or SHA-256, on newer repos) hash of its own content:\n\n- **Blob** — the raw contents of a single file, nothing else. No filename, no path — two files with identical content are the *same* blob.\n- **Tree** — a directory listing: a set of entries, each mapping a name and file mode to a blob (a file) or another tree (a subdirectory).\n- **Commit** — a pointer to one tree (the project's full state at that point), one or more parent commits, plus author, committer, timestamp, and message.\n- **Tag** — an annotated tag object points at a commit and adds a message, tagger, and signature; a lightweight tag is just a ref with no object of its own.\n\n\"Content-addressed\" is the key idea: an object's identity **is** the hash of its content, so identical content anywhere in history is automatically the same object — this is what makes git's storage naturally deduplicated.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "advanced-git-internals-s02-q1"
+      ]
+    },
+    {
+      "id": "advanced-git-internals-s03",
+      "order": 3,
+      "sectionTitle": "How a commit's tree references blobs",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A commit doesn't store a diff — it stores a pointer to a **tree** representing the entire project's state at that moment. That tree lists every file and subdirectory, each entry pointing to a blob or a nested tree by hash.\n\nThe deduplication effect is immediate: if you commit a change to one file in a thousand-file project, the new commit's tree has one new entry (the changed file's new blob hash) and re-uses the **exact same hash** for every other file's tree entry, because those files' content didn't change and content-addressing means identical content is identical storage. Git never has to \"decide\" to deduplicate — it's a structural consequence of hashing by content.\n\n<<< Image: two commit objects side by side sharing most of their tree structure — commit A's tree has entries for file1.txt, file2.txt, file3.txt each pointing to blob hashes; commit B (child of A) has an identical tree except one entry (file2.txt) points to a new blob hash, with the other two entries drawn as literally the same arrows reused from commit A's tree, labelled \"unchanged, same blob\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "advanced-git-internals-s04",
+      "order": 4,
+      "sectionTitle": "Loose objects vs packfiles",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "New objects start as **loose objects** — each one an individual zlib-compressed file under `.git/objects/`. This is simple but wasteful: many small files, no cross-object compression, and filesystem overhead per object.\n\nPeriodically (on push, on `git gc`, or automatically past a loose-object threshold), git bundles many loose objects into a single **packfile**, storing them as deltas against similar objects rather than storing each in full — two versions of a large file that differ by one line are stored as almost-one-copy plus a small diff, not two full copies. A pack also ships with an index for fast lookup by hash without decompressing the whole thing.\n\nThis is the mechanism behind why `git clone` transfers so little data for how much history exists: the server sends packfiles, which are already delta-compressed, not one file per historical blob.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "advanced-git-internals-s04-q1"
+      ]
+    },
+    {
+      "id": "advanced-git-internals-s05",
+      "order": 5,
+      "sectionTitle": "Garbage collection",
+      "subTitle": "When unreferenced objects actually get pruned",
+      "type": "concept",
+      "markdown": "An object becomes a garbage-collection candidate only once it's **unreachable** — no branch, tag, or reflog entry points to it, directly or through a parent chain. Deleting a branch or running `reset --hard` doesn't delete objects; it just removes the pointer that made them reachable, exactly as covered in [Undoing Changes & Recovery](undoing-changes-recovery).\n\n`git gc` is what actually prunes: it repacks loose objects into packfiles for efficiency, and separately expires and removes objects that have been unreachable longer than the reflog's retention window (90 days by default for objects that were once reachable, 30 for ones that never were). Until that window passes, an \"orphaned\" commit is still fully present and recoverable via its hash or a reflog entry.\n\nThis is why the reflog safety net has a real, if generous, expiration — it's a grace period, not a permanent archive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "advanced-git-internals-s06",
+      "order": 6,
+      "sectionTitle": "`git bisect` — binary-searching history",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "When a regression exists somewhere in a range of commits and you don't know which one introduced it, `git bisect` finds it in O(log n) checks instead of a linear scan:\n\n```bash\ngit bisect start\ngit bisect bad                 # current commit has the bug\ngit bisect good v1.4.0         # this old tag was fine\n# git checks out the midpoint automatically\n\n# test it, then tell git what you found:\ngit bisect good    # or: git bisect bad\n# repeats, halving the remaining range each time\n\ngit bisect reset   # done — return to your original branch\n```\n\nOn a thousand-commit range, bisect needs at most ~10 checks (log₂ 1000 ≈ 10) instead of up to 1000. `git bisect run <script>` automates the whole loop by running a script that exits nonzero on \"bad\" — turning a manual investigation into one command that reports the exact culprit commit unattended. This is dramatically more effective when history is linear (rebased) rather than full of merge commits that can make \"which side introduced this\" ambiguous.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "advanced-git-internals-s06-q1"
+      ]
+    },
+    {
+      "id": "advanced-git-internals-s07",
+      "order": 7,
+      "sectionTitle": "`git cherry-pick`",
+      "subTitle": "Applying a specific commit elsewhere",
+      "type": "concept",
+      "markdown": "`git cherry-pick <hash>` applies one specific commit's diff onto your current branch, creating a **new commit** with the same content and message but a new hash and new parent — conceptually a one-commit rebase.\n\n```bash\ngit cherry-pick a1b2c3d\n```\n\nCommon legitimate use: a critical fix landed on `main` and needs to go onto a release branch immediately, without pulling in everything else `main` has gained since the branches diverged. The conflict risk is real, though — cherry-pick applies the commit's diff against whatever the current branch's version of those lines looks like, which may have diverged significantly from the commit's original context, producing conflicts unrelated to the fix itself. Cherry-picking the same logical change onto many branches (common in multi-version support) is also exactly the scenario where tracking \"has this fix landed everywhere it needs to\" becomes genuine operational overhead.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "advanced-git-internals-s07-q1"
+      ]
+    },
+    {
+      "id": "advanced-git-internals-s08",
+      "order": 8,
+      "sectionTitle": "Submodules vs subtree vs monorepo",
+      "subTitle": "Trade-offs for embedding external code",
+      "type": "compare",
+      "markdown": "| | Submodule | Subtree | Monorepo |\n|---|---|---|\n| What's stored | A pointer (commit hash) to another repo | The external code's actual files, merged in | Everything already in one repo natively |\n| Clone experience | Requires `--recurse-submodules` or a separate init step | Works with a normal clone, no extra step | Works with a normal clone |\n| Updating the dependency | `git submodule update` to a new pinned commit | `git subtree pull`, merges upstream changes in | A normal commit in the same repo |\n| History | Separate; submodule's own repo has its own log | Merged into the parent repo's history | Unified, one history |\n| Common pain point | Forgetting to update the pointer; confusing detached-HEAD state inside the submodule | Merge conflicts between subtree updates and local edits | Repo size and CI scope at real scale |\n\nSubmodules keep a clean separation (the dependency's own versioned history stays intact) but have a genuinely confusing day-to-day experience — a stale submodule pointer is an easy, silent mistake. Subtree avoids that at the cost of blending histories. Monorepos sidestep the whole question by not having an external boundary at all, trading it for the scale challenges in [Git at Scale](git-at-scale).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "advanced-git-internals-s09",
+      "order": 9,
+      "sectionTitle": "Lightweight vs annotated tags",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **lightweight tag** is just a named ref pointing directly at a commit — no separate object, no metadata beyond the name:\n\n```bash\ngit tag v1.2.0                              # lightweight — just a ref\ngit tag -a v1.2.0 -m \"Release 1.2.0\"        # annotated — a real object\ngit tag -s v1.2.0 -m \"Release 1.2.0\"        # annotated and GPG-signed\n```\n\nAn **annotated tag** creates a real tag object with its own hash, storing the tagger's name, date, and a message, and — critically — it can be **GPG-signed**, which cryptographically proves who created the tag and that it hasn't been altered since.\n\nReleases should use annotated (and ideally signed) tags specifically because of that provenance: a signed tag on a release commit is verifiable evidence of who cut that release and when, which matters for supply-chain trust — anyone downloading `v1.2.0` can verify the signature rather than trusting the tag name alone. Lightweight tags are fine for quick personal bookmarks but carry none of that guarantee.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "advanced-git-internals-s09-q1"
+      ]
+    },
+    {
+      "id": "advanced-git-internals-s10",
+      "order": 10,
+      "sectionTitle": "Rewriting history a submodule or fork depends on",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A submodule pins its parent's dependency to an exact commit hash. Rewrite that commit's history in the upstream repo — a rebase, a `filter-repo` history rewrite, a force-push that changes hashes — and every consumer pinned to the old hash now points at a commit that may no longer be reachable at all once the old history is garbage-collected.\n\nThe same risk applies to any long-lived fork that's cherry-picked or merged from a specific point in the upstream repo's history: rewriting the commits the fork's history depends on breaks the fork's ability to cleanly pull further updates, and can silently orphan the fork's understanding of \"where did we diverge.\"\n\nThe practical rule: once a commit's hash is a dependency for something outside your immediate control — a submodule pointer, a fork's merge base, a downstream team's pinned reference — treat it as effectively shared history, subject to the same golden rule as a shared branch: don't rewrite it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "advanced-git-internals-s10-q1"
+      ]
+    },
+    {
+      "id": "advanced-git-internals-s11",
+      "order": 11,
+      "sectionTitle": "Fluency vs literacy",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "Nearly every advanced git command turns out to be a thin wrapper over the same four object types, applied differently — `cherry-pick` is a one-commit replay, exactly like a step of rebase. A tag is a ref pointing at a commit, exactly like a branch, minus the ability to move. A stash is a real (if specially-marked) commit stored outside any branch. `bisect` is nothing but a binary search driven by the commit DAG's parent links.\n\nThe practical payoff of knowing this: when an unfamiliar git problem shows up — a detached HEAD, a confusing error about \"objects not found\", a submodule stuck in a weird state — the fluent response is to reason from the object model (\"what does HEAD point to right now, what tree does that resolve to\") rather than pattern-matching to a remembered command sequence. That's usually the fastest way to actually fix an unfamiliar git situation instead of guessing at commands.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "advanced-git-internals-s12",
+      "order": 12,
+      "sectionTitle": "Where this connects next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Everything here is what makes git technically correct at any repository size. The final topic, **Git at Scale**, covers what changes when that repository has years of history and hundreds of contributors — why cloning gets slow, how large teams keep it fast anyway, and the operational tooling (CODEOWNERS, hooks, sparse checkouts) that day-to-day git commands don't need until scale forces the question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

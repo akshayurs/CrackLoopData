@@ -1,0 +1,182 @@
+{
+  "id": "capacity-planning-and-load-testing",
+  "title": "Capacity Planning & Load Testing",
+  "area": "engineering-craft",
+  "group": "performance-engineering",
+  "order": 8,
+  "slug": "capacity-planning-and-load-testing",
+  "summary": "Proving, not estimating, how much load a real system can take: load vs stress vs soak testing, finding the knee where latency breaks down, generating realistic traffic, and validating capacity safely against production.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "capacity-planning-and-load-testing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every technique in this group so far — profiling, benchmarking, algorithmic fixes, latency work, GC tuning, concurrency fixes — improves a system's performance. This topic answers the question that comes after all of that: **how much load can this system actually take, proven, not guessed?**\n\nThis is specifically about measuring an existing system under real or realistic load — estimating capacity for a system that doesn't exist yet is a System Design skill (that discipline's `capacity-estimation` group). Here, the system is built, and the job is finding its actual breaking point before your users do, using load, stress, and soak tests, and validating the result against traffic that looks like production, not traffic that's convenient to generate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s02",
+      "order": 2,
+      "sectionTitle": "Load, stress, and soak testing",
+      "subTitle": "Different questions, different test shapes",
+      "type": "concept",
+      "markdown": "Three distinct tests, often confused, that answer three distinct questions:\n\n- **Load testing** — apply the expected (or expected-peak) production load and confirm the system meets its latency and error-rate targets there. Answers: \"can we handle what we expect?\"\n- **Stress testing** — push load well beyond expected peak, deliberately past the breaking point, to find where and how the system fails. Answers: \"where's the actual ceiling, and does it fail gracefully or catastrophically?\"\n- **Soak testing** — apply moderate, sustained load for a long duration (hours or days, not minutes). Answers: \"does anything degrade slowly over time?\" — a memory leak, a slowly-filling connection pool, log files exhausting disk, that a short test would never surface.\n\nRunning only a load test and calling capacity planning \"done\" leaves two real gaps: you don't know your actual ceiling (stress) or whether the system degrades over hours under sustained traffic (soak) — both are common causes of incidents that a load test alone would never catch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "capacity-planning-and-load-testing-s02-q1"
+      ]
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s03",
+      "order": 3,
+      "sectionTitle": "Ramping load and finding the knee",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rather than jumping straight to peak load, a stress test ramps load in steps — say, increasing requests-per-second every few minutes — while watching latency and error rate at each step. This mirrors the queueing-theory shape from Latency Optimization directly: throughput rises roughly linearly with load at first, then latency starts climbing faster than load is increasing, and eventually there's a **knee** — a point where latency or error rate breaks sharply upward, often within a narrow load range.\n\nThe knee, not the point where the system finally falls over completely, is the number that matters for capacity planning: it's the load level past which user experience degrades, well before outright failure. A system might technically stay up (accepting connections, returning some responses) well past the knee while p99 latency has already become unacceptable — \"still up\" and \"still meeting its SLO\" are different claims, and the knee is where the second one stops being true.\n\nFinding the knee requires enough granularity in the ramp — jumping straight from 50% to 150% of expected load skips over the exact point where the transition happens, and that transition point (not just \"it broke somewhere between these two levels\") is the actionable number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "capacity-planning-and-load-testing-s03-q1"
+      ]
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s04",
+      "order": 4,
+      "sectionTitle": "Reading a load-test curve",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Plot two lines against increasing load: throughput (requests successfully completed per second) and latency (e.g., p99). Throughput rises roughly linearly with offered load at first — the system easily keeps up. Latency stays flat and low over that same range. Then, at some load level, latency begins rising sharply while throughput's growth flattens and eventually plateaus or even declines — the knee, and past it, the system is spending an increasing share of its capacity on queueing and contention rather than useful work (the same ρ/(1−ρ) queueing curve from Latency Optimization, now plotted against test-generated load instead of theory).\n\nThe knee's location is the number to report as \"capacity\": not the load where throughput finally stops climbing, and not the load where the system crashes, but the load where latency first breaks its target — because that's the point past which real users start having a bad experience, well before anything visibly \"fails.\"\n\n<<< Image: a dual-axis line chart with offered load on the x-axis; a throughput line rising linearly then flattening into a plateau, and a latency line staying flat and low then bending sharply upward, both changing shape at the same x-position marked \"the knee\", with a shaded region past it labeled \"technically still up, but SLO already broken\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s05",
+      "order": 5,
+      "sectionTitle": "Finding the actual bottleneck resource",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Hitting the knee tells you *that* the system is at capacity; it doesn't tell you *why*. The next step is identifying which specific resource is actually constrained — CPU, database connections, a thread pool, a downstream dependency's own capacity — because the fix is entirely different depending on the answer.\n\nThe diagnostic approach mirrors this group's earlier topics directly: check system-level utilization across candidate resources at the knee (CPU, memory, disk I/O, network, database connection-pool saturation) rather than assuming; if CPU is low while latency has already broken down, that's the off-CPU/contention signature from Profiling Techniques and Concurrency Performance — a lock, a pool, or a downstream call is the real limiter, not raw compute. A connection pool exhausted at the knee means the fix is pool sizing or reducing per-request connection hold time, not adding application server instances that all then contend for the same undersized pool.\n\nA load test that stops at \"we can handle N requests/second\" without identifying *which resource* set that ceiling gives you a number but not a plan — the next capacity increase needs to know exactly what to scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "capacity-planning-and-load-testing-s05-q1"
+      ]
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s06",
+      "order": 6,
+      "sectionTitle": "Realistic load generation",
+      "subTitle": "Traffic shape, think time, concurrent users vs requests/sec",
+      "type": "concept",
+      "markdown": "A load test's result is only as trustworthy as how closely its generated traffic matches real usage — the load-testing-specific instance of the \"benchmark that doesn't represent production\" trap from earlier in this group.\n\nThree specific realism gaps that repeatedly distort results:\n\n- **Traffic shape.** Real traffic has a distribution of request sizes and types, often skewed (a handful of huge requests among many small ones), and a realistic cache hit/miss ratio. Uniform, all-identical synthetic requests routinely make caches and connection pools look far more effective than they'll be under real skew.\n- **Think time.** Real users pause between actions — reading a page, filling a form — so \"1,000 concurrent users\" browsing a site does not translate to 1,000 requests/second; it might be closer to 50/second once realistic think time is modeled. A load test that fires requests back-to-back with zero think time can wildly overstate the concurrency the system actually needs to sustain.\n- **Concurrent users vs. requests/sec.** These are related but distinct load models, and picking the wrong one for your system matters: a system with expensive per-connection state (a WebSocket server, a database with per-connection memory overhead) cares primarily about concurrent connections; a stateless REST API cares primarily about requests/sec regardless of how many distinct clients they came from.\n\nModeling all three well is what separates a load test result you can act on from one that quietly describes a system nobody runs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": []
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s07",
+      "order": 7,
+      "sectionTitle": "Soak testing for slow degradation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A load test running for 15 minutes and a soak test running the same load for 12 hours can produce completely different verdicts on the same system, because some failure modes only accumulate over time: a memory leak (Memory & GC Performance) that's invisible in a short test because the heap hasn't grown enough to matter yet; a connection pool that leaks a connection per some rare error path, fine for an hour, exhausted by hour eight; log files or temp files accumulating until disk fills; a metrics or cache data structure that grows unbounded and only becomes a problem once it's large enough to affect GC pause times.\n\nSoak tests are specifically designed to surface these: moderate, realistic, sustained load — not peak load, since the point isn't to find the ceiling, it's to find slow decay — run for a duration long enough that an hourly-scale leak has time to become visible (a common target is 24-72 hours for a service expected to run continuously for weeks).\n\nA system that passes a load test and a stress test cleanly can still fail in production purely because nobody ran it for 12 hours straight before shipping — soak testing is the check that catches exactly that gap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "capacity-planning-and-load-testing-s07-q1"
+      ]
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s08",
+      "order": 8,
+      "sectionTitle": "Staging vs shadow/replay testing",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Testing in staging | Shadow / replay testing against production traffic |\n|---|---|---|\n| **Traffic source** | Synthetic, hand-constructed load | Real production requests, mirrored or replayed |\n| **Realism** | Only as good as the synthetic traffic model (§6) | As real as it gets — actual request shapes, actual skew, actual cache behavior |\n| **Risk to real users** | None — isolated environment | Requires care: shadow traffic must not cause side effects (writes, emails, charges) on the real system |\n| **Data/environment parity** | Often smaller dataset, different scale, different hardware | Runs against production-scale data and infrastructure by construction |\n| **Best for** | Early-stage testing, destructive tests (stress to failure) you can't risk on production infra | Final validation before a capacity-affecting or performance-affecting change ships |\n\nShadow testing (mirroring live production requests to a new code path without serving its response to real users) or replay testing (recording real traffic and re-running it later against a candidate) close staging's biggest gap — synthetic traffic that never quite matches reality — at the cost of needing careful isolation so the shadowed path can't cause a real side effect. Mature capacity-validation processes use both: staging for early, wide-ranging and destructive testing; shadow/replay as the final gate before a change reaches real users.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "capacity-planning-and-load-testing-s08-q1"
+      ]
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s09",
+      "order": 9,
+      "sectionTitle": "Load testing with unrealistic traffic",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team load-tests a service using requests that all hit warm cache, use no think time, and are all identical in size — and the test reports a comfortable 3x safety margin over expected peak. In production, the service falls over at roughly expected peak, well below the tested figure.\n\nWhat went wrong is compounding, not singular: all-cache-hit traffic never exercises the cache-miss path's real cost (database load, computation) at all, so the test measured a system that doesn't include a meaningful fraction of real work; zero think time overstated request concurrency relative to actual user behavior in one direction while understating total request volume in another, muddying what \"3x margin\" even meant; and uniform request sizes hid the cost of the occasional large request that real, skewed traffic reliably produces.\n\nThe fix is the same discipline as Benchmarking Methodology applied to load testing specifically: model the real cache hit rate, real think time, and real request-size distribution before trusting a capacity number, and validate the synthetic model's assumptions against actual production traffic characteristics rather than whatever was easiest to generate. A load test's \"safety margin\" is only as trustworthy as the traffic that produced it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "capacity-planning-and-load-testing-s09-q1"
+      ]
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s10",
+      "order": 10,
+      "sectionTitle": "Little's Law and headroom targets",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "**Little's Law** — L = λW — relates the average number of requests in a system (L) to the arrival rate (λ, requests/sec) and the average time each spends in the system (W, latency including any queueing). It's a simple relationship, but it lets you sanity-check load-test results algebraically: if a service handles 500 requests/sec and average latency is 200ms, Little's Law predicts roughly 100 requests in flight at any instant (L = 500 × 0.2) — if a load test's own concurrency metrics report something wildly different, that's a signal something about the test setup (or the measurement) is off, before you even look at the throughput numbers.\n\nIt also grounds a common capacity-planning question: how much headroom is enough? Given queueing's non-linear blowup past ~80% utilization (Latency Optimization), a common target is provisioning so that expected peak load sits at 60-70% of the tested knee — not because the system \"can't\" run higher, but because that gap is what absorbs normal traffic variance, a partial instance failure, or an unexpected spike without immediately crossing into the latency-explosion region of the queueing curve.\n\nThe knee found in a load test (§3, §4) is a ceiling, not a target — capacity planning is deciding how far below that ceiling to actually operate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s11",
+      "order": 11,
+      "sectionTitle": "Load testing safely against production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Testing against production infrastructure — needed for shadow/replay testing's realism (§8) — carries real risk: a stress test that's supposed to find the ceiling can, by design, push a system past its breaking point, and doing that against infrastructure real users depend on requires guardrails.\n\nStandard practice: run against a small, isolated slice first — a single canary instance or a dedicated shard carrying a deliberately small fraction of real traffic — rather than the whole fleet, so a failure is contained. Pair the test with automatic circuit breakers or kill switches that halt the generated load the instant a real-user-facing error-rate or latency threshold is crossed, not just when the test operator notices. Run genuinely destructive stress tests (deliberately pushing to failure) during low-traffic windows and with an on-call engineer actively watching, not as an unattended overnight job the first time.\n\nThe goal is capturing shadow/replay testing's realism advantage over staging (§8) without accepting staging's other advantage — that nothing there can hurt a real user — as collateral damage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": []
+    },
+    {
+      "id": "capacity-planning-and-load-testing-s12",
+      "order": 12,
+      "sectionTitle": "Capacity planning, end to end",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The full workflow: run load, stress, and soak tests, each answering a different question rather than treating one as a substitute for the others (§2); ramp load gradually to find the knee precisely, not just \"somewhere between these two numbers\" (§3, §4); identify which specific resource the knee is actually bound by, so the fix targets the real constraint (§5); build the load generator to match real traffic shape, think time, and the right load model for your system (§6); run long enough to catch slow degradation, not just peak behavior (§7); and validate the result against real traffic via shadow/replay before fully trusting a staging number (§8), doing so safely with guardrails (§11). Use Little's Law as a sanity check and set your operating point with real headroom below the knee, not at it (§10).\n\nThis closes the Performance Engineering group. Every earlier topic — measurement discipline, profiling, benchmarking, algorithmic and memory fixes, latency and concurrency work — feeds into this one: capacity planning is the step where you prove, under conditions that resemble reality, that all of it actually holds up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    }
+  ]
+}

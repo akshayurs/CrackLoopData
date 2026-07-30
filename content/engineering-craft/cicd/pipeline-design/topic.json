@@ -1,0 +1,180 @@
+{
+  "id": "pipeline-design",
+  "title": "Pipeline Design",
+  "area": "engineering-craft",
+  "group": "cicd",
+  "order": 3,
+  "slug": "pipeline-design",
+  "summary": "A pipeline is a system you design, not just a config file you fill in. Learn how stages, artifacts, caching, and pipeline-as-code combine into something fast, trustworthy, and cheap to change.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "pipeline-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A CI/CD pipeline is not just \"the YAML file that runs when I push.\" It is a small distributed system with its own failure modes: slow feedback, flaky stages, artifacts that drift between environments, and caches that lie.\n\nGood pipeline design optimizes for one thing above all: **how fast can a developer learn their change is broken, and how confidently can that same, unchanged artifact reach production.**\n\nThis topic covers the shape of a well-built pipeline — stages and dependencies, build-once-promote-everywhere, caching, matrices — and the failure that undoes all of it: an artifact that's subtly different per environment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-design-s02",
+      "order": 2,
+      "sectionTitle": "Stages and their dependencies",
+      "subTitle": "Build, test, package, deploy",
+      "type": "concept",
+      "markdown": "Almost every pipeline decomposes into the same handful of stages, each depending on the last succeeding:\n\n- **Build** — compile or bundle the source into a runnable form.\n- **Test** — run the suites against that build, not against source again.\n- **Package** — produce the single artifact (container image, jar, wheel) that will move forward.\n- **Deploy** — put that exact artifact somewhere.\n\nThe dependency is the important part: **test depends on build's output**, not on rebuilding. If your test stage re-checks-out and re-compiles, you've silently allowed build and test to compile *different* bits. Wire stages so each one *consumes* the previous stage's output artifact directly, never regenerates it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "pipeline-design-s02-q1"
+      ]
+    },
+    {
+      "id": "pipeline-design-s03",
+      "order": 3,
+      "sectionTitle": "Pipeline-as-code",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The pipeline definition itself — stages, jobs, triggers — should live in version control next to the code it builds (`.gitlab-ci.yml`, `.github/workflows/*.yml`, `Jenkinsfile`), not in a web UI's click-through config.\n\nThat buys you the same things version control buys application code: a **reviewable diff** when someone changes the release process, a **history** of why a stage was added, and the ability to **branch the pipeline with the code** — a feature branch that needs a new test stage can add it in the same PR, instead of someone editing shared UI config that affects every branch at once.\n\nThe alternative — pipeline config living only in a UI — is invisible to code review and impossible to roll back with `git revert`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-design-s04",
+      "order": 4,
+      "sectionTitle": "Build once, promote everywhere",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The single most important pipeline design decision: build **one** artifact and push that exact binary through staging and production, versus rebuilding from source for each environment.\n\nBuild-once-promote-everywhere means: `myapp:a1b2c3` (tagged by commit SHA) is built once, tested in staging, and — if it passes — the *identical bytes* are deployed to production. Nothing recompiles, no dependency resolves differently, no environment variable baked at build time changes the binary.\n\nThis is what makes \"it passed staging\" mean anything. If production instead rebuilds from the same source, you're testing a *different* artifact than the one that will actually run — even a `pip install` re-run an hour later can pull a patch-version bump that staging never saw.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "pipeline-design-s04-q1"
+      ]
+    },
+    {
+      "id": "pipeline-design-s05",
+      "order": 5,
+      "sectionTitle": "Build artifacts as the handoff",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **artifact** is whatever the build stage produces and every later stage consumes: a container image, a `.jar`, a compiled binary, a static site bundle. It gets a unique, immutable identifier — usually the commit SHA or a semantic version — and lands in an **artifact repository** (a container registry, Artifactory, npm registry).\n\nEvery downstream stage references that identifier, never \"whatever's currently on main.\" This is what makes a deploy **reproducible**: `deploy v2.4.1` means the same thing today and in six months, because `v2.4.1` is an immutable object in the registry, not a moving pointer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-design-s06",
+      "order": 6,
+      "sectionTitle": "Caching dependencies and layers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A pipeline that reinstalls every dependency and recompiles from scratch on every run wastes most of its own wall-clock time on work that hasn't changed. Two caching techniques cut that:\n\n- **Dependency caching** — keyed on a lockfile hash (`package-lock.json`, `poetry.lock`). If the lockfile hasn't changed, restore the installed `node_modules`/`venv` instead of re-downloading everything.\n- **Layer caching** — for container builds, Docker layers below the changed line are reused; only the layers after your edit rebuild. This is why `COPY package.json` then `RUN npm install` then `COPY . .` (dependencies before source) is the standard Dockerfile ordering — it maximizes what's cacheable.\n\nCache invalidation is the risk: a cache keyed too loosely (e.g., on branch name instead of lockfile hash) can silently serve **stale dependencies**, which is a correctness bug disguised as a speed win.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "pipeline-design-s06-q1"
+      ]
+    },
+    {
+      "id": "pipeline-design-s07",
+      "order": 7,
+      "sectionTitle": "Fan-out, fan-in",
+      "subTitle": "Parallel shards feeding a single gate",
+      "type": "diagram",
+      "markdown": "A large test suite doesn't have to run serially. Split it into shards that run **in parallel** (fan-out), then require **all** of them to pass before the pipeline proceeds to deploy (fan-in).\n\nA 40-minute test suite split into 8 parallel shards can finish in roughly 5-8 minutes (plus scheduling overhead) — turning a coffee-break feedback loop into one you can wait on. The fan-in gate is what preserves correctness: deploy must depend on *every* shard succeeding, not just the first one to finish.\n\n<<< Image: a pipeline diagram showing a build stage fanning out into 8 parallel test-shard boxes running simultaneously, all 8 arrows converging into a single \"deploy gate\" box that only proceeds when all 8 report success >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-design-s08",
+      "order": 8,
+      "sectionTitle": "Build matrices",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **build matrix** runs the same job across a cross-product of dimensions — say, 3 OSes × 3 language versions = 9 combinations — each a separate job, all in parallel.\n\nThis exists because \"works on my machine's Python 3.11 on Linux\" doesn't tell you whether it works on the Python 3.9 and Windows combination a chunk of your users actually have. A library targeting multiple runtimes without a matrix is really only tested on whichever one CI happens to run.\n\nMatrices trade **CI cost for confidence** — 9x the compute for 9x the coverage — so they're most valuable for libraries and SDKs with a wide support surface, and often overkill for a single internal service that only ever runs on one OS/runtime combination in production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "pipeline-design-s08-q1"
+      ]
+    },
+    {
+      "id": "pipeline-design-s09",
+      "order": 9,
+      "sectionTitle": "Per-environment build vs build-once",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Rebuild per environment | Build once, promote |\n|---|---|---|\n| **What's tested** | A different artifact per env | The exact artifact going to prod |\n| **Config differences** | Can leak into the build itself | Injected at runtime, not baked in |\n| **Reproducibility** | Weak — rebuild = different bits | Strong — same SHA, same bytes |\n| **Speed** | Slower — full build per env | Faster — build once, deploy N times |\n| **When it's used anyway** | Compiling genuinely different targets (e.g., mobile per-platform) | The default for services and web backends |\n\nThe only legitimate reason to rebuild per environment is when the *target itself* differs — cross-compiling a mobile app for iOS vs Android is not \"the same artifact, different config,\" it's genuinely different output. For a backend service, environment differences belong in config and environment variables read at **runtime**, never in what gets compiled.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-design-s10",
+      "order": 10,
+      "sectionTitle": "A pipeline-as-code skeleton",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal build-once-promote pipeline, showing the dependency chain explicitly:\n\n```yaml\nstages: [build, test, package, deploy-staging, deploy-prod]\n\nbuild:\n  stage: build\n  script: [\"make build\"]\n  artifacts: { paths: [dist/] }\n\ntest:\n  stage: test\n  needs: [build]          # consumes build's artifact, does not rebuild\n  script: [\"make test\"]\n\npackage:\n  stage: package\n  needs: [test]\n  script: [\"docker build -t registry/app:$CI_COMMIT_SHA .\"]\n\ndeploy-staging:\n  stage: deploy-staging\n  needs: [package]\n  script: [\"deploy registry/app:$CI_COMMIT_SHA staging\"]\n\ndeploy-prod:\n  stage: deploy-prod\n  needs: [deploy-staging]\n  when: manual            # promote the SAME tag, no rebuild\n  script: [\"deploy registry/app:$CI_COMMIT_SHA prod\"]\n```\n\nNotice `deploy-prod` promotes the identical `$CI_COMMIT_SHA` tag that staging validated — it never runs `docker build` again.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-design-s11",
+      "order": 11,
+      "sectionTitle": "When a rebuilt artifact hides the real bug",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team rebuilds the container image separately for staging and production, each build pulling \"latest compatible\" versions of a few transitive dependencies. Staging passes. Production's build, run three hours later, resolves a transitive dependency that shipped a patch release in between — and one of its behavior changes breaks a code path staging never exercised because it wasn't there.\n\nThe on-call engineer spends an hour convinced the *code* regressed, because the pipeline reported staging was green. The real defect was in the **pipeline design**: two different builds were treated as one validated artifact.\n\nThe fix isn't better testing — it's structural: build once, lock dependencies (see Build & Dependency Management), and promote the same bytes. No amount of test coverage rescues a pipeline that tests one artifact and ships another.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "pipeline-design-s11-q1"
+      ]
+    },
+    {
+      "id": "pipeline-design-s12",
+      "order": 12,
+      "sectionTitle": "Designing for the next question",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A pipeline you designed well answers three questions cheaply, without spelunking through logs:\n\n- **\"Is this exact artifact in production?\"** — yes, if you build once and promote by immutable tag.\n- **\"Why did this take 40 minutes?\"** — check whether caching and fan-out shards are actually being hit, or silently missing.\n- **\"What changed between the passing staging run and the failing prod one?\"** — nothing, if promotion is truly the same bytes; anything else is a pipeline defect, not a code defect.\n\nThe rest of this group builds outward from here: [feature flags](feature-flags-progressive-delivery) decouple *deploying* this artifact from *releasing* it to users, and build & dependency management is what makes \"build once\" actually reproducible in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

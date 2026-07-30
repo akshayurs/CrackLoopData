@@ -1,0 +1,37 @@
+{
+  "topicId": "profiling-techniques",
+  "interviewQuestions": [
+    {
+      "id": "profiling-techniques-iq1",
+      "question": "What's the difference between a sampling profiler and an instrumenting profiler, and when would you use each?",
+      "answerMarkdown": "A sampling profiler interrupts the running program at a fixed interval — say every millisecond — and records whatever's on the call stack at that instant. Do that thousands of times and the frequency each function appears approximates its share of total time. Because it only touches the program occasionally, overhead is low, often under 5%.\n\nAn instrumenting profiler inserts timing code around function calls to record exact entry and exit times. That gives exact call counts and per-call durations, but the instrumentation itself costs time — and that cost is uneven, since a function called a million times pays the tax a million times, which can distort the very ranking you're trying to measure.\n\nI reach for sampling first, especially for anything under real load or in production, because the low overhead means I'm measuring the system's actual behavior rather than a slowed-down version of it. I reach for instrumentation when I need an exact answer sampling can't give — genuine call counts, or confirming a function that looked hot in a sample is really called once per request and not accidentally in a loop — and I run it somewhere the slowdown is acceptable, like a local repro or a staging environment, never directly against live traffic.\n\nIn practice the two complement each other: sample in production to find the suspect, instrument locally to nail the exact mechanism.\n\n**Testing:** whether you understand the overhead/precision trade-off well enough to choose the right tool for where you're profiling, not just define both terms.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "profiling-techniques-iq2",
+      "question": "You're looking at a flame graph and see a very wide bar in the middle of the stack, with nothing wide stacked above it. What does that tell you, and what would you check next?",
+      "answerMarkdown": "Width in a flame graph is time — a wide bar consumed a large share of the samples. A wide bar with **no wide children above it** means that time isn't being passed down to something it calls; the work is happening in that frame itself. That's the strongest possible signal of self time, and it's exactly the frame worth optimizing first, ahead of anything above or below it in the stack.\n\nWhat I'd check next: first, whether this frame's width lines up with the overall time budget for the request — is this actually the dominant cost, or one of several similarly-wide bars, in which case Amdahl's Law says fixing just this one caps my win at its share. Second, I'd pull the exact function and line — flame graphs from most tools let you click through to source — and look at what it's doing: is it a genuine computation (serialization, hashing, a loop) or is it secretly blocked (a lock acquire that a naive on-CPU profiler still attributes to the calling frame in some tools)?\n\nThird, I'd sanity-check this isn't an artifact — was this captured on a production-equivalent build under realistic load, or a debug build / cold-cache run that would show a different, misleading shape?\n\nOnce confirmed, that's where I'd start: profile-guided, not guessed.\n\n**Testing:** whether you can actually read a flame graph to find the bottleneck, not just recite that width means time.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied reasoning"
+    },
+    {
+      "id": "profiling-techniques-iq3",
+      "question": "Your CPU profiler shows almost nothing interesting, but the service is clearly slow. How do you find the real bottleneck?",
+      "answerMarkdown": "An empty-looking CPU profile during a slow period is itself the finding: it means the bottleneck isn't computation, it's waiting, and a plain on-CPU sampling profiler is structurally blind to time spent blocked.\n\nFirst I'd confirm with a system-level check — CPU utilization during the slow window. If it's low while wall-clock latency is high, that confirms the thread is asleep, not computing: waiting on a lock, a database round trip, a downstream network call, or scheduler contention.\n\nFrom there I switch instruments. An off-CPU or wait-time profiler (Linux `perf sched`, or an async-aware profiler for languages with coroutines) samples *blocked* time the same way a CPU profiler samples executing time, and will show exactly where threads are parked and for how long.\n\nIf the wait turns out to be inside my own process — a mutex, a connection-pool checkout — that's a concurrency-performance problem I can fix locally. But if the wait is a network call to another service, no amount of profiling my own process tells me why the *other* service is slow — that's where I'd pull a distributed trace with the shared request ID, which shows time spent across every hop, not just mine.\n\nThe mistake to avoid is re-running the same CPU profiler expecting a different answer; an empty CPU profile under real slowness is a redirect to a different tool, not a dead end.\n\n**Testing:** whether you know profiling tools have blind spots and can pick the right one instead of trusting a single profiler's silence.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "profiling-techniques-iq4",
+      "question": "Why might you decide to profile in production instead of just locally, and what has to change about how you do it?",
+      "answerMarkdown": "Local profiling is reproducible and safe to run heavy tools against, but it's only as realistic as the test data and load you construct — and constructing genuinely representative concurrency, cache state, and traffic-size distribution locally is hard to do honestly. Real user traffic has skew (a handful of huge payloads, most of it small), real concurrent contention on shared resources, and real cache hit/miss ratios that a local synthetic run rarely reproduces exactly.\n\nSo I'd profile in production when I need to confirm a local finding is actually significant at scale, or when I'm chasing something that only appears under production conditions — a rare tail-latency spike, a lock that only contends under real concurrency, a cache effect that only shows up with production's actual key distribution.\n\nWhat has to change: I can't attach a heavyweight instrumenting profiler to a live process — the overhead alone could cause the very incident I'm investigating. The safe approach is an always-on, low-overhead continuous profiler (sampling a small fraction of processes or time, aggregating centrally), which is how tools like Pyroscope or a cloud provider's continuous profiler work. That gives me a fleet-wide, comparable-over-time view — I can diff today's profile against last week's to catch a slow regression — without the risk of a heavy tool destabilizing production.\n\nThe rule I follow: heavy, precise tools are for local repro; low-overhead, always-on sampling is for production.\n\n**Testing:** whether you understand that production profiling requires a fundamentally different safety posture, not just the same tool pointed at a different environment.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Production practice"
+    }
+  ]
+}

@@ -1,0 +1,180 @@
+{
+  "id": "preventing-xss",
+  "title": "Preventing XSS",
+  "area": "web-frontend",
+  "group": "web-security",
+  "order": 2,
+  "slug": "preventing-xss",
+  "summary": "Escaping is not one operation — it depends on where the string lands. Learn context-aware encoding, how React and Vue escape by default, and how to render genuinely rich text without reopening the hole.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "preventing-xss-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[xss-fundamentals](xss-fundamentals) named the boundary. This topic is the fix, and it has exactly three moving parts:\n\n- **Encode on output, for the context the value lands in.** Not on input, not once globally — at the moment the string becomes part of a document, escaped for *that* spot.\n- **Let the framework do it.** React, Vue and Angular escape interpolated text by default, which is why XSS in a modern SPA almost always traces back to a deliberate escape hatch rather than ordinary rendering.\n- **When you truly need to render user HTML, sanitize with a real library.** Not a regex. A parser-based sanitizer with an allowlist, run at render time.\n\nThe interview version of this topic is almost always the rich-text question: the product wants formatted comments, and you have to say how you'd ship that without handing every commenter script execution on your domain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "preventing-xss-s02",
+      "order": 2,
+      "sectionTitle": "Encode on output, not on input",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The instinct is to sanitize at the front door: strip dangerous characters as data arrives and store the clean version. It is the wrong place, for three reasons.\n\n- **You don't yet know the context.** The same comment might be rendered into HTML on the web, into a plain-text email, into a native mobile app, and into a CSV export. Each needs different treatment, and only the renderer knows which.\n- **It corrupts the data.** A user legitimately named `O'Brien` or a code snippet containing `<div>` gets mangled, and once mangled you cannot recover the original.\n- **It misses everything that didn't come through the front door.** Data from a partner API, a migration, a log line, or an admin tool bypasses your input filter and reaches the same renderer.\n\nThe correct rule: **store exactly what the user gave you, and encode at the moment of rendering, for the destination.** Input validation is still worth doing — length limits, type checks, allowlists for enumerated values — but it is a data-quality control, not the XSS defense.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "preventing-xss-s02-q1"
+      ]
+    },
+    {
+      "id": "preventing-xss-s03",
+      "order": 3,
+      "sectionTitle": "One string, five contexts",
+      "subTitle": "Each needs different encoding",
+      "type": "compare",
+      "markdown": "\"Escape it\" is underspecified. What escaping *means* changes with where the value lands in the document.\n\n| Context | Example position | What has to be neutralised |\n|---|---|---|\n| **HTML body** | `<p>HERE</p>` | `& < > \" '` to entities |\n| **HTML attribute** | `<div title=\"HERE\">` | entities, and always quote the attribute |\n| **JavaScript** | `var x = \"HERE\";` | quotes, backslashes, newlines, and the closing-script-tag sequence |\n| **URL** | `<a href=\"/s?q=HERE\">` | percent-encode, and validate the *scheme* if the whole URL is user-supplied |\n| **CSS** | `style=\"width: HERE\"` | CSS escaping; never interpolate raw values into style at all |\n\nThe reason there is no universal escape function: each of those parsers has different terminators. HTML entity-encoding a value is exactly right in a paragraph, does nothing useful inside a `<script>` block, and breaks a URL.\n\nA good rule of thumb from OWASP: **untrusted data belongs only in the HTML body or in a quoted attribute.** Every other context is hard to get right, so restructure until the value lands in one of those two — for example, pass server data to JS via a `data-` attribute or a `<script type=\"application/json\">` block rather than by string-concatenating it into code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 98,
+      "mcqIds": []
+    },
+    {
+      "id": "preventing-xss-s04",
+      "order": 4,
+      "sectionTitle": "The same value, four times over",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Take one untrusted string and follow it into four destinations. The correct output is different every time, and each one is dangerous in the others' slots.\n\n- Into a **paragraph**, the angle brackets and ampersands become `&lt;` `&gt;` `&amp;` — the value is displayed, never parsed.\n- Into a **quoted attribute**, the same entity encoding, plus the double quote must become `&quot;` or the attribute closes early and a new one begins.\n- Into a **JavaScript string literal**, entities mean nothing; you need backslash escapes, and the character sequence that closes a script element must be broken up because the HTML parser scans for it *before* the JS parser sees anything.\n- Into a **URL parameter**, percent-encoding — and entity encoding here corrupts the value while leaving a `javascript:` scheme perfectly intact.\n\nThat last point is the punchline of the whole topic: applying the wrong encoding gives you an output that *looks* escaped in a code review and is still exploitable.\n\n<<< Image: a single box on the left labelled \"one untrusted string\" with four arrows fanning right into four labelled destination boxes — HTML body, quoted attribute, JavaScript string literal, URL parameter — each showing the same input rendered with its own escaping style (entities, entities plus quot, backslash escapes, percent-encoding); draw a red X across the arrows that would result from applying HTML entity encoding to the JavaScript and URL destinations, annotated \"looks escaped, still exploitable\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 97,
+      "mcqIds": []
+    },
+    {
+      "id": "preventing-xss-s05",
+      "order": 5,
+      "sectionTitle": "Right escaping, wrong context",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "This is the failure mode that survives code review, because the code visibly calls an escape function.\n\n**Case 1 — HTML-escaping into a URL.** A search term is entity-encoded and dropped into `href`. Entity encoding leaves letters and the colon untouched, so a value beginning with the `javascript:` scheme passes through fully intact and clicking the link executes it. What was needed was scheme validation, not entity encoding.\n\n**Case 2 — HTML-escaping into a script block.** A server template entity-encodes a value and interpolates it into a `<script>`. The HTML parser handles that block by scanning for the closing-tag sequence *before* the JavaScript parser runs, and entity encoding does not neutralise that sequence — so a value containing it ends the script element early and whatever follows is fresh markup.\n\n**Case 3 — escaping into an unquoted attribute.** `<div class=%s>` with an entity-encoded value: no angle brackets or quotes are needed to attack it, because a plain space ends the attribute and starts a new one, and the new one can be an event handler.\n\nThe lesson: an escape call is only correct **relative to a context**. Reviewing \"is it escaped?\" is the wrong question; \"escaped for where it lands?\" is the right one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": [
+        "preventing-xss-s05-q1"
+      ]
+    },
+    {
+      "id": "preventing-xss-s06",
+      "order": 6,
+      "sectionTitle": "Framework auto-escaping",
+      "subTitle": "Why modern SPAs are mostly safe by default",
+      "type": "concept",
+      "markdown": "The single biggest reason XSS rates dropped is that the dominant frameworks made the safe path the default one.\n\n- **React** — `{value}` in JSX creates a text node. `<div>{userBio}</div>` cannot inject markup no matter what `userBio` contains, because React never hands the string to the HTML parser. Attributes are set via the DOM property API, not by string-building a tag.\n- **Vue** — `{{ value }}` and `v-bind` interpolate as text and as attribute values respectively, both escaped.\n- **Angular** — treats all values as untrusted by default and sanitizes them against the context it knows the binding is in, so an interpolation into `[href]` is checked differently from one into text content.\n- **Server-side templating** — Jinja2 with autoescape on, Rails ERB, Go's `html/template` (which is genuinely context-aware and re-escapes per position). Note that plain Handlebars/Mustache `{{ }}` escapes but `{{{ }}}` does not.\n\nThe practical consequence for interviews: in a React codebase, an XSS almost never comes from ordinary rendering. It comes from an escape hatch someone reached for, or from a sink outside the framework's view — a direct `innerHTML` in a `useEffect`, a chart library, an analytics snippet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 104,
+      "mcqIds": [
+        "preventing-xss-s06-q1"
+      ]
+    },
+    {
+      "id": "preventing-xss-s07",
+      "order": 7,
+      "sectionTitle": "The escape hatches",
+      "subTitle": "Every framework ships a way to turn the safety off",
+      "type": "pitfall",
+      "markdown": "Each framework provides a deliberate opt-out for the cases where you really do mean to render markup. Each one is named to scare you, and each one gets used anyway.\n\n- **React** — `dangerouslySetInnerHTML={{ __html: value }}`. The clumsy name and the nested object are intentional friction, so nobody reaches it by accident.\n- **Vue** — `v-html`. Notably *not* scary-sounding, which is why it slips through review more often.\n- **Angular** — `[innerHTML]` binding (still sanitized by Angular's own sanitizer, which is a real safety net) and `DomSanitizer.bypassSecurityTrustHtml`, which switches that net off entirely.\n- **Svelte** — `{@html value}`.\n- **Anywhere** — a raw `element.innerHTML` inside an effect, a `document.write` in a vendor snippet, or a `ref` handed to a library that builds markup itself.\n\nTwo rules that make these survivable:\n\n1. **Never pass an unsanitized value into one.** The argument must be output from a sanitizer, on the line before, in the same function — not \"sanitized upstream somewhere.\"\n2. **Make them greppable and reviewed.** An ESLint rule such as `react/no-danger` set to warn, plus a CI grep, turns \"someone might have\" into a list you can actually audit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": [
+        "preventing-xss-s07-q1"
+      ]
+    },
+    {
+      "id": "preventing-xss-s08",
+      "order": 8,
+      "sectionTitle": "Sanitizing rich text with DOMPurify",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "When the product genuinely needs user-authored formatting, the answer is a parser-based sanitizer. **DOMPurify** is the de-facto standard on the client: it parses the input with the browser's own HTML parser, walks the resulting tree, and drops any element or attribute not on its allowlist.\n\n```js\nimport DOMPurify from 'dompurify';\n\nconst clean = DOMPurify.sanitize(userHtml, {\n  ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'ul', 'ol', 'li', 'code'],\n  ALLOWED_ATTR: ['href', 'title'],\n  ALLOWED_URI_REGEXP: /^https?:\\/\\//i,   // no javascript: or data: in href\n});\n\n// only ever the sanitizer's output reaches the sink, on the next line\nreturn <div dangerouslySetInnerHTML={{ __html: clean }} />;\n```\n\nThree details that matter more than the call itself:\n\n- **Allowlist, never blocklist.** Name the tags you want. Trying to enumerate what's dangerous loses to the next parser quirk.\n- **Constrain URI schemes.** Without that, an `href` of `javascript:` survives a tag allowlist perfectly happily.\n- **Keep it updated.** DOMPurify bypasses are found and fixed regularly; a pinned three-year-old version is a known-vulnerable dependency.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 96,
+      "mcqIds": [
+        "preventing-xss-s08-q1"
+      ]
+    },
+    {
+      "id": "preventing-xss-s09",
+      "order": 9,
+      "sectionTitle": "Sanitize on render, or on store?",
+      "subTitle": "The trade-off nobody asks about until it bites",
+      "type": "compare",
+      "markdown": "Both are defensible, and the senior answer is usually \"both, for different reasons.\"\n\n| | Sanitize on store | Sanitize on render |\n|---|---|---|\n| Cost | once per write | every read |\n| Original preserved? | no — irreversibly lossy | yes |\n| Fixing a sanitizer bypass | must re-process all stored rows | ships with the next deploy |\n| Covers data from migrations, partner APIs, admin tools | no | yes |\n| Covers a second renderer (email, mobile, export) | partially, and with the wrong rules | yes, each with its own rules |\n\n**Render-time is the correctness answer**, because it's the only point that knows the destination and the only fix that applies retroactively. When a DOMPurify bypass is disclosed, a render-time app upgrades the dependency and is done; a store-time app has to find and rewrite every affected row.\n\nStore-time sanitizing is still worth adding as **defense in depth** — it keeps obvious garbage out of the database and out of downstream consumers you don't control. Just never let it be the only layer, and never let it be the reason the renderer trusts the value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 88,
+      "mcqIds": []
+    },
+    {
+      "id": "preventing-xss-s10",
+      "order": 10,
+      "sectionTitle": "Why regex stripping always loses",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The tempting shortcut is a hand-rolled filter: strip anything that looks like a script tag, drop attributes starting with `on`. It fails structurally, not because you missed a case.\n\nThe reason is that **HTML parsing is far stranger than it looks**, and the browser's parser is the only authority on what a string means. It recovers from malformed markup, resolves entities in surprising places, and treats several elements as having their own parsing rules. A filter reasoning about *text* is playing a different game from the parser reasoning about *trees*.\n\nTwo failure shapes worth naming:\n\n- **Blocklist gaps.** There are hundreds of event-handler attributes and several schemes that execute. Removing the ones you thought of leaves the rest, and a single-pass strip can be defeated by an input that reassembles itself once the middle is removed.\n- **Mutation XSS (mXSS).** Even parser-based sanitizers have been bypassed by input that is inert when parsed once, but which the browser *re-serialises differently* — so the string the sanitizer approved is not the tree the browser eventually builds. These are subtle enough that they get CVEs; they are not something you'll out-think with a regex.\n\nThe conclusion: use a maintained, parser-based sanitizer, keep it patched, and put CSP behind it so a bypass isn't automatically an execution.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 104,
+      "mcqIds": []
+    },
+    {
+      "id": "preventing-xss-s11",
+      "order": 11,
+      "sectionTitle": "Trusted Types",
+      "subTitle": "Making the unsafe sink impossible to call",
+      "type": "concept",
+      "markdown": "Encoding and sanitizing are things you must remember to do. **Trusted Types** is the browser feature that removes the remembering.\n\nWith `Content-Security-Policy: require-trusted-types-for 'script'`, the browser refuses to accept a plain string at DOM-XSS sinks like `innerHTML`, `document.write`, and `eval`. Those sinks will only take a typed object minted by a policy you registered — which is a single function, in one file, that you can actually review.\n\nWhy that's a different kind of win:\n\n- It converts \"audit every sink in a 200k-line codebase forever\" into \"audit one policy function.\" New code that reaches for `innerHTML` fails loudly at runtime instead of silently shipping.\n- Google reported deploying it across large properties and effectively eliminating DOM XSS in the covered code, which is the strongest evidence any XSS control has.\n- It composes with everything else: the policy body is where DOMPurify goes.\n\nThe caveat: browser support is Chromium-led, so treat it as a strong additional layer for your own code rather than the sole defense — and roll it out in report-only first, because third-party scripts calling those sinks will break.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 96,
+      "mcqIds": []
+    },
+    {
+      "id": "preventing-xss-s12",
+      "order": 12,
+      "sectionTitle": "The layers, in order",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "How to answer \"how do you prevent XSS\" without listing tricks: name the layers and what each one is for.\n\n1. **Framework auto-escaping** — the default path is safe, so ordinary rendering is a non-event. This is the highest-leverage layer because it applies to code nobody thought about.\n2. **A sanitizer at the one place raw HTML is a feature** — DOMPurify with an explicit tag, attribute, and URI-scheme allowlist, at render time, feeding the sink on the very next line.\n3. **URL scheme validation** anywhere a user-controlled value becomes an `href` or `src` — allow `http:` and `https:`, reject everything else.\n4. **Trusted Types** where you can, to make the dangerous sinks uncallable rather than merely discouraged.\n5. **A strict CSP** — covered next in this group — as the layer that decides what an injection can *do* if all of the above failed.\n6. **Lint and CI** — flag the escape hatches so they're a reviewable list, not a surprise.\n\nNotice the shape: layers 1–4 reduce the chance of injection, layer 5 reduces the impact, layer 6 keeps the others from eroding. An answer that names all three purposes reads as engineering rather than recall.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": []
+    }
+  ]
+}

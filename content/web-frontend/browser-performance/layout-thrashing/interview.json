@@ -1,0 +1,37 @@
+{
+  "topicId": "layout-thrashing",
+  "interviewQuestions": [
+    {
+      "id": "layout-thrashing-iq1",
+      "question": "A user reports the page freezes for about half a second when they open a list view. Here is the trace — walk me through diagnosing it.",
+      "answerMarkdown": "I'd start from the shape of the trace rather than the code. The signature I'm looking for is a **long yellow task with a stack of repeated purple Layout bars inside it** — dozens or hundreds, evenly spaced. A healthy frame has exactly one layout bar; many means forced synchronous layout in a loop.\n\nFrom there the trace hands me the culprit directly: click any Layout entry, read the **\"First invalidated\"** attribution and the JavaScript stack, and it names the line issuing the geometry read. Chrome also logs `[Violation] Forced reflow while executing JavaScript took NNms` in the console.\n\n**The mechanism** I'd explain out loud: style writes only mark layout dirty, and the browser flushes lazily before paint. Reading `offsetHeight` or `getBoundingClientRect()` while dirty forces the flush immediately. Interleave read and write in a loop over 200 items and you get ~199 full layout passes instead of one — 300-500ms of frozen main thread on a mid-range phone.\n\n**The fix** is a reordering, not a rewrite: collect all measurements into an array first, then apply all the writes. Two layouts instead of 199.\n\nWhat I'd check before concluding: is the task actually Rendering-dominated, or is the Summary tab showing Scripting? If it's yellow rather than purple, this is the wrong diagnosis and I'd be looking at a long task instead.\n\n**Testing:** whether you can read a real trace and connect a visual signature to a mechanism, rather than guessing at fixes.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "layout-thrashing-iq2",
+      "question": "What is layout thrashing and how do you fix it?",
+      "answerMarkdown": "It's what happens when you **interleave DOM reads and writes** so the browser is forced to run layout synchronously over and over inside one frame.\n\nNormally the browser batches: a style write just marks the tree dirty, and layout runs once at the end of the task before paint. But some properties can only be answered from current geometry — `offsetHeight`, `offsetWidth`, `scrollTop`, `getBoundingClientRect()`, `getComputedStyle()` for layout properties. Reading one while the tree is dirty means the browser must lay out **right now**, inside your JavaScript.\n\nThe classic loop:\n\n```js\nfor (const card of cards) {\n  const h = card.offsetHeight;        // forces layout\n  card.style.height = h + 20 + 'px';  // dirties it again\n}\n```\n\nWith 200 cards that's ~199 forced layout passes. The fix is to split it into two phases — map all the reads into an array, then run all the writes. Same operations, same iteration count, but the number of layout passes drops to about two and becomes **independent of list length**.\n\nWhere it gets subtle in real code: the read and write are usually in different functions, or in per-component `useLayoutEffect` hooks, so no single file looks wrong. That's why I diagnose from the trace rather than by reading code.\n\n**Testing:** whether you know the browser's lazy-layout model, or have only memorised \"batch your reads.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "layout-thrashing-iq3",
+      "question": "Which DOM properties force a synchronous layout, and is forcing one ever acceptable?",
+      "answerMarkdown": "Anything whose value depends on current geometry. The practical list:\n\n- `offsetTop/Left/Width/Height`\n- `clientTop/Left/Width/Height`\n- `scrollTop/Left/Width/Height`\n- `getBoundingClientRect()` and `getClientRects()`\n- `getComputedStyle()` for any layout-dependent property\n- `el.focus()`, and `innerText` on some engines\n\nAnd yes, forcing one is often correct. The real rule is **never force layout N times when once will do**, because a single pass is a couple of milliseconds.\n\nTwo places where a deliberate forced read is the standard technique:\n\n- **Kicking off a CSS transition on a freshly-inserted node.** Insert with the start class, read `offsetHeight` once to flush layout, then add the end class. Skip the read and the browser coalesces both style changes, so no transition runs at all.\n- **FLIP animations.** Read positions before and after a DOM change, then animate the delta with `transform`. Two reads total, and the payoff is a fully composited animation.\n\nSo I'd frame the cost as *number of forced passes × cost per pass*, note that the second factor grows with document size, and say which factor I'm attacking. One 2ms read to enable a smooth animation is a good trade; 200 of them to size some cards is not.\n\n**Testing:** whether you can reason about the cost model or just recite a prohibition.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "layout-thrashing-iq4",
+      "question": "How would you stop layout thrashing from reappearing in a large codebase where many components measure themselves?",
+      "answerMarkdown": "The hard part isn't the fix, it's that the interleaving is **emergent** — each component's `useLayoutEffect` measures itself and sets a style, which is individually correct and collectively a thrash across the subtree. No code review catches that, because no single file is wrong.\n\nWhat I'd actually do, roughly in order of leverage:\n\n- **Remove the measurement where CSS can do it.** `-webkit-line-clamp` for truncation, `position: sticky` instead of scroll-handler math, Grid or `align-items: stretch` for equal-height cards. The fastest read is the one you deleted, and this eliminates whole classes of the bug permanently.\n- **Push the rest onto observers.** `ResizeObserver` and `IntersectionObserver` deliver geometry after layout has run, so nothing pulls synchronously. This covers lazy loading, infinite scroll, and impression tracking.\n- **Centralise unavoidable measurement** behind one scheduler — a `fastdom`-style read/write queue flushed in rAF phases — so components can't interleave with each other even when they don't know one another exists.\n- **Catch regressions automatically.** A `PerformanceObserver` for `longtask` wired into RUM, plus a CI check on a scripted interaction, turns this from a thing someone notices into a thing that fails a build.\n\nThe judgement call is the third bullet: a global read/write scheduler adds real indirection, so I'd only reach for it once the first two haven't been enough.\n\n**Testing:** whether you think about prevention at a system level, not just fixing one loop.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "System design"
+    }
+  ]
+}

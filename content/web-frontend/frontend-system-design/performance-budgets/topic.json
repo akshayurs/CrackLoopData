@@ -1,0 +1,156 @@
+{
+  "id": "performance-budgets",
+  "title": "Performance Budgets",
+  "area": "web-frontend",
+  "group": "frontend-system-design",
+  "order": 5,
+  "slug": "performance-budgets",
+  "summary": "Defining hard limits on bundle size and user-facing metrics like LCP and TTI, enforcing them in CI, and code-splitting as the primary lever for staying under budget.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "performance-budgets-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Keep it fast\" is not enforceable — a **performance budget** is. A budget is a hard, measurable limit (a bundle size in KB, a Largest Contentful Paint in milliseconds) tied to a real user-facing metric, checked automatically so a PR that blows it fails the same way a broken test fails.\n\nThis topic covers what to budget, how to enforce it in CI rather than by vigilance, and the main lever for staying under budget — code-splitting — plus the trap every team eventually hits: setting a budget once and never revisiting it as the app legitimately grows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-budgets-s02",
+      "order": 2,
+      "sectionTitle": "What a performance budget actually is",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A performance budget is a **numeric limit tied to a user-facing consequence**, not an aspiration. \"Try to keep the bundle small\" is a value; \"the main JS bundle must stay under 170KB gzipped, because past that our mid-tier Android test device misses the 2.5s LCP target\" is a budget — it has a number, a unit, and a reason.\n\nThe reason matters more than the number: a budget derived from an actual measured device/network condition (not an arbitrary round number) is defensible when someone asks to bust it for a new feature, and gives you a real answer to \"why 170 and not 200.\" A budget with no story behind its number gets negotiated away the first time it's inconvenient.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "performance-budgets-s02-q1"
+      ]
+    },
+    {
+      "id": "performance-budgets-s03",
+      "order": 3,
+      "sectionTitle": "Common budget targets",
+      "subTitle": "Bundle size, TTI, LCP, request count",
+      "type": "concept",
+      "markdown": "Four metrics cover most of what teams budget in practice:\n\n- **Bundle size** — the compressed (gzip/brotli) size of JS shipped for a route. Easiest to measure and enforce, but a proxy — a small bundle full of blocking synchronous work can still render slowly.\n- **LCP (Largest Contentful Paint)** — when the largest visible element (often a hero image or headline) finishes rendering. Google's Core Web Vitals threshold: under 2.5s is \"good.\"\n- **TTI (Time to Interactive)** — when the page can reliably respond to input without a long main-thread task blocking it. A page can look done (good LCP) and still be unresponsive to a tap for another second.\n- **Request count** — how many separate network round trips a page's initial load makes; each one costs latency even if small, especially over a slow or high-latency mobile connection.\n\nBundle size is the easiest lever to control directly (this topic's focus), but LCP and TTI are the metrics users actually feel — a team that only budgets bundle size can hit its number while shipping a slow page.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "performance-budgets-s03-q1"
+      ]
+    },
+    {
+      "id": "performance-budgets-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: tracking bundle size per PR",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A budget only holds if the trend is visible before it's blown, not discovered after. A per-PR bundle-size report — bot-posted as a comment showing the diff versus the base branch — turns an invisible, gradual creep into a number every reviewer sees on every change, the same way a diff shows added and removed lines.\n\nThe trend view matters as much as the single-PR diff: a bundle that grows 2KB per PR looks harmless in any one review, but 2KB × 200 merged PRs a quarter is 400KB — well past most mobile budgets — and only a tracked-over-time chart makes that visible before it's a crisis.\n\n<<< Image: a line chart titled \"Main bundle size (gzipped) per merged PR, last 90 days\" showing a slowly rising line crossing a horizontal dashed \"budget: 170KB\" line partway through, with a small annotated PR-comment bubble showing \"+3.2KB vs main\" pointing at one data point >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-budgets-s05",
+      "order": 5,
+      "sectionTitle": "Code: enforcing a budget in CI",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A minimal budget check using `bundlesize`-style config, wired to fail the build:\n\n```json\n// bundlesize.config.json\n{\n  \"files\": [\n    {\n      \"path\": \"./dist/main.*.js\",\n      \"maxSize\": \"170 kB\",\n      \"compression\": \"gzip\"\n    },\n    {\n      \"path\": \"./dist/checkout.*.js\",\n      \"maxSize\": \"90 kB\",\n      \"compression\": \"gzip\"\n    }\n  ]\n}\n```\n\n```yaml\n# .github/workflows/ci.yml (excerpt)\n- name: Check performance budget\n  run: npx bundlesize\n  # non-zero exit fails the workflow, blocking merge\n```\n\nThe budget is per-chunk, not one global number — `main` (loaded on every route) gets a tight budget, while a route-specific chunk like `checkout` gets its own, separately-tracked limit. A single global budget hides which specific route actually regressed.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "performance-budgets-s05-q1"
+      ]
+    },
+    {
+      "id": "performance-budgets-s06",
+      "order": 6,
+      "sectionTitle": "Code-splitting as the primary lever",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The main way to stay under a bundle budget without cutting features is **code-splitting**: instead of shipping every route's code in one bundle, split it so a user visiting the home page never downloads checkout's code until they navigate there.\n\n```javascript\n// Route-based split: this import only fetches when /checkout is visited\nconst CheckoutPage = React.lazy(() => import('./routes/CheckoutPage'));\n```\n\nThe budget conversation and the code-splitting conversation are the same conversation: a budget without a splitting strategy just pressures teams to inline everything into fewer, larger files to \"simplify,\" which makes the budget harder to hit, not easier. The next slide compares the two common splitting granularities.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "performance-budgets-s07",
+      "order": 7,
+      "sectionTitle": "Compare: route-based vs component-based splitting",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Route-based | Component-based |\n|---|---|---|\n| Split unit | An entire page/route | A single heavy component (a rich-text editor, a chart library) |\n| Best for | Reducing initial load for pages users don't always visit | A specific known-heavy dependency used on only some interactions within a page |\n| Granularity | Coarse — easy to reason about, big wins | Fine — more surgical, more chunks to manage |\n| Common trigger | \"Users on the home page shouldn't download checkout's code\" | \"This one modal pulls in a 200KB charting library only 5% of users open\" |\n\n**How to decide:** always do route-based splitting first — it's the highest-leverage, lowest-effort win. Add component-based splitting only for specific dependencies you can name and measure (a chart library, a rich editor), not as a blanket policy, since over-splitting adds request overhead of its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "performance-budgets-s07-q1"
+      ]
+    },
+    {
+      "id": "performance-budgets-s08",
+      "order": 8,
+      "sectionTitle": "When splitting isn't enough: what else eats budget",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Code-splitting reduces what's downloaded *per route*, but three other costs commonly blow a budget even with good splitting: **duplicated dependencies** across chunks (two lazy-loaded routes each bundling their own copy of a date library because the bundler didn't dedupe them), **polyfills shipped to everyone** (a `core-js` polyfill for a browser feature 95% of users' browsers already support natively, sent to 100% of users anyway), and **third-party scripts** (analytics, a chat widget, an ad SDK) that the team doesn't control and that often dwarf the app's own code.\n\nA senior-level performance budget conversation names these three explicitly rather than assuming code-splitting alone solves the number — bundler analysis tools (`webpack-bundle-analyzer`, `source-map-explorer`) exist specifically to surface duplication and oversized third-party scripts that splitting doesn't touch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "performance-budgets-s08-q1"
+      ]
+    },
+    {
+      "id": "performance-budgets-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: setting a budget once and never revisiting it",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong pattern:** a team sets a 170KB budget at launch, wires it into CI, and considers performance solved. Two years later every PR either fails the check and gets a one-off exception approved, or the budget got bumped to 250KB \"just this once\" three separate times with no reassessment of whether devices or user expectations changed.\n\n**Why it happens:** a budget is easy to set and easy to forget, especially once it's automated — automation removes the human check-in that would otherwise prompt \"is 170KB still the right number.\"\n\n**Correct model:** revisit the budget on a schedule (quarterly is common) against real data — has the target device mix shifted, has the network-condition assumption changed, has a legitimate new feature genuinely earned more budget. A budget that only ever gets exceptions granted, never renegotiated with evidence, has stopped functioning as a budget at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "performance-budgets-s09-q1"
+      ]
+    },
+    {
+      "id": "performance-budgets-s10",
+      "order": 10,
+      "sectionTitle": "Diagnosing budget regression before fixing it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a bundle has drifted well past its budget over time, the senior move isn't a single fix — it's diagnosis first. Pull the bundle-analyzer output and separate the growth into buckets: legitimate new features, duplicated dependencies, and unmaintained third-party scripts. Each bucket has a different fix.\n\nFor legitimate feature growth, the honest move is often accepting a higher budget for the routes that earned it while keeping the shared `main` chunk's budget strict — a new feature's code shouldn't inflate a bundle that loads on every route. For duplication, dedupe via the bundler or a shared-dependency policy (echoing the shared-singleton problem from micro-frontends). For third-party scripts, negotiate with whoever owns that vendor relationship — engineering often can't unilaterally remove an analytics SDK product or legal requires.\n\nThe closing move: re-baseline the budget from the diagnosis, not from the current bloated number — a budget reset to \"whatever we're at now\" isn't a budget, it's a rubber stamp.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

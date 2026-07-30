@@ -1,0 +1,37 @@
+{
+  "topicId": "preventing-xss",
+  "interviewQuestions": [
+    {
+      "id": "preventing-xss-iq1",
+      "question": "Product wants rich-text comments — bold, links, lists. How do you render that safely?",
+      "answerMarkdown": "I'd push first on whether we need HTML at all. If Markdown with raw HTML **disabled** covers the formatting they want, the class is gone and there's nothing to sanitize. That's genuinely the cheapest answer and it wins about half the time.\n\nIf we do need HTML, the design is:\n\n- **Store the original verbatim.** No input-time stripping — it's lossy, and data arriving via migrations or partner APIs skips that filter anyway.\n- **Sanitize at render, with DOMPurify**, configured as an allowlist: `ALLOWED_TAGS` for the formatting product actually asked for, `ALLOWED_ATTR` for `href` and `title`, and `ALLOWED_URI_REGEXP` pinned to `https?://`. That last one matters — a tag allowlist happily passes an `href` using the `javascript:` scheme.\n- **The sanitizer output feeds `dangerouslySetInnerHTML` on the next line**, in the same function, so review can see the pairing.\n- **CSP behind it** with `script-src` on nonces and no `unsafe-inline`, so a sanitizer bypass isn't automatically execution.\n\nWhat I would not do is hand-roll a regex filter. mXSS bypasses exist against maintained parser-based sanitizers; a regex reasoning about text rather than trees loses on day one.\n\nOperationally: keep DOMPurify current — bypasses get disclosed and patched, and a pinned old version is a known-vulnerable dependency.\n\n**Testing:** whether you reach for a maintained sanitizer with an allowlist and layer CSP behind it, or start inventing a filter.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "preventing-xss-iq2",
+      "question": "What does context-aware output encoding mean, and why isn't one escape function enough?",
+      "answerMarkdown": "Because each destination is parsed by a different parser with different terminators, so \"escaped\" only means something relative to where the value lands.\n\nThe same string needs four different treatments:\n\n- **HTML body** — entity-encode `& < > \" '`. The value is displayed, never parsed.\n- **Quoted attribute** — entity encoding plus a real quote around the attribute. Unquoted, a plain space starts a new attribute, and no angle bracket is needed to attack it.\n- **JavaScript string** — backslash escapes, and the closing-script-tag sequence has to be broken, because the HTML parser scans for it before the JS parser sees anything.\n- **URL** — percent-encoding, plus **scheme validation** if the whole URL is user-supplied.\n\nThe failure that survives code review is applying the right function in the wrong place. HTML-entity-encoding a URL looks escaped and leaves a `javascript:` scheme completely intact, because entities don't touch letters or the colon.\n\nSo my working rule, straight from OWASP: untrusted data belongs in the HTML body or a quoted attribute, and nowhere else. If it needs to reach JS, I pass it via a `data-` attribute or a JSON script block rather than concatenating it into code.\n\nGo's `html/template` is the interesting counterexample — it tracks position during parsing and picks the encoding per context automatically. Most template engines don't.\n\n**Testing:** whether you understand escaping as parser-relative, or as a single function you call and stop thinking.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "preventing-xss-iq3",
+      "question": "We use React. Are we safe from XSS?",
+      "answerMarkdown": "Mostly, and the exceptions are worth naming precisely.\n\n**What React does give you:** `{value}` in JSX creates a text node, so ordinary rendering can't inject markup no matter what the value contains. Attributes are set through DOM properties rather than by string-building a tag. That covers the overwhelming majority of the render surface, including code nobody thought about — which is why it's the highest-leverage control.\n\n**Where XSS still comes from in a React app:**\n\n- `dangerouslySetInnerHTML` with an unsanitized value.\n- A user-controlled `href` or `src`. `<a href={userUrl}>` looks like inert data binding, but `javascript:` is a scheme and clicking it executes. React warns on this but historically didn't block it — validate the scheme yourself.\n- A raw `innerHTML` inside a `useEffect`, or a `ref` handed to a chart or editor library that builds markup itself.\n- Third-party scripts — analytics, chat widgets — which run outside React entirely.\n- Server-side: JSON state serialized into a `<script>` block during SSR.\n\nSo the answer I'd give a reviewer is: React removes the default-path risk, and I'd add `react/no-danger` in ESLint, scheme validation on any user URL, and a nonce-based CSP for the third-party surface.\n\n**Testing:** whether \"we use a modern framework\" is a conclusion or the start of an actual threat model.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Frameworks"
+    },
+    {
+      "id": "preventing-xss-iq4",
+      "question": "Would you sanitize user HTML when it's saved or when it's rendered?",
+      "answerMarkdown": "**Render time, as the control I rely on** — and store time as optional hygiene on top.\n\nThe deciding argument is what happens when your sanitizer turns out to be bypassable. DOMPurify bypasses are disclosed periodically. A render-time app bumps the dependency and ships; every historical row is retroactively fixed. A store-time app has to find and re-process every affected row, and the ones it misses stay live forever.\n\nThree more reasons render time wins:\n\n- **Only the renderer knows the context.** The same comment may go to HTML, a plain-text email, a mobile client, and a CSV export. One sanitize-on-write applies one set of rules to all four.\n- **Store time is lossy.** You can't recover the original, so a false positive silently mangles a user's content — a code snippet, a name with an apostrophe.\n- **Data arrives by other doors.** Migrations, partner APIs, admin tooling and log pipelines all reach the renderer without passing your write path.\n\nThe cost is real: sanitizing on every read rather than once per write. If that shows up in profiling, I'd cache the sanitized output keyed by content hash **and** sanitizer version, so a library upgrade invalidates the cache automatically.\n\n**Testing:** whether you think about the failure mode of your own defense, not just its happy path.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

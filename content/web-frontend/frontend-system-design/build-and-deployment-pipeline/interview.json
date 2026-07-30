@@ -1,0 +1,37 @@
+{
+  "topicId": "build-and-deployment-pipeline",
+  "interviewQuestions": [
+    {
+      "id": "build-and-deployment-pipeline-iq1",
+      "question": "Walk me through what happens between a merged pull request and a user loading the new version in their browser.",
+      "answerMarkdown": "CI checks out the merged commit and runs the bundler, which resolves the full module graph, transforms JSX/TypeScript/CSS, splits output into chunks (a per-route chunk, a vendor chunk, a small runtime chunk), and minifies everything — tree-shaking out code nothing imports. The output is a set of content-hashed files like `main.f7g8h9.js` plus an `index.html` referencing them by their exact hashed names.\n\nThose files upload to object storage or directly to a CDN's origin. The hashed JS/CSS files get a long-lived, immutable cache header since their filename changing is the guarantee their content changed; `index.html` gets a short or no-cache header specifically because it's the one file whose references change every deploy — caching it long would serve users stale references to a previous build's now-superseded files.\n\nIf the app uses feature flags, none of this alone releases anything user-visible — a flag stays off until a separate config change flips it, often as a gradual percentage rollout monitored for error rate.\n\nOn the next page load, the browser fetches the fresh `index.html`, sees new hashed filenames, and fetches those fresh too — the whole update happens without any explicit cache-purge step for the hashed assets themselves.\n\n**Testing:** whether you can narrate the full pipeline end to end with the caching asymmetry explained, not just name the tools involved.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "build-and-deployment-pipeline-iq2",
+      "question": "A production incident happens right after a deploy, and rolling back means reverting the last few commits and waiting for a new build. How would you change the pipeline to make rollback faster?",
+      "answerMarkdown": "The core fix is decoupling rollback from rebuilding. If every deploy's hashed build artifacts are retained (not just the current one), rollback becomes re-pointing the router or CDN config at the *previous* build's already-built files — an operation that takes seconds, not a full CI run.\n\nConcretely: keep the last N builds' hashed assets in object storage rather than deleting them immediately, and make the 'live' build a pointer (an alias, a routing rule) rather than an overwrite — deploying means moving the pointer forward, rolling back means moving it one step back. This is the same idea as blue-green deployment applied to a static frontend.\n\nI'd pair this with feature flags for anything risky enough to warrant an even faster kill switch than a rollback — flipping a flag off is instant and doesn't depend on the deploy pipeline at all, which matters if the incident is bad enough that you don't want to wait even the seconds a pointer-swap takes.\n\nWhat I wouldn't do is treat 'rebuild on every rollback' as acceptable just because builds are fast — the goal is a rollback path with no build step in the critical path at all.\n\n**Testing:** whether you can propose a concrete pipeline change (artifact retention, pointer-based deploys) rather than just agreeing rollback should be faster.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "build-and-deployment-pipeline-iq3",
+      "question": "You have five feature flags live in production right now for a checkout redesign. How do you decide which ones to remove, and why does it matter?",
+      "answerMarkdown": "I'd start from the end state: any flag whose feature has been at 100% rollout for a reasonable bake period (I'd want at least a couple of weeks of stable error rates) with no plan to roll it back is a flag that should be deleted along with its old code path, not left in place indefinitely.\n\nIt matters because flags compose — five active flags mean up to 2⁵ theoretical code paths through that area, almost none of which get explicitly tested; a bug that only manifests when flag A is on and flag C is off is exactly the kind of thing that slips through QA because nobody thought to test that specific combination. Removing a resolved flag isn't cleanup for its own sake, it's collapsing a real, untested branch of behavior back down to one.\n\nI'd treat flag removal as a required follow-up task tracked alongside the feature's rollout, not optional — concretely, a ticket auto-created when a flag reaches 100% for two weeks, assigned to whoever owns that code, so it doesn't silently become permanent config-only code no one remembers is conditional.\n\n**Testing:** whether you see flag accumulation as a real complexity and testing-surface cost, not just a rollout convenience with no downside.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "build-and-deployment-pipeline-iq4",
+      "question": "A dashboard app that users leave open all day starts throwing errors a few hours after a deploy that changed the backend API's response shape. What's going on, and how do you prevent it?",
+      "answerMarkdown": "The client-side code hasn't been reloaded since before the deploy — cache-busting only helps a client that actually fetches a fresh `index.html`; a tab left open for hours is still running the old JS, which was written against the old API response shape. This is a distinct problem from stale caching: the files are correctly cache-busted, the *already-running* client just hasn't picked them up yet.\n\nTo prevent it going forward, two mitigations, usually both: a lightweight version-check the client polls periodically, prompting the user to refresh when a mismatch is detected rather than letting stale code keep calling a changed API silently; and backend API versioning with a compatibility window, so an old client calling the previous response shape doesn't immediately break the moment a new client-compatible version ships.\n\nFor this specific incident, I'd also check whether the API change was additive (new fields, safe for old clients) or a genuine breaking change (renamed/removed fields) — an additive change wouldn't have caused this at all, so the immediate fix might be reverting the backend to be backward-compatible while the frontend catches up on its own schedule.\n\n**Testing:** whether you recognize a long-lived client as a distinct failure mode from cache-busting, and can propose both a client-side and backend-side mitigation.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging"
+    }
+  ]
+}

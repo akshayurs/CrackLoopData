@@ -1,0 +1,37 @@
+{
+  "topicId": "state-management-fundamentals",
+  "interviewQuestions": [
+    {
+      "id": "state-management-fundamentals-iq1",
+      "question": "How do you decide where a new piece of state should live in a component tree?",
+      "answerMarkdown": "I run it through a short checklist rather than guessing, in this order:\n\n- **Can I derive it from state or props I already have?** If yes, it's not state at all — I compute it inline at render time. This alone eliminates a surprising number of \"where should this live\" debates, because the honest answer is often \"nowhere.\"\n- **Does anything outside this component need to read or change it?** If no, it stays local — the cheapest, safest option, since there's no coordination and nothing else can disagree with it.\n- **Do multiple components need it?** Then it belongs on their nearest common ancestor, passed down as props — not reflexively at the top of the tree, because every layer between the ancestor and a non-consuming component becomes pass-through prop drilling.\n- **Do far-apart components need it with no reasonable common ancestor?** That's the signal for Context or an external store, not a sign I should force it up through ten layers of props.\n\nAn example that hits all four: a shopping cart's item count. It's derived from the cart's item list (step 1), several unrelated components across the app need it (step 4 territory) — so it lands in a shared store, computed as a selector rather than duplicated as its own field.\n\n**Testing:** whether you have a repeatable process, or you place state by instinct and get inconsistent answers under follow-up questions.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "state-management-fundamentals-iq2",
+      "question": "What's the difference between local state and lifted state, and when would you use each?",
+      "answerMarkdown": "**Local state** lives inside one component and nothing outside it reads or changes it — a dropdown's open flag, an input's uncommitted text before submit. It's the default choice because it needs zero coordination: there's exactly one place that can be wrong, and it's the component you're already looking at.\n\n**Lifted state** is the same state moved to the nearest common ancestor of every component that needs it, then passed back down as props. You lift when two or more components have to agree on the same value — a price filter and a product list both need the current price range, and since they're siblings with no direct connection, the only way they can agree is through a shared owner above them.\n\nThe decision test isn't complexity, it's **reach**: if deleting the component would make the state meaningless to the rest of the app, keep it local, however complicated the state itself is — a multi-step wizard's current step is still local even though it's non-trivial. The moment a second component needs to read or drive the same value, it has to move up, because there's no sibling-to-sibling channel in the component model.\n\nI'd also flag the failure mode in the other direction: lifting further than necessary — say, to the page root when only two adjacent components need the value — creates prop drilling through everything in between, so I lift to the *lowest* common ancestor, not the highest convenient one.\n\n**Testing:** whether you understand lifting as a reach-driven decision, not just a rule to apply whenever two components are nearby.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "state-management-fundamentals-iq3",
+      "question": "What's wrong with storing a derived value — like a form's validity flag — in its own state instead of computing it?",
+      "answerMarkdown": "The core problem is that it creates **two sources of truth for one fact.** If `isValid` is its own state variable alongside the field values it depends on, every code path that updates a field now also has to remember to recompute and set `isValid` — and the moment one path forgets, the flag goes stale silently, with no error to catch it.\n\nComputing it inline during render removes the failure mode entirely: `const isValid = email.includes(\"@\") && password.length >= 8;` can never disagree with its inputs, because it's recalculated from them every single time, using whatever the current field values are at render time.\n\nThe one legitimate reason to reach for state instead is **cost** — if the computation is genuinely expensive (a heavy validation pass, a large filter over a big list), the fix is to memoize the *calculation* with something like `useMemo`, keyed on its actual inputs, not to store the result as independent state that has to be kept in sync by hand. Memoization is a performance decision made on top of a value that's still conceptually derived; storing it as separate state is a correctness decision that trades a small perf win for an entire class of stale-UI bugs.\n\nA sync-via-effect version — updating `isValid` inside a `useEffect` watching the fields — looks like a fix but isn't: it still creates a stale window and an extra render, it just moves the forgetting risk into an incomplete dependency array instead of a forgotten call site.\n\n**Testing:** whether you reach for derivation by default, or default to state and patch staleness with effects.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Correctness"
+    },
+    {
+      "id": "state-management-fundamentals-iq4",
+      "question": "You find a component syncing two pieces of state with a useEffect, and QA reports a visible flicker in production. How do you fix it, and how do you explain why it happened?",
+      "answerMarkdown": "The flicker is the tell: an effect-driven sync runs **after** the render that changed its dependencies has already committed and painted, so there's a real, user-visible frame where the derived value is stale, followed by a second render once the effect fires and updates it. That's not a rare edge case — it's the guaranteed behavior of the pattern.\n\n**Fix:** delete the effect and the separate state variable, and compute the derived value directly in the render body from its actual inputs. There's no sync step left to have a stale window, because there's only ever one calculation, done fresh every render, instead of two renders separated by an effect.\n\n**Why it shipped in the first place:** this pattern usually gets written by someone reaching for `useEffect` as a general \"do something when X changes\" tool, when its actual job is synchronizing with something **outside** the framework's own state — a subscription, a DOM measurement, a network call. Keeping two pieces of your own state in agreement doesn't need external synchronization; derivation does it for free, in one render instead of two.\n\n**In production specifically**, I'd also check whether the dependency array is complete — a common secondary bug is a derived value that silently stops updating entirely because a newly-added source field was never added to the effect's dependencies, which reads as \"stale forever\" rather than \"flickers once.\"\n\n**Testing:** whether you can connect a visible symptom (flicker) to its precise mechanical cause (an extra render cycle), rather than treating it as a vague performance issue to be optimized away.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

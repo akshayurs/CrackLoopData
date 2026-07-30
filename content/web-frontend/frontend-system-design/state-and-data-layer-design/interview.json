@@ -1,0 +1,37 @@
+{
+  "topicId": "state-and-data-layer-design",
+  "interviewQuestions": [
+    {
+      "id": "state-and-data-layer-design-iq1",
+      "question": "Design the data layer for a Twitter-like feed with likes and replies.",
+      "answerMarkdown": "I'd start by splitting state into three layers, since that decision drives everything else. **UI state** is local and ephemeral — whether the reply composer is expanded, which reply thread is collapsed. **Client cache** holds server-originated data — the feed's post list, each post's like count, its replies — owned by a data-fetching library, not a general store.\n\nFor the cache itself, I'd normalize by entity: a `posts` table keyed by post ID, a `users` table keyed by user ID, and a `replies` table keyed by reply ID, with the feed itself stored as an ordered list of post IDs pointing into that shared table. That way liking a post from the feed and having it also open in a detail view updates both instantly, because they read the same cached entity rather than two independent copies.\n\nFor invalidation, likes and replies need different tolerances: a like count is fine slightly stale, so I'd use a short TTL plus event-based invalidation on the user's own like action. A new reply arriving from another user matters more for feed freshness, so I'd add a lightweight push (websocket event) that invalidates that post's replies tag rather than polling.\n\nFor mutations, liking is a strong candidate for an optimistic update — low stakes, cheap to roll back. Posting a reply is a weaker one, since it can fail moderation; I'd show it in a 'sending' state rather than as immediately confirmed.\n\n**Testing:** whether you can decompose 'design the data layer' into concrete state-layer, normalization, invalidation, and optimistic-update decisions, rather than giving a vague 'I'd use Redux' answer.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "state-and-data-layer-design-iq2",
+      "question": "Why shouldn't you put server-fetched data straight into Redux or another general-purpose global store?",
+      "answerMarkdown": "You can, and plenty of production apps did for years — but it means reimplementing caching, deduplication, background refetch, and staleness tracking by hand, which purpose-built data-fetching libraries already solve. A general store is designed to hold arbitrary application state with no opinion about server truth; it doesn't know a fetched post can go stale, that two components requesting the same post should share one in-flight request, or that a mutation should invalidate specific other queries.\n\nConcretely, without a dedicated layer you end up hand-writing loading/error flags per fetch, manual deduplication so five components mounting at once don't fire five identical requests, and ad hoc invalidation logic scattered across reducers — all things React Query, SWR, or Apollo give you by default.\n\nThe reasonable middle ground, and what most teams land on: keep Redux (or another store) for genuine UI/app state — auth session, feature flags, cross-cutting UI state — and use a dedicated data-fetching library for anything that originated on the server. RTK Query exists specifically to bridge this if a team wants to stay in the Redux ecosystem.\n\n**Testing:** whether you understand the specific problems a data-fetching library solves, rather than treating 'we already have Redux' as a sufficient reason to skip one.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "state-and-data-layer-design-iq3",
+      "question": "Two users report seeing different vote counts on the same comment at the same time. How do you debug this, and how does your caching design change as a result?",
+      "answerMarkdown": "First I'd confirm it's a caching issue and not a real backend inconsistency — check if both users' requests actually reached the same backend replica and got the same value at read time, since a replication-lag bug upstream would look identical from the client. Assuming the backend agrees, the client side is the suspect.\n\nI'd check three things in order: whether the vote count is normalized (one canonical cached copy per comment) or duplicated across multiple query caches that update independently; whether the mutation that changes a vote count actually invalidates every cached view of that comment, not just the one the voter is looking at; and whether there's a TTL or push mechanism catching *other users'* votes, since a user who didn't trigger the mutation only sees it on their own client's next fetch trigger.\n\nThe likely fix is one of: normalizing the comment entity if it wasn't already, tagging the vote-count query so the mutation's invalidation reaches every screen showing that comment, and adding a short TTL or a websocket push so passive viewers see other users' votes within an acceptable window rather than only on their own actions.\n\n**Testing:** whether you can separate a backend-consistency bug from a client-cache bug, and know which caching mechanism closes each specific gap.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "state-and-data-layer-design-iq4",
+      "question": "When would you choose NOT to use an optimistic update, even though the library makes it easy to add?",
+      "answerMarkdown": "Ease of implementation isn't the deciding factor — the deciding factor is whether showing the wrong answer briefly is an acceptable cost, and that depends on the action's stakes and how likely it is to fail.\n\nI'd skip optimistic updates for anything where failure is either high-probability or high-consequence: a payment or checkout confirmation, a username change that can collide server-side in a way the client can't predict, or any action with real server-side validation the client doesn't have enough information to replicate. Showing 'success' and then yanking it away is worse for trust than a short, honest loading state — a payment flow especially should never flicker between confirmed and reverted.\n\nI'd also be cautious with actions that are hard to reverse cleanly in the UI even if the server-side effect is reversible — a sent chat message showing, then un-showing, after a failed send reads as a bug even though technically nothing was lost.\n\nWhere I would use it freely: likes, upvotes, toggling a follow, reordering a list — low-stakes, easily reversible, and the failure case (a brief flicker back to the old state) is cheap and legible to the user.\n\n**Testing:** whether you can articulate the actual cost-benefit behind optimistic UI rather than applying it uniformly because a hook makes it one line of code.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

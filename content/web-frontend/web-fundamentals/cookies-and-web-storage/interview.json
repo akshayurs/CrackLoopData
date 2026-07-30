@@ -1,0 +1,37 @@
+{
+  "topicId": "cookies-and-web-storage",
+  "interviewQuestions": [
+    {
+      "id": "cookies-and-web-storage-iq1",
+      "question": "Where would you store an auth token, and why?",
+      "answerMarkdown": "My default is an `HttpOnly`, `Secure`, `SameSite=Lax` (or `Strict`, if the app's flows tolerate it) cookie, set by the server on login — JavaScript never touches the token directly at any point.\n\nThe reasoning is a trade-off, and I'd state it rather than just assert a preference. `localStorage` is the simpler implementation and immune to CSRF, since nothing attaches it to a request automatically — but any successful XSS on the page is then a **full, silent token compromise**: `localStorage.getItem` hands it over with no extra exploit needed. An `HttpOnly` cookie can't be read by JavaScript at all, even from a successful XSS, which closes that theft vector entirely.\n\nWhat I'm accepting instead is **CSRF exposure**, because the cookie now gets attached automatically to requests the browser makes on the user's behalf, including ones a malicious site can trigger. `SameSite=Lax` mitigates most of that by withholding the cookie on cross-site subresource requests and non-top-level navigations; for anything state-changing and sensitive, I'd add an explicit CSRF token as a second layer rather than relying on `SameSite` alone.\n\nThe one place I'd still reach for `localStorage`: genuinely non-sensitive data — UI preferences, a feature flag, a draft autosave — where a leak has no real consequence, so the simpler API is worth it.\n\n**Testing:** whether you can name both attack surfaces and the trade-off between them, not just recite 'cookies are safer.'",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Security"
+    },
+    {
+      "id": "cookies-and-web-storage-iq2",
+      "question": "What's the practical difference between localStorage and sessionStorage, and where have you seen the wrong choice cause a real bug?",
+      "answerMarkdown": "Same API surface, genuinely different lifetimes and scope. `localStorage` persists until explicitly cleared — across tab closes, browser restarts, days or years. `sessionStorage` is scoped to a **single tab** and is wiped when that tab closes; critically, opening a link in a new tab or duplicating a tab does **not** carry over the same `sessionStorage` — each tab starts fresh.\n\nThe bug pattern I've seen: a multi-step checkout flow stored its in-progress form state in `sessionStorage`, assuming it would survive the user opening a product page in a new tab to double-check something and then returning. It didn't — the new tab got its own empty `sessionStorage`, and switching back to the original tab was fine, but any flow that expected state to follow the user across tabs (a common real user pattern: opening links in new tabs) silently lost progress. The fix was moving that specific state to `localStorage`, since it genuinely needed to survive across tabs, while intentionally-per-tab state (like a wizard step that shouldn't leak between two open instances of the same flow) stayed in `sessionStorage`.\n\nThe generalizable rule: ask 'does this need to survive to a new tab of the same site' before picking. If yes, `localStorage`. If it should be genuinely isolated per browsing context, `sessionStorage`.\n\n**Testing:** whether you understand tab-scoping specifically, which is the detail that actually causes bugs, versus reciting 'one is longer-lived than the other.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "cookies-and-web-storage-iq3",
+      "question": "Your team is building an offline-capable app that needs to cache a large product catalog client-side. Why wouldn't localStorage work here, and what would you use instead?",
+      "answerMarkdown": "Two separate reasons rule out `localStorage`, and I'd name both. First, **capacity** — `localStorage` typically caps out around 5-10MB per origin (browser-dependent), which a real product catalog with images metadata, descriptions, and variants can blow through quickly. Second, and more important even at smaller sizes, `localStorage`'s API is **synchronous**: every read or write blocks the main thread, so querying or updating a large catalog on every interaction would introduce real, visible jank.\n\n`IndexedDB` is the right tool: it's asynchronous (never blocks the main thread), supports **indexes** so I can query by, say, category or price range rather than only by a single key, stores structured JS objects natively without manual `JSON.stringify`/`parse`, and its quota is tied to available disk space rather than a small fixed cap — commonly hundreds of megabytes or more.\n\nIn practice I wouldn't hand-write the raw IndexedDB API — it's callback-heavy and verbose — I'd reach for a wrapper like `Dexie.js` or the `idb` library, which give a Promise-based interface over the same transactional guarantees.\n\nOne more consideration for a genuinely offline app: I'd pair this with `navigator.storage.persist()` to request persistent (not best-effort) storage, since under disk pressure the browser can otherwise evict an origin's IndexedDB data entirely without warning — a real risk for an offline-first product that assumes its cached catalog will still be there tomorrow.\n\n**Testing:** whether you can justify IndexedDB with its actual technical properties (async, indexed, quota) rather than just 'it's the newer one.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "cookies-and-web-storage-iq4",
+      "question": "A backend engineer wants to set a large session object directly into a single cookie instead of a session ID. What would you push back on?",
+      "answerMarkdown": "The hard limit: cookies cap out around **4KB per cookie**, and a browser also enforces a per-domain limit on the total number of cookies (commonly cited around 50, varying by browser). A serialized session object with any real amount of data — user profile, permissions, cart contents — will blow past 4KB quickly, and the failure mode is silent: an oversized `Set-Cookie` is either truncated or dropped entirely by the browser, with **no JavaScript-visible error anywhere**. The bug surfaces downstream as 'the session randomly doesn't persist,' far removed from its actual cause, which makes it painful to debug later.\n\nBeyond the size limit, there's a bandwidth cost: **every** cookie for a domain is sent on **every** request to that domain, including requests for images, CSS, and any other subresource that doesn't need session data at all. A bloated session cookie means paying that overhead on every single request, not once per session.\n\nMy recommendation: keep the cookie to a small opaque session ID (or a signed/encrypted reference), and store the actual session data server-side — in Redis, a database, or an encrypted session store — keyed by that ID. This keeps the cookie small and stable regardless of how much session data grows later, and avoids the silent-failure mode entirely.\n\n**Testing:** whether you know the concrete size limits and their silent-failure behavior, not just 'cookies are for small data' as received wisdom.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    }
+  ]
+}

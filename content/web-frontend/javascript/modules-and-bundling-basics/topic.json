@@ -1,0 +1,169 @@
+{
+  "id": "modules-and-bundling-basics",
+  "title": "Modules and Bundling Basics",
+  "area": "web-frontend",
+  "group": "javascript",
+  "order": 8,
+  "slug": "modules-and-bundling-basics",
+  "summary": "CommonJS resolves and runs synchronously at require time; ES Modules resolve statically before any code runs, which is exactly the property that makes tree-shaking and safe circular imports possible.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "modules-and-bundling-basics-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every production frontend app ships through a bundler, and every bundler decision — code-splitting, tree-shaking, why one import style behaves differently under Webpack vs Node — traces back to one structural fact: **CommonJS resolves dynamically, at runtime; ES Modules resolve statically, before any code executes.**\n\nThat single difference explains why ESM enables tree-shaking and CommonJS effectively can't, why circular imports behave differently under each system, and why `import()` exists as a separate, deliberately dynamic escape hatch. This topic builds that one idea and follows it through to the practical bundler behavior it produces.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "modules-and-bundling-basics-s02",
+      "order": 2,
+      "sectionTitle": "CommonJS vs ES Modules",
+      "subTitle": "`require`/`module.exports` vs `import`/`export`",
+      "type": "compare",
+      "markdown": "```javascript\n// CommonJS (Node's original module system)\nconst { readFile } = require(\"fs\");\nmodule.exports = { greet: () => \"hi\" };\n\n// ES Modules (the language standard)\nimport { readFile } from \"fs\";\nexport const greet = () => \"hi\";\n```\n\n| | CommonJS | ES Modules |\n|---|---|---|\n| **`require`/`import` runs** | synchronously, as a normal function call, anywhere in the code | as a hoisted, static declaration, resolved before execution |\n| **Exports** | a mutable `module.exports` object, reassignable at runtime | a fixed, statically-analyzable list of bindings |\n| **Where it originated** | Node.js (pre-ESM) | the ECMAScript language standard itself |\n| **Browser support** | none natively — needs a bundler | native, via `<script type=\"module\">` |\n\nCommonJS treats a module load like calling a function that returns an object. ESM treats it like a declaration the engine can fully analyze without running anything.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": true,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "modules-and-bundling-basics-s02-q1"
+      ]
+    },
+    {
+      "id": "modules-and-bundling-basics-s03",
+      "order": 3,
+      "sectionTitle": "Static vs dynamic resolution",
+      "subTitle": "Why ESM enables tree-shaking",
+      "type": "concept",
+      "markdown": "`import`/`export` statements must appear at the **top level** of a module — never inside an `if`, a function body, or a loop — precisely so a tool can determine the entire module graph and exactly which named bindings are used, **without running any code**. This is called **static analysis**.\n\n`require`, by contrast, is a normal function call: `require(someVariable)` is completely legal CommonJS, and there's no way to know what it loads without actually executing the program. A bundler analyzing ESM can build a precise graph of \"file A imports only `foo` from file B\" ahead of time; a bundler analyzing CommonJS has to assume the whole `module.exports` object might be used, because it genuinely can't always tell otherwise.\n\nThis is the entire mechanism behind tree-shaking (next slide) — it isn't a smarter algorithm applied to CommonJS, it's a capability that specifically requires ESM's static shape.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "modules-and-bundling-basics-s03-q1"
+      ]
+    },
+    {
+      "id": "modules-and-bundling-basics-s04",
+      "order": 4,
+      "sectionTitle": "`import()` — dynamic import for code-splitting",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Static `import` at the top of a file is resolved and bundled eagerly — every module it references ships in the initial bundle. `import()`, called as a function anywhere in the code, is the deliberate exception: it returns a **Promise** and lets the bundler split that module into a **separate chunk**, loaded only when the code path actually runs.\n\n```javascript\nbutton.addEventListener(\"click\", async () => {\n  const { openModal } = await import(\"./modal.js\"); // fetched only on click\n  openModal();\n});\n```\n\n`modal.js` and everything it imports get bundled into their own file, fetched over the network only the first time this click handler fires — not as part of the initial page load. This is the mechanism behind route-based code-splitting in every modern framework (`React.lazy`, Vue's async components, Next.js's automatic route splitting) — they're all `import()` under the hood, wrapped in framework sugar.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "modules-and-bundling-basics-s05",
+      "order": 5,
+      "sectionTitle": "Which branches get tree-shaken",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "```javascript\n// utils.js\nexport function used() { return 1; }\nexport function unused() { return 2; }\n\n// app.js\nimport { used } from \"./utils.js\";\nconsole.log(used());\n```\n\nBecause `app.js` only statically imports `used`, a bundler doing tree-shaking can prove `unused` is never referenced anywhere in the graph and **omit it entirely** from the final bundle — not just skip calling it, but not include its code at all.\n\n<<< Image: a dependency graph with app.js at the top pointing to two named exports inside utils.js — \"used()\" and \"unused()\" — with a solid arrow from app.js to used() labelled \"imported, kept\" and a dashed greyed-out arrow to unused() labelled \"never imported, tree-shaken out of the final bundle\" >>>",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "modules-and-bundling-basics-s06",
+      "order": 6,
+      "sectionTitle": "Circular dependencies",
+      "subTitle": "What happens, and how each system handles it",
+      "type": "pitfall",
+      "markdown": "A circular dependency (A imports B, B imports A) is legal in both systems, but the failure mode differs:\n\n**CommonJS** returns whatever `module.exports` looked like **at the moment of the circular `require`**, even if incomplete — because `require` runs eagerly and synchronously, a module partway through its own initial execution can be `require`'d by something it itself depends on, getting back a half-populated `exports` object with some properties still missing.\n\n**ES Modules** handle this more gracefully via **live bindings**: `import` gives you a live reference to the export, not a snapshot, and ESM's static hoisting means both modules' `export` declarations are registered before either module's body actually runs. A circular import can still hit a value that isn't initialized *yet* (accessed too early, before its line runs — a TDZ-like situation for exports), but the binding itself updates once the exporting module finishes, rather than being frozen at the moment of the circular require the way CommonJS's snapshot is.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "modules-and-bundling-basics-s06-q1"
+      ]
+    },
+    {
+      "id": "modules-and-bundling-basics-s07",
+      "order": 7,
+      "sectionTitle": "Named vs default exports",
+      "subTitle": "API design trade-offs for a library",
+      "type": "compare",
+      "markdown": "```javascript\n// Named exports — one file, many named things\nexport function debounce() {}\nexport function throttle() {}\nimport { debounce, throttle } from \"./utils\";\n\n// Default export — one file, one primary thing\nexport default function Button() {}\nimport Button from \"./Button\"; // the importer can name it anything\n```\n\n| | Named exports | Default export |\n|---|---|---|\n| **Tree-shaking** | precise — a bundler knows exactly which named bindings are used | works, but slightly coarser — the whole default is one unit |\n| **Import naming** | fixed at the source, consistent everywhere it's imported | importer picks any name, which can drift inconsistently across a codebase |\n| **Refactoring** | renaming the export is a traceable, tool-assisted rename | renaming the source function doesn't force import sites to update, since names aren't tied |\n| **Typical fit** | utility modules with several related exports | a component or class that is the one thing a file exists for |\n\nMany style guides now prefer named exports even for single-purpose files specifically for the consistent-naming and tooling benefits — default exports remain common mainly by convention in component-per-file frameworks.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "modules-and-bundling-basics-s07-q1"
+      ]
+    },
+    {
+      "id": "modules-and-bundling-basics-s08",
+      "order": 8,
+      "sectionTitle": "Barrel files and their tree-shaking cost",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A \"barrel\" file — an `index.js` that re-exports everything from a directory (`export * from \"./button\"; export * from \"./modal\";`) — is convenient to import from, but can quietly defeat tree-shaking depending on the bundler and how the re-exports are written.\n\n```javascript\n// components/index.js — a barrel\nexport * from \"./button\";\nexport * from \"./modal\";\nexport * from \"./huge-rarely-used-chart-library-wrapper\";\n\n// app.js\nimport { Button } from \"./components\"; // only wants Button\n```\n\nSome bundlers, especially with side-effectful modules or looser configuration, end up including the entire barrel's transitive dependency tree even though only `Button` was imported — because proving nothing else has a side effect requires more static analysis than a straightforward named import does. The practical guidance: import directly from the specific file (`from \"./components/button\"`) in performance-sensitive code, and check your bundler's `sideEffects` field configuration (`package.json`) if barrel files are unavoidable.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "modules-and-bundling-basics-s08-q1"
+      ]
+    },
+    {
+      "id": "modules-and-bundling-basics-s09",
+      "order": 9,
+      "sectionTitle": "Interop: requiring ESM from CommonJS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because the two systems resolve fundamentally differently — one synchronous and eager, one static and hoisted — mixing them isn't always seamless. A CommonJS file **cannot** `require()` a genuine ES Module synchronously; Node requires an `import()` (dynamic, async) instead, since loading an ESM module is inherently an asynchronous operation in Node's implementation.\n\nThe reverse — importing a CommonJS module from ESM — usually works transparently: `import pkg from \"./cjs-module.cjs\"` gets Node's best-effort interop, which wraps `module.exports` as the default export. This asymmetry is why library authors publishing to npm often ship **dual packages** (both a CommonJS and an ESM build, selected via `package.json`'s `exports` field) rather than picking one, specifically to avoid forcing every consumer into the async `import()` dance just to use a CommonJS-authored dependency.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "modules-and-bundling-basics-s10",
+      "order": 10,
+      "sectionTitle": "How tree-shaking actually eliminates code",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Tree-shaking\" isn't a single clever trick — it's the combination of two ordinary compiler passes, made possible by ESM's static shape:\n\n1. **Build the module graph statically.** Because every `import`/`export` is analyzable without running code, the bundler knows exactly which named bindings each file actually uses from each dependency.\n2. **Dead-code elimination on that graph.** Anything exported but never imported anywhere reachable from the entry point is proven unreachable and stripped, the same way a compiler removes an `if (false) { ... }` branch.\n\nThe reason this doesn't work reliably for CommonJS: step 1 requires knowing the import surface *before execution*, and `require`'s dynamic, runtime nature (`require(cond ? \"a\" : \"b\")`, `module.exports = computeStuff()`) makes that proof generally impossible — the bundler has to assume the whole module might be needed, defeating elimination.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "modules-and-bundling-basics-s10-q1"
+      ]
+    },
+    {
+      "id": "modules-and-bundling-basics-s11",
+      "order": 11,
+      "sectionTitle": "Choosing a module strategy",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A senior-level summary a candidate should be able to give without prompting:\n\n- **Use ESM by default** for anything shipping to a bundler or a modern browser — it's the language standard, enables tree-shaking, and has cleaner circular-import semantics via live bindings.\n- **Reach for `import()`** specifically at genuine code-splitting boundaries — routes, modals, rarely-used heavy dependencies — not everywhere, since over-splitting adds request overhead.\n- **Prefer named exports** for utility modules and anywhere tooling-assisted refactors and precise tree-shaking matter; reserve default exports for the one-thing-per-file convention many component frameworks lean on.\n- **Watch barrel files** in performance-sensitive code paths, and check a library's `package.json` `exports`/`sideEffects` fields when tree-shaking doesn't seem to be working as expected.\n\nThe unifying idea underneath all of it: static analyzability is the feature, and every practical benefit here is a direct consequence of choosing the module system that gives the bundler more to reason about ahead of time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

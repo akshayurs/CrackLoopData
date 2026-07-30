@@ -1,0 +1,37 @@
+{
+  "topicId": "performance-mindset-and-measurement",
+  "interviewQuestions": [
+    {
+      "id": "performance-mindset-and-measurement-iq1",
+      "question": "A user reports the app 'feels slow.' Walk me through how you'd actually approach that.",
+      "answerMarkdown": "I'd start by refusing to guess, because \"feels slow\" isn't actionable yet — I need a number, a percentile, and a location before I touch anything.\n\nFirst step is turning the report into a measurable claim: which action, on which device/network, and how slow relative to what baseline. If I have real user monitoring, I pull the actual latency distribution for that action rather than trusting the report's framing — users are good at noticing slowness and bad at diagnosing its cause.\n\nOnce I have a number, I break down where the time goes: DNS/TLS, network, backend processing, database, downstream calls, client rendering. In one real case, a \"slow checkout\" complaint turned out to be a font file blocking render on slow connections — nothing in the backend was wrong, and a backend engineer chasing API latency would have found nothing.\n\nOnly after that breakdown do I profile the specific segment that dominates, form a hypothesis, and make one targeted change — then re-measure against the original number to confirm the fix actually moved it, not just that the code looks different.\n\nThe discipline is: number first, breakdown second, profiler third, one change at a time, re-measure. Skipping straight to \"optimize the thing I suspect\" is how teams spend a sprint on code that was never the problem.\n\n**Testing:** whether you default to a measurement-driven process or jump straight to fixing based on a hunch.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "performance-mindset-and-measurement-iq2",
+      "question": "Your team parallelized the slowest step in a data pipeline across 10x more workers and only got a 1.4x speedup. Why might that happen?",
+      "answerMarkdown": "This is Amdahl's Law showing up in practice: the parallelized step was never the whole bottleneck, and whatever fraction of total time sits outside it now caps the win.\n\nConcretely, if that step was genuinely 40% of total pipeline time and got infinitely faster, the ceiling on overall speedup is 1 / (1 − 0.4) = 1.67x — a 1.4x result is close to that ceiling, meaning the team likely got most of what was available, and the shortfall isn't a parallelization bug, it's a measurement-of-the-wrong-thing bug: they never confirmed the step was actually 40%+ before investing in 10x more workers.\n\nI'd check three things: what fraction of end-to-end time did that step actually represent before the change (if it was 15%, not 40%, a 1.4x result is roughly what the math predicts); whether the \"parallel\" workers are now contending on something serial — a shared output file, a database connection pool, a lock — which silently reintroduces a serial fraction; and whether overhead (worker startup, result merging, coordination) grew with worker count and is eating the gain.\n\nThe fix generally isn't more workers on the same step — it's finding the *next* largest serial or sequential fraction and attacking that, or accepting that 40%-of-total was always going to cap out around there.\n\n**Testing:** whether you can apply Amdahl's Law quantitatively to diagnose a real scaling result, not just recite the formula.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied reasoning"
+    },
+    {
+      "id": "performance-mindset-and-measurement-iq3",
+      "question": "How would you decide whether a proposed optimization is worth doing before any code is written?",
+      "answerMarkdown": "I'd want three numbers before greenlighting it: what fraction of the time budget the target actually represents, what the performance budget requires, and what the optimization is likely to cost in complexity or risk.\n\nFirst, I check whether the target is even a meaningful fraction of end-to-end time — Amdahl's Law says optimizing a step that's 5% of total time caps your overall win at 5%, so if someone proposes rewriting a function that profiling shows is 2% of total latency, that's very likely not worth the engineering time regardless of how much faster the rewrite makes that function.\n\nSecond, I check it against the budget: if p99 for checkout is already 220ms against a 300ms target, there's no business reason to spend a sprint shaving another 30ms off a component users can't perceive — that's classic premature optimization, chasing a number nobody asked for.\n\nThird, I weigh the cost: does the optimization add a cache with its own invalidation surface, hand-inlined code that's harder to read, or a new failure mode under load? A 15% latency win that adds a subtle cache-invalidation bug is often a net loss once you count the on-call cost.\n\nIf all three check out — meaningful fraction of the budget, budget genuinely at risk, acceptable added complexity — it's worth doing, and I want a benchmark or profiler trace as evidence before, not just after.\n\n**Testing:** whether you can reason about optimization ROI instead of treating \"faster\" as automatically worth pursuing.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "performance-mindset-and-measurement-iq4",
+      "question": "Give an example of latency and throughput actually being in tension, and how you'd decide which one to prioritize.",
+      "answerMarkdown": "A message queue consumer that processes events one at a time has low per-event latency but caps out at a modest throughput because of per-event overhead — network round trips to a downstream API, per-event transaction commits. Batching 500 events into one downstream call and one commit multiplies throughput, often 10-20x, because the fixed overhead is now amortized across the batch. But the first event in a batch now waits for the other 499 to accumulate before it's even sent, so its latency went from single-digit milliseconds to however long the batch window is — often hundreds of milliseconds.\n\nWhich one to prioritize depends entirely on what's downstream of the decision, not on which number looks better in isolation: a fraud-detection consumer that has to react before a transaction settles needs low per-event latency and can't tolerate a batch window, even at a throughput cost. An analytics-ingestion consumer that just needs everything processed within an hour should batch aggressively — nobody's waiting on any single event.\n\nIn practice I'd also look for a shape that isn't purely one or the other: a small batch window (say 50ms) captures most of the throughput win of batching while keeping the worst-case added latency bounded and known, rather than either extreme.\n\nThe decision criterion is: which metric does the consumer of this system actually feel, and what's the cost of getting it wrong for them.\n\n**Testing:** whether you can reason about a real latency/throughput trade-off with a concrete mechanism, not just recite that they're in tension.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

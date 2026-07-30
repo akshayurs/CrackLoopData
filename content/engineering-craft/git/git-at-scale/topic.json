@@ -1,0 +1,169 @@
+{
+  "id": "git-at-scale",
+  "title": "Git at Scale",
+  "area": "engineering-craft",
+  "group": "git",
+  "order": 7,
+  "slug": "git-at-scale",
+  "summary": "Git's data model was designed for the Linux kernel, not a 50GB monorepo with 10,000 contributors — and it shows at scale. Learn what actually gets slow, the tooling that fixes it, and the operational layer of hooks, ownership, and provenance a large team needs.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "git-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything in this group so far assumed a repository small enough that cloning, checking out, and searching history are all instant. That assumption breaks at real scale — a monorepo with tens of gigabytes of history, hundreds of thousands of files, and thousands of daily commits from thousands of engineers.\n\nThis topic is about what actually gets slow first, the tooling built specifically to fix it (partial clone, sparse checkout, virtual filesystems), and the operational layer — hooks, CODEOWNERS, signed commits — that a large organization needs on top of git's core mechanics to keep quality and trust intact as headcount grows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "git-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "Why cloning and checkout get slow",
+      "subTitle": "Full history, full tree",
+      "type": "concept",
+      "markdown": "A normal `git clone` does two expensive things by default: it transfers **every historical commit's objects** (packed and delta-compressed, but still real data), and it materializes **every file in the current tree** onto disk. Both scale with the repository, not with how much of it any one engineer actually touches.\n\nAt a company-wide monorepo scale, that means: a fresh clone can mean tens of gigabytes of history transfer even though a given engineer works in one small corner of the codebase, and `git status` has to stat every file in a working tree of hundreds of thousands of files just to see what changed. Commands that are instant in a 500-file repo become seconds-to-minutes operations in a repo with a million files, purely from filesystem overhead multiplying across every file present.\n\nThis is the specific problem the next few slides' tooling exists to solve — none of it changes what git *is*, only how much of it you're forced to have present locally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "git-at-scale-s02-q1"
+      ]
+    },
+    {
+      "id": "git-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "Shallow clone vs partial clone vs sparse checkout",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Shallow clone (`--depth`) | Partial clone (`--filter`) | Sparse checkout |\n|---|---|---|\n| Reduces | History depth | Object content fetched | Files materialized on disk |\n| What you get | Only the last N commits, no older history | Full commit graph, but blobs fetched lazily on demand | Full history, but only chosen paths checked out |\n| Trade-off | Can't `git log` or `blame` past the cutoff; some operations need a full unshallow | First access to an old file's content needs a network round trip | History operations still see the full tree; only the working directory is scoped |\n| Typical use | CI checkouts that only need HEAD | Huge monorepos where any one clone touches a small slice of history | Huge monorepos where any one clone touches a small slice of the *tree* |\n\nThese solve genuinely different problems and often combine: a partial clone with a sparse checkout gets both a lazily-fetched object store and a working directory limited to the paths one team actually needs, which is close to how the largest git deployments (Windows, several large tech companies' monorepos) actually operate day to day.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "git-at-scale-s03-q1"
+      ]
+    },
+    {
+      "id": "git-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "Git hooks for local automation",
+      "subTitle": "pre-commit, pre-push, commit-msg",
+      "type": "code",
+      "markdown": "Hooks are scripts git runs automatically at specific points, living in `.git/hooks/` (or distributed to every clone via a tool like `pre-commit` or `husky`):\n\n```bash\n# .git/hooks/pre-commit — runs before a commit is created\n#!/bin/sh\nnpx eslint --max-warnings=0 $(git diff --cached --name-only) || exit 1\n\n# .git/hooks/commit-msg — runs after the message is written, can reject it\n#!/bin/sh\ngrep -qE '^(feat|fix|chore|docs)(\\(.+\\))?: ' \"$1\" || {\n  echo \"Commit message must follow Conventional Commits format\"; exit 1;\n}\n\n# .git/hooks/pre-push — runs before objects are sent to the remote\n#!/bin/sh\nnpm test || exit 1\n```\n\nHooks give **local, instant** feedback — a failing lint or a broken convention is caught before it ever reaches CI, saving the round-trip. The trade-off: hooks live in `.git/hooks/` by default, which isn't committed to the repo, so teams need a distribution mechanism (a hooks-manager tool, or a setup script) to make sure everyone actually has them installed — an uninstalled hook enforces nothing.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "git-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "CODEOWNERS and required reviewers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A `CODEOWNERS` file maps paths to the people or teams responsible for reviewing changes there:\n\n```\n/payments/          @payments-team\n/infra/terraform/   @platform-team\n*.proto             @api-review-team\n```\n\nWhen a PR touches a matched path, the platform automatically requests review from the mapped owners — and can be configured to **require** their approval before merge, not just request it. This is what makes review routing scale past the point where every engineer knows who to ask: in a thousand-engineer monorepo, nobody can personally know which of a thousand possible reviewers understands a given directory, so ownership needs to be explicit and machine-enforced rather than tribal knowledge.\n\nThe common failure mode is a stale CODEOWNERS file — a team reorganizes, a path's true owner changes, and the file isn't updated, so reviews route to people who've moved on. Treating CODEOWNERS as living configuration, reviewed itself whenever teams reorganize, is what keeps the automation actually accurate.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "git-at-scale-s05-q1"
+      ]
+    },
+    {
+      "id": "git-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "Log archaeology",
+      "subTitle": "blame, -L, --follow, pickaxe",
+      "type": "code",
+      "markdown": "`git blame` alone gets noisy fast in old, high-churn files — a single formatting-only commit can make blame attribute half a file to \"reformatted the whole thing,\" hiding the actual author of the logic. More targeted tools:\n\n```bash\ngit log -L 40,60:server.py         # history of just lines 40-60, across renames and edits\ngit log --follow -- utils/parse.py # history across file renames (default log stops at a rename)\ngit log -S \"MAX_RETRIES\"           # \"pickaxe\" — commits that added or removed this exact string\ngit log -G \"retry.*count\"          # like -S, but matches a regex change in the diff, not exact text\ngit blame -w file.py               # ignore whitespace-only changes when attributing lines\n```\n\n`-L` is the fix for blame's biggest weakness — line-range history survives across refactors far better than blaming the whole file. `-S`/`-G` (pickaxe) answer \"when did this specific behavior get introduced\" directly, which is often faster than guessing which commit message might mention it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "git-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Signed commits and tags",
+      "subTitle": "Why supply-chain trust cares about provenance",
+      "type": "concept",
+      "markdown": "A commit's author field is just text — anyone with local git config can set `user.name` and `user.email` to whatever they want, so an unsigned commit's claimed authorship is not verifiable. **GPG-signed commits and tags** (`git commit -S`, `git tag -s`) add a cryptographic signature that proves the commit was actually created by whoever holds that private key.\n\nThis matters directly for supply-chain security: several major open-source incidents have involved a compromised account or a malicious contributor introducing code under someone else's apparent identity. A branch protection rule requiring signed commits closes that specific gap — an attacker without the maintainer's private key can't forge a passing signature, regardless of what name or email they set.\n\nAt scale, this is often paired with requiring signed releases specifically (annotated, signed tags, as covered in [Advanced Git Internals](advanced-git-internals)) — so anyone consuming a release artifact can verify it traces back to a trusted key, not just a plausible-looking commit history.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "git-at-scale-s07-q1"
+      ]
+    },
+    {
+      "id": "git-at-scale-s08",
+      "order": 8,
+      "sectionTitle": "Monorepo tooling vs many small repos",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Monorepo tooling (sparse checkout, virtual filesystems) | Many small repos |\n|---|---|---|\n| Local disk/checkout cost | Scoped explicitly, or every clone pays for the whole repo | Naturally small — each repo is only its own project |\n| Cross-project atomic changes | Possible, one commit/PR | Not possible; needs coordinated multi-repo PRs |\n| CI scoping | Must be built deliberately (path-based triggers) | Naturally scoped — each repo's CI only runs for itself |\n| Tooling investment required | High — sparse checkout, build graph scoping, sometimes a virtual filesystem | Low — normal git usage suffices |\n| Failure mode without investment | Every clone and CI run pays full-repo cost regardless of what changed | Cross-cutting changes become a coordination and versioning burden |\n\nThe honest trade-off: a monorepo at real scale is not simpler than many small repos — it's a different, larger tooling investment traded for atomic cross-project changes and unified history. Companies that run monorepos successfully (Google, Meta, Microsoft's Windows repo) invest heavily in exactly the tooling this topic covers; adopting a monorepo without that investment just means everyone pays full-repo cost on every operation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "git-at-scale-s08-q1"
+      ]
+    },
+    {
+      "id": "git-at-scale-s09",
+      "order": 9,
+      "sectionTitle": "One large-file commit, bloating clones forever",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Someone commits a 2GB database dump, a build artifact, or an accidentally-included video file. It gets caught in review and immediately deleted in the next commit — but the object is still in history, still reachable from every commit after it, and still transferred to **every future clone of the repository, forever**, unless someone deliberately rewrites history to remove it.\n\nDeleting the file in a later commit only removes it from the *current* tree; the blob remains a permanent part of history because git's model is additive by design — a later commit can't retroactively shrink an earlier one. The actual fix requires a history-rewriting tool (`git filter-repo`, BFG Repo-Cleaner) that walks every commit and strips the object out entirely, which changes every downstream commit's hash — exactly the kind of shared-history rewrite that needs full team coordination, a golden-rule violation done on purpose and carefully.\n\nThe practical defense is prevention: a pre-receive hook on the server rejecting pushes over a size threshold, and Git LFS for genuinely large binary assets that need version control without living in the main object store.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "git-at-scale-s09-q1"
+      ]
+    },
+    {
+      "id": "git-at-scale-s10",
+      "order": 10,
+      "sectionTitle": "The senior-level nuance",
+      "subTitle": "Scale tooling is a deliberate trade, not a default",
+      "type": "concept",
+      "markdown": "Every tool in this topic — partial clone, sparse checkout, hooks, CODEOWNERS, signed commits — solves a real problem, but each one also adds operational surface: a partial clone that isn't configured correctly can silently miss objects in scripts that assume a full clone; a hook that isn't distributed to every machine enforces nothing while looking like it does; a CODEOWNERS file that drifts from actual team structure routes reviews to the wrong people confidently and silently.\n\nThe judgment call a senior engineer makes isn't \"should we adopt these tools\" — it's **at what scale does the complexity they add start paying for itself**. A 50-engineer team with a 2GB repo gains little from partial clone and sparse checkout and would just be adding operational surface for no benefit; a 5,000-engineer monorepo without them is unworkable. Introducing scale tooling before it's needed is itself a form of premature optimization — the interview-worthy insight is knowing where that threshold actually sits, not that the tools exist.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "git-at-scale-s11",
+      "order": 11,
+      "sectionTitle": "Closing the group",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This group started from git's mental model — commits, branches, the three trees — and built up through branching, rebasing, workflows, undoing mistakes, the object model underneath, and finally what changes at real scale. The throughline across all seven topics is the same: git's operations are simpler and more mechanical than they look from the command line alone, and almost every piece of advice — the golden rule about rebasing, why signed commits matter, why long-lived branches hurt — follows directly from understanding what a commit actually is and what happens when its identity or reachability changes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

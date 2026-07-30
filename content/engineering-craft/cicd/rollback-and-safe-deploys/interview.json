@@ -1,0 +1,37 @@
+{
+  "topicId": "rollback-and-safe-deploys",
+  "interviewQuestions": [
+    {
+      "id": "rollback-and-safe-deploys-iq1",
+      "question": "What makes a deploy 'safe,' and how do you actually measure that?",
+      "answerMarkdown": "I think of deploy risk as roughly the product of three things: blast radius (how much traffic is exposed before you know something's wrong), detection time (how long until you know), and rollback time (how long until the bad code stops running). A safe deploy process is one that deliberately shrinks all three, not just one of them.\n\nConcretely: blast radius is limited by canarying — 5% of traffic first, not 100%. Detection time is shrunk by automated guardrail metrics (error rate, p99 latency, and at least one business metric like checkout success rate) checked continuously during the rollout window, not by waiting for a human to notice a dashboard or a customer to complain. Rollback time is shrunk by having an automated, tested revert path — ideally a config change or traffic-routing flip rather than a full rebuild-and-redeploy.\n\nThe measurement I actually care about is: if this deploy is bad, how many users are affected, for how long, before it's undone? If I can't answer that with real numbers — not \"pretty quickly\" — the deploy process isn't actually safe yet, it just hasn't been tested by a real failure.\n\n**Testing:** whether you think about deploy safety as a measurable system, not a vague good practice.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "rollback-and-safe-deploys-iq2",
+      "question": "How do you handle a database migration so that a bad app deploy can still be rolled back safely?",
+      "answerMarkdown": "The core discipline is expand/contract, splitting one migration into steps that never make an app-code rollback depend on a schema rollback. First, **expand**: add the new column or table in a way both old and new app code tolerate — nullable, or with a safe default, so the old version doesn't break just because the column now exists. Second, **migrate**: deploy the new app code that actually writes to (and optionally backfills) the new shape, while the schema still supports the old version too, in case a rollback is needed at this stage. Third, only once the new code has run successfully for a while and there's no remaining rollback scenario, **contract**: a later, separate migration removes the old column or constraint.\n\nThe failure mode this prevents: adding a `NOT NULL` column in the same deploy as the code that writes it. During a rolling deploy, old and new instances run side by side, and the old instances — unaware of the new column — get their inserts rejected by the constraint, causing errors *during* the deploy, and now a rollback doesn't even cleanly fix it because some rows have the column and some don't.\n\nThe rule I hold myself to: at any point in the rollout, both app versions must be able to run against the schema as it currently exists. If that's not true, the migration needs another expand step first.\n\n**Testing:** whether you can reason concretely about the failure mode expand/contract prevents, not just recite the pattern's name.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "rollback-and-safe-deploys-iq3",
+      "question": "You're on-call and a deploy just went out. Metrics look slightly off but not clearly broken. Do you roll back?",
+      "answerMarkdown": "I'd lean toward rolling back, and here's the reasoning I'd actually use rather than guessing in the moment. First, I'd check whether the deploy included a schema migration or wrote data in a new format — if it did, and any instances have already written new-shape data, a rollback might not be clean, and I'd need to check whether the old code can tolerate that data before reverting (this is exactly why expand/contract matters: it's supposed to make this check trivially \"yes\").\n\nAssuming rollback is safe, the actual decision comes down to the cost asymmetry: if I'm wrong and it was noise, rolling back costs a few minutes and a redeploy once the real cause is understood. If I'm wrong the other way — it's real and I wait — the blast radius keeps growing the longer I hesitate. That asymmetry favors rolling back on ambiguous signal, not waiting for certainty.\n\nWhat I wouldn't do is try to \"test a theory\" by making a live change in production to see if it's the cause — that's an uncontrolled experiment on live traffic. I'd roll back first to restore known-good behavior, then investigate the ambiguous signal calmly afterward, off the critical path.\n\nIf the guardrail metrics were automated with pre-set thresholds, this decision wouldn't even reach me as a judgment call — that's the whole point of building the automation in the first place.\n\n**Testing:** whether you default to safety under ambiguity and understand why live production experimentation during uncertainty is risky.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "rollback-and-safe-deploys-iq4",
+      "question": "What's the difference between forward-fixing and rolling back, and how do you decide which to do?",
+      "answerMarkdown": "Rolling back means reverting to the last known-good version and undoing the bad deploy entirely. Forward-fixing means shipping a small, targeted patch on top of the current (bad) version instead of reverting.\n\nRollback is usually the default because it's fast and doesn't require writing a new fix under pressure — but it assumes the old version can safely run against whatever state currently exists. That assumption breaks the moment new data has been written in a format or shape the old version doesn't understand: a new required field, a changed enum, a different serialization. In that case, rolling back can reintroduce code that mishandles the already-written data, which is a data-consistency problem, potentially worse than the original bug.\n\nSo my actual decision process: first ask whether any state was written that the old version can't handle. If no, roll back — it's faster and lower-risk. If yes, forward-fix — accept that the bug stays live a little longer while a real patch is written and tested, because that's safer than corrupting data on the way back down.\n\nThe way to avoid this decision being hard in the first place is designing migrations with expand/contract, so \"can the old version handle current state\" is always yes, and rollback stays the default safe choice.\n\n**Testing:** whether you understand rollback's hidden assumption and can reason about when it silently fails.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

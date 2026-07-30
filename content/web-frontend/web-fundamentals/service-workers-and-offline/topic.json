@@ -1,0 +1,180 @@
+{
+  "id": "service-workers-and-offline",
+  "title": "Service Workers and Offline",
+  "area": "web-frontend",
+  "group": "web-fundamentals",
+  "order": 8,
+  "slug": "service-workers-and-offline",
+  "summary": "A service worker is a programmable network proxy running in the browser, and it's what turns a normal page into an app that survives a dropped connection — at the cost of a lifecycle that trips up nearly every team that ships one.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 13,
+  "slides": [
+    {
+      "id": "service-workers-and-offline-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **service worker** is a script the browser runs separately from your page — no DOM access, its own thread, its own lifecycle — sitting between your app and the network as a programmable proxy. Every `fetch` your page makes can be intercepted, inspected, and answered from a cache, the network, or logic you write, entirely under your control.\n\nThat's the mechanism behind \"make this app work offline,\" a real and common interview design question, and behind Progressive Web Apps generally. It's also one of the trickiest browser APIs to reason about, precisely because its lifecycle is deliberately asynchronous and decoupled from any single page load — the classic \"why isn't my update showing up\" bug traces directly back to that lifecycle.\n\nThis topic covers what a service worker actually is, its install/activate/fetch lifecycle, caching strategies, and the update problem that catches nearly every team that ships one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "service-workers-and-offline-s02",
+      "order": 2,
+      "sectionTitle": "A programmable network proxy, in the browser",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once registered, a service worker sits between your page and the network for every request in its scope — it can inspect the request, decide whether to serve a cached response, forward it to the network, modify it, or synthesize a response entirely from code, with no server involved at all.\n\nThree properties define what it is and isn't: it has **no access to the DOM** (it can't touch `document` — communication with pages happens via `postMessage`); it runs on its **own thread**, independent of any specific page, and can outlive the tab that registered it, continuing to run in the background for things like push notifications; and it only runs over **HTTPS** (or `localhost` for development), because a network-intercepting script is powerful enough that shipping it over plain HTTP would let a network attacker inject one.\n\nThis is genuinely different from earlier offline attempts like AppCache — a service worker is imperative code you write, not a declarative manifest the browser interprets, which is exactly why it can implement arbitrary caching logic instead of one fixed strategy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "service-workers-and-offline-s02-q1"
+      ]
+    },
+    {
+      "id": "service-workers-and-offline-s03",
+      "order": 3,
+      "sectionTitle": "The lifecycle: install, activate, fetch",
+      "subTitle": "Why updates are tricky",
+      "type": "diagram",
+      "markdown": "A service worker moves through distinct states, and the transitions are the entire source of update confusion:\n\n1. **Register** — the page calls `navigator.serviceWorker.register('/sw.js')`.\n2. **Install** — the new worker downloads and runs its `install` event, typically pre-caching assets. If this fails, the worker is discarded.\n3. **Waiting** — if an **older** service worker is already controlling open pages, the new one enters `waiting` and does **not** take over yet — by design, to avoid two versions of your app running simultaneously in different tabs.\n4. **Activate** — once no page is using the old worker (all its tabs closed, or `skipWaiting()` called explicitly), the new worker activates, typically cleaning up old caches here.\n5. **Fetch** — the active worker now intercepts requests from pages within its scope.\n\n<<< Image: a state diagram with boxes Register -> Install -> Waiting -> Activate -> Fetch, with a side note near \"Waiting\" reading \"blocked here until all tabs controlled by the OLD worker are closed, unless skipWaiting() is called\", and a dotted loop arrow from Fetch back to a new \"Install\" box for the next version, labeled \"new sw.js detected on next registration check\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "service-workers-and-offline-s03-q1"
+      ]
+    },
+    {
+      "id": "service-workers-and-offline-s04",
+      "order": 4,
+      "sectionTitle": "Caching strategies",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Inside the `fetch` handler, you decide per-request how to answer, and the three canonical patterns fit different content:\n\n- **Cache-first** — check the cache, serve it immediately if present, only hit the network on a miss. Fits versioned static assets (hashed JS/CSS bundles) that never change under a given URL.\n- **Network-first** — try the network, fall back to cache only on failure. Fits content that should be as fresh as possible but still needs an offline fallback, like an article page.\n- **Stale-while-revalidate** — serve the cached response **immediately**, and simultaneously kick off a network fetch in the background to update the cache for **next time**. Fits content where instant response matters more than this-exact-load freshness, like a list of recent items.\n\nThe third one is the workhorse of most real service worker implementations because it gives the perceived speed of cache-first without permanently freezing content — the user just sees this load's data one request \"behind,\" not stale forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "service-workers-and-offline-s04-q1"
+      ]
+    },
+    {
+      "id": "service-workers-and-offline-s05",
+      "order": 5,
+      "sectionTitle": "A minimal stale-while-revalidate worker",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```javascript\nself.addEventListener('fetch', event => {\n  event.respondWith(\n    caches.open('v1').then(async cache => {\n      const cached = await cache.match(event.request);\n      const networkFetch = fetch(event.request).then(response => {\n        cache.put(event.request, response.clone()); // clone: body can only be read once\n        return response;\n      });\n      // Serve cached immediately if present; otherwise wait on the network\n      return cached || networkFetch;\n    })\n  );\n});\n```\n\nTwo details that matter in real implementations: `response.clone()` is required because a `Response` body is a stream that can only be consumed once — you need one copy to return to the page and one to store in the cache. And the network fetch still runs even when serving from cache, specifically so the **next** request gets fresher data — that's the \"revalidate\" half of the strategy's name.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "service-workers-and-offline-s06",
+      "order": 6,
+      "sectionTitle": "The Cache API vs the HTTP cache",
+      "subTitle": "Who's in control",
+      "type": "compare",
+      "markdown": "Two caching layers exist side by side, and confusing them is a common bug source:\n\n| | HTTP cache | Cache API (inside a service worker) |\n|---|---|---|\n| Controlled by | `Cache-Control`/`ETag` headers, browser heuristics | Your JavaScript, explicitly |\n| Applies without a service worker | Yes — always active | No — only reachable from worker code |\n| Storage keys | URL (implicitly, per HTTP semantics) | Whatever Request you choose to use as a key |\n| Typical use | Standard resource caching (images, fonts, API responses) | Explicit offline strategies, precaching an app shell |\n\nA service worker's `fetch` handler sits **in front of** the HTTP cache — when your worker code calls `fetch(request)` inside a handler, that call still goes through the normal HTTP caching rules; the Cache API is a separate, explicitly-managed store your code reads and writes on top of that. \"Turning off\" HTTP caching via headers doesn't disable the Cache API, and vice versa — they're independent systems that happen to both be called \"cache.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "service-workers-and-offline-s06-q1"
+      ]
+    },
+    {
+      "id": "service-workers-and-offline-s07",
+      "order": 7,
+      "sectionTitle": "Building a basic PWA",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A service worker with a caching strategy is the runtime half; two more pieces make it a full installable Progressive Web App:\n\n- **Web app manifest** (`manifest.json`, linked via `<link rel=\"manifest\">`) — declares the app's name, icons, theme color, and `display` mode (`standalone` hides the browser chrome, making it look like a native app).\n- **Install prompts** — Chrome fires a `beforeinstallprompt` event when its installability heuristics are met (served over HTTPS, has a manifest, has a registered service worker with a `fetch` handler); you can capture that event and trigger your own custom \"Install app\" UI instead of relying on the browser's default prompt timing.\n- **Offline fallback page** — a dedicated cached page served when the network-first strategy's fetch fails **and** nothing matching is in the cache, so users see \"you're offline, here's what you can still do\" instead of the browser's generic connection-error page.\n\nAll three are optional individually — a service worker with a cache-first strategy already gives you offline support without a manifest at all — but together they're what \"installable, app-like, offline-capable\" actually means in practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "service-workers-and-offline-s08",
+      "order": 8,
+      "sectionTitle": "The zombie service worker",
+      "subTitle": "Holding back new deploys",
+      "type": "pitfall",
+      "markdown": "The lifecycle's `waiting` step is a deliberate safety feature that becomes the most common production bug in this whole topic. Ship a new version, and users with the app **already open in a tab** keep running the old service worker indefinitely — the new one sits in `waiting` until every tab running the old version closes, which for a tab a user never closes (email, a dashboard left open overnight) can be days.\n\nThe symptom: a user reports a bug you already fixed and deployed; they refresh the page repeatedly and it's still broken, because refreshing doesn't close the tab in the sense the lifecycle checks for — the old worker is still \"in control\" across that reload. Users conclude the deploy didn't work; it did, they're just being served by a zombie.\n\nThe fix pattern: call `self.skipWaiting()` in the new worker's `install` handler to force immediate activation, paired with `clients.claim()` in `activate` so it takes control of already-open pages right away — accepting the trade-off that a page might briefly run with assets from two different app versions mixed (old page, new worker) unless you also handle that explicitly, e.g. by prompting the user to reload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "service-workers-and-offline-s08-q1"
+      ]
+    },
+    {
+      "id": "service-workers-and-offline-s09",
+      "order": 9,
+      "sectionTitle": "\"Make this app work offline\" — the design conversation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This question is deliberately open-ended, and a strong answer starts by asking what \"work offline\" needs to mean for this specific app, because the strategy differs enormously by content type:\n\n1. **What's the app shell** — the HTML/CSS/JS that renders the UI itself — versus **data**? Precache the shell aggressively (cache-first, since it's versioned and static); treat data separately.\n2. **Which data is safe to show stale, and which isn't?** A read-only content feed tolerates stale-while-revalidate; a live inventory count doesn't and should show an explicit \"you're offline, this may be outdated\" state rather than silently serving cached numbers.\n3. **What happens to writes made while offline?** This is the part candidates most often skip — a form submitted offline needs a **background sync** strategy (queue the request, replay it when connectivity returns) rather than silently failing or silently succeeding against a cache that goes nowhere.\n4. **What's the update story?** Ship the `skipWaiting`/`clients.claim` pattern deliberately, or accept the safer-but-slower default lifecycle.\n\nNaming the write-while-offline case unprompted is usually the single biggest signal of depth in this conversation — most candidates design beautifully for reads and forget that offline apps still need to handle mutations.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "service-workers-and-offline-s10",
+      "order": 10,
+      "sectionTitle": "Scope and multiple service workers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A service worker's **scope** is the set of URLs it controls, and it defaults to the directory the worker script is served from — registering `/sw.js` gives it scope over the whole origin; registering `/app/sw.js` scopes it to `/app/*` only, leaving everything outside that path uncontrolled.\n\nMultiple service workers **can** coexist on one origin at different scopes (a marketing site at `/` with no worker, an app at `/app/` with one) — but a page is controlled by at most one worker, determined by the most specific matching scope, similar to how routing precedence works.\n\nThe practical gotcha: a service worker registered too broadly can accidentally intercept requests for parts of the site it was never meant to touch — a common real bug is a worker registered at root scope that ends up serving a cached, stale response for a marketing page that has nothing to do with the app it was built for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "service-workers-and-offline-s11",
+      "order": 11,
+      "sectionTitle": "Debugging in the wild",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "DevTools' **Application > Service Workers** panel is the primary debugging surface, and a few settings there matter enormously during development versus production:\n\n- **\"Update on reload\"** — forces the browser to bypass the normal update-check throttling and always install a fresh worker on every reload, which you want on during active development and should never rely on in production, where real users don't have this checked.\n- **\"Bypass for network\"** — temporarily disables the service worker's `fetch` interception entirely, useful for confirming whether a bug is caused by the worker's caching logic versus something else in the app.\n- **Force-unregistering** a worker during debugging clears its Cache API storage only if you also clear it explicitly — unregistering the worker itself doesn't automatically empty caches it created.\n\nA real production debugging pattern: if a user reports stale content that a fresh page load in your own browser doesn't reproduce, the very first question is which version of the service worker their browser is actually running — not whether the deploy itself succeeded.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "service-workers-and-offline-s12",
+      "order": 12,
+      "sectionTitle": "What a service worker costs you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "None of this is free, and naming the cost is part of a senior answer. A service worker adds a genuine layer of **operational complexity**: cache invalidation bugs are notoriously hard to reproduce (they depend on which version a specific user's browser has active), and a bad deploy that ships broken caching logic can strand users on old, broken behavior far longer than a normal bug would last, because the whole point of the mechanism is resilience against exactly the kind of change a bad deploy represents.\n\nThe rule of thumb: reach for a service worker when offline support or install-ability is a genuine product requirement — not by default on every app, since the lifecycle and cache-invalidation complexity is a real, ongoing maintenance cost, not a one-time setup fee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

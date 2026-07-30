@@ -1,0 +1,193 @@
+{
+  "id": "measuring-performance",
+  "title": "Measuring Performance",
+  "area": "web-frontend",
+  "group": "browser-performance",
+  "order": 5,
+  "slug": "measuring-performance",
+  "summary": "Lab data tells you why a page is slow; field data tells you whether it is. Reading a DevTools trace and instrumenting real users are two different skills, and you need both.",
+  "level": "intermediate",
+  "slideCount": 13,
+  "estReadMinutes": 13,
+  "slides": [
+    {
+      "id": "measuring-performance-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Almost every wasted performance sprint starts the same way: someone optimises what a tool told them, without checking whether that tool describes their users.\n\nThere are exactly two kinds of measurement, and they answer different questions:\n\n- **Lab (synthetic)** — you run the page under controlled conditions. Reproducible, detailed, and available before you ship. Answers **\"why is it slow?\"**\n- **Field (RUM)** — you record what real users actually experienced. Messy, aggregate, and only available after you ship. Answers **\"is it slow, and for whom?\"**\n\nThe discipline is simple to state and constantly violated: **decide with field data, debug with lab data.** A green Lighthouse score is not evidence that users are having a good time; a red one is not proof they aren't.\n\nThis topic covers reading a Performance trace, what Lighthouse's score really is, and how to capture [core-web-vitals](core-web-vitals) from production with `PerformanceObserver`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s02",
+      "order": 2,
+      "sectionTitle": "Lab vs field",
+      "subTitle": "Two tools, two jobs",
+      "type": "compare",
+      "markdown": "| | Lab / synthetic | Field / RUM |\n|---|---|---|\n| Where it runs | your machine or a test agent | real users' browsers |\n| Conditions | fixed CPU, network, viewport | whatever the user has |\n| Reproducible | yes, that's the point | no, it's a distribution |\n| Detail available | full trace, stack traces, screenshots | metric values plus limited attribution |\n| Available before release | yes | no |\n| Can measure INP properly | no (uses TBT as a proxy) | yes |\n| Catches ads, consent banners, cold cache | only if you configure it | automatically |\n| Best for | root-causing, CI regression gates | deciding priorities, proving impact |\n\nThe rows that cause the most real-world confusion are the last three. A lab run doesn't interact with the page, so it can't produce an INP number at all. And it loads a clean page without the consent flow, ad slots, or third-party tags that dominate a real visit.\n\nSo the honest framing: **lab data is a hypothesis generator, field data is the scoreboard.** If they disagree, the field is not wrong — your lab configuration is missing a condition your users live with.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 92,
+      "mcqIds": [
+        "measuring-performance-s02-q1"
+      ]
+    },
+    {
+      "id": "measuring-performance-s03",
+      "order": 3,
+      "sectionTitle": "The Performance panel",
+      "subTitle": "What the tracks actually show",
+      "type": "concept",
+      "markdown": "A Chrome DevTools Performance recording stacks several tracks against one timeline. Knowing what each one is turns a wall of colour into a diagnosis.\n\n- **Frames** — one box per rendered frame, colour-coded. Green is a normal frame, yellow-ish is a partially presented one, and red-flagged entries are dropped frames. This is where you confirm jank actually happened before you go hunting for a cause.\n- **Main** — the main thread's flame chart. Read it top-down: the top bar is the task, and everything under it is what that task called. Colours are consistent across Chrome: **yellow = scripting, purple = rendering (style + layout), green = painting and compositing, grey = system/idle.**\n- **Network** — request waterfall aligned to the same timeline, so you can see which request unblocked which paint.\n- **Timings** — markers for FCP, LCP, DCL, `load`, and any `performance.mark()` you added yourself.\n- **Interactions** — logged input events with their duration, which is where you find the INP offender.\n\nThe most valuable habit: **record 3-5 seconds around one specific interaction**, not a whole minute. A short, targeted recording is dramatically easier to read, and you can use the Interactions track to jump straight to the slow one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 98,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s04",
+      "order": 4,
+      "sectionTitle": "Long tasks",
+      "subTitle": "The 50ms line and why it matters",
+      "type": "concept",
+      "markdown": "A **long task** is any main-thread task that runs for more than **50ms**. The threshold isn't about frames — it's about responsiveness.\n\nThe reasoning: the browser cannot interrupt a task. While one runs, input events queue. If a user taps during a 300ms task, the tap sits unhandled for up to 300ms before your handler even starts. The **RAIL** guidance is that a response should feel immediate within about 100ms, so a task longer than ~50ms risks pushing an unluckily-timed input past that.\n\nIn the Performance panel, long tasks are drawn with a **red triangle in the top-right corner** and a striped overlay. In the Summary you'll see the aggregate as **Total Blocking Time (TBT)**, which sums *only the portion of each long task beyond 50ms*. Three 60ms tasks contribute 30ms of TBT; one 200ms task contributes 150ms.\n\nThat formula tells you the fix: **breaking a 200ms task into four 50ms tasks reduces TBT from 150ms to 0**, without doing a single unit of work less. The total CPU time is identical, but the main thread now has three yield points where a queued tap can be serviced.\n\nThis is why \"yield more often\" is such a disproportionately effective INP fix — it changes responsiveness without changing throughput.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": [
+        "measuring-performance-s04-q1"
+      ]
+    },
+    {
+      "id": "measuring-performance-s05",
+      "order": 5,
+      "sectionTitle": "Reading a flame chart",
+      "subTitle": "A long task, dissected",
+      "type": "diagram",
+      "markdown": "Picture the Main track during a page load. Most of it is thin, harmless activity — then one wide block dominates 340ms of the timeline, marked with a red corner triangle.\n\nRead it downward. The top row is the **Task** itself. Beneath it, **Evaluate Script** for a vendor bundle. Beneath that, a stack of application frames — a hydration entry, then a component render, then dozens of thin repeated bars for a per-item function. Right at the bottom, alternating purple **Layout** slivers, which is the tell for forced synchronous layout inside that loop.\n\nTwo more things the picture makes visible. The **Frames** track above shows a gap with no frames delivered for the whole 340ms — that's the freeze the user felt. And below, an **Interactions** entry whose bar starts inside the long task and extends past it: the user tapped, and their tap waited.\n\nThe reading order is always the same: find the widest block, descend to the widest child, keep going until the bars become the code you own.\n\n<<< Image: a DevTools-style Performance panel excerpt with three stacked tracks. Top, a Frames track with green frame boxes then a wide empty gap labelled \"no frames for 340ms\". Middle, a Main-thread flame chart with a wide yellow \"Task\" bar carrying a red corner triangle, containing nested bars top to bottom: \"Evaluate Script - vendor.js\", \"hydrateRoot\", \"renderList\", then many thin repeated \"measureItem\" bars, with small purple \"Layout\" slivers alternating beneath them; annotate the purple slivers \"forced synchronous layout\". Bottom, an Interactions track with a bar starting inside the long task labelled \"pointerdown - 290ms waiting\". Include a 50ms scale marker for reference >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 98,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s06",
+      "order": 6,
+      "sectionTitle": "Lighthouse",
+      "subTitle": "What the number is made of",
+      "type": "concept",
+      "markdown": "Lighthouse runs the page once under emulated conditions and produces a 0-100 performance score. The score is a **weighted blend of five lab metrics** (weights as of Lighthouse 10-12):\n\n- **Total Blocking Time — 30%**\n- **Largest Contentful Paint — 25%**\n- **Cumulative Layout Shift — 25%**\n- **First Contentful Paint — 10%**\n- **Speed Index — 10%**\n\nTwo mechanics worth understanding:\n\n- **Each metric is scored on a log-normal curve** calibrated against real-site data, then weighted. That's why improving LCP from 6s to 5s barely moves the number while 3s to 2.4s moves it a lot — you're on a steeper part of the curve.\n- **INP is not in the score**, because Lighthouse doesn't interact with the page. TBT stands in for it, and TBT is a decent but imperfect proxy.\n\nThe default mobile configuration is a deliberately harsh **4x CPU slowdown** and a throttled connection modelled on slow 4G — roughly a mid-tier Android phone.\n\nWhat the score is genuinely good for: the **Opportunities and Diagnostics** sections, which name specific problems (render-blocking resources, unsized images, unused JavaScript) with estimated savings. Those are far more actionable than the headline number, and they're the part experienced engineers actually read.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 98,
+      "mcqIds": [
+        "measuring-performance-s06-q1"
+      ]
+    },
+    {
+      "id": "measuring-performance-s07",
+      "order": 7,
+      "sectionTitle": "Instrumenting real users",
+      "subTitle": "PerformanceObserver and the web-vitals library",
+      "type": "code",
+      "markdown": "The raw platform API is `PerformanceObserver`, which delivers performance entries as the browser records them:\n\n```js\n// Raw API: every long task over 50ms\nnew PerformanceObserver(list => {\n  for (const entry of list.getEntries()) {\n    console.log('long task', entry.duration, entry.attribution);\n  }\n}).observe({ type: 'longtask', buffered: true });\n\n// Raw API: LCP keeps updating until the first interaction\nnew PerformanceObserver(list => {\n  const entries = list.getEntries();\n  const last = entries[entries.length - 1];\n  console.log('LCP candidate', last.startTime, last.element);\n}).observe({ type: 'largest-contentful-paint', buffered: true });\n```\n\nIn production, use Google's **`web-vitals`** library rather than hand-rolling — it handles the genuinely fiddly parts: BFCache restores, tab visibility changes, which LCP candidate is final, and the INP percentile logic.\n\n```js\nimport { onLCP, onINP, onCLS } from 'web-vitals/attribution';\n\nfunction report({ name, value, rating, attribution }) {\n  navigator.sendBeacon('/rum', JSON.stringify({\n    name, value, rating,                    // 'good' | 'needs-improvement' | 'poor'\n    target: attribution.interactionTarget    // or largestShiftTarget / lcpEntry\n      ?? attribution.largestShiftTarget,\n    route: location.pathname,\n    conn: navigator.connection?.effectiveType,\n  }));\n}\n\nonLCP(report); onINP(report); onCLS(report);\n```\n\nTwo non-obvious details. Use `navigator.sendBeacon` (or `fetch` with `keepalive`) so the report survives the page unloading. And always send **route, device, and connection type** alongside the value — an aggregate number you can't segment is very hard to act on.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "measuring-performance-s07-q1"
+      ]
+    },
+    {
+      "id": "measuring-performance-s08",
+      "order": 8,
+      "sectionTitle": "Attribution",
+      "subTitle": "Turning a number into a line of code",
+      "type": "concept",
+      "markdown": "A metric value on its own is nearly useless. \"CLS is 0.28\" doesn't tell you what moved. The `web-vitals/attribution` build exists precisely to close that gap, and knowing what it gives you is a strong signal in an interview.\n\n- **LCP attribution** — the LCP **element selector**, plus the four-way split into TTFB, resource load delay, resource load time, and element render delay. That split determines whether the fix is server-side, a preload, or compression.\n- **CLS attribution** — `largestShiftTarget`, a selector for the element responsible for the biggest shift, plus the time it happened. This alone usually identifies the offending ad slot or image.\n- **INP attribution** — the `interactionTarget` selector, the event type, and the breakdown into input delay, processing duration, and presentation delay. Different phases, completely different fixes.\n\nThe complementary tool is the **User Timing API** for your own code: `performance.mark('search:start')`, `performance.mark('search:end')`, then `performance.measure('search', 'search:start', 'search:end')`. Those measures show up as labelled bars in the Performance panel's Timings track *and* can be observed and reported from production.\n\nThe pattern that scales: standard vitals for comparability, custom marks for the flows your product actually cares about — \"time from route click to first row rendered\" is often a better product metric than any standard vital.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s09",
+      "order": 9,
+      "sectionTitle": "Synthetic monitoring vs RUM",
+      "subTitle": "Why serious teams run both",
+      "type": "compare",
+      "markdown": "Both are continuous monitoring; they fail in opposite directions.\n\n| | Synthetic monitoring | RUM |\n|---|---|---|\n| Example tools | WebPageTest, Lighthouse CI, Calibre, SpeedCurve | `web-vitals` + your own endpoint, CrUX, commercial RUM |\n| Signal | one controlled run, repeated on a schedule | thousands of uncontrolled real sessions |\n| Detects a regression | within minutes of deploy | hours to days, once traffic accumulates |\n| Works pre-production | yes — PR checks, staging | no |\n| Reflects real devices | no | yes |\n| Noise level | very low | high, needs percentiles to read |\n| Blind to | ads, consent, real device mix, logged-in flows | *why* something regressed |\n\nThe practical division of labour:\n\n- **Synthetic gates the deploy.** A Lighthouse CI budget in the pipeline — \"LCP must stay under 2.5s, bundle under 250KB gzipped\" — catches the regression in the PR that caused it, when the diff is five files instead of a week of merges. Its low noise is exactly what makes it usable as a gate.\n- **RUM decides what to work on.** It's the only source that tells you the 75th-percentile experience on the devices your users actually hold, segmented by route and geography.\n\nUsing only synthetic means shipping things that look fine and aren't. Using only RUM means knowing something broke without knowing which deploy did it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 98,
+      "mcqIds": [
+        "measuring-performance-s09-q1"
+      ]
+    },
+    {
+      "id": "measuring-performance-s10",
+      "order": 10,
+      "sectionTitle": "One run is not a measurement",
+      "subTitle": "Variance, and what to do about it",
+      "type": "pitfall",
+      "markdown": "Lighthouse results vary substantially run to run on identical code. Google's own guidance acknowledges swings of **several points, and occasionally much more**, from causes that have nothing to do with your changes:\n\n- Other processes competing for CPU on the machine running the test.\n- Antivirus, browser extensions, and background tabs.\n- A/B test variants, ad auctions returning different creatives, and third-party latency.\n- CDN cache state, which differs between the first and second run.\n- Client-side layout non-determinism, especially for CLS.\n\nSo a single run showing 91 → 87 after a deploy is **not evidence of a regression**. Treating it as one leads to teams chasing noise and, worse, learning to ignore the tool.\n\nWhat to do instead:\n\n- **Run 5-9 times and take the median**, which is what Lighthouse CI does by default and why its numbers are more trustworthy than a manual run.\n- **Compare distributions, not points.** WebPageTest's multiple-run mode and the median filmstrip exist for this.\n- **Gate on budgets with a margin**, not on exact scores — \"LCP under 2.5s\" is stable; \"score ≥ 92\" is not.\n- **Test on real devices for the numbers that matter.** Emulated 4x CPU throttling is a rough approximation of a mid-tier Android; a device lab or a service like WebPageTest's real-device agents is the ground truth.\n\nThe underlying principle: **performance is a distribution, and any process that reduces it to one number will mislead you.**",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s11",
+      "order": 11,
+      "sectionTitle": "Performance budgets in CI",
+      "subTitle": "Catching regressions before users do",
+      "type": "concept",
+      "markdown": "The cheapest performance win available to most teams is a **budget enforced in the pipeline**, because it converts a slow, invisible decay into a failing check on the PR that caused it.\n\nThree layers, cheapest first:\n\n- **Bundle-size budgets.** A `bundlesize` or `size-limit` check on the main entry point. \"Main bundle ≤ 180KB gzipped\" catches the accidental import of a 400KB date library in the PR that added it. This is by far the highest signal-to-effort check available.\n- **Lighthouse CI with assertions.** Run against a preview deploy, median of several runs, asserting on metric values rather than the composite score: `largest-contentful-paint ≤ 2500`, `total-blocking-time ≤ 200`, `cumulative-layout-shift ≤ 0.1`.\n- **Scripted interaction traces.** Puppeteer or Playwright driving the key flow, capturing long tasks via `PerformanceObserver`, and failing if a specific interaction exceeds its budget. More work to maintain, but it's the only lab check that meaningfully covers INP.\n\nThe part teams get wrong is the failure policy. A flaky gate that blocks merges gets disabled within a month. Start with **warn-only** on the metric assertions and **hard-fail** only on bundle size — that one is deterministic, so it can be strict without being flaky. Tighten the others once you've seen a few weeks of real variance and know where the noise floor sits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s12",
+      "order": 12,
+      "sectionTitle": "Measuring the wrong thing",
+      "subTitle": "Common instrumentation mistakes",
+      "type": "pitfall",
+      "markdown": "Even with both lab and field in place, the measurement itself can lie:\n\n- **Reporting averages.** A mean LCP of 2.1s can hide a 25% of users at 6s. Performance distributions have long right tails, so **always report p75 and p95**, never the mean.\n- **Measuring only successful, fast sessions.** If your beacon fires on `load`, you systematically drop every user who abandoned because it was slow — survivorship bias that makes your numbers better exactly where they're worst. Fire on `visibilitychange`/`pagehide` instead.\n- **Ignoring the device mix.** A dashboard averaging desktop and mobile hides that mobile is failing. Segment by device class at minimum, ideally by device memory and connection type too.\n- **Not sampling consistently.** Sampling 10% of sessions is fine; sampling 10% of *page views* skews toward heavy users. Decide once per session.\n- **Local development as a proxy.** A hot Vite dev server with no minification, no CDN, and a warm cache tells you nothing about production.\n- **Chasing the Lighthouse score itself.** The score is a proxy for a proxy. Optimising it directly leads to things like removing a genuinely useful third-party script that costs 3 points and helps conversion.\n\nThe question that keeps instrumentation honest: **would this number change if my users' experience got worse?** If a plausible degradation wouldn't move it, you're measuring the wrong thing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": []
+    },
+    {
+      "id": "measuring-performance-s13",
+      "order": 13,
+      "sectionTitle": "A measurement stack that works",
+      "subTitle": "What to actually set up",
+      "type": "concept",
+      "markdown": "Assembled, the pieces form a stack where each layer covers the one below's blind spot:\n\n1. **RUM in production.** `web-vitals/attribution` reporting LCP, INP, CLS plus a few custom marks via `sendBeacon`, tagged with route, device, and connection. Report **p75 and p95**, segmented. This is the scoreboard.\n2. **Synthetic monitoring on a schedule.** WebPageTest or a commercial equivalent hitting key URLs from a couple of locations, several runs, median. This is what tells you *when* something changed, with a filmstrip and a trace attached.\n3. **CI budgets.** Bundle size hard-failing; Lighthouse CI assertions warning. This is what tells you *which PR*.\n4. **Local deep-dive tooling.** DevTools Performance panel with 4x CPU throttling, the Rendering tab, and the Layers panel. This is what tells you *why*.\n\nThe workflow that ties them together: **RUM says which metric and which segment is failing → synthetic or CI says which deploy → the Performance panel says which line → RUM confirms the fix landed for real users.**\n\nIf you can only build one layer, build RUM. Without it you are optimising a page you hope resembles what your users load, and the most common outcome of that is a quarter spent improving a score nobody outside the team ever experiences.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 98,
+      "mcqIds": []
+    }
+  ]
+}

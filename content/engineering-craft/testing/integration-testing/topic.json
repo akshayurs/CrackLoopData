@@ -1,0 +1,182 @@
+{
+  "id": "integration-testing",
+  "title": "Integration Testing",
+  "area": "engineering-craft",
+  "group": "testing",
+  "order": 5,
+  "slug": "integration-testing",
+  "summary": "Unit tests, backed by doubles, structurally cannot verify that a real dependency behaves the way those doubles assume. Integration tests close exactly that gap — testing the real seams between a unit and its real collaborators.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "integration-testing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Test doubles](test-doubles-mocking) let you test a unit fast and in isolation, but every double is built on an assumption: that it behaves the way the real dependency actually does. A fake in-memory database that silently diverges from real Postgres semantics — different null handling, different transaction isolation — is a trap disguised as a safety net, and no amount of unit testing against that fake can catch the divergence.\n\n**Integration tests** exist specifically to verify the seam where a unit meets its real collaborator: a real database, a real filesystem, another real service. Fewer of them than unit tests, slower, but they check something unit tests structurally cannot.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "integration-testing-s02",
+      "order": 2,
+      "sectionTitle": "What integration tests verify that unit tests can't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A unit test with a mocked database can prove your code calls `INSERT` with the right values. It cannot prove that a real Postgres instance accepts that exact query, respects the constraints you assumed, or returns rows shaped the way your code expects — because nothing real is on the other end of the call.\n\nThe gap is specifically about assumptions baked into the double: a stub that returns `None` on a missing key is only correct if the real dependency actually does that, rather than throwing, timing out, or returning an empty list. Integration tests are the only test type that can catch a mismatch between \"what we assumed the dependency does\" and \"what it actually does\" — which is exactly the failure mode of over-mocking covered in the previous topic: a fully green unit suite that still ships a broken integration.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "integration-testing-s02-q1"
+      ]
+    },
+    {
+      "id": "integration-testing-s03",
+      "order": 3,
+      "sectionTitle": "Narrow vs broad integration tests",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Integration tests span a real range of scope, and the term covers both ends:\n\n- **Narrow integration test** — one component talking to one real dependency, everything else still doubled. A repository class hitting a real test database, with the rest of the application entirely absent from the test.\n- **Broad integration test** — several real components wired together, closer to how production actually runs. A real API layer, a real service layer, a real database, minus only genuinely external third parties.\n\nNarrow tests are fast enough to run often and pinpoint exactly which seam broke when they fail. Broad tests catch problems narrow tests miss — two components individually correct but wired together wrong — at the cost of being slower and, when they fail, less specific about where the problem actually is. Most healthy suites lean narrow, with a much smaller number of broad tests covering the handful of paths that genuinely need end-to-end confidence below the UI layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "integration-testing-s04",
+      "order": 4,
+      "sectionTitle": "A real dependency via containers",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Running a real Postgres in CI, scoped to just the test run, is the standard way to get real-dependency fidelity without a shared, stateful test environment:\n\n```yaml\n# docker-compose.test.yml\nservices:\n  test-db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: test\n    ports:\n      - \"5433:5432\"\n```\n\n```python\ndef test_repository_persists_and_retrieves_order():\n    conn = connect(\"postgresql://localhost:5433/test\")\n    repo = OrderRepository(conn)\n\n    repo.save(Order(id=1, total=42.50))\n    fetched = repo.find(1)\n\n    assert fetched.total == 42.50\n```\n\nThis exercises the real SQL, the real driver, the real constraints — nothing here is a fake or a mock. Tools like Testcontainers automate the container lifecycle (spin up, wait for readiness, tear down) per test run, so this pattern works the same locally and in CI without a shared, long-lived database anyone can accidentally leave in a dirty state.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "integration-testing-s04-q1"
+      ]
+    },
+    {
+      "id": "integration-testing-s05",
+      "order": 5,
+      "sectionTitle": "Contract testing",
+      "subTitle": "Verifying agreement without a live call",
+      "type": "concept",
+      "markdown": "Between two services, a full integration test would mean standing up both, live, for every test run — expensive and often impractical across team boundaries. **Contract testing** verifies the same thing — that a consumer and a provider agree on the shape of their interaction — without either one needing to be live during the other's test run.\n\nThe consumer records what it expects (\"a GET to `/orders/{id}` returns a JSON object with an `id`, `total`, and `status` field\") as a **contract**. The provider's own test suite then replays that contract against its real implementation and fails if reality no longer matches what the consumer expects. Neither side needs the other running — the contract is the shared, checkable artifact standing in for a live call, closing the exact gap a mocked integration test leaves open: it actually verifies against the real provider, just asynchronously.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "integration-testing-s05-q1"
+      ]
+    },
+    {
+      "id": "integration-testing-s06",
+      "order": 6,
+      "sectionTitle": "Consumer-driven contract testing flow",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The consumer-driven variant flips who authors the contract: instead of the provider publishing an API spec, the **consumer** defines exactly what it needs and expects, and the provider is verified against that.\n\nThe flow: the consumer's test suite runs against a mock of the provider, generating a contract file describing every interaction it made. That contract is published to a shared broker. The provider's CI pipeline then fetches every consumer's contract and replays each one against its real implementation — if the provider's actual behavior doesn't match what any consumer expects, that provider's build fails, *before* a real deployment breaks that consumer in production.\n\nThis catches breaking API changes at the exact point they're introduced — on the provider's own CI — rather than being discovered when a consumer's production traffic starts failing.\n\n<<< Image: three-stage flow diagram. Stage 1: consumer's tests run against a mock provider, producing a \"contract\" file. Stage 2: the contract is published to a central broker/registry. Stage 3: the provider's CI fetches all consumer contracts and replays them against its real implementation, failing the provider's build if any contract doesn't match >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "integration-testing-s06-q1"
+      ]
+    },
+    {
+      "id": "integration-testing-s07",
+      "order": 7,
+      "sectionTitle": "Real dependency vs lightweight substitute",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Real dependency (containerized) | In-memory / lightweight substitute |\n|---|---|---|\n| Fidelity | Exact — same engine, same constraints, same edge cases | Approximate — only as faithful as whoever built the substitute made it |\n| Speed | Slower — container startup, real I/O | Fast — no process boundary |\n| Setup cost | Higher — image, network, lifecycle management | Lower — usually just a library import |\n| Risk | Low, if the container matches production's version | Silent divergence from real behavior over time, especially across version upgrades |\n\nThe honest trade-off: a lightweight substitute is only as good as its fidelity to the real thing, and that fidelity tends to erode as the real dependency evolves (a new Postgres version's stricter type coercion, a changed default isolation level) unless someone actively keeps the substitute in sync. Real, containerized dependencies avoid that risk entirely at the cost of speed — which is exactly why most suites run substitutes in the fast unit layer and real containers in a smaller, slower integration layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "integration-testing-s07-q1"
+      ]
+    },
+    {
+      "id": "integration-testing-s08",
+      "order": 8,
+      "sectionTitle": "Test data setup and teardown",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A real database persists state between tests unless something actively resets it, which makes data management the central operational concern of integration testing:\n\n- **Transactional rollback** — wrap each test in a transaction, roll it back at the end. Fast, and guarantees isolation with zero manual cleanup — the most common default for database integration tests.\n- **Fixtures** — pre-defined data loaded before each test (or suite), giving a known starting state. Simple, but can drift out of sync with the schema over time if not actively maintained.\n- **Builders** — code that constructs valid test objects with sensible defaults and overridable fields (`OrderBuilder().with_total(50).build()`), avoiding both the drift risk of static fixtures and the verbosity of constructing every field by hand in every test.\n\nMost mature suites combine builders for object construction with transactional rollback for isolation — builders keep test setup readable and resilient to schema changes, rollback keeps tests from leaking state into each other regardless of execution order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "integration-testing-s09",
+      "order": 9,
+      "sectionTitle": "Integration tests sharing mutable state",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A test that inserts a row and never cleans it up leaves that row for the next test to encounter — which is fine until a later test assumes an empty table, or two tests race for the same row when run in parallel, or the whole suite passes only when run in one specific order and fails when parallelized or reordered.\n\nThis is the exact same order-dependence pitfall from [Unit Testing Principles](unit-testing-principles), but with a database attached it's far easier to trigger by accident, because the shared state (the database itself) persists across test files and even test runs unless something explicit resets it. Symptoms are distinctive: a test suite that passes locally but fails intermittently in CI, or passes in isolation but fails when run alongside others — both point squarely at shared mutable state rather than a real bug in the code under test.\n\nThe fix is the same as the data-management slide above: transactional rollback or a fully-reset fixture per test, never relying on execution order to leave the database in the right state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "integration-testing-s09-q1"
+      ]
+    },
+    {
+      "id": "integration-testing-s10",
+      "order": 10,
+      "sectionTitle": "The senior-level nuance",
+      "subTitle": "Sizing the integration layer deliberately",
+      "type": "concept",
+      "markdown": "The number of integration tests a codebase needs isn't proportional to the number of unit tests — it's proportional to the number of genuinely risky **seams**: places where an assumption about a real dependency's behavior could be wrong in a way unit tests can't catch. A service with three external dependencies needs integration coverage of those three seams, not integration tests mirroring every unit test's scenario against a real database.\n\nOver-investing here inverts the test pyramid's economics: a suite with as many integration tests as unit tests is slow to run and slow to diagnose, without a proportional increase in the risk it's actually covering. Under-investing leaves exactly the over-mocking blind spot from the previous topic — passing unit tests, broken real integration. The judgment call is identifying which seams are actually risky (a third-party API with loose documentation, a database feature you're using in an unusual way) versus which are stable and low-risk enough that a well-maintained fake is sufficient.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "integration-testing-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Integration tests verify a unit against its real collaborators, but they still don't exercise the system the way a real user does — through the actual interface, across every layer at once. The next topic, **E2E & UI Testing**, covers that outermost layer: real wiring, real user paths, and the flakiness that comes with testing through a live interface instead of an API boundary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "integration-testing-s12",
+      "order": 12,
+      "sectionTitle": "A quick contrast, restated",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "One line worth keeping: a unit test with a mock proves your code *calls* the dependency correctly; an integration test proves the dependency *actually does* what your code assumes it does. Both are necessary, and neither substitutes for the other — a suite that's excellent at one and weak at the other has a real, specific blind spot, not just \"fewer tests than ideal.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "compositing-and-gpu-layers",
+  "interviewQuestions": [
+    {
+      "id": "compositing-and-gpu-layers-iq1",
+      "question": "How would you make a navigation drawer's slide-in animation buttery smooth on a mid-range Android phone?",
+      "answerMarkdown": "Three things, in order of importance.\n\n**Animate only `transform`.** `translateX(-100%)` → `translateX(0)`, never `left` or `width`. That keeps every frame at the compositing stage — no layout, no repaint, well under 1ms of GPU work against a 16.7ms budget.\n\n**Keep it declarative.** A CSS transition or the Web Animations API, not a `requestAnimationFrame` loop setting transforms. Declarative animations are handed to the compositor thread, so the drawer keeps moving even if the main thread blocks for 200ms rendering the route it just navigated to. A JS-driven transform has the same paint cost but freezes with the main thread — and on a mid-range phone that block is very likely.\n\n**Promote just in time.** Add `will-change: transform` when the trigger is hovered or pressed, and remove it on `transitionend`. That gives the browser a frame to rasterise the layer — 5-20ms for a large element — so the cost isn't paid on the first animation frame, and the roughly 3MB texture is released afterwards instead of held all session.\n\nWhat I wouldn't do is leave `will-change` in the stylesheet permanently, or apply it to list items. And I'd verify with layer borders plus the Layers panel rather than assume the promotion landed.\n\n**Testing:** whether you know the composited-property rule *and* the second-order details — off-main-thread ownership and promotion timing — that separate a smooth drawer from a nearly-smooth one.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Applied"
+    },
+    {
+      "id": "compositing-and-gpu-layers-iq2",
+      "question": "What is a compositor layer and why do browsers create them?",
+      "answerMarkdown": "A compositor layer is a **separately painted and rasterised surface** — effectively its own bitmap texture in GPU memory. The final frame is produced by drawing these textures in z-order with each one's transform matrix and alpha applied.\n\nThey exist so that content whose pixels haven't changed doesn't have to be redrawn. Once an element is on its own layer, moving or fading it is a GPU operation over an existing texture: no layout, no rasterisation, typically under a millisecond regardless of the element's size.\n\nThe second benefit is arguably bigger: compositing can happen **off the main thread**. The compositor thread holds the textures and transforms, so it can keep producing frames while JavaScript is busy.\n\nThings that create a layer: `<video>` and accelerated `<canvas>`, 3D transforms, `will-change: transform/opacity`, `position: fixed`, `backdrop-filter`, elements with a running transform/opacity animation — and **overlap**, where an element painting above a composited layer gets promoted implicitly to preserve ordering.\n\nThe cost side matters: a texture is width × height × 4 bytes × DPR², so a full-screen layer on a DPR 3 phone is around 12MB. Layers are a scarce resource, not a free optimisation.\n\n**Testing:** whether you understand compositing as a pixel-reuse mechanism with a memory bill, rather than as a vague \"GPU acceleration\" idea.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "compositing-and-gpu-layers-iq3",
+      "question": "A teammate proposes adding `will-change: transform` to every card in a feed so scrolling feels smoother. What do you say?",
+      "answerMarkdown": "I'd push back, because this is the textbook way to trade jank for something worse.\n\n**The memory maths.** Each promoted card gets its own texture at width × height × 4 bytes × DPR². A 350 × 200 card on a DPR 3 phone is roughly 2.5MB. Two hundred cards is around 500MB of GPU memory against a device budget usually measured in low hundreds of megabytes shared with everything else.\n\n**What actually happens** is not a clean failure. Chrome hits internal limits and stops promoting, or the GPU evicts textures and re-rasterises them on demand — producing unpredictable stutter that's harder to debug than the original problem. Meanwhile \"Update Layer Tree\" grows on the main thread, because managing hundreds of layers is itself main-thread work.\n\n**And it doesn't address the cause.** If scrolling is janky, the culprit is usually expensive paint (large shadows, filters), too many DOM nodes, or a scroll handler doing synchronous layout reads. `will-change` fixes none of those.\n\nWhat I'd propose instead: profile the scroll first; then `content-visibility: auto` or list virtualisation to cut layout and paint work, and cheaper paint properties. `will-change` only for the specific element that's about to animate, added on interaction and removed on `transitionend`.\n\n**Testing:** whether you can quantify a cost and redirect to the actual bottleneck, rather than agreeing with a plausible-sounding optimisation.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "compositing-and-gpu-layers-iq4",
+      "question": "A page animates `transform` on a modal, yet the animation still freezes whenever a heavy component renders. Why might that be?",
+      "answerMarkdown": "Using `transform` gets you the cheap pipeline stage, but it does **not** automatically mean the animation runs off the main thread. The most likely causes, roughly in the order I'd check them:\n\n- **The transform is driven from JavaScript.** A `requestAnimationFrame` loop setting `style.transform` each frame is a main-thread animation — your callback can't run while a component renders, so it stops dead. Only declarative animations (CSS transitions/animations, Web Animations API) hand the timeline to the compositor.\n- **The element never got a layer.** If it isn't promoted, the transform is applied during main-thread compositing rather than by the compositor thread. The Layers panel's compositing reasons will say so immediately.\n- **The layer is being re-rasterised each frame.** If the modal's content is also changing — text updating, a spinner, a child animating a paint property — the texture is invalidated and paint returns to the main thread.\n- **Something disqualified compositing.** Certain filter combinations, `background-attachment: fixed`, or a parent with a non-composited transform can force a main-thread fallback.\n\nI'd confirm with a Performance recording: if there are yellow scripting blocks aligned with the freeze and no compositor-thread animation track, it's the first cause; if there are green Paint entries per frame, it's the third.\n\nThe fix for the common case is to move the animation to a CSS transition or `element.animate()` and let the compositor own it.\n\n**Testing:** whether you know that composited-property and composited-animation are different things — a distinction most candidates miss.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging"
+    }
+  ]
+}

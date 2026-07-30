@@ -1,0 +1,182 @@
+{
+  "id": "content-security-policy",
+  "title": "Content Security Policy",
+  "area": "web-frontend",
+  "group": "web-security",
+  "order": 4,
+  "slug": "content-security-policy",
+  "summary": "CSP is the browser-enforced allowlist for what your page may execute and load. Learn the directives that matter, why nonces beat domain allowlists, and how to roll one out without breaking production.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 13,
+  "slides": [
+    {
+      "id": "content-security-policy-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Content Security Policy** is a response header that tells the browser what your page is allowed to execute and load. Anything not on the list is blocked, by the browser, before it runs.\n\nThe key framing for interviews: **CSP is not an XSS fix, it's an XSS mitigation.** Escaping and sanitizing reduce the chance an injection happens; CSP reduces what an injection can *do* once it has. A page with a strict policy can have an injected script element that simply never executes, because the browser refuses to run script the policy didn't authorise.\n\nThat makes it the highest-value second layer in frontend security — and also the one most often deployed in a form that does nothing, because a single `unsafe-inline` in `script-src` neutralises the entire policy.\n\nThis topic covers the directives worth knowing, nonces versus domain allowlists, and how to ship one without a week of outages.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "content-security-policy-s02",
+      "order": 2,
+      "sectionTitle": "How enforcement actually works",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The browser receives your `Content-Security-Policy` header, parses it into a set of rules, and then checks every resource load and every script execution against them for the lifetime of that document.\n\nThree properties fall out of that:\n\n- **It's enforced in the browser, not your server.** A client that ignores CSP simply doesn't get the protection; it can't be used to protect the server, only the user.\n- **It's per-response.** The policy applies to the document it arrived with, so a policy is something your rendering layer emits on every HTML response — not a one-time configuration. A `<meta http-equiv=\"Content-Security-Policy\">` tag works too, but can't express `frame-ancestors` or `report-uri`, so the header is the real mechanism.\n- **It's default-deny within a directive.** Once `script-src` is present, only sources it names may execute. There is no \"block these\" mode — you enumerate what's allowed.\n\nThe practical consequence: CSP is an inventory exercise before it's a security exercise. You cannot write a working policy without knowing every script, style, font, image and API endpoint your page legitimately uses — including the ones your marketing tag manager injects at runtime.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": [
+        "content-security-policy-s02-q1"
+      ]
+    },
+    {
+      "id": "content-security-policy-s03",
+      "order": 3,
+      "sectionTitle": "The directives that matter",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "There are around twenty directives. These are the ones that carry the security value:\n\n- **`default-src`** — the fallback for most fetch directives you don't specify. `default-src 'self'` is a sensible floor, but note it does *not* cover `frame-ancestors`, `base-uri`, or `form-action`, so those must be set explicitly.\n- **`script-src`** — the important one. Controls which scripts may execute, including inline ones. Everything CSP is worth doing hangs off getting this right.\n- **`style-src`** — stylesheets and inline styles. Usually the hardest to lock down, because CSS-in-JS libraries inject inline style at runtime.\n- **`connect-src`** — where `fetch`, XHR, WebSockets, `EventSource` and `sendBeacon` may go. This is the **exfiltration** control: it's what stops injected script shipping stolen data to an attacker's collector.\n- **`img-src`, `font-src`, `media-src`** — asset loads. Lower value, but a loose `img-src` is an exfiltration channel too, since a URL can carry data.\n- **`frame-ancestors`** — who may frame *you*. The anti-clickjacking directive, covered in the next topic.\n- **`frame-src` / `child-src`** — what you may frame.\n- **`base-uri`** — restrict the `<base>` tag. Cheap and important: without it, an injection can add a `<base>` and redirect every relative script URL on the page.\n- **`form-action`** — where forms may submit, which limits credential theft via an injected form.\n- **`object-src 'none'`** — kills plugin content. Free win, always set it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 118,
+      "mcqIds": [
+        "content-security-policy-s03-q1"
+      ]
+    },
+    {
+      "id": "content-security-policy-s04",
+      "order": 4,
+      "sectionTitle": "A policy you could actually ship",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A realistic strict policy for an SPA with a JSON API and one analytics vendor:\n\n```http\nContent-Security-Policy:\n  default-src 'self';\n  script-src 'nonce-rAnd0m2024' 'strict-dynamic' https: 'unsafe-inline';\n  style-src 'self' 'unsafe-inline';\n  img-src 'self' data: https://cdn.example.com;\n  connect-src 'self' https://api.example.com https://analytics.vendor.com;\n  font-src 'self';\n  object-src 'none';\n  base-uri 'self';\n  form-action 'self';\n  frame-ancestors 'none';\n  report-uri /csp-report\n```\n\nTwo lines look wrong and aren't:\n\n- **`'unsafe-inline'` next to a nonce.** Browsers that understand nonces *ignore* `'unsafe-inline'` when one is present, so it's a fallback for ancient browsers only. Same trick with `https:` — it's ignored wherever `'strict-dynamic'` is supported.\n- **`'unsafe-inline'` in `style-src`** is a deliberate concession. Inline style is far less dangerous than inline script, and every CSS-in-JS library needs it. Locking styles down is a later, optional step.\n\nThe nonce must be **regenerated per response** from a cryptographic RNG. A build-time constant is the same as no nonce at all.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 96,
+      "mcqIds": []
+    },
+    {
+      "id": "content-security-policy-s05",
+      "order": 5,
+      "sectionTitle": "Nonces and hashes",
+      "subTitle": "Allowing specific inline scripts without `unsafe-inline`",
+      "type": "code",
+      "markdown": "Real apps have inline script — a bootstrap config object, a theme-flash preventer, SSR hydration state. Both mechanisms let you allow *specific* inline blocks while keeping everything else blocked.\n\n**Nonce** — a fresh random value per response, echoed on the tag:\n\n```html\n<!-- server generated a new value for this response only -->\n<script nonce=\"rAnd0m2024\">window.__CONFIG__ = { region: 'eu' };</script>\n```\n\nAn injected script has no nonce, so it doesn't run. This is why the value must be unpredictable and per-response: if an attacker can guess or reuse it, the whole policy folds.\n\n**Hash** — pin the exact content instead:\n\n```http\nscript-src 'sha256-B2yPHKaXnvFWtRChIbabYmUBFZdVfKKXHbWtWidDVF8='\n```\n\nThe browser hashes the inline block and runs it only on an exact match. No server-side randomness needed, so it suits **static sites and CDN-cached HTML** where a per-response nonce is impossible. The cost is that changing one character of that script means regenerating the hash, so it belongs in your build.\n\n**`'strict-dynamic'`** is the piece that makes either practical: a script you trusted by nonce or hash may load further scripts, so a tag manager keeps working without you allowlisting everything it fetches.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 108,
+      "mcqIds": [
+        "content-security-policy-s05-q1"
+      ]
+    },
+    {
+      "id": "content-security-policy-s06",
+      "order": 6,
+      "sectionTitle": "Reading a CSP violation",
+      "subTitle": "What the console error tells you",
+      "type": "diagram",
+      "markdown": "When CSP blocks something, the browser does three things: refuses the load or execution, logs a console error, and — if you configured reporting — POSTs a JSON report to your endpoint.\n\nThe console message names the four facts you need: **which directive** fired, **what resource** was blocked, **which policy source list** was in effect, and often a hint about the fix. Reading them in that order is the whole debugging loop:\n\n- Directive `script-src` and a blocked inline script → you have inline script without a nonce or hash. Fix by adding the nonce, not by adding `'unsafe-inline'`.\n- Directive `connect-src` and a blocked API host → a legitimate endpoint is missing from the list, *or* something is trying to exfiltrate and CSP just stopped it. Check which before you widen the policy.\n- Directive `script-src` naming `eval` → a dependency uses `new Function` or string `setTimeout`. Common in older template engines and some source-map tooling.\n- A violation with a `blockedURI` of `inline` and no line number → often a browser extension, not your code. This is the single biggest source of noise in report data.\n\n<<< Image: a browser window split into three stacked panes — top: the page with a highlighted script tag that failed to run; middle: a devtools console line reading \"Refused to execute inline script because it violates the following Content-Security-Policy directive: script-src 'nonce-…'\" with four callout arrows labelling the parts (violated directive, blocked resource, effective source list, suggested fix); bottom: a small JSON report body posted to /csp-report showing documentURI, violatedDirective, blockedURI and effectiveDirective fields >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 108,
+      "mcqIds": [
+        "content-security-policy-s06-q1"
+      ]
+    },
+    {
+      "id": "content-security-policy-s07",
+      "order": 7,
+      "sectionTitle": "Report-only mode",
+      "subTitle": "Shipping a policy without breaking production",
+      "type": "concept",
+      "markdown": "`Content-Security-Policy-Report-Only` uses identical syntax but **enforces nothing**. The browser evaluates every rule, logs what *would* have been blocked, and POSTs a violation report — while the page keeps working.\n\nThis is not an optional nicety. A first CSP on a mature app will break something, and the breakage is silent from the server's point of view: a chart doesn't render, a payment widget stops loading, and no exception reaches your error tracker because the browser refused the resource rather than erroring in JS.\n\nThe standard rollout:\n\n1. Ship your intended policy as **report-only** and collect for one to two weeks — long enough to include weekly jobs, marketing campaigns, and the long tail of browsers.\n2. **Triage the reports.** Expect the majority to be browser extensions and injected ISP or antivirus content, which you should filter out rather than allowlist.\n3. **Fix your own violations** by adding nonces and moving inline handlers into scripts — not by widening the policy.\n4. **Add genuinely-needed third-party sources** deliberately, one at a time, with an owner recorded for each.\n5. **Switch to enforcing**, ideally on a fraction of traffic first. Keep a report-only header alongside for the *next*, stricter policy — both headers can be sent at once.\n\nOne detail that saves a bad day: **both headers can be present simultaneously**, so you can enforce today's policy while measuring tomorrow's.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 112,
+      "mcqIds": []
+    },
+    {
+      "id": "content-security-policy-s08",
+      "order": 8,
+      "sectionTitle": "Domain allowlist vs nonce-based",
+      "subTitle": "Why the older style mostly doesn't work",
+      "type": "compare",
+      "markdown": "| | Allowlist by domain | Nonce / hash + `'strict-dynamic'` |\n|---|---|---|\n| Policy says | \"scripts from these hosts may run\" | \"scripts I explicitly marked may run\" |\n| Needs server-side per-response work | no | yes, a fresh nonce per response |\n| Grows with your vendor list | yes, continuously | no |\n| Survives a new CDN path being added | no — policy edit needed | yes |\n| Bypassable via JSONP or an old library on an allowed host | **yes** | no |\n| Covers scripts loaded by your scripts | only if each host is listed | yes, via `'strict-dynamic'` |\n\nThe decisive argument is the bypass row. Google researchers analysed CSPs across billions of pages and found the large majority of domain-allowlist policies were trivially bypassable — because popular allowlisted hosts serve JSONP endpoints or old framework builds that will happily execute an attacker-chosen callback. Allowlisting such a host silently allowlists arbitrary script execution.\n\nA domain allowlist also rots: it must be edited every time a vendor changes a hostname, so it drifts toward being broad enough to be meaningless.\n\n**Nonce-based is the recommendation** in current guidance from both Google and OWASP. It costs you server-side nonce plumbing — which is real work in a statically-exported app — but the resulting policy is short, stable, and actually enforces something.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 108,
+      "mcqIds": [
+        "content-security-policy-s08-q1"
+      ]
+    },
+    {
+      "id": "content-security-policy-s09",
+      "order": 9,
+      "sectionTitle": "The temporary `unsafe-inline`",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The most common way CSP ends up being decorative: a launch is blocked, someone adds `'unsafe-inline'` to `script-src` to unblock it, and it is still there three years later.\n\n**Why it's fatal rather than merely weak.** `'unsafe-inline'` means \"any inline script may execute.\" That is exactly the capability an XSS payload needs. The rest of the policy — the carefully enumerated hosts, the `connect-src`, the `object-src 'none'` — is still doing something, but the primary purpose of the policy is gone. A page with `script-src 'self' 'unsafe-inline'` offers close to no XSS mitigation.\n\n**`'unsafe-eval'` is the sibling.** It permits `eval`, `new Function`, and the string forms of `setTimeout`/`setInterval`. Usually it's requested by a dependency — an older template engine, a rules or expression evaluator, some WASM loaders. It's less catastrophic than `'unsafe-inline'` but still turns strings into code.\n\n**How to keep it from becoming permanent.**\n\n- Never add either to unblock a release; add the nonce instead, which is nearly always a smaller change than it looks.\n- If you genuinely must, scope it to the narrowest possible route rather than the site-wide policy.\n- Record it as tracked work with an owner and a date. An automated check that fails CI when the string appears in the production policy is the version that actually holds.\n- Watch for the subtler equivalent: allowlisting a host that serves a JSONP endpoint achieves the same thing without the scary keyword.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 118,
+      "mcqIds": [
+        "content-security-policy-s09-q1"
+      ]
+    },
+    {
+      "id": "content-security-policy-s10",
+      "order": 10,
+      "sectionTitle": "What CSP does not do",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Being precise about the limits is what separates a senior answer from a checklist one.\n\n- **It doesn't stop CSRF.** Different attack, different mechanism — CSP governs what *your* page loads, not what other sites send to your server.\n- **It doesn't replace escaping.** An injection that rewrites the visible page, plants a fake login form, or defaces content needs no script execution at all. `form-action 'self'` limits where that fake form can post, which helps, but the injection still happened.\n- **It doesn't stop exfiltration through channels you allowed.** If `connect-src` includes an analytics vendor, injected script can encode data into requests to that vendor. Same for a permissive `img-src`, where a URL path carries the payload. Tightening `connect-src` is the single most underrated hardening step.\n- **It doesn't protect non-browser clients**, and it does nothing for a user on a browser that ignores it.\n- **It doesn't help if it's misdelivered.** A policy on the HTML but not on an error page, or a `<meta>` tag policy that silently can't express `frame-ancestors`, is a policy with holes.\n- **DOM clobbering and pure-markup injections** survive a strict script policy entirely.\n\nCSP is the layer that assumes your other defenses failed. It is not a reason to relax them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 108,
+      "mcqIds": []
+    },
+    {
+      "id": "content-security-policy-s11",
+      "order": 11,
+      "sectionTitle": "Nonces in a real framework",
+      "subTitle": "Where the plumbing gets awkward",
+      "type": "concept",
+      "markdown": "Nonce-based CSP requires a fresh random value per HTML response, which forces a real architectural question: **is your HTML dynamic?**\n\n- **Server-rendered apps** — straightforward. Generate the nonce in middleware, put it on the response header and in the request context, and have the template read it. Next.js exposes the nonce for `next/script`; Django, Rails and Express all have well-worn middleware for this.\n- **Statically exported sites on a CDN** — a per-response nonce is impossible by definition, since the HTML is one cached artifact. Two options: compute **hashes** at build time for your inline blocks, or inject the nonce at the edge (a CDN worker rewriting the header and the tags). Hashes are simpler and usually sufficient.\n- **Client-rendered SPAs** — most of your script is external files, so this is easier than it sounds. The friction is third-party snippets that inject their own script tags at runtime, which is exactly what `'strict-dynamic'` exists to accommodate.\n\nTwo failure modes to know: a nonce that ends up **cached** (in a CDN, a service worker, or a `bfcache`d page) is reused, which defeats it; and a nonce leaked into the DOM where injected script could read it, which is why you never render the value into an attribute an attacker could query and reuse.\n\nBudget a real sprint for this on a mature app. The policy is the easy part; the inventory and the plumbing are not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 118,
+      "mcqIds": []
+    },
+    {
+      "id": "content-security-policy-s12",
+      "order": 12,
+      "sectionTitle": "The order to do it in",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A pragmatic sequence, roughly in order of value per unit of effort:\n\n1. **Free wins first.** `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'` (or an allowlist). These break almost nothing and close real holes — `base-uri` in particular, since a `<base>` injection redirects every relative script URL on the page.\n2. **Report-only with your intended strict policy.** Collect two weeks. Filter extension noise.\n3. **Nonce-based `script-src` with `'strict-dynamic'`.** This is where the actual XSS mitigation lives. Do it before touching styles.\n4. **Tighten `connect-src`.** Cheap, and it's the exfiltration control — often more valuable than another round of `script-src` polish.\n5. **`form-action 'self'`**, which limits an injected credential-stealing form.\n6. **`style-src`, last and optionally.** CSS-in-JS makes this the most painful and the least valuable directive to lock down.\n7. **Keep a report endpoint running permanently.** A spike in violations is a genuine security signal — sometimes the first sign of a compromised third-party script.\n\nIf you're asked to design a CSP in an interview, this ordering *is* the answer: start from `default-src 'self'`, name what the app actually needs, refuse to add `'unsafe-inline'` to `script-src`, and describe how you'd roll it out without an outage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 116,
+      "mcqIds": []
+    }
+  ]
+}

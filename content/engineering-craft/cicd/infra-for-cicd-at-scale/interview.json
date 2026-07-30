@@ -1,0 +1,37 @@
+{
+  "topicId": "infra-for-cicd-at-scale",
+  "interviewQuestions": [
+    {
+      "id": "infra-for-cicd-at-scale-iq1",
+      "question": "Why doesn't 'run the full test suite on every commit' scale, and what's the fix?",
+      "answerMarkdown": "It scales fine at small size — a suite that runs in a couple of minutes on a codebase with a few dozen packages is cheap to run on every commit and easy to reason about. It stops scaling once the suite itself takes long enough, and commit volume is high enough, that CI queue time becomes the organization's bottleneck: engineers spend longer waiting for a signal than they spent writing the change.\n\nThe naive fixes both fail. Skipping tests to go faster trades speed for missed regressions, which is a real cost, not a free lunch. Throwing more CI compute at it hits diminishing returns once the suite has serial dependencies or shared-resource contention — a single test database, a rate-limited external API — that parallelism alone can't route around.\n\nThe actual fix is doing less work, but the *correct* less: affected-only testing computes, from the dependency graph, exactly which packages could plausibly break because of a given change, and runs only those tests. Most commits in a large monorepo are local — they touch one package with few or no dependents — so the typical commit's test scope shrinks dramatically even though a change to a widely-depended-on shared library still correctly triggers a large run.\n\n**Testing:** whether you understand this as a graph-computation problem, not just 'add more CI machines.'",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "infra-for-cicd-at-scale-iq2",
+      "question": "How would you decide between self-hosted CI runners and a managed CI service for a growing engineering org?",
+      "answerMarkdown": "I'd frame it as a crossover driven by volume and specialization, not a universal preference. Managed runners win by default — no infrastructure to patch, scale, or secure, predictable if occasionally pricier per-minute cost, and a vendor handling the whole runner lifecycle. For a team running a modest number of standard builds, the ops burden of self-hosting isn't worth taking on.\n\nSelf-hosting starts paying off once you have real volume — thousands of jobs a day — or specialized needs a managed vendor doesn't offer cheaply: GPU access for ML pipeline tests, or private network reach into internal-only resources that can't be exposed to a third-party runner. At that point, fixed infrastructure cost can genuinely beat pay-per-minute pricing, and you can pre-warm runners for near-instant job start instead of eating cold-start latency on every job.\n\nThe part that's easy to underweight: self-hosting isn't free just because the per-minute bill goes away — someone now owns patching, scaling, and securing that fleet as a real operational responsibility, indefinitely. I wouldn't recommend self-hosting without that ownership being explicit and staffed, because an under-maintained runner fleet becomes its own outage source.\n\n**Testing:** whether you weigh the hidden ongoing ops cost of self-hosting, not just the sticker price comparison.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "infra-for-cicd-at-scale-iq3",
+      "question": "You've rolled out affected-only testing in a large monorepo, and a regression still shipped in a shared library that 'should have' been caught. How do you debug this?",
+      "answerMarkdown": "My first hypothesis is that the affected-set computation is wrong, not that the tests are missing — because the prompt says a regression shipped in a *shared* library, which by definition has many dependents, and affected-only testing's whole premise is that changes to widely-depended-on packages trigger a correspondingly large test run.\n\nI'd check, in order: did the test for the actual failure exist and pass historically (if yes, it wasn't a coverage gap)? Did that test actually *run* on the commit that introduced the regression (check the CI logs for that specific run's selected test set)? If the test existed but didn't run, the dependency graph the tool used to compute \"affected\" is either stale, incomplete, or using the wrong traversal direction — walking forward from the changed package's own dependencies instead of backward to find its dependents, which is a startlingly common bug in homegrown implementations.\n\nThe fix, once confirmed, is almost never \"add more tests\" — the coverage was already there. It's fixing the graph computation itself, and I'd strongly prefer migrating to an established tool (Bazel, Nx, Turborepo) that's already solved this correctly, over patching a homegrown version, because this exact bug class recurs whenever teams build affected-only logic from scratch.\n\n**Testing:** whether you diagnose the actual failure — a graph-computation bug — instead of reflexively reaching for 'write more tests.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "infra-for-cicd-at-scale-iq4",
+      "question": "How would you deploy a change that spans multiple interdependent services without a risky, tightly-coordinated 'big bang' release?",
+      "answerMarkdown": "I'd apply the same expand/contract idea used for database schemas, but to service APIs: sequence the deploys so each step is backward-compatible on its own, and no step requires another team's deploy to happen at a precise moment.\n\nConcretely, if service A needs to call a new endpoint on service B: deploy B first with the new endpoint added but its existing behavior completely unchanged — this is safe regardless of what version A is running, since nothing about A's current calls changes. Confirm B is healthy and the new endpoint works as expected. Only then deploy A to start calling it. If A's deploy needs to roll back for an unrelated reason, B is still fine — it never depended on A's new behavior existing.\n\nFor a handful of services this can be coordinated manually with clear communication about ordering. Past a certain number of interdependent services deploying daily, I'd want actual orchestration tooling — a deploy pipeline that understands the dependency graph between services and can enforce ordering automatically, rather than relying on two teams remembering to talk to each other before every related release.\n\nThe underlying principle either way: minimize the number of deploys that have to happen in a specific order relative to each other, because every such constraint is a coordination failure waiting to happen.\n\n**Testing:** whether you can generalize expand/contract beyond databases to service-to-service API changes.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    }
+  ]
+}

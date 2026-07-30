@@ -1,0 +1,37 @@
+{
+  "topicId": "core-web-vitals",
+  "interviewQuestions": [
+    {
+      "id": "core-web-vitals-iq1",
+      "question": "A product page has an LCP of 4.8 seconds on mobile. Walk me through debugging it.",
+      "answerMarkdown": "I'd work from field data down to a single sub-part rather than guessing.\n\n**Confirm and segment first.** PageSpeed Insights gives the CrUX 75th-percentile number; RUM tells me whether it's all mobile users or a specific country, network, or route. \"4.8s on Android in India on the PDP\" is a far more tractable problem than \"LCP is bad.\"\n\n**Then attribute.** The `web-vitals` library's attribution build reports the LCP *element* and splits the time into four parts: TTFB, resource load delay, resource load time, and element render delay. That split decides the fix:\n\n- **TTFB dominates** (say 1.8s) → server-side: caching, CDN, get database work off the critical path. No frontend change will help.\n- **Load delay dominates** → a discovery problem. The image is set by JS or CSS `background-image`, so the preload scanner never sees it. `<link rel=preload as=image>` plus `fetchpriority=\"high\"` typically collapses this to near zero.\n- **Load time dominates** → weight. A 2MB JPEG at 4000px wide becomes a ~90KB AVIF sized to the layout — routinely a full second on mobile.\n\n**Reproduce honestly.** 4x CPU throttle, Slow 4G, cold cache, consent banner present. And I'd check the hero isn't marked `loading=\"lazy\"`, which is a startlingly common self-inflicted regression.\n\nThen verify in the lab but decide on field data, remembering CrUX's 28-day window lags the fix.\n\n**Testing:** whether you have a systematic attribution-driven method or jump straight to \"compress the images.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "core-web-vitals-iq2",
+      "question": "What are the three Core Web Vitals, what does each measure, and what are the thresholds?",
+      "answerMarkdown": "Three metrics for three separate user complaints:\n\n- **LCP — Largest Contentful Paint.** When the largest content element in the viewport finished rendering. Answers \"did the page show up?\" **Good ≤ 2.5s**, needs improvement ≤ 4.0s, poor above.\n- **INP — Interaction to Next Paint.** From a tap, click, or keypress to the next frame showing a result. Answers \"does it respond?\" **Good ≤ 200ms**, needs improvement ≤ 500ms, poor above. It replaced FID in March 2024 because FID only measured the delay before the handler started, not how long the response took.\n- **CLS — Cumulative Layout Shift.** A unitless score for unexpected movement, computed as impact fraction × distance fraction, reported over the worst 5-second window. **Good ≤ 0.1**, needs improvement ≤ 0.25, poor above.\n\nThe scoring rules matter as much as the numbers: assessment is at the **75th percentile** of real visits, split by device class, and **all three must be good** for a URL to pass. So designing for the median doesn't work.\n\nWhat makes them different from `load` or `DOMContentLoaded` is that they measure perceived experience and are capturable in the field via `PerformanceObserver`, which is what makes them actionable rather than trivia.\n\n**Testing:** whether you know the metrics precisely — including the percentile rule and the FID replacement — or just the acronyms.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "core-web-vitals-iq3",
+      "question": "Our Lighthouse score is 98 but the Search Console Core Web Vitals report says the page is failing. How is that possible?",
+      "answerMarkdown": "They measure different things, and when they disagree the field data is right.\n\n**Lighthouse is one synthetic run** on fast hardware with an emulated network, no user interaction, no scrolling, and typically no ads or consent banner. **CrUX is the 75th percentile of real Chrome visits over a rolling 28 days**, including cold caches, cheap Android devices, and genuinely bad networks.\n\nThe specific gaps that produce this exact symptom:\n\n- **INP isn't measured in the lab at all.** Lighthouse reports **TBT** as a proxy. A page can have low TBT and a 900ms INP on the one interaction users actually perform.\n- **CLS in the lab misses everything post-load.** Real users scroll into lazy-loaded images, ads fill their slots, a cookie banner appears. A 0.01 lab CLS against a 0.3 field CLS is the classic version of this.\n- **The 28-day window lags.** A fix shipped five days ago is still averaged against 23 days of the old behaviour, so \"we fixed it and nothing moved\" is often just latency.\n\nMy working rule is **lab for debugging, field for deciding**. I'd wire up the `web-vitals` library with attribution to get our own RUM, so we see the change in days rather than weeks and can segment by device and route — Search Console tells you that something is wrong, not what.\n\n**Testing:** whether you understand lab versus field as a methodological distinction, not as one tool being broken.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Measurement"
+    },
+    {
+      "id": "core-web-vitals-iq4",
+      "question": "Your INP is 480ms at the 75th percentile on a React dashboard. How would you bring it under 200ms?",
+      "answerMarkdown": "INP is a main-thread problem, so I'd attribute it to a phase before touching code. The `web-vitals` attribution build names the interaction target and splits the time into **input delay, processing time, and presentation delay**.\n\n- **If input delay dominates**, something was already running when the user tapped — usually hydration or third-party tags. Fixes: defer non-critical scripts, load third parties after first interaction, and break hydration into islands or progressive chunks so the main thread isn't monopolised on arrival.\n- **If processing time dominates**, the handler does too much synchronously. The pattern I'd apply: update only the state that produces immediate visual feedback, then `await scheduler.yield()` (falling back to `setTimeout(0)`) and do the expensive work after the browser has painted. In React, `useTransition` does this idiomatically — the urgent input value renders now, the heavy filtered list renders as a non-urgent update. On a search-as-you-type field that's often 300ms → 80ms.\n- **If presentation delay dominates**, the DOM commit is too big. Virtualise the long list, add `content-visibility` or `contain` so layout is bounded, and stop re-rendering thousands of nodes per keystroke.\n\nThe thing I'd flag to the team: INP reports your **worst** interaction, not the average. One slow modal-open on a page of otherwise instant interactions fails the whole URL — so I'd hunt the tail, not the mean.\n\n**Testing:** whether you can decompose INP into phases and match each to a real fix, including framework-level tools.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied"
+    }
+  ]
+}

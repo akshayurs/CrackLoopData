@@ -1,0 +1,182 @@
+{
+  "id": "concurrency-performance",
+  "title": "Concurrency Performance",
+  "area": "engineering-craft",
+  "group": "performance-engineering",
+  "order": 7,
+  "slug": "concurrency-performance",
+  "summary": "Using concurrency and parallelism to raise throughput, and the contention costs that cap how far that goes: lock contention, false sharing, and why adding threads to a lock-bound workload can make things worse.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "concurrency-performance-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "More threads sounds like an unlimited lever for more throughput. It isn't — every shared resource (a lock, a cache line, a connection pool) is a place where concurrent work has to coordinate, and coordination cost grows with contention, not with how many threads you'd like to have working.\n\nThis topic is about the ceiling that contention imposes and the techniques that push it back: understanding what actually contends, choosing a concurrency model that matches your workload, and recognizing the specific, counterintuitive failure mode where adding *more* parallelism makes a system *slower*.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-performance-s02",
+      "order": 2,
+      "sectionTitle": "Concurrency vs parallelism",
+      "subTitle": "Structure vs execution",
+      "type": "concept",
+      "markdown": "**Concurrency** is a property of a program's structure: multiple logical tasks are in progress at overlapping times, but not necessarily executing at the same instant. A single-core machine running an event loop handles thousands of concurrent connections by rapidly switching between them — genuinely concurrent, never parallel, since only one instruction executes at any given nanosecond.\n\n**Parallelism** is a property of execution: multiple tasks genuinely run at the same instant, which requires multiple cores (or machines). A program can be concurrent without being parallel (single-core async), and in principle parallel without much concurrency in the everyday sense (a tight numerical loop split across cores with no logical task interleaving).\n\nThe distinction matters for performance work because they solve different problems: concurrency is a tool for **handling many waiting things efficiently** (I/O-bound work — most of a web server's connections are idle, waiting on network or disk, at any instant). Parallelism is a tool for **doing more computation per unit time** (CPU-bound work — genuinely splitting a computation across cores). Reaching for more threads to fix an I/O-wait problem, or reaching for async/event-loop structure to fix a CPU-bound problem, is applying the wrong tool to the bottleneck.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "concurrency-performance-s02-q1"
+      ]
+    },
+    {
+      "id": "concurrency-performance-s03",
+      "order": 3,
+      "sectionTitle": "Amdahl's Law revisited",
+      "subTitle": "The serial fraction caps parallel speedup",
+      "type": "concept",
+      "markdown": "Performance Mindset & Measurement introduced Amdahl's Law as a general ceiling on speedup; here it's the specific ceiling on **parallel** speedup, and it's worth restating precisely because it's the single most-cited law in concurrency interviews. If a fraction **P** of the work is parallelizable and **(1 − P)** must run serially, speedup with N processors is:\n\n**speedup(N) = 1 / ((1 − P) + P/N)**\n\nAs N → ∞, this approaches **1 / (1 − P)** — a hard ceiling that no amount of additional hardware crosses. If 90% of a computation parallelizes perfectly and 10% is inherently serial, the maximum possible speedup is 10x, whether you use 100 cores or 100,000. Going from 10 cores (speedup ≈ 5.3x) to 1,000 cores (speedup ≈ 9.9x) captures almost the entire remaining gain — the curve flattens hard well before infinite cores, which is why over-provisioning cores for a workload with a real serial fraction has rapidly diminishing returns.\n\nThe serial fraction is often something unglamorous: a single lock around a shared counter, a sequential initialization step, or — as covered next — contention on a resource that *looks* parallel but funnels through one bottleneck.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "concurrency-performance-s03-q1"
+      ]
+    },
+    {
+      "id": "concurrency-performance-s04",
+      "order": 4,
+      "sectionTitle": "Lock contention",
+      "subTitle": "How a shared lock becomes the new bottleneck",
+      "type": "concept",
+      "markdown": "A lock (mutex) ensures only one thread executes a critical section at a time — necessary for correctness when multiple threads mutate shared state, but it turns that critical section into Amdahl's serial fraction in disguise. Every thread that wants the lock while it's held has to wait, and as thread count grows, so does the queue of waiters.\n\n**Lock contention** is what happens when that queue becomes significant: threads spend real, measurable time blocked waiting for a lock rather than doing useful work, and that wait time shows up as increased latency (the thread is queued, invisible to a naive CPU profiler — recall Profiling Techniques' off-CPU profiling) and capped throughput (the system can't process more concurrent work than the critical section can serialize through).\n\nThe severity scales with two things: how large the critical section is (more time held = more time other threads wait) and how frequently threads want it (more contenders = longer queues). A lock protecting a rarely-called, tiny critical section is nearly free; the same lock protecting a large block called on every request, under high concurrency, can become the dominant bottleneck in the entire system — effectively serializing a system that was designed to run in parallel.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "concurrency-performance-s04-q1"
+      ]
+    },
+    {
+      "id": "concurrency-performance-s05",
+      "order": 5,
+      "sectionTitle": "Throughput plateauing under contention",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Plot throughput against number of threads for a workload with a shared lock. At low thread counts, throughput rises close to linearly — more workers, more done. Past some point, the line bends and flattens: added threads are now mostly waiting on the lock rather than doing new work, so throughput stops climbing. Past a further point, on many real systems, the line actually **drops** — the overhead of context-switching between an ever-larger pool of blocked and contending threads starts costing more than the marginal thread contributes.\n\nThat shape — rise, plateau, decline — is the visual signature of a workload hitting a contention ceiling, and it's the reason \"just add more threads\" is not a reliable performance strategy once a shared resource is in the picture: past the plateau, more threads actively make things worse, not just fail to help.\n\n<<< Image: a line chart with number of threads on the x-axis and throughput on the y-axis; the line rises steeply and roughly linearly at first, bends into a plateau around a marked point labeled \"contention point\", then visibly declines past that point, annotated \"more threads now hurt, not help\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-performance-s06",
+      "order": 6,
+      "sectionTitle": "Reducing contention",
+      "subTitle": "Finer locks, sharding, lock-free structures, immutability",
+      "type": "concept",
+      "markdown": "Once contention is confirmed as the bottleneck, several techniques reduce it, roughly in order of how much they change the code:\n\n- **Finer-grained locking.** Instead of one lock protecting an entire data structure, use separate locks for separate parts (e.g., a lock per bucket in a hash map instead of one lock for the whole map). Threads touching different parts no longer contend at all.\n- **Sharding.** Split the shared resource into N independent shards (N counters instead of one, each handling 1/N of the traffic, summed only when a total is needed), so most operations never contend in the first place. This is finer-grained locking taken further — no shared state at all for the common case.\n- **Lock-free structures.** Built on atomic compare-and-swap (CAS) operations instead of locks — a thread attempts an update and retries if another thread got there first, rather than blocking. Removes blocking entirely under moderate contention, at the cost of significantly harder-to-reason-about code and subtle correctness bugs if done by hand.\n- **Immutability.** If shared data is never mutated after creation, there's nothing to contend over — readers never need a lock, because there's no writer to race against. This is why functional-style, immutable-data patterns are common in highly concurrent systems: it doesn't reduce contention, it eliminates the reason for it.\n\nThe right choice depends on how the resource is actually used — sharding needs a use case that tolerates approximate/eventually-summed totals; immutability needs a workload that's read-heavy with infrequent, whole-value replacement rather than in-place mutation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "concurrency-performance-s06-q1"
+      ]
+    },
+    {
+      "id": "concurrency-performance-s07",
+      "order": 7,
+      "sectionTitle": "Thread-per-request vs event-loop/async",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Thread-per-request | Event-loop / async |\n|---|---|---|\n| **Model** | One OS thread blocks per in-flight request | A small pool of threads multiplexes many logical tasks, switching on I/O wait |\n| **Memory per connection** | Higher — each thread has its own stack (often 1MB+ default) | Lower — a suspended async task is a small heap-allocated state machine |\n| **Scaling limit** | Thousands of threads incurs real OS scheduling and context-switch overhead | Scales to tens of thousands of concurrent connections on far fewer OS threads |\n| **CPU-bound work** | Naturally parallelizes across cores via the OS scheduler | A CPU-bound task blocks the event loop unless explicitly offloaded to a worker pool |\n| **Mental model** | Simple — code reads top-to-bottom, blocking calls block visibly | Requires explicit async/await or callback structure; blocking calls silently stall the whole loop |\n\nThe workload decides the winner: I/O-bound services with huge numbers of mostly-idle connections (chat servers, API gateways, proxies) favor event-loop/async, because thread-per-request would exhaust memory and scheduler capacity long before exhausting actual work. CPU-bound services favor thread-per-request (or explicit worker pools) because the event loop model gains nothing from concurrency when the work is genuinely computational — and can actively hurt if a long CPU-bound task blocks the loop for everyone else.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-performance-s08",
+      "order": 8,
+      "sectionTitle": "False sharing",
+      "subTitle": "Cache-line contention between \"independent\" variables",
+      "type": "concept",
+      "markdown": "Two threads each update their own, logically independent variable — no lock, no shared data, should scale perfectly. Yet throughput is terrible. The cause: CPU caches operate on **cache lines** (typically 64 bytes), not individual variables. If both variables happen to live in the same cache line — common when they're adjacent fields in a struct, or adjacent elements in an array, such as a `counters[thread_id]` array — every write from one thread invalidates the *entire cache line* for every other core caching it, even though the other thread never touches the variable that changed.\n\nThis is **false sharing**: contention that exists purely because of memory layout, with no logical data dependency between the threads at all. It's diagnosable by a symptom that looks like lock contention (throughput doesn't scale with cores, or gets worse) but with **no actual lock anywhere in the code** — a profiler showing high cache-coherence traffic (tools expose this as a hardware performance counter) on otherwise-unshared variables is the tell.\n\nThe fix is **padding**: adding unused bytes between per-thread variables so each lands on its own cache line, or restructuring per-thread data as separate objects rather than adjacent array elements. This is a pure memory-layout fix, in the same spirit as the array-of-structs/struct-of-arrays discussion in Algorithmic & Data Structure Optimization — it changes nothing about the logic, only where things sit in memory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "concurrency-performance-s08-q1"
+      ]
+    },
+    {
+      "id": "concurrency-performance-s09",
+      "order": 9,
+      "sectionTitle": "More threads, less throughput",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A service under load looks CPU-underutilized, so a team doubles the thread pool size expecting more throughput. Throughput instead drops. The workload was already lock-bound: the existing threads were mostly waiting on a shared lock, not computing, which is exactly why CPU looked underutilized in the first place — a classic off-CPU-wait signature (Profiling Techniques). Doubling the thread count doubled the number of threads competing for the *same* lock, adding context-switching overhead (the OS now has twice as many blocked/runnable threads to schedule) without adding any capacity to the actual bottleneck, since the critical section still only lets one thread through at a time.\n\nThe diagnostic that would have caught this before shipping: check whether CPU utilization is low *because the system is idle* or low *because threads are blocked waiting* — the fix for the first is more threads or more cores; the fix for the second is reducing contention (§6), not adding more contenders. Off-CPU profiling or simply checking lock-wait-time metrics distinguishes the two.\n\nThe general lesson: \"CPU isn't maxed out, so add more parallelism\" is only valid when the limiting resource is CPU itself. When the limiting resource is a lock, a connection pool, or any other shared, serializing resource, more threads make the queue for that resource longer, not shorter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "concurrency-performance-s09-q1"
+      ]
+    },
+    {
+      "id": "concurrency-performance-s10",
+      "order": 10,
+      "sectionTitle": "A lock-protected counter vs a sharded one",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\n// Single lock: every increment serializes through one point of contention\nclass LockedCounter {\n    private long count = 0;\n    private final Object lock = new Object();\n    void increment() {\n        synchronized (lock) { count++; }\n    }\n    long get() { synchronized (lock) { return count; } }\n}\n\n// Sharded: threads mostly hit their own shard, contention only on read\nclass ShardedCounter {\n    private final long[] shards = new long[16];  // one per likely-contending thread group\n    void increment(int threadHash) {\n        int i = threadHash % shards.length;\n        synchronized (shards) { shards[i]++; }   // still needs sync per-shard in real code\n    }\n    long get() {\n        long total = 0;\n        for (long s : shards) total += s;         // summed only when a total is needed\n        return total;\n    }\n}\n```\n\nUnder high concurrency, `LockedCounter` funnels every single increment through one lock — exactly the serial fraction Amdahl's Law penalizes. `ShardedCounter` spreads increments across 16 independent shards, so two threads hashing to different shards never contend at all; only `get()`, called far less often, pays a cost proportional to shard count. The trade: `get()` is slower and the true count can be momentarily stale across shards mid-update — acceptable for most counters (page views, request counts), not for anything requiring an exact, immediately-consistent total.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-performance-s11",
+      "order": 11,
+      "sectionTitle": "Contention's evil twin: deadlock",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "Reducing contention by adding more locks (finer-grained locking, §6) introduces a new risk that pure contention doesn't have: **deadlock**. If thread A holds lock 1 and waits for lock 2, while thread B holds lock 2 and waits for lock 1, neither ever proceeds — not a slowdown, a permanent hang for both threads. This gets more likely, not less, as a system moves from one coarse lock to many fine-grained ones, because there are now more possible lock-acquisition orderings for different code paths to disagree about.\n\nThe standard prevention is a **consistent lock ordering**: if every code path that needs both lock 1 and lock 2 always acquires them in the same order (e.g., always by a fixed ID or memory address), the circular-wait condition that causes deadlock can't arise. This is a discipline that has to be maintained deliberately across a codebase — a single code path that acquires locks in the \"wrong\" order relative to everyone else reintroduces the risk, often invisibly, until it hits the specific interleaving that triggers it.\n\nThis is why lock-free structures and immutability (§6) are attractive beyond just their throughput benefit: they don't just reduce contention, they remove an entire class of correctness bug that finer-grained locking can introduce as a side effect of fixing performance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-performance-s12",
+      "order": 12,
+      "sectionTitle": "Concurrency performance in practice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Match the concurrency model to the workload first — event-loop/async for I/O-bound, thread-per-request or worker pools for CPU-bound (§2, §7). Understand that any shared, serializing resource is Amdahl's serial fraction in a new costume, and that its cost grows with critical-section size and contention frequency, not just with thread count (§3, §4, §5). When contention shows up, reduce it with the least invasive technique that fits the workload — finer locks, sharding, lock-free structures, or immutability (§6) — while watching for the correctness cost that comes with more locks, not fewer (§11). Rule out false sharing specifically when contention appears with no actual lock in the code (§8). And before adding threads to fix low CPU utilization, confirm the bottleneck is genuinely CPU and not a lock queue in disguise (§9).\n\nThis closes out the group's diagnostic topics. The final topic, Capacity Planning & Load Testing, is where all of this — profiling, benchmarking, algorithmic and layout fixes, GC tuning, and concurrency limits — gets validated together under real, sustained load before you trust it in production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    }
+  ]
+}

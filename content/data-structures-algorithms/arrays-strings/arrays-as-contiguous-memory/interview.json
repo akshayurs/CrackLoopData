@@ -1,0 +1,37 @@
+{
+  "topicId": "arrays-as-contiguous-memory",
+  "interviewQuestions": [
+    {
+      "id": "arrays-as-contiguous-memory-iq1",
+      "question": "Why is array indexing O(1) but inserting into the middle O(n)?",
+      "answerMarkdown": "Both come from the same fact: an array is one contiguous block of memory, and every operation has to keep it that way.\n\nReading `a[i]` doesn't search — it computes `base_address + i * element_size`. That's one multiply and one add regardless of how big i is, so it's O(1) no matter the array's size.\n\nInserting into the middle breaks the layout: if you write a new value at index k, every element that used to sit at k, k+1, k+2… now has to move one slot over so the array stays gap-free and the indexing formula stays valid. That's a shift of `n - k` elements, which is O(n) in the worst case (inserting near the front).\n\nThe end is the one position where nothing after it needs to move, which is why appends are cheap and everything else isn't. I'd contrast this with a linked list, which flips the trade: O(n) to reach a middle node, but O(1) to splice one in once you're there, because nothing needs to be contiguous.\n\nIn an interview I'd lead with the contiguity constraint first — the O(1)/O(n) split falls out of it immediately rather than needing to be memorized as two separate facts.\n\n**Testing:** whether you understand *why* the costs differ, not just that they do.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "arrays-as-contiguous-memory-iq2",
+      "question": "How can appending to a dynamic array be O(1) if the array sometimes has to be resized?",
+      "answerMarkdown": "It's O(1) **amortized**, not O(1) on every single call — that distinction is the whole answer.\n\nMechanically: the backing buffer has spare capacity beyond its current length. Most appends just write into an already-allocated slot and bump a counter — genuinely O(1). When capacity runs out, the array allocates a new buffer, typically double the size, and copies every existing element across before adding the new one — that single call is O(n).\n\nThe reason this still averages to O(1) is that doubling makes resizes exponentially rare: they happen at sizes 1, 2, 4, 8, 16… For n appends, the total copying across all resizes sums to roughly `n + n/2 + n/4 + ... ≈ 2n`, so the average cost per append, spread across the whole sequence, is O(1) even though individual calls aren't uniform.\n\nA growth factor smaller than 2 (Java's `ArrayList` effectively grows by 1.5x in some JVMs, .NET's `List<T>` similarly) trades more frequent resizes for less wasted memory — a real design choice, not an accident.\n\nWhere this bites in practice: if you know the final size ahead of time, pre-sizing (`reserve`, passing an initial capacity) skips every resize entirely, which matters when you're measuring tail latency rather than average throughput.\n\n**Testing:** whether you can distinguish amortized analysis from worst-case, and connect it to a concrete production lever (pre-sizing).",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Amortized analysis"
+    },
+    {
+      "id": "arrays-as-contiguous-memory-iq3",
+      "question": "You need a structure that supports fast insertion at both the front and the back. Would you use an array?",
+      "answerMarkdown": "Not a plain dynamic array, no — front insertion on one is fundamentally O(n), and no growth-factor trick fixes that, because the cost comes from shifting existing elements, not from resizing.\n\nIf the requirement is genuinely \"fast at both ends,\" I'd reach for a **deque** (double-ended queue), typically implemented as a circular buffer or a small list of fixed-size blocks. A circular buffer keeps head and tail pointers that wrap around a fixed-size array, so pushing to the front just moves the head pointer backward (with wraparound) instead of shifting every element — O(1) at both ends.\n\nIf I only need fast appends and don't actually need front-insertion in the hot path, I'd keep the plain array and restructure the algorithm instead — e.g., append everything in encounter order and reverse once at the end (O(n) total) rather than inserting at index 0 in a loop (O(n²)).\n\nThe general principle I'd state out loud: don't reach for a fancier structure to fix an O(n²) pattern that a reordering of the same array-based algorithm removes for free. Save the deque for when the front-insertions are structurally unavoidable — a sliding window, a job queue, an undo/redo buffer.\n\n**Testing:** whether you pick the right structure for the actual access pattern instead of defaulting to \"just use a fancier container.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "arrays-as-contiguous-memory-iq4",
+      "question": "A batch job appending millions of records to a list occasionally spikes to 50x its normal per-record latency. How do you explain and fix it?",
+      "answerMarkdown": "That's the signature of hitting a dynamic array's resize boundary. Amortized O(1) append means the *average* over many calls is cheap, but the specific call that triggers a resize is O(n): it allocates a new, larger buffer and copies every existing element into it before the new record can be added. On a multi-million-element list, that one call moves millions of elements while its neighbors move one.\n\nHow I'd confirm it: check whether the spikes land at sizes consistent with a geometric growth curve (roughly doubling — 1M, 2M, 4M...), and check whether spike duration scales with current array size rather than being constant. If both hold, it's resize cost, not GC, I/O, or lock contention.\n\nThe fix depends on whether the final count is knowable up front:\n\n- If yes, **pre-allocate**: `ArrayList<>(expectedSize)`, `vector.reserve(n)`, or Python's `[None] * n` plus indexed writes instead of `append`. This removes every resize from the hot path.\n- If no, and the SLO is on tail latency specifically, consider a structure with no resize-copy at all — a linked list of fixed-size chunks, or streaming records to storage/a queue instead of holding them all in one growable buffer.\n\nI'd also flag that average throughput looks fine either way — this is purely a p99/p999 problem, which is why load tests using average latency can miss it entirely.\n\n**Testing:** whether you connect an abstract amortized-cost fact to a concrete, debuggable production symptom.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

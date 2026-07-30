@@ -1,0 +1,195 @@
+{
+  "id": "layout-reflow-and-repaint",
+  "title": "Layout, Reflow, and Repaint",
+  "area": "web-frontend",
+  "group": "browser-performance",
+  "order": 1,
+  "slug": "layout-reflow-and-repaint",
+  "summary": "Every visual change re-enters the rendering pipeline at some stage. Which stage decides whether your animation costs 0.3ms or 12ms per frame — and whether it holds 60fps.",
+  "level": "intermediate",
+  "slideCount": 13,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "layout-reflow-and-repaint-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Two animations look identical in a mockup. One runs at a locked 60fps; the other stutters visibly on a mid-range Android phone. The code difference is often a single CSS property.\n\nThe reason is that the browser renders in **stages**, and a style change re-enters that pipeline at whichever stage it invalidates. Change `width` and you pay for geometry, painting, and compositing. Change `transform` and you pay for compositing alone.\n\nAt 60fps you have **16.7ms per frame** to produce a new image, and the browser needs part of that for itself — so the practical budget for your work is closer to **10ms**. Knowing which properties cost which stage is how you stay inside it.\n\nThis topic is the vocabulary — reflow, repaint, composite — that every other performance conversation is built on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s02",
+      "order": 2,
+      "sectionTitle": "The pipeline, end to end",
+      "subTitle": "Five stages, each one skippable",
+      "type": "concept",
+      "markdown": "Turning HTML and CSS into pixels runs through a fixed sequence, sometimes called the **pixel pipeline**:\n\n1. **Style** — match selectors to elements and compute the final value of every property. Produces the computed styles.\n2. **Layout (reflow)** — compute the geometry: how big is each box and where exactly does it sit. Produces a box tree with concrete x/y/width/height.\n3. **Paint** — fill in the pixels for each box: text, colours, borders, shadows, images. Produces a list of draw commands, recorded per layer.\n4. **Composite** — hand the painted layers to the GPU and assemble them into the final frame in the right order, applying transforms and opacity.\n5. **Display** — the frame is handed to the screen at the next vsync.\n\nThe key insight is that the pipeline is **entered from wherever the change invalidates**, and every stage from there on must re-run. Invalidate layout and you also pay paint and composite. Invalidate paint and you skip layout but still pay paint and composite. Invalidate only compositing and the first three stages are skipped entirely.\n\nThat is the whole game: **push your changes as far down the pipeline as possible.**",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "layout-reflow-and-repaint-s02-q1"
+      ]
+    },
+    {
+      "id": "layout-reflow-and-repaint-s03",
+      "order": 3,
+      "sectionTitle": "Reflow",
+      "subTitle": "When geometry has to be recomputed",
+      "type": "concept",
+      "markdown": "**Reflow** (the spec calls it layout) is the browser recomputing the position and size of boxes. It happens whenever something could change geometry:\n\n- Changing a geometric property — `width`, `height`, `padding`, `margin`, `border-width`, `top`/`left`, `font-size`, `display`.\n- Adding, removing, or reordering DOM nodes.\n- Changing text content, so line boxes have to be re-broken.\n- Resizing the window, rotating the device, or a font finally loading and swapping in at different metrics.\n\nThe expensive part is that **layout is relational**. Normal document flow means a box's position depends on its siblings and ancestors, so widening one element can push everything after it. A change near the root of a deep tree can force the browser to re-measure thousands of nodes.\n\nCost scales roughly with the number of nodes that need re-measuring. A full-document layout on a large page — think 5,000+ elements — routinely costs **10-30ms** on a mid-range phone. That is your entire frame budget gone in one stage.\n\nReflow always drags paint and composite along behind it, because moved boxes have to be redrawn.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "layout-reflow-and-repaint-s03-q1"
+      ]
+    },
+    {
+      "id": "layout-reflow-and-repaint-s04",
+      "order": 4,
+      "sectionTitle": "Repaint",
+      "subTitle": "Same boxes, different pixels",
+      "type": "concept",
+      "markdown": "**Repaint** is filling in pixels without moving anything. If you change `background-color`, `color`, `visibility`, `border-color`, `box-shadow`, or `border-radius`, the geometry is unchanged — every box stays exactly where it was — so layout is skipped and the browser goes straight to paint.\n\nThat is cheaper than reflow, but it is not free. Paint cost scales with the **area** repainted and the **complexity** of what's drawn:\n\n- A flat colour over a small button: microseconds.\n- A full-viewport repaint with large blurred `box-shadow`s, gradients, and `border-radius` clipping: several milliseconds, easily more on a low-end device.\n\nPaint is also **not** confined to the element you touched. The browser repaints the affected region of the whole layer, so a change to an element sitting on the root layer can dirty a large rectangle of the screen — including everything overlapping it.\n\nA useful mental note: `box-shadow` and `filter: blur()` are the two properties that most often turn a \"cheap\" repaint into a frame-blowing one, because blur is a per-pixel operation over an inflated area.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s05",
+      "order": 5,
+      "sectionTitle": "Compositing",
+      "subTitle": "The stage where the GPU does the work",
+      "type": "concept",
+      "markdown": "**Compositing** is the browser assembling already-painted layers into a final frame. If an element lives on its own compositor layer, its painted texture is already sitting in GPU memory — moving it, scaling it, rotating it, or fading it is just the GPU re-drawing that texture with a different matrix or alpha value.\n\nNo geometry is recomputed. No pixels are re-rasterised. That's why only two property families are genuinely cheap to animate:\n\n- **`transform`** — `translate`, `scale`, `rotate`, `skew`, and their 3D forms.\n- **`opacity`** — a per-layer alpha multiply.\n\nBoth map directly onto operations the GPU does in hardware, so a composited animation typically costs well under **1ms per frame** regardless of element size — a full-screen slide-in costs about the same as a 40px one.\n\nThere's one more crucial property: composited animations can run on the **compositor thread**, separate from the main thread. That means a `transform` animation keeps moving smoothly even while JavaScript is busy for 200ms. A `left` animation, which needs main-thread layout every frame, freezes solid.\n\nThat off-main-thread property is usually the real reason a `transform` version feels dramatically smoother in the wild, not just the raw millisecond count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "layout-reflow-and-repaint-s05-q1"
+      ]
+    },
+    {
+      "id": "layout-reflow-and-repaint-s06",
+      "order": 6,
+      "sectionTitle": "The decision tree",
+      "subTitle": "Where your change enters the pipeline",
+      "type": "diagram",
+      "markdown": "Picture the pipeline as a horizontal chain — **Style → Layout → Paint → Composite** — with three arrows pointing into it from above.\n\nThe first arrow lands on **Layout** and is labelled with geometric properties (`width`, `height`, `top`, `margin`, `display`, `font-size`). From there the change flows through every remaining stage: layout, then paint, then composite. It is the most expensive entry point and the one to avoid in animations.\n\nThe second arrow lands on **Paint**, skipping layout, and is labelled with paint-only properties (`background-color`, `color`, `box-shadow`, `border-radius`, `visibility`). Two stages run instead of three.\n\nThe third arrow lands directly on **Composite** and carries only `transform` and `opacity`. Layout and paint are both skipped, and this is the only path that can also run off the main thread.\n\nThe shape of the picture is the lesson: three entry points, and the further right you enter, the less work per frame.\n\n<<< Image: horizontal four-box pipeline chain labelled Style, Layout, Paint, Composite with arrows between them; three labelled arrows enter from above — one into Layout tagged \"width, height, top, margin, display (most expensive)\", one into Paint tagged \"background-color, color, box-shadow, border-radius\", one into Composite tagged \"transform, opacity (cheapest, off main thread)\"; shade the stages downstream of each entry point to show the work each triggers >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s07",
+      "order": 7,
+      "sectionTitle": "Property cost table",
+      "subTitle": "What each change actually triggers",
+      "type": "compare",
+      "markdown": "The properties you reach for most, sorted by what they cost:\n\n| Property | Layout | Paint | Composite | Notes |\n|---|---|---|---|---|\n| `width`, `height` | yes | yes | yes | can reflow siblings and ancestors |\n| `top`, `left`, `margin` | yes | yes | yes | the classic janky animation |\n| `display`, `position` | yes | yes | yes | changes participation in flow |\n| `font-size`, `font-family` | yes | yes | yes | re-breaks every line of text |\n| `background-color`, `color` | no | yes | yes | cheap on small areas |\n| `box-shadow`, `border-radius` | no | yes | yes | blur/clipping makes paint expensive |\n| `visibility` | no | yes | yes | unlike `display: none`, keeps the box |\n| `transform` | no | no | yes | GPU only, can run off main thread |\n| `opacity` | no | no | yes | GPU only, needs its own layer |\n\nTwo caveats that separate a memorised table from real understanding:\n\n- **`opacity` only skips paint if the element is on its own layer.** Otherwise the browser has to re-composite the layer it shares, and may re-paint it.\n- **`visibility: hidden` avoids reflow; `display: none` does not.** Hiding with `display` removes the box from flow, so everything after it moves — a full reflow. That single choice can be the difference between a 0.5ms and a 15ms toggle.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 90,
+      "mcqIds": [
+        "layout-reflow-and-repaint-s07-q1"
+      ]
+    },
+    {
+      "id": "layout-reflow-and-repaint-s08",
+      "order": 8,
+      "sectionTitle": "Swapping left for transform",
+      "subTitle": "The same motion, a different pipeline entry",
+      "type": "code",
+      "markdown": "Both of these slide a panel 320px to the right over 300ms. They are not the same animation.\n\n```css\n/* Janky: every frame re-enters at Layout */\n.panel {\n  position: absolute;\n  left: -320px;\n  transition: left 300ms ease-out;\n}\n.panel.open { left: 0; }\n\n/* Smooth: every frame enters at Composite */\n.panel {\n  position: absolute;\n  left: 0;\n  transform: translateX(-320px);\n  transition: transform 300ms ease-out;\n}\n.panel.open { transform: translateX(0); }\n```\n\nThe `left` version asks the browser to recompute geometry on **every single frame** — around 18 frames for a 300ms transition, each one running layout, paint, and composite on the main thread. If any of them exceeds the ~10ms budget, the frame is dropped and the motion visibly stutters.\n\nThe `transform` version paints the panel once, then hands the compositor a new translation matrix each frame. Layout and paint run zero times during the animation.\n\nThe same rule applies to size: animate `transform: scale()` instead of `width`/`height`, and fade with `opacity` rather than toggling `visibility` or `background-color` alpha.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s09",
+      "order": 9,
+      "sectionTitle": "The 16ms budget",
+      "subTitle": "What \"smooth\" actually costs",
+      "type": "concept",
+      "markdown": "A 60Hz display refreshes every **16.7ms**. To animate without dropping frames, everything — JavaScript, style, layout, paint, composite — must finish inside that window. In practice the browser reserves a few milliseconds for its own housekeeping, so plan for about **10ms of your own work per frame**.\n\nWhat that budget buys you in round numbers on a mid-range device:\n\n- **Composite-only change** (transform/opacity on an existing layer): ~0.2-1ms. You could do a dozen and still be fine.\n- **Repaint of a modest region**: 1-5ms. Usually survivable, occasionally not.\n- **Layout of a large tree**: 10-30ms. One of these blows the frame on its own.\n\nTwo things that make this stricter than it looks. First, **120Hz displays halve the budget to 8.3ms**, and high-refresh phones and laptops are now mainstream. Second, dropped frames are not proportional to overhead — a frame that takes 17ms doesn't render 6% late, it misses vsync entirely and the previous frame stays on screen for 33ms. The user perceives that as a stutter, not a slowdown.\n\nThat cliff edge is why \"just a little over budget\" still looks broken.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "layout-reflow-and-repaint-s09-q1"
+      ]
+    },
+    {
+      "id": "layout-reflow-and-repaint-s10",
+      "order": 10,
+      "sectionTitle": "Limiting how far reflow spreads",
+      "subTitle": "Containment and isolated subtrees",
+      "type": "concept",
+      "markdown": "Reflow cost is driven by **how many nodes have to be re-measured**, so the senior move isn't only to avoid layout — it's to make layout cheap when it does happen.\n\n- **CSS containment.** `contain: layout` promises the browser that nothing inside this element affects the geometry of anything outside it, so a change inside can be laid out without touching the rest of the document. `contain: content` bundles layout, paint, and style containment together.\n- **`content-visibility: auto`** goes further: offscreen subtrees skip layout and paint entirely until they scroll near the viewport. On a long feed this can cut initial render work dramatically, and it is the cheapest big win available for long list pages.\n- **Absolute and fixed positioning** take an element out of normal flow, so moving it doesn't push siblings around — the reflow is confined rather than eliminated.\n- **Shallower trees reflow faster.** Deeply nested wrappers multiply the work of every layout pass.\n\nThe pairing to remember: `content-visibility: auto` plus `contain-intrinsic-size` (so the scrollbar doesn't jump around when content is skipped) is the standard recipe for long lists that would otherwise lay out tens of thousands of nodes on load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s11",
+      "order": 11,
+      "sectionTitle": "Animating the wrong property",
+      "subTitle": "Where jank usually comes from",
+      "type": "pitfall",
+      "markdown": "The commonest sources of animation jank, roughly in order of how often they show up in real codebases:\n\n- **Animating `width`/`height` for an expand-collapse.** Every frame reflows the whole subtree and often everything below it on the page. The fix is `transform: scaleY()` plus a compensating inverse scale on the children, or animating `max-height` (still layout, but bounded), or the newer `interpolate-size`/`calc-size` route where supported.\n- **Animating `top`/`left` for movement.** Use `transform: translate()`.\n- **Animating `box-shadow` on hover.** Blur is a per-pixel operation and the shadow inflates the dirty rect well beyond the element. The trick is to put the shadow on a pseudo-element and animate its `opacity` instead — composite-only.\n- **Animating `filter: blur()` over a large area.** Expensive even when composited, because the blur itself is real GPU work per frame.\n- **Toggling `display` to show and hide.** Removes the box from flow, so everything after it reflows. Prefer `visibility` plus `opacity` when the element should keep its space, or accept the one-off layout when it genuinely shouldn't.\n\nThe general test: ask \"could the GPU produce this frame from the pixels it already has?\" If yes, there is a `transform`/`opacity` formulation of what you want.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s12",
+      "order": 12,
+      "sectionTitle": "\"Transform is free\" is an overstatement",
+      "subTitle": "The costs that survive compositing",
+      "type": "pitfall",
+      "markdown": "`transform` and `opacity` skip layout and paint **only once the element has its own compositor layer and has been painted into it**. That comes with real costs people forget:\n\n- **The first frame still pays.** Promoting an element means rasterising it into a fresh texture. Animate a large element and you take a paint hit right at the start — often the exact moment the user is watching.\n- **Layers cost GPU memory.** A full-screen layer on a 1080p device is roughly 1920 × 1080 × 4 bytes ≈ **8MB**. A handful of those on a memory-constrained phone causes texture eviction and stutter.\n- **`transform: scale()` can look blurry.** The texture was rasterised at one size; scaling up stretches those pixels. Scaling *down* from a larger rasterisation is safer.\n- **A composited element can still force paint** if its own content changes — animating `transform` on a node whose text is also updating every frame repaints the layer regardless.\n\nSo the rule isn't \"transform is free.\" It's \"transform moves the per-frame cost off layout and paint, at the price of a one-time paint and some GPU memory.\" That trade is almost always worth it for a discrete animation and almost never worth it applied blanket-style across a page.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "layout-reflow-and-repaint-s13",
+      "order": 13,
+      "sectionTitle": "Proving it in DevTools",
+      "subTitle": "Don't guess which stage you're paying for",
+      "type": "concept",
+      "markdown": "You never have to reason about this from memory — Chrome will tell you which stages ran.\n\n- **Performance panel.** Record while the animation runs. The main-thread flame chart colour-codes the stages: purple **Layout**, green **Paint**, and separate **Composite Layers** entries. If you see purple bars repeating once per frame during a transition, you're animating a layout property.\n- **Rendering tab** (⋮ → More tools → Rendering):\n  - **Paint flashing** highlights repainted regions in green. If a whole panel flashes every frame, your \"cheap\" change isn't cheap.\n  - **Layer borders** outlines compositor layers so you can confirm an element was actually promoted.\n  - **Frame rendering stats** gives a live FPS meter and GPU memory readout.\n- **Layers panel** shows the layer tree in 3D with each layer's memory cost and, usefully, the *reason* it was promoted.\n\nThe workflow that catches almost everything: record 3-5 seconds of the interaction, find the frames over 16.7ms, and look at what dominates them. If it's purple, fix the property. If it's green, shrink the paint area. If it's yellow (scripting), the problem is JavaScript, not CSS.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": [
+        "layout-reflow-and-repaint-s13-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,169 @@
+{
+  "id": "tactical-ddd-patterns",
+  "title": "Tactical DDD Patterns",
+  "area": "engineering-craft",
+  "group": "clean-architecture",
+  "order": 5,
+  "slug": "tactical-ddd-patterns",
+  "summary": "The concrete building blocks DDD uses to implement a domain model — aggregates, aggregate roots, repositories, domain services, and domain events.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "tactical-ddd-patterns-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Entities and value objects, from Domain-Driven Design Fundamentals, are the smallest building blocks — but on their own they don't answer a question every real system hits fast: when an operation touches several related objects, what stops them from ending up in an inconsistent state relative to each other?\n\nAn `Order` and its `OrderLineItems` need to stay consistent — the order total must always match the sum of its lines. A `Subscription` and its billing history need the same. Tactical DDD's answer is the **aggregate**: a cluster of objects with one designated entry point that guards the group's consistency as a unit.\n\nThis topic covers aggregates, the aggregate root, repositories, domain services, and domain events — the patterns that turn entities and value objects into something you can actually build a transactional system around.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "tactical-ddd-patterns-s02",
+      "order": 2,
+      "sectionTitle": "Aggregates",
+      "subTitle": "A cluster of objects treated as one consistency boundary",
+      "type": "concept",
+      "markdown": "An **aggregate** is a cluster of related entities and value objects that must stay consistent together, treated as a single unit for the purposes of changes. `Order` plus its `OrderLineItem`s is a textbook aggregate: you never want a line item to exist whose total isn't reflected in the order's grand total, so the two are grouped and changed together, never independently.\n\nThe aggregate defines a **transactional boundary**: a single database transaction should create or update at most one aggregate. This is a deliberate constraint, not an incidental one — it's what lets you reason about consistency locally, one aggregate at a time, instead of needing a distributed transaction across the whole object graph every time anything changes.\n\nDeciding aggregate boundaries is genuinely one of the hardest calls in DDD — too large and you get lock contention (the next topic in this group covers this pitfall); too small and you lose the consistency guarantee you wanted in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "tactical-ddd-patterns-s02-q1"
+      ]
+    },
+    {
+      "id": "tactical-ddd-patterns-s03",
+      "order": 3,
+      "sectionTitle": "The aggregate root",
+      "subTitle": "The single entry point that guards invariants",
+      "type": "concept",
+      "markdown": "Every aggregate has exactly one **aggregate root** — one entity, chosen deliberately, that is the *only* object outside the aggregate is allowed to hold a reference to or call methods on. For the `Order` aggregate, `Order` itself is the root; `OrderLineItem` is not.\n\nWant to add a line item? You don't reach into the aggregate and construct an `OrderLineItem` directly — you call `order.addLineItem(product, quantity)`, and the root internally does whatever bookkeeping keeps the invariant true (recompute the total, check a max-line-count rule, whatever the business requires). Outside code never touches `OrderLineItem` directly, which is precisely what makes the consistency guarantee enforceable rather than aspirational — there's exactly one door in, and it's guarded.\n\nThis is the same idea as encapsulation in OO design, just applied at the scale of a cluster of objects instead of a single class's fields.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "tactical-ddd-patterns-s03-q1"
+      ]
+    },
+    {
+      "id": "tactical-ddd-patterns-s04",
+      "order": 4,
+      "sectionTitle": "An aggregate boundary in practice",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture the `Order` aggregate as a boundary box. Inside: the `Order` root and its `OrderLineItem` value-like entities, plus a `ShippingAddress` value object. Outside code (a use case, a controller) holds a reference only to `Order`; every read or write to a line item goes through a method on `Order`.\n\nA second aggregate, `Customer`, sits entirely outside this box — even though an order belongs to a customer, they're modeled as two separate aggregates linked by an ID reference (`Order.customerId`), not by holding a live object reference into each other's internals. That's deliberate: it keeps each aggregate's transactional boundary small and independent.\n\n<<< Image: a boundary box labelled Order Aggregate containing an Order box marked ROOT with an arrow control point, and inside the same box two OrderLineItem boxes and a ShippingAddress box, all only reachable through the Order root; outside the boundary box, a separate Customer Aggregate box connected to the Order box only by a thin dashed line labelled \"customerId reference\", not a direct object reference >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "tactical-ddd-patterns-s05",
+      "order": 5,
+      "sectionTitle": "Repositories",
+      "subTitle": "An abstraction for loading and saving whole aggregates",
+      "type": "concept",
+      "markdown": "A **repository** is the abstraction that loads and saves an aggregate as a single unit — `OrderRepository.findById(id)` returns a fully-formed `Order` with all its line items already attached, and `OrderRepository.save(order)` persists the whole aggregate, line items included, in one call.\n\nThis is exactly the port pattern from Dependency Inversion & Boundaries, applied specifically to aggregates: the repository interface lives in the domain, defined in the domain's vocabulary (`findOverdueOrders()`, not `executeQuery(sql)`), and a concrete adapter implements it against whatever database is in use.\n\nThe rule that keeps repositories honest: **one repository per aggregate root**, never per entity. There's an `OrderRepository`, never an `OrderLineItemRepository` — because `OrderLineItem` is never loaded or saved independently of the `Order` it belongs to. If you find yourself wanting a repository for a non-root entity, that's usually a sign the aggregate boundary is drawn wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "tactical-ddd-patterns-s05-q1"
+      ]
+    },
+    {
+      "id": "tactical-ddd-patterns-s06",
+      "order": 6,
+      "sectionTitle": "Domain services",
+      "subTitle": "Logic that doesn't naturally belong to one entity",
+      "type": "concept",
+      "markdown": "Not every business operation fits naturally as a method on one entity or value object. Transferring money between two `Account` aggregates involves both accounts equally — putting `transfer()` on one `Account` and having it reach into the other would violate the rule that each aggregate is only modified through its own root.\n\nA **domain service** is a stateless operation that coordinates across multiple aggregates (or represents a domain concept that just isn't naturally an entity's responsibility), living in the domain layer alongside entities and value objects — not in the application/use-case layer, and not a generic \"helper\" class. `TransferService.transfer(fromAccount, toAccount, amount)` is a domain service: it contains real domain logic (insufficient-funds checks, currency matching) but doesn't belong to either account alone.\n\nThe test for whether something should be a domain service versus a use case: a domain service expresses a business *concept* (\"a transfer\"), while a use case expresses an application *workflow* (\"handle this transfer request, then send a confirmation email\"). The email-sending step is a use-case concern; the transfer logic itself is a domain-service concern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "tactical-ddd-patterns-s06-q1"
+      ]
+    },
+    {
+      "id": "tactical-ddd-patterns-s07",
+      "order": 7,
+      "sectionTitle": "Domain events",
+      "subTitle": "Recording \"something happened\" for other parts to react to",
+      "type": "concept",
+      "markdown": "A **domain event** is a record that something significant happened in the domain — `OrderPlaced`, `PaymentAuthorized`, `SubscriptionCancelled` — named in the past tense because it's a fact about something that already occurred, not a command to do something.\n\nAggregates raise domain events as a side effect of a state change: `order.place()` doesn't just update the order's status, it also records an `OrderPlaced` event. Something outside the aggregate — an event handler, a message queue subscriber — later reacts to that event: sending a confirmation email, updating an analytics dashboard, kicking off a fulfillment workflow. The aggregate that raised the event doesn't know or care who's listening.\n\nThis decouples the core rule (\"placing an order changes its status and generates a fact about that\") from every consequence of that fact (emailing the customer, notifying the warehouse), which can be added or changed later without touching the aggregate at all — genuinely useful when a business grows more reactions to the same event over time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "tactical-ddd-patterns-s07-q1"
+      ]
+    },
+    {
+      "id": "tactical-ddd-patterns-s08",
+      "order": 8,
+      "sectionTitle": "An aggregate root enforcing its invariant, in code",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nclass Order:\n    def __init__(self, id: str, customer_id: str):\n        self.id = id\n        self.customer_id = customer_id\n        self._line_items: list[OrderLineItem] = []\n        self.status = \"draft\"\n        self._events: list[object] = []\n\n    def add_line_item(self, product_id: str, quantity: int, unit_price: Money) -> None:\n        if self.status != \"draft\":\n            raise ValueError(\"cannot modify a placed order\")\n        self._line_items.append(OrderLineItem(product_id, quantity, unit_price))\n\n    def total(self) -> Money:\n        return sum((li.subtotal() for li in self._line_items), Money(0, \"USD\"))\n\n    def place(self) -> None:\n        if not self._line_items:\n            raise ValueError(\"cannot place an empty order\")\n        self.status = \"placed\"\n        self._events.append(OrderPlaced(order_id=self.id, total=self.total()))\n```\n\nNothing outside `Order` constructs an `OrderLineItem` directly, and `place()` both enforces an invariant (non-empty order) and raises a domain event as a side effect of the state change.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "tactical-ddd-patterns-s09",
+      "order": 9,
+      "sectionTitle": "Transaction-per-aggregate vs. spanning multiple aggregates",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | One transaction per aggregate | One transaction spanning multiple aggregates |\n|---|---|---|\n| **Consistency model** | Strong within the aggregate, eventual between aggregates | Strong across all involved aggregates |\n| **Locking / contention** | Limited to one aggregate's rows | Can lock rows across several aggregates at once |\n| **Typical mechanism for cross-aggregate consistency** | Domain events + eventually-consistent handlers | A database-level distributed or multi-table transaction |\n| **Scales to microservices** | Yes — each service owns its aggregates independently | Poorly — cross-service transactions need sagas or 2PC |\n\nDDD's standard advice is the left column: keep transactions scoped to one aggregate, and use domain events to propagate consistency to other aggregates *eventually* rather than atomically. This trades a small window of temporary inconsistency (an order is placed a moment before inventory is decremented) for dramatically simpler, less contended transactions — a trade most systems should take.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "tactical-ddd-patterns-s10",
+      "order": 10,
+      "sectionTitle": "An aggregate too large",
+      "subTitle": "Every operation contends on the same lock or row",
+      "type": "pitfall",
+      "markdown": "The most common tactical-DDD mistake is drawing the aggregate boundary too large — modeling, say, an entire `Warehouse` with all its `InventoryItem`s as one aggregate, because \"they're related.\" Now adding a single item to inventory and updating a completely unrelated item's stock count both need to go through the same `Warehouse` root, in the same transaction, contending for the same row lock.\n\nUnder real concurrent load this becomes a throughput ceiling: two unrelated writes that have no actual business reason to be atomic together are now serialized behind one lock, and the system's write throughput for the entire warehouse is capped by however fast one transaction can complete.\n\nThe fix is almost always to shrink the aggregate to the smallest cluster that truly needs atomic consistency — `InventoryItem` becomes its own aggregate root, and cross-item consistency (if any is genuinely needed, like a warehouse-wide capacity check) moves to a domain event or an eventually-consistent check, not a shared lock.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "tactical-ddd-patterns-s10-q1"
+      ]
+    },
+    {
+      "id": "tactical-ddd-patterns-s11",
+      "order": 11,
+      "sectionTitle": "From one aggregate to a whole system",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Everything so far — aggregates, roots, repositories, domain services, domain events — operates at the scale of one part of the model: how to keep one cluster of objects consistent, and how other code interacts with it.\n\nReal systems have dozens or hundreds of these clusters, built by different teams, evolving independently, and the same word (\"account,\" \"customer,\" \"order\") often means something subtly different depending on which part of the business you're in. Strategic DDD & Bounded Contexts, next in this group, is about drawing boundaries at that larger scale — where one coherent model ends and another begins.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

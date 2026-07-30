@@ -1,0 +1,37 @@
+{
+  "topicId": "benchmarking-methodology",
+  "interviewQuestions": [
+    {
+      "id": "benchmarking-methodology-iq1",
+      "question": "Someone tells you 'I benchmarked it, the new version is 12ms faster.' What would you want to know before trusting that number?",
+      "answerMarkdown": "I'd treat that single number as a claim to verify, not a result — a lot can be hiding behind it.\n\nFirst, how many runs produced it? A single run can land anywhere in normal noise; I'd want to see a distribution across many runs, with a variance or confidence interval, not a bare average. If the run-to-run spread is ±5ms, a 12ms difference from one sample each way isn't a finding.\n\nSecond, was there a warm-up phase? If this is a JIT-compiled language, measuring from the first invocation captures interpreter performance, not steady state — the \"12ms faster\" could be entirely a warm-up artifact that vanishes after both versions run long enough to reach optimized code.\n\nThird, were both versions measured under the same conditions — same machine, same input data, same time, ideally interleaved runs rather than \"before\" measured Monday and \"after\" measured Thursday? A machine-wide slowdown partway through invalidates a sequential comparison.\n\nFourth, is this a microbenchmark or a system-level measurement? A 12ms win in an isolated benchmark might not survive contact with production concurrency and contention.\n\nIf all of that checks out — multiple runs, warm-up excluded, controlled comparison, right benchmark shape for the claim — then I'd trust it. Until then, it's an anecdote with a decimal point.\n\n**Testing:** whether you know a single benchmark number is not evidence on its own, and can name what evidence actually requires.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "benchmarking-methodology-iq2",
+      "question": "You wrote a microbenchmark for a hot function and the results were suspiciously fast — much faster than the operation should plausibly take. What's going on and how do you fix it?",
+      "answerMarkdown": "My first suspicion is dead-code elimination: if the benchmark loop computes a result that's never read anywhere — no return, no print, no side effect — the compiler or JIT is free to prove the whole computation is unobservable and remove it. The benchmark then times an effectively empty loop, and the suspiciously fast number is the compiler correctly reporting that it did almost no work.\n\nI'd check this by looking at whether the loop body's output is ever consumed. If it's assigned to a local variable that's never read afterward, that's the classic pattern.\n\nThe fix is forcing observation: accumulate every iteration's result into an external variable that gets printed or returned at the end, so the optimizer can't prove it's dead. Purpose-built micro-benchmark harnesses solve this for you — JMH's `Blackhole.consume()`, Google Benchmark's `DoNotOptimize()` — specifically because hand-rolled loops get this wrong constantly.\n\nMore generally, any benchmark result that seems too good given what the code visibly does is worth treating as suspicious rather than celebrating immediately — the two next most common causes after dead-code elimination are an unintentionally cached/memoized result from a previous iteration, and accidentally benchmarking a no-op due to a bug in the harness itself.\n\n**Testing:** whether you've actually hit this failure mode and know the concrete fix, not just that \"compilers optimize things.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "benchmarking-methodology-iq3",
+      "question": "When would you use a microbenchmark versus a full system-level or load test, and what's the risk of using the wrong one?",
+      "answerMarkdown": "I'd reach for a microbenchmark when comparing two implementations of one narrow, well-defined operation — two JSON libraries, two string-hashing functions, two sorting routines on a fixed input shape. It's fast to run, precise, and reproducible, which makes it good for quick iteration while developing.\n\nI'd reach for a system-level benchmark (or a load/shadow-traffic test) when the question is whether a change holds up inside the real system — because a microbenchmark structurally can't see contention on shared locks or connection pools, cache effects from a real working set, or GC pauses under sustained real allocation patterns. Those only show up when the code runs alongside everything else it normally runs alongside, under concurrent load.\n\nThe risk of using the wrong one runs in one direction more often than the other in practice: teams pick a microbenchmark because it's easier to write, get an encouraging isolated number, ship it, and then discover in production that the win either shrank to nothing or the change actively regressed performance under contention the microbenchmark never modeled — a cache implementation that's fast alone but thrashes under real concurrent access is the textbook example.\n\nMy rule: microbenchmark to choose between clearly narrow options while iterating, then confirm any meaningful decision against a system-level test before treating it as settled.\n\n**Testing:** whether you understand these answer genuinely different questions, not that one is \"more rigorous\" than the other in the abstract.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "benchmarking-methodology-iq4",
+      "question": "How would you set up automated performance regression testing in CI, and what makes it hard to get right?",
+      "answerMarkdown": "I'd run a representative benchmark suite on every commit (or nightly, if per-commit is too expensive), record the result to a time-series store, and alert when a metric crosses a threshold relative to its recent trailing baseline — not an absolute number, since that drifts with legitimate changes.\n\nWhat's hard is controlling the same three things a one-off benchmark needs, but continuously: a dedicated, low-noise runner, because shared CI hardware with variable contention from other jobs will produce enough variance to either mask real regressions or trigger false alarms constantly; enough repetitions per run for a stable number, which costs CI time and budget; and a threshold tuned to the environment's actual noise floor — set it too tight and every run cries wolf until people start ignoring the alert (the same failure mode as flaky tests), set it too loose and it never catches the 2%-per-commit creep it exists to catch.\n\nThe organizational part is just as important as the technical setup: treating a regression benchmark failure with the same seriousness as a failing unit test — blocking the PR or requiring an explicit acknowledgment — rather than letting it become a dashboard nobody checks. I've seen teams build the infrastructure well and then quietly stop looking at it after the first false alarm, which defeats the entire point.\n\n**Testing:** whether you've thought through the operational reality of regression benchmarking, not just the concept of tracking a metric over time.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production practice"
+    }
+  ]
+}

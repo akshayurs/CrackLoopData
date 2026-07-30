@@ -1,0 +1,37 @@
+{
+  "topicId": "xss-fundamentals",
+  "interviewQuestions": [
+    {
+      "id": "xss-fundamentals-iq1",
+      "question": "Here's a component that renders a user's bio with `innerHTML`. Find the vulnerability and explain what an attacker can do with it.",
+      "answerMarkdown": "That's a **stored XSS**. The bio is untrusted text and `innerHTML` is a markup-parsing sink, so whatever the user typed is parsed as HTML rather than displayed as characters. If someone saves a bio containing a script element, it executes for every visitor who loads that profile.\n\nThree things I'd say about impact, because \"it pops an alert\" undersells it:\n\n- It runs **in your origin**, so it can call your own API endpoints and the victim's session cookie is attached automatically. Account-email change, adding an OAuth app, minting an API token — all reachable without ever reading the cookie.\n- It can **read the whole DOM**, so anything on screen is exfiltratable, including a one-time code the user just pasted.\n- It's **stored**, so there's no phishing step. Every viewer is a victim, and it can be made self-propagating — that's how the Samy worm hit a million MySpace profiles in under a day.\n\nThe fix depends on the requirement. If bios are plain text, use `textContent` and the class is gone. If they're genuinely rich text, run the HTML through **DOMPurify** with a tight allowlist and render the sanitized output. And I'd add a CSP with `script-src` on nonces as the layer that limits the damage if some other sink slips through.\n\n**Testing:** whether you can name the sink, articulate real impact, and pick a fix proportional to the actual product requirement.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "xss-fundamentals-iq2",
+      "question": "What's the difference between stored, reflected, and DOM-based XSS?",
+      "answerMarkdown": "They differ in **where the payload rests between the attacker and the victim**, and that changes both the blast radius and who can fix it.\n\n- **Stored** — the payload is written to something persistent (a comments table, a cache, a log) and served to everyone who later views it. No social engineering needed, so it's the most severe. A poisoned display name renders for every viewer.\n- **Reflected** — the payload rides in the request, usually a query parameter, and is echoed back into the response. One victim per crafted link, so it requires getting someone to click.\n- **DOM-based** — the payload never reaches the server. Client JavaScript reads a source like `location.hash` and writes it into a sink like `innerHTML`.\n\nThe practical consequence worth naming: **DOM-based XSS is invisible server-side**. Everything after the `#` is stripped by the browser before the request is sent, so it appears in no access log, no WAF rule, and no server-side scanner. It needs a headless-browser DAST or manual review to find.\n\nI'd also flag that \"stored\" is broader than \"database\". A CDN caching a reflected response, an admin log viewer rendering a `User-Agent`, or an uploaded SVG served from your origin are all stores.\n\n**Testing:** whether you know the taxonomy operationally — how each is found and how severe it is — or just as three labels.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "xss-fundamentals-iq3",
+      "question": "Our session cookie is HttpOnly. Doesn't that mean XSS can't really hurt us?",
+      "answerMarkdown": "No — `HttpOnly` closes the **exfiltration** path, not the **use** path.\n\nWhat it genuinely buys: `document.cookie` can't read the token, so an attacker can't lift it and replay the session from their own machine next week. That downgrades \"permanent takeover from anywhere\" to \"full control while the page is open,\" which is a real reduction and worth having.\n\nWhat it doesn't touch: the browser still attaches that cookie to same-origin requests. So injected script just calls your API *from the victim's page*:\n\n- `POST /api/account/email` to start a takeover via password reset\n- `POST /api/tokens` to mint a long-lived API key, which the script **can** read and exfiltrate\n- read any endpoint's response and ship the data out — same outcome as stealing the cookie, one hop later\n\nIt also can't stop the script rewriting the page. Replacing the login form with a look-alike works fine, and the URL bar and padlock still say your domain, so every signal a careful user checks is correct.\n\nThe honest framing in a design review: `HttpOnly` and `Secure` are table stakes that shrink blast radius. The controls that actually reduce XSS likelihood are framework auto-escaping and a sanitizer; CSP is what limits what an injection can do.\n\n**Testing:** whether you can distinguish a blast-radius control from a mitigation, which is the difference between checklist security and reasoning about it.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "xss-fundamentals-iq4",
+      "question": "A bug-bounty report claims XSS on a page your team is sure is safe. How would you triage it?",
+      "answerMarkdown": "**Reproduce first, in a real browser.** Half of these turn on a detail a static reading misses — a fragment payload, a sink inside a third-party widget, a browser-specific parser quirk. If the reporter's steps execute, it's real regardless of what the code review concluded.\n\nThen I'd work the flow backwards:\n\n- **Find the sink.** Search the page's JS for `innerHTML`, `insertAdjacentHTML`, `document.write`, `eval`, and dynamic `href`/`src` binding. Set a DOM breakpoint on the node that changes and read the stack.\n- **Find the source.** `location.hash`/`search`, `document.referrer`, `postMessage` data, or a value read back out of `localStorage`. If the source is the fragment, that alone explains why nothing appeared in server logs — which is usually why the team was sure it was safe.\n- **Check whether it's really DOM-based**, because that decides ownership: the fix is entirely in client code, and no backend patch or WAF rule will touch it.\n\n**Severity, not cleverness, drives priority.** Three questions: does it need auth, does it need a click, does it persist? Stored, no-interaction, on an authenticated page is critical. Reflected behind a crafted link on an anonymous marketing page is often medium.\n\nFor the fix I'd patch the sink, then ask what structural change stops the next one — usually auto-escaping plus a strict CSP, rather than another one-off.\n\n**Testing:** whether you can debug client-side security systematically instead of arguing with the reporter.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

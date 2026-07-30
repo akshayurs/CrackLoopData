@@ -1,0 +1,37 @@
+{
+  "topicId": "secure-storage-and-tokens",
+  "interviewQuestions": [
+    {
+      "id": "secure-storage-and-tokens-iq1",
+      "question": "Where do you store the JWT, and why?",
+      "answerMarkdown": "**Not in `localStorage`.** My default is the access token in memory and a refresh token in an `HttpOnly; Secure; SameSite=Strict` cookie scoped by `Path` to the refresh endpoint.\n\nThe reasoning is about which compromise I'm choosing:\n\n- **`localStorage`** is CSRF-immune but one line of injected script reads it — and what leaves is a *portable* credential the attacker replays from their own machine until it expires. Logging the user out doesn't help if the JWT is self-contained.\n- **`HttpOnly` cookie** can't be exfiltrated, so the attacker is confined to acting inside the victim's open page. That costs me CSRF exposure, which has cheap, complete, well-understood defenses. XSS-driven token theft doesn't.\n\nSo the split: access token in a module closure, 5–15 minute lifetime; refresh token in the cookie, rotated on every use with **reuse detection** — if a rotated token reappears, two parties hold it, so I revoke the family. A page reload silently re-authenticates via the cookie, so the UX is unaffected.\n\nAnd if I control a backend on the same site, the better answer is a **BFF**: keep both tokens server-side and give the browser only a session cookie. Then XSS has nothing portable to steal at all.\n\nI'd also flag that storage isn't the only control — a 15-minute lifetime caps every one of these failure modes.\n\n**Testing:** whether you can defend a trade-off rather than recite \"cookies good, localStorage bad.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "secure-storage-and-tokens-iq2",
+      "question": "What does the HttpOnly flag do, and what doesn't it do?",
+      "answerMarkdown": "It tells the browser to omit the cookie from `document.cookie` and the Cookie Store API. The value still travels on every matching request — it's simply invisible to JavaScript.\n\n**What that closes: the exfiltration path.** Injected script can't lift the token and ship it to an attacker's collector, so nothing portable leaves the machine. No credential to replay tomorrow, nothing that outlives the browser session.\n\n**What it doesn't close: the use path.** The browser still attaches the cookie to same-origin requests, so injected script calls your API as the user right now — `POST /account/email` to start a takeover, or `POST /tokens` to mint an API key it *can* read and exfiltrate. Reading a response and shipping the data out reaches the same end one hop later.\n\nSo I'd describe it as a **blast-radius control, not a mitigation**: it downgrades XSS from \"permanent takeover from anywhere\" to \"full control while the page is open.\"\n\nThe flags I'd set alongside, because `HttpOnly` alone is half a configuration: `Secure` so it never crosses plain HTTP, `SameSite=Lax` or `Strict` for the CSRF exposure the cookie creates, a sensible `Path` and `Max-Age`, and the **`__Host-` prefix**, which is browser-enforced and stops a sibling subdomain overwriting the cookie.\n\n**Testing:** whether you know a control's precise boundary, or treat a flag as a solved problem.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "secure-storage-and-tokens-iq3",
+      "question": "Why use short-lived access tokens with a refresh token instead of one long-lived token?",
+      "answerMarkdown": "Because a self-contained JWT is valid by virtue of its signature, not because a server says so — which means **you cannot revoke it**. \"Log out everywhere\" does nothing to one already issued. A password change doesn't invalidate it. A stolen one works until `exp`. Role changes lag the same way: demote a user and their existing token still carries the old claims.\n\nSplitting the credential gets that property back:\n\n- **Access token, 5–15 minutes, in memory, sent as a bearer header.** A theft window measured in minutes rather than a day.\n- **Refresh token, opaque and stored server-side, in an `HttpOnly` cookie** scoped to one endpoint. Because it's opaque, revocation is a database delete and takes effect at the next refresh — so worst case is one access-token lifetime.\n\nThat's why lifetime is a security parameter, not a UX one. Fifteen minutes versus twenty-four hours is the difference between a stolen token being a nuisance and being a full day of access.\n\nThe honest version of the trade: if you're going to check server state on every request anyway — via a denylist of revoked IDs, or token introspection — then you've reinvented sessions with extra steps, and an opaque session ID in an `HttpOnly` cookie is simpler and strictly better. JWTs earn their keep when you genuinely need stateless verification across services.\n\n**Testing:** whether you understand why the industry uses this pattern, rather than copying it.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanisms"
+    },
+    {
+      "id": "secure-storage-and-tokens-iq4",
+      "question": "Our tokens are in HttpOnly cookies and we have a strict CSP. What are we still missing?",
+      "answerMarkdown": "Probably the non-storage leak paths, which get none of the debate and are where tokens actually escape.\n\n- **Tokens in URLs.** A query-string credential lands in server access logs, browser history, the `Referer` sent to every third party you link to, and any proxy in between. It still happens in password-reset and magic-link flows.\n- **Your error tracker.** An unhandled fetch error serialised with request headers puts `Authorization` into Sentry, readable by a much wider group than your session store is. Scrub at the SDK level, not by convention.\n- **`postMessage` with a `'*'` target origin**, which broadcasts to whatever window is listening.\n- **Tokens rendered into the DOM** — a `data-` attribute or hidden input for template convenience is readable by every script on the page.\n- **Service worker caches**, where an authenticated response persists a token-bearing payload to disk.\n\nOn the cookie side specifically, I'd check the **subdomain surface**: `SameSite` is site-scoped, so a compromised or dangling subdomain is same-site with you, and without the `__Host-` prefix it can overwrite your cookies. Dangling DNS records pointing at decommissioned services are a real and common way in.\n\nAnd I'd confirm the CSP's `connect-src` is actually tight. That directive is what makes exfiltration hard, and it's the one people leave broad after adding vendors.\n\n**Testing:** whether you can audit beyond the two controls everyone knows about.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Auditing"
+    }
+  ]
+}

@@ -1,0 +1,195 @@
+{
+  "id": "long-session-spa-perf",
+  "title": "Long-Session SPA Performance",
+  "area": "web-frontend",
+  "group": "browser-performance",
+  "order": 8,
+  "slug": "long-session-spa-perf",
+  "summary": "A multi-page site gets a free reset on every navigation. An SPA never does, so every listener, timer, and detached node you forget to clean up accumulates for the whole session.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 13,
+  "slides": [
+    {
+      "id": "long-session-spa-perf-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"It's fine when I load it, but after an hour it's unusable\" is a distinctively single-page-app bug report. A traditional multi-page site can't have it: every navigation tears down the whole JavaScript heap, every listener, every timer, and starts clean.\n\nAn SPA never gets that reset. A user who navigates twenty routes over a two-hour session is running in the **same document, same heap, same event loop** the entire time. Anything you allocate and don't release stays.\n\nThe accumulation is usually invisible for the first ten minutes and then compounds:\n\n- Event listeners that were never removed keep firing — twenty copies of the same scroll handler.\n- Timers and intervals from unmounted components keep running and keep their closures alive.\n- Detached DOM subtrees stay in memory because one stale reference points at them.\n\nMemory climbs, GC pauses lengthen, handlers multiply, and the app degrades continuously. The prevention is unglamorous and completely mechanical: **every subscription needs a matching teardown**, enforced structurally rather than remembered.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 85,
+      "mcqIds": []
+    },
+    {
+      "id": "long-session-spa-perf-s02",
+      "order": 2,
+      "sectionTitle": "Why SPAs degrade",
+      "subTitle": "The missing reset",
+      "type": "concept",
+      "markdown": "In a multi-page app, a link click is a **document navigation**: the browser destroys the JavaScript context entirely. Every leak you wrote is forgiven a few seconds later. It's a crude form of garbage collection, and it hides an enormous amount of sloppiness.\n\nAn SPA replaces that with a client-side route change — a DOM swap inside a persistent document. What persists across it:\n\n- The **JavaScript heap**, including every closure still reachable from a live reference.\n- **Listeners on long-lived targets** — `window`, `document`, `body`, and any element outside the swapped subtree.\n- **Timers and intervals**, which the browser has no reason to stop.\n- **Open connections** — WebSockets, `EventSource`, in-flight `fetch`es.\n- **Framework-level global state** — stores, caches, query clients.\n\nThat persistence is the *point*: it's what makes SPA navigation fast and lets state survive across routes. But it converts every missing cleanup from a transient annoyance into a permanent one.\n\nThe structural consequence worth naming: **in an SPA, memory management becomes an application concern.** In a server-rendered app it isn't, which is why engineers moving from one to the other are frequently surprised by this class of bug — nothing in their previous experience made it visible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 95,
+      "mcqIds": [
+        "long-session-spa-perf-s02-q1"
+      ]
+    },
+    {
+      "id": "long-session-spa-perf-s03",
+      "order": 3,
+      "sectionTitle": "The accumulators",
+      "subTitle": "What actually piles up",
+      "type": "concept",
+      "markdown": "In practice, almost every long-session degradation traces to one of these:\n\n- **Event listeners on long-lived targets.** `window.addEventListener('resize', onResize)` in a component that mounts on every visit to a route. Visit it twenty times and twenty handlers fire on every resize — and each one keeps its whole closure, including the component's props and DOM references, alive.\n- **Timers and intervals.** `setInterval(poll, 5000)` never stops on its own. Ten mounts means ten polls every five seconds, ten sets of network requests, and ten closures retained.\n- **Subscriptions.** Store subscriptions, WebSocket handlers, `EventSource`, RxJS observables, Firebase listeners. Same shape as event listeners, but often with a server-side cost too.\n- **Observers.** `IntersectionObserver`, `ResizeObserver`, `MutationObserver` all keep observing until disconnected, and hold references to the elements they observe.\n- **Detached DOM nodes.** Covered next — the subtlest of the group.\n- **Unbounded caches.** A `Map` keyed by route or entity id that only ever grows. Common in hand-rolled data caches, and easy to miss because it looks like a deliberate optimisation.\n- **Console references in development.** `console.log(bigObject)` retains it in DevTools — a real source of confusing profiler results, and a reason to profile without the console open.\n\nThe pattern across all of them: something **outside** the component's lifetime is holding a reference to something **inside** it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "long-session-spa-perf-s03-q1"
+      ]
+    },
+    {
+      "id": "long-session-spa-perf-s04",
+      "order": 4,
+      "sectionTitle": "Detached DOM nodes",
+      "subTitle": "Removed from the page, still in memory",
+      "type": "concept",
+      "markdown": "A **detached DOM node** is an element that's been removed from the document but is still referenced from JavaScript, so it can't be collected.\n\n```js\nlet cachedRow = document.querySelector('#row-42');   // still holds it\ncontainer.innerHTML = '';                            // removed from the page\n// cachedRow keeps the node AND its entire subtree alive\n```\n\nWhat makes this expensive rather than merely untidy:\n\n- **Retaining one node retains its whole subtree**, because a DOM node keeps references to its children. A cached reference to a table row can hold a thousand cells.\n- **It retains ancestors too**, via `parentNode`. A single detached child can pin an entire detached tree.\n- **Any listeners on those nodes stay live**, along with their closures.\n\nThe JavaScript garbage collector works on **reachability**, not on whether something is visible: an object survives as long as anything reachable from a root — globals, the stack, closures — points at it. \"Removed from the DOM\" is not a root, so it means nothing to the collector. The mechanics of reachability, closures, and GC are the JavaScript runtime's territory rather than the browser's rendering pipeline.\n\nWhere it comes from in real code: caching DOM references in module scope, storing elements in a `Map` or array, closures over elements inside long-lived listeners, and framework refs held past unmount.\n\nThe DevTools Memory panel finds these directly — take a heap snapshot and filter the class list for **\"Detached\"**. Anything under `Detached HTMLDivElement` and friends is a leak with a retaining path you can read.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "long-session-spa-perf-s04-q1"
+      ]
+    },
+    {
+      "id": "long-session-spa-perf-s05",
+      "order": 5,
+      "sectionTitle": "A leaking memory graph",
+      "subTitle": "What the profiler shows",
+      "type": "diagram",
+      "markdown": "Picture the DevTools Memory panel's allocation timeline across ten minutes of a user navigating between two routes.\n\nA **healthy** app draws a sawtooth: memory climbs as a route mounts and allocates, then drops sharply when garbage collection runs after the route unmounts. The peaks and troughs stay at roughly the same level all the way across — 45MB, up to 60MB, back to 46MB, up to 61MB. The *baseline* is flat, and that flat baseline is the entire signal.\n\nA **leaking** app draws the same sawtooth on a staircase. Each cycle's trough sits higher than the last: 45MB, 52MB, 59MB, 66MB. The GC is running and reclaiming plenty — it just can't reclaim what's still referenced. After twenty route changes memory has doubled, GC pauses have grown with the live set, and the app feels progressively heavier.\n\nThe diagnostic move the picture implies: force a GC at the top and bottom of each cycle, and compare **troughs**, not peaks. A rising peak proves nothing; a rising trough is a leak.\n\n<<< Image: a line chart of JS heap size (y, 0-80MB) against time (x, 0-10 minutes) with two overlaid series. The green \"healthy\" series is a sawtooth oscillating between ~45MB and ~60MB with a flat dashed baseline at 45MB. The red \"leaking\" series is a sawtooth whose troughs rise steadily — 45, 52, 59, 66MB — with an upward-sloping dashed baseline. Mark each downward edge with a small \"GC\" label, mark route-change moments with vertical ticks along the x axis, and annotate the two baselines \"compare troughs, not peaks\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 100,
+      "mcqIds": []
+    },
+    {
+      "id": "long-session-spa-perf-s06",
+      "order": 6,
+      "sectionTitle": "The cleanup pattern",
+      "subTitle": "Every subscription returns its own teardown",
+      "type": "code",
+      "markdown": "The discipline that prevents all of this: **the code that subscribes returns the code that unsubscribes**, so the two can never drift apart.\n\n```js\n// Vanilla: one function owns setup and teardown together\nfunction mountRoute(el) {\n  const controller = new AbortController();\n  const { signal } = controller;\n\n  // AbortController removes every listener registered with the signal at once\n  window.addEventListener('resize', onResize, { signal });\n  document.addEventListener('keydown', onKey, { signal });\n\n  const timer = setInterval(poll, 5000);\n  const io = new IntersectionObserver(onSeen);\n  const socket = new WebSocket(WS_URL);\n\n  return function unmount() {\n    controller.abort();      // all signal-bound listeners, in one call\n    clearInterval(timer);\n    io.disconnect();\n    socket.close();\n  };\n}\n```\n\n```jsx\n// React: the effect's return value is the teardown\nuseEffect(() => {\n  const controller = new AbortController();\n  window.addEventListener('scroll', onScroll, { signal: controller.signal });\n  const id = setInterval(poll, 5000);\n\n  return () => {              // runs on unmount and before every re-run\n    controller.abort();\n    clearInterval(id);\n  };\n}, [routeId]);\n```\n\n`AbortController` is the underused piece here: passing a `signal` to `addEventListener` means one `abort()` removes every listener bound to it, and the same signal cancels in-flight `fetch` requests. It removes the whole class of \"we removed three of the four listeners\" bugs.\n\nThe rule to state in an interview: **if a function's return value isn't a teardown, the caller has no way to clean up.** Design the API so cleanup is impossible to forget rather than easy to remember.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "long-session-spa-perf-s06-q1"
+      ]
+    },
+    {
+      "id": "long-session-spa-perf-s07",
+      "order": 7,
+      "sectionTitle": "Router-level cleanup",
+      "subTitle": "Making teardown structural",
+      "type": "concept",
+      "markdown": "Per-component cleanup is necessary but fragile — it depends on every developer remembering, forever. The systems that actually stay clean push teardown into the **framework boundary**, where forgetting isn't possible.\n\n- **Tie everything to component lifetime.** In React, `useEffect` returns a cleanup. In Vue, `onUnmounted`. In Angular, `takeUntilDestroyed()` or `ngOnDestroy`. The framework calls these; there's no path where they're skipped.\n- **Give each route an `AbortSignal`.** The router creates a controller on entry and aborts it on exit; every listener, `fetch`, and subscription in that route binds to the signal. One abort cleans the whole route, and nothing can outlive it.\n- **Prefer a shared, long-lived resource over per-route ones.** One `IntersectionObserver` or one WebSocket owned by the app shell, with routes registering and deregistering against it, beats each route creating its own.\n- **Use a data layer that owns cache lifetime.** TanStack Query, SWR, Apollo, and RTK Query all garbage-collect unused cache entries after a configurable idle time. A hand-rolled `Map` cache does not, and that's the most common unbounded-growth source in an SPA.\n- **Reset global stores on logout or workspace switch.** Otherwise the previous user's data stays resident — a memory issue and often a privacy one.\n\nThe useful framing: **cleanup you have to remember is a bug waiting for a deadline.** The goal is a shape where the only way to subscribe also registers the unsubscribe.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": []
+    },
+    {
+      "id": "long-session-spa-perf-s08",
+      "order": 8,
+      "sectionTitle": "The forgotten interval",
+      "subTitle": "The leak that outlives its feature",
+      "type": "pitfall",
+      "markdown": "The single most common real-world instance: a polling interval added for a feature that no longer exists.\n\n```js\n// Added in 2022 for a live-status badge that was removed in 2023.\n// The interval was never cleared, and nobody noticed.\nsetInterval(() => fetch('/api/status').then(updateBadge), 3000);\n```\n\nWhy it survives so long:\n\n- **It causes no visible error.** `updateBadge` no-ops against a missing element, or throws silently in a handler nobody watches.\n- **The cost is diffuse.** Twenty requests a minute per user, per tab, forever. It shows up as backend load and battery drain, not as a frontend bug report.\n- **It gets worse over time.** If the interval lives in a component that mounts per route visit without cleanup, visit count multiplies it: after fifteen navigations that's 300 requests a minute from one tab.\n- **Background tabs don't save you.** Browsers throttle timers in background tabs — typically to once per minute — but they don't stop them, and the closures stay alive regardless.\n\nHow to find them: in DevTools, the **Performance monitor** shows live counts of DOM nodes, JS event listeners, and documents. Watch those numbers while navigating back and forth between two routes ten times. **Any counter that ratchets upward and never comes back down is a leak.** It's a 60-second check that most teams never run.\n\nThe preventive version: a lint rule requiring every `setInterval` to have a corresponding `clearInterval` in the same scope, and a periodic audit of what the app polls.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "long-session-spa-perf-s08-q1"
+      ]
+    },
+    {
+      "id": "long-session-spa-perf-s09",
+      "order": 9,
+      "sectionTitle": "Finding a leak",
+      "subTitle": "The three-snapshot technique",
+      "type": "concept",
+      "markdown": "The standard, reliable procedure — worth knowing by name, because it's what a senior interviewer is listening for.\n\n1. **Open the Memory panel**, load the app, and navigate to the suspect route and back once to warm up any lazy initialisation. This avoids attributing one-time setup to the leak.\n2. **Force GC** (the bin icon) and take **snapshot 1**.\n3. **Perform the cycle 5-10 times** — navigate in and out, open and close the modal, whatever the suspected action is. Repetition matters: it multiplies the leak so it stands out from noise.\n4. **Force GC** and take **snapshot 2**.\n5. **Switch the view to \"Objects allocated between snapshot 1 and snapshot 2\"**. Everything shown survived a GC despite being allocated during your cycle — by definition, still referenced.\n6. **Sort by retained size**, pick the top entry, and read the **Retainers** pane at the bottom. It shows the reference chain from a GC root to the object, and that chain names the variable holding it.\n\nThe alternatives and when each is better:\n\n- **Filter the class list for \"Detached\"** — fastest path when you suspect DOM retention specifically.\n- **Allocation instrumentation on timeline** — shows allocations as they happen with stack traces, best when you want to know *which code* allocated, not just what survived.\n- **Performance monitor** — the 60-second smoke test: watch DOM node count, listener count, and heap size while repeating an action.\n\nThe step candidates skip is **forcing GC before each snapshot**. Without it you can't distinguish garbage that simply hasn't been collected yet from a genuine leak, and you'll chase phantoms.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 110,
+      "mcqIds": []
+    },
+    {
+      "id": "long-session-spa-perf-s10",
+      "order": 10,
+      "sectionTitle": "Not every slowdown is a leak",
+      "subTitle": "The other long-session degradations",
+      "type": "pitfall",
+      "markdown": "\"Slow after an hour\" has several causes, and memory is only the most famous:\n\n- **Listener multiplication without memory growth.** Twenty scroll handlers doing 2ms each is 40ms per scroll event — catastrophic for smoothness while barely registering on the heap. The Performance monitor's **JS event listeners** counter catches this; a memory snapshot may not.\n- **DOM node accumulation.** An infinite-scroll feed that never removes rows reaches 50,000 nodes. Every layout pass now costs more, so the whole app slows even on unrelated routes. Windowing fixes it.\n- **Unbounded store growth.** Redux or a query cache holding every entity ever fetched. Each state update runs selectors over a larger set, so update cost grows with session length.\n- **GC pressure rather than a leak.** Allocating heavily in a hot path — cloning large objects on every keystroke — makes collections frequent and long even though nothing leaks. The tell is a healthy sawtooth with a flat baseline but very frequent GC.\n- **CSS and stylesheet growth.** CSS-in-JS libraries that inject rules per component instance can grow the stylesheet unboundedly, making style recalculation progressively slower.\n- **Accumulated animation and observer registrations**, each cheap alone, collectively a per-frame tax.\n\nThe distinguishing diagnostic: **if the heap baseline is flat but the app is slower, it's not a memory leak** — count listeners, nodes, and store entries instead. Reaching straight for a heap snapshot when the problem is 20,000 DOM nodes wastes an afternoon.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": [
+        "long-session-spa-perf-s10-q1"
+      ]
+    },
+    {
+      "id": "long-session-spa-perf-s11",
+      "order": 11,
+      "sectionTitle": "WeakMap, WeakRef, and FinalizationRegistry",
+      "subTitle": "Holding a reference without owning it",
+      "type": "concept",
+      "markdown": "Sometimes you genuinely need to associate data with an object without keeping that object alive. The weak collections exist for exactly this.\n\n- **`WeakMap` / `WeakSet`.** Keys are held weakly, so an entry vanishes when its key is collected elsewhere. The canonical use is attaching metadata to DOM nodes: `nodeMeta.set(el, { scrollPos })`. With a plain `Map` that entry pins `el` forever — a guaranteed detached-node leak. With a `WeakMap`, removing the element from the DOM lets both go. Keys must be objects, and the collection isn't enumerable, which is the price of the guarantee.\n- **`WeakRef`.** A reference you can dereference (`ref.deref()`) that doesn't prevent collection — the result may be `undefined`. Useful for caches of expensive-but-recreatable objects. Genuinely tricky to use correctly, because collection timing is unspecified.\n- **`FinalizationRegistry`.** Runs a callback after an object is collected. Almost never appropriate for application logic — it's non-deterministic, may never fire, and using it for cleanup is a design smell. It's occasionally useful for *detecting* leaks in development: register components on unmount and log any that are never finalised.\n\nThe judgement to show: **weak references are for caches and metadata, not for fixing cleanup you should have written.** If a listener isn't being removed, the fix is to remove the listener — not to hold the component weakly. Reaching for `WeakRef` to paper over a missing teardown produces code that leaks unpredictably instead of predictably, which is worse.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": []
+    },
+    {
+      "id": "long-session-spa-perf-s12",
+      "order": 12,
+      "sectionTitle": "Monitoring long sessions in production",
+      "subTitle": "Catching what QA never will",
+      "type": "concept",
+      "markdown": "This class of bug is essentially invisible in testing — QA sessions last minutes, and developers reload constantly. It only appears in the field, so you have to instrument for it.\n\n- **`performance.memory`** (Chromium only, requires cross-origin isolation for full precision) gives `usedJSHeapSize`. Sample it every few minutes alongside session duration and route-change count. The signal isn't the absolute value, it's the **slope**: heap versus navigations, segmented by route.\n- **`measureUserAgentSpecificMemory()`** is the modern, standardised replacement — more accurate and it accounts for workers and iframes, but it's asynchronous and also requires cross-origin isolation.\n- **Segment your existing RUM by session age.** If p75 INP for users past 30 minutes is meaningfully worse than for users in their first five, you have a long-session degradation even without a single memory measurement. This is the cheapest possible signal and needs no new API.\n- **Track counters, not just memory.** Reporting DOM node count and listener count periodically catches the non-leak degradations from the previous slide.\n- **Watch crash and reload rates.** An out-of-memory tab crash on mobile often shows as an unexplained bump in reloads or session restarts rather than as an error report.\n\nThe framing to bring to a design discussion: **degradation over session length is a metric like any other, and if nobody measures it, nobody will find it until a customer describes it.** Adding a heap-slope panel to an existing dashboard is a day of work and routinely surfaces leaks that have been shipping for a year.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 108,
+      "mcqIds": []
+    },
+    {
+      "id": "long-session-spa-perf-s13",
+      "order": 13,
+      "sectionTitle": "A prevention checklist",
+      "subTitle": "What to actually enforce",
+      "type": "concept",
+      "markdown": "Condensed to what a team can review against:\n\n1. **Every `addEventListener` on `window`, `document`, or `body` has a matching `removeEventListener`** — or better, an `AbortController` signal tied to the component or route lifetime.\n2. **Every `setInterval` has a `clearInterval` in the same scope.** Lintable, and worth linting.\n3. **Every observer** — `Intersection`, `Resize`, `Mutation` — is `disconnect()`ed.\n4. **Every WebSocket, `EventSource`, and store subscription** is closed or unsubscribed on unmount.\n5. **No unbounded caches.** Either a library that expires entries, or an explicit LRU with a size cap.\n6. **Metadata about DOM nodes lives in a `WeakMap`**, never a `Map`.\n7. **Global stores reset on logout** and on any tenant/workspace switch.\n8. **Long lists are windowed** past a few hundred rows.\n\nAnd two process items that catch what review misses:\n\n- **The 60-second check, in code review or before release:** open the Performance monitor, navigate between two routes ten times, and confirm the DOM node and listener counters return to baseline. Anything that ratchets up is a leak, found before it ships.\n- **A periodic long-session soak**, even manual — leave the app open for an hour under scripted navigation and compare heap snapshots at the start and end.\n\nThe reason to make this mechanical rather than a matter of care: **cleanup bugs are asymmetric.** Writing the subscription is visible and reviewed; omitting the teardown is invisible and produces no failure until a user has been in the app for an hour.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 105,
+      "mcqIds": []
+    }
+  ]
+}

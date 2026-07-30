@@ -1,0 +1,37 @@
+{
+  "topicId": "case-study-design-a-news-feed",
+  "interviewQuestions": [
+    {
+      "id": "case-study-design-a-news-feed-iq1",
+      "question": "Design the frontend architecture for a news feed with infinite scroll. Walk me through your full answer, step by step, as you would in the room.",
+      "answerMarkdown": "I'd clarify scope first: mobile-first, feed grows unbounded via infinite scroll, mixed content types (text, image, video), and new posts should appear without a manual refresh but a few seconds of staleness is acceptable. I'd also ask roughly how many posts a session scrolls through and how often new posts arrive, since both numbers change downstream decisions.\n\nFor the component tree: a `FeedContainer` owning the fetched post IDs and pagination cursor, a `FeedList` as the scrollable region, repeating `FeedItem`s dispatching to type-specific renderers, and a `LoadMoreSentinel` whose intersection triggers the next page fetch.\n\nFor data flow: posts are server truth, normalized into a shared cache keyed by ID; the feed itself is an ordered list of IDs pointing into that cache, not a list of full post objects, so a post's data is the same wherever it's referenced.\n\nFor the API: cursor-based pagination (`?after=<postId>`), not offset-based — offset breaks the moment a post is inserted above an already-fetched page, causing skips or duplicates.\n\nFor scale: given a session can render hundreds to low thousands of posts, I'd virtualize the list, rendering only ~15-30 `FeedItem`s at once regardless of total scrolled volume, using variable-height measurement since post types differ wildly in height.\n\nFor live updates: new posts land in a pending buffer behind a 'N new posts' banner rather than auto-inserting, so a user mid-scroll never gets yanked to the top — merging only happens on an explicit tap.\n\nFinally, non-functionals: keyboard/screen-reader support for the sentinel-triggered loading state, and graceful handling of a fetch failure (a retry affordance, not a silent stall).\n\n**Testing:** whether you can synthesize every layer of this framework into one coherent, ordered answer under time pressure, not just recite isolated facts about pagination or virtualization.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "case-study-design-a-news-feed-iq2",
+      "question": "Why is cursor-based pagination specifically important for a feed, more so than for, say, a paginated admin table?",
+      "answerMarkdown": "Both benefit from cursor pagination in principle, but a feed makes the failure mode of offset-based pagination happen constantly rather than rarely. An admin table's underlying data changes occasionally; a social feed has new posts inserted at the top continuously, by design, while the user is actively paginating through it.\n\nWith offset-based pagination, every insertion above the user's current position shifts all subsequent pages by one, so the user reliably sees skipped or duplicated posts within a normal browsing session — not an edge case, the common case. Cursor-based pagination anchors each page to a specific post ID rather than a numeric position, so it's immune to insertions happening anywhere before that anchor.\n\nThe secondary reason cursor pagination fits a feed specifically: it composes cleanly with the pending-new-posts pattern — new posts simply don't affect the cursor the user is currently paginating from, since the cursor points at a specific already-seen post, not a shifting numeric offset.\n\n**Testing:** whether you can explain why this specific decision matters more for a feed than for other paginated UIs, rather than reciting cursor-vs-offset as a memorized fact.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "case-study-design-a-news-feed-iq3",
+      "question": "Users on lower-end Android devices report the feed becomes janky and eventually crashes after scrolling for a long session. How do you debug this?",
+      "answerMarkdown": "The symptom — degradation that worsens the longer the session runs — points strongly at unbounded DOM growth rather than a one-time slow render. I'd check first whether virtualization is actually implemented or was skipped for a simpler always-render-everything approach, since that's the single most common cause of this exact pattern: memory and layout cost scaling with total posts ever fetched, not with what's visible.\n\nIf virtualization exists, I'd check whether the overscan buffer or the height-estimation logic has a bug causing more items to stay mounted than intended — a height-measurement pass that never fires for off-screen images, for instance, can leave stale unmeasured items retained rather than recycled.\n\nI'd also check the pending-new-posts buffer specifically: if it's implemented as an ever-growing array that's never capped or cleared, a very active feed session can accumulate thousands of pending posts in memory even though none of them are rendered, which is memory pressure independent of virtualization.\n\nGiven it's specifically lower-end Android, I'd also profile actual heap usage on a comparable test device rather than assume desktop Chrome DevTools numbers transfer directly, since the crash threshold is a real device memory ceiling, not an abstract concern.\n\n**Testing:** whether you can connect a vague field report to the specific architectural piece (virtualization, buffer growth) most likely responsible, and reason about device-specific constraints.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "case-study-design-a-news-feed-iq4",
+      "question": "Product wants the feed's ordering to come from a ranking algorithm instead of pure reverse-chronological. What changes in your client-side design?",
+      "answerMarkdown": "The client-visible mechanics — cursor pagination, virtualization, the pending-buffer pattern for new posts — stay the same, because none of them assume chronological order specifically; they assume a stable, paginatable sequence, which a ranking service can still provide if it's designed correctly.\n\nWhat changes is the contract with the backend: the cursor now anchors to a position in the *ranked* sequence at the time of the first request, and the ranking service needs to guarantee that sequence doesn't silently reorder already-fetched items out from under an in-progress pagination session — that's now the backend's responsibility to guarantee, not something the client can enforce. I'd explicitly ask whether the ranking is stable per-session (computed once, paginated through) or continuously re-scored (in which case the client needs to handle the same post appearing to move, or accept a snapshot-per-session model).\n\nThe pending-new-posts banner also gets subtler: 'new posts' in a ranked feed might mean 'posts the algorithm now ranks highly,' not strictly 'posts created after your last fetch' — I'd clarify with product whether the banner's trigger is chronological or ranking-driven, since those are genuinely different signals.\n\n**Testing:** whether you understand which parts of a feed design are order-agnostic and which parts implicitly assumed chronological order, and can name the new contract a ranking service needs to uphold.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

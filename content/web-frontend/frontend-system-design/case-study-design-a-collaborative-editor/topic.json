@@ -1,0 +1,182 @@
+{
+  "id": "case-study-design-a-collaborative-editor",
+  "title": "Case Study — Design a Collaborative Editor",
+  "area": "web-frontend",
+  "group": "frontend-system-design",
+  "order": 8,
+  "slug": "case-study-design-a-collaborative-editor",
+  "summary": "A worked frontend design round for a real-time collaborative editor — why last-write-wins fails, OT vs CRDTs at a conceptual level, local-first editing, and showing other users' presence.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "case-study-design-a-collaborative-editor-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design something like Google Docs\" tests whether you can reason about concurrent edits without drowning the room in distributed-systems theory. The frontend-round version cares less about the math behind conflict resolution and more about: why the obvious approach (last-write-wins) breaks for text, what the client actually does to feel instant despite a network round trip, and how you show other people's cursors without the whole thing feeling laggy or confusing.\n\nThis case study builds that client architecture end to end — requirements, the conflict problem, local-first editing, and presence — while treating the actual conflict-resolution algorithm (OT or CRDTs) at the conceptual depth a frontend interview actually rewards, not the depth a distributed-systems interview would.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s02",
+      "order": 2,
+      "sectionTitle": "Requirements: cursors, low latency, eventual consistency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A reasonable scope for this prompt: multiple people editing the same document simultaneously, each seeing the others' cursor position and selection live; a keystroke must feel instant to the person typing regardless of network latency; and every client's document eventually converges to the same content, even though they may briefly disagree mid-edit.\n\nThat last point is the requirement to name explicitly and early: this system does **not** need strong consistency (every client seeing the identical byte-for-byte state at every instant) — it needs **eventual consistency with a specific convergence guarantee** (given the same set of edits, every client ends up at the same final document, regardless of the order edits arrived in). Naming this distinction up front tells the interviewer you're not going to reach for a heavier consistency model than the problem needs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-collaborative-editor-s02-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s03",
+      "order": 3,
+      "sectionTitle": "Why last-write-wins breaks for concurrent text edits",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**The naive approach:** treat the document like any other record — whoever's write reaches the server last overwrites the field entirely. This works fine for a single-value field (a profile's display name) but breaks immediately for a shared text document.\n\n**Why it breaks:** two users each insert a different word at different positions in the same paragraph, seconds apart. Last-write-wins means whichever edit's request reaches the server second **replaces the entire document state**, silently discarding the first user's edit — not merging it, deleting it. The first user watches their sentence vanish with no warning and no conflict indicator, which is the worst possible failure mode for a collaboration tool: silent, undiscoverable data loss.\n\nThe fix isn't a smarter last-write-wins — it's abandoning whole-document overwrites entirely in favor of a model that operates on individual edits (insert this character at this position, delete that range) and merges them, which is exactly what OT and CRDTs (next slide) are built to do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-collaborative-editor-s03-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s04",
+      "order": 4,
+      "sectionTitle": "Compare: Operational Transformation vs CRDTs — the conceptual difference",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Both solve the same problem — merge concurrent edits into one converged document — with a different core idea. This is the depth a frontend round wants; the underlying algorithms are covered in full elsewhere.\n\n| | Operational Transformation (OT) | CRDTs (Conflict-free Replicated Data Types) |\n|---|---|---|\n| Core idea | Transform an incoming edit against every edit that happened concurrently, so applying it still lands in the right place | Structure the data itself (e.g. each character gets a unique, ordered ID) so merging any set of edits is automatically order-independent — no transformation step needed |\n| Needs a central authority? | Usually yes — a server that establishes a canonical order edits are transformed against | No — designed to converge correctly even peer-to-peer, with no server required to arbitrate |\n| What a frontend engineer mainly deals with | Sending edits to the server, applying the server's transformed edits back to the local buffer | Applying and merging CRDT operations, often via a library (Yjs, Automerge) that hides the data-structure internals |\n| Where it shows up | Google Docs' original implementation | Most modern collaborative-editor libraries (Yjs, Automerge) — now the more common choice for new products |\n\nFor an interview, naming both, their core idea in one sentence each, and that CRDTs are the more common modern default is a complete, appropriately-scoped answer — deriving the transformation functions live is depth a frontend round isn't testing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "case-study-design-a-collaborative-editor-s04-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: two clients converging",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Trace a concrete concurrent edit: Client A and Client B both start with \"The cat sat.\" A inserts \"black \" before \"cat\"; at nearly the same instant, B inserts \" quietly\" after \"sat\". Neither has seen the other's edit yet.\n\nEach client applies its own edit locally immediately (for responsiveness) and sends the edit to the server/peers. Once both edits have propagated and been merged — whether via OT's transform step or a CRDT's structural merge — both clients converge to the same final string: \"The black cat sat quietly.\" Neither user's edit is lost, and critically, neither user had to wait for the other's edit to see their own keystroke appear.\n\n<<< Image: two side-by-side timelines for Client A and Client B, each starting from \"The cat sat.\", A's timeline showing a local insert of \"black \" applied instantly then sent outward, B's timeline showing a local insert of \" quietly\" applied instantly then sent outward, both timelines converging at the bottom to the identical merged string \"The black cat sat quietly.\" >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s06",
+      "order": 6,
+      "sectionTitle": "Local-first editing: applying edits before server confirmation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The requirement that a keystroke feel instant regardless of network latency means the client can never wait for a round trip before showing what the user typed. **Local-first editing** applies every edit to the local document buffer the instant it happens, renders it immediately, and sends it to the server/peers asynchronously in the background.\n\nThis is the same optimistic-update idea from the data-layer topic, applied continuously rather than per-action: every keystroke is its own optimistic update, and the \"rollback\" case is handled structurally by OT/CRDT merge logic rather than by reverting to a snapshot, since the whole point of these algorithms is that a local edit never needs to be undone — it just gets reconciled with everyone else's edits once they arrive.\n\nThe client-side implication: the local buffer is the source of truth for what the user sees typing, while a separate reconciliation process handles merging in background, and those two concerns should be architecturally separate so a slow network never blocks the typing experience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s07",
+      "order": 7,
+      "sectionTitle": "Code: applying a remote operation without disturbing local typing",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A simplified shape of how a client integrates a remote edit while the user might be actively typing:\n\n```javascript\nfunction applyRemoteOp(localDoc, remoteOp, localCursor) {\n  // Merge (via CRDT structure or OT transform) rather than overwrite\n  const mergedDoc = mergeOperation(localDoc, remoteOp);\n\n  // The user's cursor position must shift if the remote edit\n  // inserted/removed content before it -- otherwise typing\n  // continues at the wrong position after a remote edit lands\n  const adjustedCursor = shiftCursorForOp(localCursor, remoteOp);\n\n  render(mergedDoc, adjustedCursor);\n}\n```\n\nThe subtlety worth naming out loud: `shiftCursorForOp` isn't optional. If a remote insert lands three characters before your cursor while you're mid-keystroke, your next character needs to land at your *intended* position, not three characters off because the document shifted under you — a bug users experience as \"my typing gets scrambled when someone else edits.\"",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-collaborative-editor-s07-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s08",
+      "order": 8,
+      "sectionTitle": "Presence: showing other users' cursors and selections",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Presence** is distinct from the document content itself: it's ephemeral metadata — where each connected user's cursor sits, what they have selected, sometimes a colored highlight and name label — that has no long-term persistence requirement and doesn't need the convergence guarantees the document content needs.\n\nThat distinction has a practical payoff: presence data can be sent over a much lighter, lossier channel (broadcast the latest cursor position on every change, with no need to replay missed updates) since an out-of-date cursor position for half a second is a non-issue, unlike a lost document edit. Most collaborative-editor libraries (Yjs's awareness protocol, for instance) explicitly separate presence/awareness state from document state for exactly this reason — bundling them would force presence updates to pay the same durability and ordering guarantees document edits need, for no benefit.\n\nRendering-wise, each remote cursor needs to track the same position-shifting logic as the previous slide's local cursor — a remote user's cursor position also needs to shift correctly as other edits land, or their highlighted selection visibly drifts from where they actually are.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "case-study-design-a-collaborative-editor-s08-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s09",
+      "order": 9,
+      "sectionTitle": "Numbers: what real collaborative-editing scale looks like",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete numbers anchor the design choices. A typical collaborative document session involves a **handful to a few dozen concurrent editors** — this is not a thousand-way fan-out problem, which is why a lightweight presence broadcast (rather than a heavily optimized pub-sub architecture) is usually sufficient. Editors expect their own keystroke to render in **under ~50ms** locally (imperceptible), while a remote collaborator's edit typically appears within **100-300ms** round trip — noticeably not instant, but acceptable since it's someone else's edit, not your own.\n\nDocument size matters for CRDT/OT overhead: a CRDT's per-character metadata (unique IDs, tombstones for deleted content) can meaningfully bloat a document's in-memory and network-transfer size for very large documents — a known trade-off libraries mitigate with periodic compaction, worth naming if the prompt specifies a large-document scenario.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: echoing a user's own edit back and jumping their cursor",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong implementation:** the client sends a local edit to the server, and when the server broadcasts confirmed edits back to all connected clients (including the one that sent it), the originating client naively re-applies its own edit a second time — either duplicating the text, or at minimum needlessly re-rendering and resetting the local cursor position.\n\n**Why it happens:** the simplest server implementation broadcasts every confirmed edit to every connected client uniformly, which is correct for the *other* clients but requires the originating client to recognize and skip its own echoed edit — a step that's easy to forget since it only manifests as a bug for the person who made the edit, not as a data-correctness issue anyone else notices.\n\n**Correct model:** every outgoing edit carries an origin/client ID or a local-only flag; the originating client filters out echoes of its own already-applied edits when they come back from the server, applying only edits that originated elsewhere. This is a small, specific detail, but it's exactly the kind of edge case that separates a design that's actually been implemented from one that's only been drawn on a whiteboard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "case-study-design-a-collaborative-editor-s10-q1"
+      ]
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s11",
+      "order": 11,
+      "sectionTitle": "Cross-link: where the deeper consistency theory lives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This case study intentionally treats OT and CRDTs at the depth a frontend round rewards — the conceptual difference and what a client engineer implements around them, not the underlying algorithms' formal guarantees. The full depth on CRDTs, quorum systems, and replication consistency models belongs to backend/distributed-systems material, not here.\n\nIf you want the mathematical and systems-level depth — how a CRDT actually guarantees convergence, how consensus and replication strategies relate to it — that lives in System Design's consistency-replication group, which covers CRDTs in depth alongside consensus basics, quorum systems, and replication strategies. Reaching for that depth unprompted in a frontend round is usually a miscalibration, not a bonus point.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "case-study-design-a-collaborative-editor-s12",
+      "order": 12,
+      "sectionTitle": "Framing this design at the right depth",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The single biggest risk in this specific case study is over-rotating into distributed-systems depth because the words \"conflict resolution\" and \"eventual consistency\" sound like an invitation to. A frontend interviewer wants to hear: the requirements framed correctly, why last-write-wins fails, that you know OT and CRDTs exist and roughly how they differ, that you understand local-first editing and cursor-position correctness, and how presence is architected separately from document state.\n\nA frontend interviewer does **not** want a derivation of a CRDT's merge function or a debate about vector clocks — naming that this depth exists and belongs to a different conversation (per the cross-link above) is itself the calibrated answer. Candidates who launch into the algorithm's internals unprompted are usually trying to prove depth in the wrong dimension for this specific round.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

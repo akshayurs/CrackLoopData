@@ -1,0 +1,37 @@
+{
+  "topicId": "execution-context-and-scope",
+  "interviewQuestions": [
+    {
+      "id": "execution-context-and-scope-iq1",
+      "question": "```javascript\nconsole.log(a);\nvar a = 1;\nconsole.log(b);\nlet b = 2;\n```\nWhat does each `console.log` print, and why?",
+      "answerMarkdown": "The first line prints **`undefined`**; the second **throws** a `ReferenceError: Cannot access 'b' before initialization`.\n\nBoth `a` and `b` are hoisted — the creation phase scans the whole scope before any line executes and reserves a slot for both. What differs is what that slot holds until execution reaches the real declaration:\n\n- **`var a`** gets initialized to `undefined` immediately in the creation phase, so reading it early is legal and just returns `undefined`.\n- **`let b`** is reserved but left **uninitialized** — it sits in the Temporal Dead Zone from the top of the block until its declaration line runs. Touching it anywhere in that window throws.\n\nI'd frame it as: hoisting is one mechanism (pre-scan and reserve), but `var` and `let` disagree on what \"reserved\" means before the code reaches the line — a real value versus nothing accessible at all. That's also why `let`/`const` catch a whole class of used-before-assigned bugs at the exact wrong line instead of silently returning `undefined` and failing somewhere downstream.\n\n**Testing:** whether you can explain hoisting as a mechanism rather than reciting \"let and const aren't hoisted,\" which is the common but inaccurate shortcut.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "execution-context-and-scope-iq2",
+      "question": "Why does using `let` instead of `var` fix the classic loop-plus-`setTimeout` bug?",
+      "answerMarkdown": "It fixes it because `let` gives the loop a **fresh binding per iteration**, while `var` shares one binding across the whole loop.\n\nWith `var i`, the variable is function-scoped, so there is exactly one `i` for the entire `for` loop. Every callback registered inside the loop closes over that same variable. By the time any callback actually runs — after the synchronous loop has already finished — `i` holds its final value, so all callbacks read the same number.\n\nWith `let i`, the language spec creates a **new lexical binding of `i` for each iteration**, copying the previous iteration's value into it before the next pass runs. Each callback's closure captures its own iteration's binding, so each one prints the value it was created with — 0, 1, 2 instead of 3, 3, 3.\n\nI'd add the practical framing: this isn't a `setTimeout` quirk specifically — it happens with any async callback captured inside a `var` loop (event listeners, promise callbacks, `map` over an array of functions). The fix generalizes to \"use `let`,\" or, in older code, wrap the loop body in an IIFE to manually create a new scope per iteration.\n\n**Testing:** whether you understand the per-iteration binding as the actual mechanism, not just as a rule to apply.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "execution-context-and-scope-iq3",
+      "question": "Why does modern JavaScript prefer block scope (`let`/`const`) over function scope (`var`), given that `var` has been in the language since the beginning?",
+      "answerMarkdown": "Block scope makes a variable's **lifetime match its visible lifetime in the source**, which eliminates a category of bugs `var` allows by design.\n\nThree concrete costs of `var`'s function scoping that `let`/`const` remove:\n\n- **Leakage past the block you think contains it.** A `var` declared inside an `if` or `for` block is visible for the *entire enclosing function*, so it's easy to accidentally reuse or shadow it later in the same function without realizing it's still alive.\n- **Silent redeclaration.** Declaring `var x` twice in the same scope is legal and does nothing; declaring `let x` twice is a `SyntaxError` — the engine catches the mistake for you instead of silently keeping the first declaration.\n- **Global pollution.** A top-level `var` attaches to `window`, so two independent scripts can clobber the same global name without either author knowing. Top-level `let`/`const` don't attach to `window` at all.\n\nThe TDZ is the fourth piece: it converts \"read before assigned\" from a silent `undefined` into an immediate crash at the actual offending line.\n\nNone of this makes `var` wrong to know — you still need it to read older code and to reason about closures precisely — but new code has essentially no reason to reach for it over `let`/`const`.\n\n**Testing:** whether you can justify the modern default with concrete failure modes, not just repeat \"let is block-scoped, use let.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design rationale"
+    },
+    {
+      "id": "execution-context-and-scope-iq4",
+      "question": "You're debugging a page where a third-party analytics script and your own app both define a top-level `config` variable, and values are getting overwritten unpredictably depending on script load order. What's happening, and how do you fix it?",
+      "answerMarkdown": "This is global-scope pollution meeting `var`'s attach-to-`window` behavior. If either script declares `var config = {...}` at the top level, that assignment writes directly to `window.config` — there is exactly **one** slot for that name across every script on the page, regardless of which `<script>` tag or file it came from. Whichever script runs last simply overwrites the other's value, and because script load and execution order can shift with caching, async attributes, or CDN timing, the bug looks intermittent even though the mechanism is completely deterministic.\n\nHow I'd confirm it: check `window.config` in devtools after each script loads, or grep both bundles for a bare top-level `config` declaration — the fix doesn't require reading application logic, just finding the name collision.\n\nThe fix, in order of how much control you have over each script:\n- **Your own code:** stop declaring anything at true global scope. Wrap your app in a module (ESM or an IIFE) or namespace your config under one unique global object (`window.MyApp = { config: {...} }`).\n- **The third-party script:** you usually can't change it, so rename or namespace around it, and load order becomes the mitigation — load your script after theirs and read, don't share, the global.\n- **Long-term:** this is exactly the problem ES modules solve structurally — module-scoped bindings never touch `window` at all, so two modules can each have their own `config` with zero collision risk.\n\n**Testing:** whether you can connect the scope-chain/global-object mechanics to a real, load-order-dependent production bug, not just recite that `var` pollutes globals.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production debugging"
+    }
+  ]
+}

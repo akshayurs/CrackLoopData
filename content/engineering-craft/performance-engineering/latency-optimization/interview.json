@@ -1,0 +1,37 @@
+{
+  "topicId": "latency-optimization",
+  "interviewQuestions": [
+    {
+      "id": "latency-optimization-iq1",
+      "question": "Why do performance teams report p99 latency instead of average latency?",
+      "answerMarkdown": "Because the average is dominated by the bulk of requests and can look perfectly healthy while a meaningful slice of users have a bad experience. Take 1,000 requests where 990 take 50ms and 10 take 5 seconds — the mean is around 99.5ms, which reads as fine, but 1% of users waited a hundred times longer than everyone else, and the average gives zero indication that happened.\n\np99 answers a more honest question: what's the experience of the worst-treated 1% of requests? That matters more than it sounds, because a user rarely makes just one request — over a session with 20-50 requests, the odds of hitting at least one p99-or-worse request are meaningfully higher than 1%, so \"1% of requests are bad\" translates to a much larger share of *users* noticing at least one bad request per session.\n\nIt also matters because tail latency compounds: a request that fans out to several downstream calls has its overall latency set by the slowest of them, so even dependencies with a clean tail individually can combine into a much worse overall tail. Optimizing p50 while ignoring p99 can make the \"typical\" experience faster while the fan-out tail — which is what surfaces as \"random slow requests\" in complaints — gets worse.\n\nIn practice I'd track p50 for a general health signal and set SLOs against p99 or p99.9, because that's the number that predicts what users actually complain about.\n\n**Testing:** whether you understand percentiles are a deliberate choice, not just a fancier way to report the same information as an average.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "latency-optimization-iq2",
+      "question": "A service's CPU utilization is at 90% and latency is spiking badly. An engineer argues 90% is fine because there's still 10% headroom. How would you respond?",
+      "answerMarkdown": "I'd push back using the shape of the queueing curve, not just the raw percentage. Basic queueing theory (the M/M/1 approximation) says expected wait time scales roughly with ρ/(1−ρ), where ρ is utilization. At 75% that factor is 3; at 90% it's 9; at 95% it's 19. The relationship isn't linear — it's a curve that goes vertical as utilization approaches 100%, so \"10% headroom\" sounds comfortable but sits well past the point where the curve has already started climbing steeply.\n\nConcretely, going from 75% to 90% utilization isn't a proportional 20% worse latency — the queueing-driven component of latency roughly triples. That's consistent with what's being observed: a latency spike disproportionate to how \"full\" the system looks by CPU percentage alone.\n\nMy recommendation would be to treat 90% as already in the danger zone rather than as headroom, and to have either an autoscaling response that kicks in well before this point (targeting something like 70-80% sustained utilization) or a plan to reduce work per request so the system needs less capacity to serve the same traffic. I'd also want to know whether this is a genuine capacity issue or whether a single serial resource — a lock, a connection pool, a single-threaded downstream dependency — is queueing independently of overall CPU, since that's a different fix entirely.\n\n**Testing:** whether you understand queueing behavior well enough to correct an intuitive-but-wrong reading of a utilization number.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "latency-optimization-iq3",
+      "question": "How would you go about reducing the latency of an endpoint that calls a database and an internal auth service, does some computation, and returns?",
+      "answerMarkdown": "First I'd find the actual critical path with a trace, not assume it from reading the code — I want to know which of these steps genuinely block the response and which run in parallel or could.\n\nIf the database read and the auth check don't depend on each other's output, the first and often highest-return fix is running them concurrently instead of sequentially — the critical path becomes the slower of the two rather than their sum, which can be a large win with essentially no new infrastructure, just confirming there's no hidden dependency between them.\n\nNext I'd look for caching opportunities: is the auth check's underlying permission data read far more often than it changes? If so, caching it (with a sensible TTL or invalidation trigger) can remove that call from the critical path almost entirely for the common case. Same question for any part of the computation step that doesn't vary per-request.\n\nIf some part of the response is expensive to compute but doesn't need to be request-specific — say, a personalization score that's fine being a few minutes stale — I'd look at precomputing it on a schedule rather than computing it live on every request.\n\nThroughout, I'd validate against percentiles, not the mean, since it's easy to \"fix\" the common case while making the tail worse — for instance, if the cache adds overhead that the miss path now pays on top of the original cost.\n\n**Testing:** whether you can apply the standard latency-reduction levers concretely to a specific endpoint, in a sensible order.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied reasoning"
+    },
+    {
+      "id": "latency-optimization-iq4",
+      "question": "What is a hedged request, and when would you use one?",
+      "answerMarkdown": "A hedged request is a tail-latency countermeasure: if a downstream call hasn't returned within some threshold — typically its own p95 or p99 latency — you fire a second, identical request, often to a different replica, and take whichever response arrives first, cancelling the loser. It directly attacks the 'tail at scale' problem, where a request fanning out to many dependencies has its overall latency set by the unluckiest one.\n\nThe reasoning is probabilistic: if any single call has, say, a 1% chance of being slow, the odds that *both* the original request and its hedge are unlucky at the same time are far lower than 1% — so hedging converts a rare-but-real slow tail into a much rarer one, at the cost of some duplicate load.\n\nI'd use it selectively, not everywhere: it's worth the extra load on latency-critical paths where the downstream service has spare capacity to absorb occasional duplicate requests, and where the operation is safe to run twice (idempotent reads, or writes protected by idempotency keys). I'd cap the hedge rate — most requests are fast and never trigger a hedge, but under genuine overload, hedging can make things worse by adding load exactly when the system is already struggling, so it needs backpressure or a circuit breaker alongside it.\n\nI wouldn't reach for this before the basics — caching, parallelizing independent calls, reducing fan-out — are already in place; hedging is a targeted fix for residual tail latency after the cheaper wins are exhausted.\n\n**Testing:** whether you know an advanced technique beyond the standard latency levers, and understand its real cost, not just its benefit.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

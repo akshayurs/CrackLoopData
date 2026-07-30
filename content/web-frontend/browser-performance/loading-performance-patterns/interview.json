@@ -1,0 +1,37 @@
+{
+  "topicId": "loading-performance-patterns",
+  "interviewQuestions": [
+    {
+      "id": "loading-performance-patterns-iq1",
+      "question": "The homepage takes eight seconds to load on 3G. Where do you start?",
+      "answerMarkdown": "With the **waterfall**, not with a fix. I'd load the page throttled to Slow 4G with 4x CPU slowdown and a cold cache, and read the request chart — its shape tells me which of the following applies, and skipping this step is how teams spend a week compressing images on a page whose real problem was a 1.9s TTFB.\n\nThen, in order:\n\n- **TTFB over ~800ms?** Fix that first — caching, CDN, database work off the render path. No frontend change recovers time spent before the first byte.\n- **Render-blocking resources?** `defer` every non-essential script, inline the CSS needed for the first viewport, and stop shipping blocking CSS for below-the-fold components.\n- **Is the LCP element discovered late?** This is usually the single biggest win. If the hero is a CSS `background-image` or rendered by JavaScript, the preload scanner never sees it and the fetch starts a second or two in. Making it a plain `<img>` with `fetchpriority=\"high\"`, plus a `preconnect` to the image CDN, often moves LCP by more than a second **without removing a single byte**.\n- **Then weight:** AVIF or WebP at the displayed size via `srcset` — a 2MB JPEG becoming a 90KB AVIF is routine.\n- **Then JavaScript:** route splitting, dependency audit, defer third parties.\n\nAnd I'd re-measure between every step, because the bottleneck moves — step 5 is often unnecessary once step 4 lands.\n\n**Testing:** whether you diagnose before optimising and know that discovery time usually beats payload size.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "loading-performance-patterns-iq2",
+      "question": "Explain the difference between preload, prefetch, preconnect, and dns-prefetch.",
+      "answerMarkdown": "They act at different points and for different navigations.\n\n- **`dns-prefetch`** — resolves DNS for a host. Cheapest hint, a few bytes, worth scattering on third-party domains you'll probably use.\n- **`preconnect`** — DNS plus TCP plus TLS handshake, so the connection is warm when the request comes. Saves **round trips, not bytes** — commonly 100-300ms on mobile. Use it for 2-4 origins at most; browsers close unused connections after around 10 seconds.\n- **`preload`** — actually downloads a resource for **this** navigation, at a priority you can raise with `fetchpriority`. This is what an LCP image or a critical font needs. `as` is mandatory: without it the browser can't set priority or CORS mode and may fetch twice.\n- **`prefetch`** — downloads at the **lowest** priority for a **future** navigation. Right for the next page in a known flow, wrong for anything on the current one.\n\nThe mix-up that costs real time is preload versus prefetch: a `prefetch` for your LCP image is nearly useless because it may not arrive until after paint.\n\nThe trade-off I'd raise unprompted: these hints reorder a **zero-sum** priority queue. Teams add a dozen preloads for fonts and icons and make LCP worse, because those now compete with the hero image. My test before adding any hint is \"which request am I moving earlier, and what am I willing to delay for it?\"\n\n**Testing:** whether you know the four apart precisely and understand hints as priority reallocation rather than free speed.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "loading-performance-patterns-iq3",
+      "question": "What does a good image loading strategy look like on a content-heavy page?",
+      "answerMarkdown": "Images are usually **50-70% of page bytes**, so the strategy has four parts.\n\n**Format.** AVIF where supported, WebP as fallback, JPEG last. AVIF is roughly **50% smaller than JPEG** at equivalent quality, WebP about 25-35%. Served via `<picture>` with `type` on each `<source>`. A 2MB hero commonly lands at ~90KB.\n\n**Size.** `srcset` with several widths plus a correct `sizes` attribute. `sizes` must be in the HTML because the preload scanner picks a candidate before CSS applies — get it wrong and the browser downloads a much larger file than needed. And remember a DPR 3 phone genuinely wants ~1200 device pixels for a 400px slot, so \"just serve small images\" is equally wrong.\n\n**Priority.** `fetchpriority=\"high\"` on the LCP image, `loading=\"lazy\"` on everything below the fold — and never on the hero, which is a common self-inflicted LCP regression. `decoding=\"async\"` too: decoding a large image costs 20-50ms of main-thread time on a phone.\n\n**Stability.** `width` and `height` on every `<img>`, even with `srcset`, so the aspect ratio reserves space and CLS stays at zero.\n\nWhere I'd stop: I wouldn't hand-manage this. An image CDN or the framework's image component does format negotiation and resizing at request time, and hand-maintained `srcset` lists rot fast.\n\n**Testing:** whether you cover format, dimensions, priority, and layout stability, or only reach for \"compress the images.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied"
+    },
+    {
+      "id": "loading-performance-patterns-iq4",
+      "question": "A React SPA has a 2.4s LCP and the team wants to hit 1.5s. Optimising images and hints hasn't been enough. What next?",
+      "answerMarkdown": "At that point the ceiling is **architectural**, not asset-level. A client-rendered page's LCP cannot be earlier than TTFB + bundle download + parse + execute + data fetch + paint. On a mid-tier phone that chain is routinely 3-5 seconds, because parse-and-execute is CPU-bound and immune to a faster network — roughly 1MB of JavaScript per second on that hardware.\n\nSo the options, in order of impact:\n\n- **Move the LCP content to server-rendered or static HTML.** Streaming SSR, or SSG if the content is cacheable. The hero and headline are then in the initial response and paint while the bundle is still downloading. This is usually the change that actually gets to 1.5s, and it often halves LCP without recompressing anything.\n- **Cut the critical bundle.** Route-level splitting first; then the Coverage tab to find unused bytes — a 300KB date library used for one format call, or a whole icon set for six icons, are extremely common. Target under ~300KB gzipped for the initial route.\n- **Defer hydration.** Progressive or islands hydration so the main thread isn't monopolised on arrival. This helps INP more than LCP, but they usually fail together.\n- **Defer third parties.** On commercial sites the tag manager frequently outweighs first-party JavaScript.\n\nThe trade-off I'd state honestly: SSR adds server cost, a hydration-mismatch class of bugs, and real migration effort. For a public marketing or content page it's clearly right; for a logged-in dashboard behind auth, where nothing is cacheable and the user has already committed, I'd fix the bundle instead and leave the architecture alone.\n\n**Testing:** whether you can recognise when asset optimisation has hit its ceiling and reason about rendering strategy with its costs.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

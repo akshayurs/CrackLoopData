@@ -1,0 +1,182 @@
+{
+  "id": "memory-and-gc-performance",
+  "title": "Memory & GC Performance",
+  "area": "engineering-craft",
+  "group": "performance-engineering",
+  "order": 6,
+  "slug": "memory-and-gc-performance",
+  "summary": "Performance problems rooted in allocation and garbage collection: why allocation isn't free, how a GC pause becomes a visible latency spike, tuning the throughput-vs-pause trade-off, and finding a leak that isn't 'no GC' at all.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "memory-and-gc-performance-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "In a managed language — Java, C#, Go, JavaScript, Python — you don't call `free()`. That convenience has a cost, and this topic is about seeing it: allocation is never actually free, garbage collection has to run *sometime*, and when it runs, it can stop your program cold for milliseconds to seconds.\n\nThe latency spikes this group has discussed abstractly — a request that's inexplicably slow with no obvious cause — are very often a GC pause in disguise. This topic covers the mechanism precisely enough that you can recognize one, tune around it, and diagnose the memory leaks that make it worse over time, without falling into the trap of just turning the GC off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-and-gc-performance-s02",
+      "order": 2,
+      "sectionTitle": "Allocation cost",
+      "subTitle": "Why 'just allocate an object' isn't free",
+      "type": "concept",
+      "markdown": "Allocating an object, even in a managed language, does real work: finding available space (bump-pointer allocation in a young generation is fast, but not zero-cost), initializing the object's header and fields, and — critically — creating one more thing the garbage collector will eventually have to trace to determine if it's still reachable.\n\nThat last cost is the one that surprises people: allocation cost isn't paid once, at creation. It's paid again, repeatedly, every time a GC cycle runs and has to walk the object graph to figure out what's still live. A hot path that allocates a small temporary object per iteration, run a million times a second, doesn't just do a million cheap allocations — it hands the collector a million objects to eventually evaluate, and at high enough allocation rates, the collector runs more often and takes longer each time.\n\nThe practical consequence: \"reduce allocations on the hot path,\" already covered in Algorithmic & Data Structure Optimization, isn't just about the allocator's own cost — it's about reducing the total load on the collector, which is where a lot of the real payoff lives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "memory-and-gc-performance-s02-q1"
+      ]
+    },
+    {
+      "id": "memory-and-gc-performance-s03",
+      "order": 3,
+      "sectionTitle": "Garbage collection basics",
+      "subTitle": "Generational GC, stop-the-world pauses",
+      "type": "concept",
+      "markdown": "Most production garbage collectors (JVM's default collectors, .NET's, V8's) are **generational**, built on an empirical observation: most objects die young. They split the heap into a small **young generation** (new allocations) and a larger **old generation** (objects that survived several young-gen collections). Young-gen collections run frequently but are fast, because most objects there are already garbage and get discarded cheaply; old-gen collections run rarely but cost more, because they scan a much larger, mostly-live set of objects.\n\nA **stop-the-world pause** is exactly what it sounds like: the collector needs a consistent view of the object graph, so it pauses all application threads while it traces reachability and reclaims memory. Young-gen pauses are typically sub-millisecond to a few milliseconds; old-gen (\"major\" or \"full\") GC pauses can run from tens of milliseconds to multiple seconds on a large heap, because there's simply more live data to walk.\n\nThe generational split exists specifically to keep the *common* pause short — most collections only ever touch the young generation — while accepting that occasional, larger pauses are the cost of eventually reclaiming long-lived garbage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "memory-and-gc-performance-s03-q1"
+      ]
+    },
+    {
+      "id": "memory-and-gc-performance-s04",
+      "order": 4,
+      "sectionTitle": "A GC pause on the latency timeline",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture a request-latency timeline across many requests, mostly flat and low — until one request's latency spikes sharply, well above the others, then the line returns to normal immediately after. That spike, isolated and not correlated with request size or a slow downstream call, is the signature of a stop-the-world GC pause: every thread, including the one serving that unlucky request, froze for the pause's duration regardless of what it was doing.\n\nThis is why GC pauses are notoriously hard to diagnose from request-level tracing alone — the request itself did nothing wrong; it was simply unlucky enough to be in flight when the collector needed to run. Correlating a latency spike against GC logs (which record every pause's start time and duration) rather than assuming the request itself is slow is the diagnostic move that separates \"we found the GC pause\" from \"we spent a week profiling a request that was actually fine.\"\n\n<<< Image: a line chart of request latency over time, mostly flat and low, with one sharp isolated spike rising well above the baseline and returning to normal immediately after, annotated \"GC pause: every thread froze, not just this request\" with a small inset showing a GC log entry timestamped to match the spike >>>",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-and-gc-performance-s05",
+      "order": 5,
+      "sectionTitle": "Tuning GC",
+      "subTitle": "Heap sizing and generation thresholds trade throughput for pause time",
+      "type": "concept",
+      "markdown": "GC tuning is mostly about picking a point on a throughput-vs-pause-time trade-off curve, not finding a universally \"better\" setting.\n\n- **Larger heap** → collections run less often (more room before the collector must reclaim), which is good for throughput, but each collection — especially a major GC — has more live data to potentially scan, so worst-case pause time can grow.\n- **Larger young generation** → more objects die there before being promoted, reducing pressure on the old generation and reducing the frequency of expensive major GCs — at the cost of each young-gen pause itself taking slightly longer, since there's more to scan even there.\n- **Promotion threshold (how many young-gen collections an object survives before moving to old gen)** → tuning this affects whether medium-lived objects (surviving a few requests but not truly long-lived) end up cluttering the old generation, triggering more major GCs than necessary.\n\nA service with a strict p99 latency SLO typically tunes toward smaller, more frequent, more predictable pauses even at some throughput cost. A batch job that only cares about total completion time tunes the opposite way — bigger heap, fewer, larger pauses, higher overall throughput. There's no universally correct setting; it's decided by which metric your performance budget actually protects (Performance Mindset & Measurement).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "memory-and-gc-performance-s05-q1"
+      ]
+    },
+    {
+      "id": "memory-and-gc-performance-s06",
+      "order": 6,
+      "sectionTitle": "Memory leaks in managed languages",
+      "subTitle": "Retained references, not \"no GC\"",
+      "type": "concept",
+      "markdown": "A common misconception: \"managed languages have a garbage collector, so they can't leak memory.\" They absolutely can — a GC only reclaims objects that are **unreachable**. If your code still holds a live reference to an object, the collector correctly considers it in-use and will never reclaim it, no matter how long ago you actually stopped needing it.\n\nThe classic patterns: a cache with no eviction policy that grows forever because nothing is ever removed; a list of event listeners/callbacks that are registered but never unregistered when the registering object goes away, keeping both alive indefinitely; a `static` collection (in Java, a class-level field) that objects get added to but never removed from, since static fields are always reachable for the life of the process.\n\nThe distinguishing symptom versus a native-language leak: heap usage grows steadily over time even under steady traffic, but each individual GC cycle still runs and reclaims *something* — it's just that a growing portion of the heap is legitimately, correctly considered reachable, and the collector is doing its job correctly on data your own code forgot to release its hold on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "memory-and-gc-performance-s06-q1"
+      ]
+    },
+    {
+      "id": "memory-and-gc-performance-s07",
+      "order": 7,
+      "sectionTitle": "Diagnosing a leak",
+      "subTitle": "Heap snapshots and diffing over time",
+      "type": "code",
+      "markdown": "The standard technique: take two heap snapshots separated by a meaningful interval of normal traffic (e.g., 30 minutes apart), then diff them to see which object types grew in count without a corresponding drop elsewhere.\n\n```\n$ jmap -histo:live <pid> > snapshot1.txt\n# ... wait 30 minutes under normal traffic ...\n$ jmap -histo:live <pid> > snapshot2.txt\n$ diff <(sort snapshot1.txt) <(sort snapshot2.txt) | grep -E '^\\d+c\\d+'\n\n   num     #instances     #bytes  class name (before)\n     1:      120,432   19,269,120  com.app.cache.CacheEntry\n   num     #instances     #bytes  class name (after)\n     1:      847,901  135,664,160  com.app.cache.CacheEntry\n```\n\n`CacheEntry` grew from ~120k to ~848k instances in 30 minutes with no traffic spike to justify it — the strongest possible signal of a leak in that specific cache. From there, the next step is finding what's holding the reference: a heap-analysis tool's \"path to GC root\" feature traces backward from a `CacheEntry` instance to whatever reachable object is keeping it alive — usually revealing a static map, an unbounded cache, or a listener list that was never cleaned up. Counting instances tells you *what* is leaking; the path to GC root tells you *why*.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-and-gc-performance-s08",
+      "order": 8,
+      "sectionTitle": "Object pooling to reduce GC pressure",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Reusing objects instead of allocating fresh ones on a hot path — already introduced as an allocation-cost fix in Algorithmic & Data Structure Optimization — has a specific added benefit in a garbage-collected language: every object that's reused instead of newly allocated is one fewer object the collector ever has to trace. At high allocation rates, this can be the difference between the young generation filling up every few milliseconds versus every few seconds, directly reducing how often *any* GC pause happens at all.\n\nThe classic production example is buffer pooling in network-heavy services: instead of allocating a new byte buffer for every incoming request, a pool of pre-allocated buffers is checked out, filled, used, and returned — common in high-throughput servers (Netty's `ByteBuf` pooling is a well-known real instance of this pattern) specifically because unpooled buffer allocation at high request rates was measurably driving GC pause frequency.\n\nThe same caveats apply as before: pooling adds checkout/return complexity and a real bug class (using a pooled object after returning it, or forgetting to return it — which silently reintroduces the leak this topic just covered). It earns its complexity on paths where profiling and GC logs show allocation rate is genuinely driving pause frequency, not as a default habit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "memory-and-gc-performance-s08-q1"
+      ]
+    },
+    {
+      "id": "memory-and-gc-performance-s09",
+      "order": 9,
+      "sectionTitle": "\"Fixing\" pauses by disabling GC",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Faced with painful GC pauses, a team disables garbage collection outright, or sets the heap so large that GC effectively never runs during a request's lifetime, and the pauses vanish from the graph. This isn't a fix — it's deferring the entire cost to a single, catastrophic event: eventually the heap fills, and either the process runs out of memory and crashes, or a full GC finally runs against a heap that's grown enormous, producing a pause far worse than any of the ones that were \"fixed.\"\n\nA related version of the same mistake: setting the heap enormous specifically to push major GCs far into the future, without addressing the underlying allocation rate. This buys time, at the cost of a single eventual pause that scales with however large the heap grew — a heap ten times bigger doesn't just delay the problem, it makes the eventual full GC roughly ten times more expensive when it finally happens.\n\nThe actual fix is the one already covered in this topic: reduce the allocation rate driving GC frequency (pooling, avoiding unnecessary allocation on hot paths) and fix real leaks (§6, §7) so the heap has a stable steady-state size instead of growing without bound. Disabling or indefinitely deferring GC treats the symptom by hiding it, then paying the entire deferred cost at the worst possible moment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "memory-and-gc-performance-s09-q1"
+      ]
+    },
+    {
+      "id": "memory-and-gc-performance-s10",
+      "order": 10,
+      "sectionTitle": "Concurrent and low-pause collectors",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "Modern collectors (Java's ZGC and Shenandoah, .NET's server GC in background mode) attack the pause problem directly, rather than only through tuning: they do most of their tracing and reclamation work **concurrently** with the running application, using techniques like coloring pointers or read/write barriers to safely let the application keep mutating the object graph while the collector works alongside it. The trade is real — these collectors typically cost more total CPU (often 10-20% throughput overhead) and more memory headroom, in exchange for pause times measured in **single-digit milliseconds regardless of heap size**, even on heaps in the hundreds of gigabytes.\n\nThe senior-level judgment call: a strict low-latency SLO (a trading system, a real-time bidding service) justifies paying that throughput tax for pause-time predictability that scales with heap size in traditional collectors (bigger heap → bigger worst-case pause) but doesn't in a concurrent collector. A batch job or an internal tool with no latency SLO gets nothing from this trade and should stick with a throughput-optimized collector instead.\n\nThis doesn't replace the fundamentals in this topic — a concurrent collector still benefits enormously from a lower allocation rate and no leaks; it changes the *shape* of the pause-time cost, not whether allocation and reachability still matter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-and-gc-performance-s11",
+      "order": 11,
+      "sectionTitle": "Escaping GC entirely",
+      "subTitle": "Off-heap memory and arenas",
+      "type": "concept",
+      "markdown": "For the most latency-sensitive hot paths, some systems sidestep GC for specific allocations entirely rather than tuning around it. **Off-heap memory** (direct byte buffers in Java, `unsafe` allocations) is memory the collector doesn't track or trace at all — the tracing cost this whole topic has been about simply doesn't apply to it, at the cost of manual lifecycle management and the classic native-language bug class (use-after-free, double-free) the GC exists to prevent everywhere else.\n\n**Arena allocation** is a related, safer-in-practice pattern: allocate a large block up front, hand out chunks of it during a request's processing, and free the *entire arena* at once when the request completes, rather than tracking each individual allocation's lifetime. This turns many small allocations plus individual GC tracing into effectively one allocation and one deallocation per request — a technique that shows up in high-performance HTTP servers and is central to how memory-safe-without-a-GC languages like Rust structure performance-critical code (`Vec` reuse, scoped allocators).\n\nThis is a substantial complexity trade, appropriate only where profiling shows GC is a genuine, unavoidable-by-tuning bottleneck on the most critical path — not a default technique for general application code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-and-gc-performance-s12",
+      "order": 12,
+      "sectionTitle": "Memory performance in practice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The working order: understand that allocation cost includes future GC tracing cost, not just the allocation itself (§2); know the generational model well enough to recognize which pauses are cheap (young-gen) and which are expensive (major GC) (§3, §4); tune heap size and generation thresholds toward whichever side of throughput-vs-pause your performance budget actually needs (§5); rule out — or find — a real leak before assuming tuning alone will fix rising pause times (§6, §7); reduce allocation rate on genuinely hot paths via pooling (§8); and if pauses remain a hard blocker despite all of that, consider a concurrent collector or, for the most extreme cases, off-heap/arena allocation (§10, §11) — never disabling or deferring GC outright (§9).\n\nThe next topic, Concurrency Performance, covers the other major source of the same symptom — a request stuck waiting, invisibly, for reasons that have nothing to do with the work it's actually trying to do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    }
+  ]
+}

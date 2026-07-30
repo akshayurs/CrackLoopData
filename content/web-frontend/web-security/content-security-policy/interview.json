@@ -1,0 +1,37 @@
+{
+  "topicId": "content-security-policy",
+  "interviewQuestions": [
+    {
+      "id": "content-security-policy-iq1",
+      "question": "Design a CSP for a React SPA that uses a JSON API, a CDN for images, and one analytics vendor.",
+      "answerMarkdown": "I'd start from deny-everything and add only what the app provably needs:\n\n```\ndefault-src 'self';\nscript-src 'nonce-{perResponse}' 'strict-dynamic';\nstyle-src 'self' 'unsafe-inline';\nimg-src 'self' data: https://cdn.example.com;\nconnect-src 'self' https://api.example.com https://analytics.vendor.com;\nobject-src 'none'; base-uri 'self'; form-action 'self';\nframe-ancestors 'none'; report-uri /csp-report\n```\n\n**Why nonce rather than a host allowlist.** Allowlisting a popular CDN is usually equivalent to allowing arbitrary script, because those hosts often serve JSONP endpoints or old library builds that execute caller-supplied code — large-scale analyses found most allowlist policies bypassable this way. `'strict-dynamic'` then lets the analytics loader pull its own scripts without me enumerating them.\n\n**Deliberate concessions.** `'unsafe-inline'` in `style-src`, because CSS-in-JS requires it and inline style is far lower risk than inline script. I would not make the same concession in `script-src`.\n\n**Rollout.** Report-only for two weeks, filter out the browser-extension noise that will dominate the reports, fix our own violations with nonces rather than by widening rules, then enforce on a traffic slice. Both headers can be sent at once, so I keep report-only running for the next, stricter policy.\n\n**Testing:** whether you can build a policy from the app's actual dependency graph and defend each relaxation, rather than reciting directives.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Design"
+    },
+    {
+      "id": "content-security-policy-iq2",
+      "question": "What is a Content Security Policy and what problem does it solve?",
+      "answerMarkdown": "It's a response header that tells the browser what the page is allowed to execute and load. Anything not on the list is blocked by the browser before it runs.\n\nThe framing that matters: **CSP is a mitigation, not a fix.** Escaping and sanitizing reduce the chance an injection happens. CSP reduces what an injection can *do* once it has. A page with a strict `script-src` can have an injected script element sitting in the DOM that simply never executes.\n\nThe directives that carry most of the value:\n\n- **`script-src`** — what may execute. Everything else is secondary.\n- **`connect-src`** — where `fetch`, XHR, WebSockets and `sendBeacon` may go. This is the exfiltration control, and it's the most underrated one.\n- **`object-src 'none'`** and **`base-uri 'self'`** — near-free wins. Without `base-uri`, an injected `<base>` tag redirects every relative script URL on the page.\n- **`frame-ancestors`** — anti-clickjacking.\n\nThe common failure is deploying a policy that does nothing: a single `'unsafe-inline'` in `script-src` permits any inline script, which is exactly the capability XSS needs, so the rest of the policy is decoration.\n\nAnd the limits are worth stating: it doesn't stop CSRF, doesn't replace escaping, and won't stop exfiltration through a channel you already allowed.\n\n**Testing:** whether you position CSP correctly in the defense stack rather than treating it as an XSS cure.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "content-security-policy-iq3",
+      "question": "How would you roll out CSP on a ten-year-old app without causing an outage?",
+      "answerMarkdown": "**Report-only first, always.** `Content-Security-Policy-Report-Only` has identical syntax and enforces nothing — the browser evaluates the rules, reports what it *would* have blocked, and the page keeps working.\n\nThat's not caution for its own sake. CSP breakage is silent server-side: a chart stops rendering, a payment widget doesn't load, and no exception reaches your error tracker, because the browser refused the resource rather than throwing in JS. You will not find it in staging.\n\nThe sequence I'd run:\n\n1. **Free wins immediately**, enforcing: `object-src 'none'`, `base-uri 'self'`, `frame-ancestors`. These break essentially nothing.\n2. **Report-only with the intended strict policy**, collecting one to two weeks — long enough to catch weekly jobs and marketing campaigns.\n3. **Triage.** Expect most reports to be browser extensions and injected ISP or antivirus content. Filter those out; do not allowlist what they name.\n4. **Fix our violations with nonces**, not by widening rules. Third-party sources get added one at a time, each with a recorded owner.\n5. **Enforce on a traffic slice**, then ramp — and keep a report-only header alongside for the next tightening.\n6. **Keep the report endpoint permanently.** A violation spike is a real signal; it's sometimes the first sign a third-party script was compromised.\n\nRealistically this is a sprint of work on a mature app. The policy is the easy part; the inventory and the nonce plumbing are not.\n\n**Testing:** whether you've actually shipped one, or only read the spec.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Operations"
+    },
+    {
+      "id": "content-security-policy-iq4",
+      "question": "We have a strict nonce-based CSP. Can an XSS still cause real damage?",
+      "answerMarkdown": "Yes, and being precise about how is the useful part.\n\n**What still works with zero script execution:**\n\n- **Defacement and UI redress.** Injected markup can replace the page content or overlay a fake login form. `form-action 'self'` limits where that form can post, which helps a lot, but the injection happened.\n- **Data exfiltration through allowed channels.** If `connect-src` includes an analytics vendor, or `img-src` is permissive, a URL can carry stolen data out. This is why tightening `connect-src` is often worth more than another round of `script-src` polish.\n- **DOM clobbering.** Injected named elements can shadow globals your own scripts read, changing their behaviour without any new script running.\n\n**And ways the policy itself can fold:**\n\n- **Nonce reuse.** If HTML gets cached — a CDN, a service worker, `bfcache` — the same nonce is served repeatedly and becomes guessable-by-observation. That's a subtle, total failure.\n- **A missing policy on some responses.** Error pages and legacy routes often don't get the header.\n- **A `<meta>`-delivered policy**, which silently cannot express `frame-ancestors` or `report-uri`.\n\nSo my position in a review: CSP is the layer that assumes everything else failed. It's the reason to keep escaping, sanitizing, and Trusted Types — not a reason to relax them.\n\n**Testing:** whether you understand your own control's limits, which is the difference between defense in depth and a false sense of it.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

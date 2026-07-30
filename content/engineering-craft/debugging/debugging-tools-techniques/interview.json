@@ -1,0 +1,37 @@
+{
+  "topicId": "debugging-tools-techniques",
+  "interviewQuestions": [
+    {
+      "id": "debugging-tools-techniques-iq1",
+      "question": "When would you reach for an interactive debugger instead of just adding print statements?",
+      "answerMarkdown": "My rule of thumb is about the cost of guessing wrong versus the cost of pausing. Print debugging requires me to guess in advance which values matter, add logging for them, and rerun — if I guessed wrong, that's another edit-rerun cycle. A debugger lets me pause once and inspect *anything* in scope, including things I didn't think to log, and walk the whole call stack to see other frames' state too.\n\nSo I use a debugger for deep single-process bugs in code I don't know well — an unfamiliar codebase, a corrupted data structure several calls deep, or a case where I genuinely don't know what to look for yet. I use print/log debugging instead when timing matters (a debugger's pause can change or hide the bug entirely — the probe effect) or when the bug spans multiple processes or services, since attaching a debugger to five services at once isn't practical.\n\nConditional breakpoints and logpoints extend the debugger's usefulness a lot — a bug that only shows up on iteration 4,982 of a loop is unusable with a plain breakpoint but trivial with a conditional one.\n\n**Testing:** whether you choose tools based on the bug's shape rather than habit.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "debugging-tools-techniques-iq2",
+      "question": "Walk me through how you'd use git bisect to find a regression, and when it wouldn't help.",
+      "answerMarkdown": "I'd start by marking a known-good commit — often an old release tag — and the current bad state: `git bisect start`, `git bisect bad HEAD`, `git bisect good v2.3.0`. Git checks out the midpoint automatically; I run my repro or test suite there and tell it `good` or `bad`, and it keeps bisecting the remaining range. A 1,000-commit range resolves in roughly 10 steps instead of a linear scan through hundreds.\n\nIf I have an automated test that reliably reproduces the failure, `git bisect run <test-command>` does the entire loop unattended — check out, run, read the exit code, continue — and just reports the first bad commit.\n\nWhere it breaks down: if the bug is flaky and the test doesn't reproduce it reliably at every commit, bisect will get a wrong good/bad answer somewhere and converge on the wrong commit. It also assumes the codebase actually builds and runs at every commit in the range, which isn't always true after a large refactor. And it finds *which commit*, not *why* — the causal explanation is still on me once bisect narrows the range to one diff.\n\n**Testing:** whether you understand bisect's mechanism well enough to know its failure modes, not just the happy path.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Tooling"
+    },
+    {
+      "id": "debugging-tools-techniques-iq3",
+      "question": "You're debugging a crash in a C++ service that happens intermittently with no obvious pattern. What's your approach?",
+      "answerMarkdown": "Intermittent native crashes with no clear pattern are the classic signature of memory corruption — the mistake (a use-after-free, buffer overrun, or double-free) usually doesn't crash where it happens; it silently corrupts memory and the process crashes somewhere unrelated, later, making the stack trace at crash time nearly useless for finding the real cause.\n\nMy first move, before trying to reason about the crash site at all, is to run the reproducing workload under **AddressSanitizer** (or the equivalent for the platform). It instruments the binary to catch the violation at the exact instruction where it occurs, converting a baffling downstream crash into a precise stack trace pointing at the actual bug. If it's a leak rather than a crash, a leak detector like Valgrind's memcheck does the analogous job for unfreed allocations.\n\nThe trade-off is the 2–10x runtime overhead, which is why this runs in CI or a dedicated debug build, not in production. If the sanitizer doesn't reproduce it — say it's timing-dependent rather than purely a memory bug — I'd escalate to a record-replay tool to capture the exact interleaving once and inspect it after the fact, rather than trying to catch it live.\n\n**Testing:** whether you recognize the signature of memory corruption and reach for the tool built for exactly that class of bug instead of guessing at the crash site.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Native debugging"
+    },
+    {
+      "id": "debugging-tools-techniques-iq4",
+      "question": "Have you ever accidentally shipped debug code to production? What happened and what would you change?",
+      "answerMarkdown": "The pattern I've seen most often isn't a print statement — those are usually caught in review — it's a flag or bypass added mid-debugging to speed up a local loop, like skipping an expensive auth check \"just to test the happy path,\" that then rides along in the same commit as the actual fix and gets merged without anyone specifically reviewing that line.\n\nWhat makes it slip through is that the diff looks like \"the fix\" plus some noise, and a reviewer skimming for the fix doesn't scrutinize a line that looks like debugging scaffolding rather than a real change. The actual damage ranges from mild (a debug endpoint exposing internal state) to serious (a real permission bypass reaching production traffic).\n\nThe change I'd make isn't \"be more careful\" — that doesn't survive time pressure. It's structural: a linter rule that flags known debug patterns (hardcoded test IDs, disabled auth checks, `console.log`/`pdb.set_trace`) so they fail CI regardless of whether a human reviewer catches them, plus a habit of reviewing your own diff line-by-line before requesting review, treating that as a real step rather than a formality.\n\n**Testing:** whether you can turn a real mistake into a process fix rather than a one-off apology.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Process"
+    }
+  ]
+}

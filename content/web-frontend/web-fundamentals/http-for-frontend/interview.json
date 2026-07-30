@@ -1,0 +1,37 @@
+{
+  "topicId": "http-for-frontend",
+  "interviewQuestions": [
+    {
+      "id": "http-for-frontend-iq1",
+      "question": "A user reports that data they just updated in the admin panel still shows the old value in the app. What would you check first?",
+      "answerMarkdown": "I'd check caching before I'd check application logic, because a stale 200 looks identical to a fresh one at the code level — `response.status === 200` tells you the request succeeded, not that the data is current.\n\nFirst step: open the Network tab and look at the **Size** column for that request, not the status code. If it says something like '(disk cache)' or '(memory cache)' instead of a byte count, the browser served it entirely from cache with no network round trip at all — which explains the stale value immediately.\n\nIf that's what I find, the next question is what `Cache-Control` the server is sending for that endpoint. A `max-age=3600` on data that changes more often than hourly is a mismatch between the caching policy and the data's actual volatility — not a bug in my code, but a bug in how the response is being cached.\n\nThe fix depends on how fresh the data genuinely needs to be: if it should always reflect the latest write, the server should send `Cache-Control: no-cache` (forces revalidation every time via ETag) or the client should explicitly pass `cache: 'no-store'` on that fetch. If occasional staleness is acceptable, a shorter `max-age` is the lighter fix.\n\nI've seen this exact bug reported as 'the API is broken' when the actual fix was a one-line header change on an endpoint that should never have had a long max-age in the first place.\n\n**Testing:** whether you reach for caching semantics as a first suspect for 'stale data' bugs, not just application state.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "http-for-frontend-iq2",
+      "question": "Why is it dangerous to automatically retry a failed POST request, and how would you make retries safe for a payment or order-creation flow?",
+      "answerMarkdown": "It's dangerous because POST isn't idempotent — 'create a new order' run twice creates two orders, and on a timeout you genuinely can't tell whether the first request succeeded server-side before the response was lost. The client only knows it didn't get an answer, not that nothing happened.\n\nThe production-grade fix is an **idempotency key**: the client generates a unique identifier (a UUID) per logical operation, once, before the first attempt, and sends it as a header on every retry of that same operation. The server keeps a short-lived record of keys it's processed — if it sees the same key again, it returns the stored result of the first execution instead of running the operation a second time. Stripe's Payments API is the reference implementation of this pattern, precisely because 'did my payment go through' has to be answerable with certainty, not a guess.\n\nWithout that mechanism, my rule is: retry `GET`/`PUT`/`DELETE` freely, since they're idempotent by nature, but never auto-retry a bare `POST` on ambiguous failure (timeout, connection drop) — only on responses that clearly indicate the request never reached the server, like a DNS failure before any bytes went out.\n\nI'd also flag this in code review specifically — a generic retry-with-backoff wrapper applied uniformly to every HTTP call is a common source of duplicate-charge bugs, because it doesn't distinguish method semantics at all.\n\n**Testing:** whether you connect idempotency directly to a real failure mode, and know the actual mechanism (idempotency keys) used to fix it in production systems.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Reliability"
+    },
+    {
+      "id": "http-for-frontend-iq3",
+      "question": "What's the difference between ETag-based and Last-Modified-based cache revalidation, and when would you pick one over the other?",
+      "answerMarkdown": "Both answer the same question — 'is my cached copy still good?' — but at different granularities. `Last-Modified` is a timestamp, checked with `If-Modified-Since`, accurate to the second; `ETag` is an opaque identifier the server computes from the response body itself (often a hash), checked with `If-None-Match`, and can detect a change even when the modification timestamp hasn't changed, or the reverse — content identical but the file re-saved with a new timestamp.\n\nThe practical gap: `Last-Modified` alone would incorrectly treat a file re-saved with no actual content change as 'modified,' forcing an unnecessary full re-download, because it only looks at the clock, not the bytes. An `ETag` computed from content avoids that — same content, same hash, same ETag, so the server can correctly answer `304` even after a meaningless re-save.\n\nIn practice I default to ETag when the server supports it, because it's strictly more precise and avoids that false-positive re-download. `Last-Modified` still matters as a fallback for servers or CDN configurations that don't compute ETags, and the two aren't mutually exclusive — many servers send both, and a client can send both conditional headers, with the server free to honor whichever it trusts more.\n\nEither way, the win over no revalidation at all is the same: a `304` response has no body, so a cache hit that still needs a round trip is far cheaper than a full re-download.\n\n**Testing:** whether you understand the two mechanisms are solving the same problem at different fidelity, not interchangeable synonyms.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Caching"
+    },
+    {
+      "id": "http-for-frontend-iq4",
+      "question": "Your app's fetch calls never throw for a 500 error — the .catch() block never runs, and errors show up as broken UI instead of an error state. Why, and how do you fix it?",
+      "answerMarkdown": "This is one of the most common `fetch` surprises: the `fetch` promise only rejects on a **network-level failure** — DNS failure, connection refused, CORS block — not on an HTTP error status. A `500` or `404` response is still a successfully completed HTTP exchange as far as the Fetch API is concerned; the promise resolves normally with `response.ok === false` and `response.status === 500`.\n\nDevelopers coming from libraries like Axios (which does throw on non-2xx by default) get bitten by this constantly — they write a `.catch()` expecting it to handle server errors and it silently never fires, so the code falls through to whatever happens when you try to `.json()` an error page's HTML body or an empty response.\n\nThe fix is an explicit check right after the fetch resolves, before touching the body:\n\n```javascript\nconst res = await fetch(url);\nif (!res.ok) {\n  throw new Error(`Request failed: ${res.status}`);\n}\nconst data = await res.json();\n```\n\nThat manually promotes an HTTP error status into a JS exception your existing `.catch()` or `try/catch` can actually handle. I treat this as a standing checklist item whenever I review a new `fetch` call — `res.ok` gets checked before the body is ever parsed, every time, with no exceptions for 'this endpoint always succeeds.'\n\n**Testing:** whether you know fetch's actual rejection semantics precisely, rather than assuming it behaves like other HTTP clients.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    }
+  ]
+}

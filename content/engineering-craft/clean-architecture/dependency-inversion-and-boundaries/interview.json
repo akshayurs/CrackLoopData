@@ -1,0 +1,37 @@
+{
+  "topicId": "dependency-inversion-and-boundaries",
+  "interviewQuestions": [
+    {
+      "id": "dependency-inversion-and-boundaries-iq1",
+      "question": "What does the Dependency Inversion Principle actually mean, and how is it different from just using an interface?",
+      "answerMarkdown": "It's about **who owns the interface**, not just whether one exists. Plenty of codebases use interfaces everywhere and still haven't inverted anything.\n\nThe principle has two clauses: high-level modules shouldn't depend on low-level modules — both should depend on abstractions — and abstractions shouldn't depend on details, details should depend on abstractions. Concretely: my business logic (high-level, encodes *why* the system exists) shouldn't hard-depend on my SQL library (low-level, a *how*). But the part people skip is that the abstraction is **defined by the business layer**, based on what it needs — `save(order)`, `findById(id)` — not handed down by whatever the database driver happens to expose.\n\nThe test I use to check this is real: delete the concrete database adapter package entirely. Does the domain package still compile? If yes, the dependency is genuinely inverted — the domain only ever referenced its own interface. If deleting the adapter breaks domain compilation, you've got an interface, but the import still runs the old direction underneath it.\n\nThe payoff is concrete, not academic: I can swap Postgres for DynamoDB by writing one new adapter, and I can unit-test my pricing logic with an in-memory fake in milliseconds, no test database required.\n\n**Testing:** whether you understand DIP as an ownership rule for the contract, or just recall \"program to an interface\" without the deeper mechanism.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "dependency-inversion-and-boundaries-iq2",
+      "question": "Walk me through what a port and an adapter are, using a payment integration as the example.",
+      "answerMarkdown": "A **port** is the interface, owned by the domain — it describes what the domain needs, in the domain's vocabulary. For payments, that's something like `PaymentGateway` with a `charge(amount, customerId) -> PaymentResult` method. It says nothing about Stripe, PayPal, or HTTP.\n\nAn **adapter** is a concrete class living in the outer/infrastructure layer that implements the port for one specific technology — `StripePaymentGateway` implementing `PaymentGateway` by calling Stripe's SDK and mapping its response shape onto `PaymentResult`. If the business later adds Adyen as a second processor, that's a second adapter, `AdyenPaymentGateway`, satisfying the exact same port — the checkout use case that calls `charge()` doesn't change a line.\n\nThe part that trips people up: one port can and often does have multiple adapters simultaneously in the same running system — a production `StripePaymentGateway` and a test-only `FakePaymentGateway` that just records calls in memory, both valid implementations of the same interface, swapped in via configuration or dependency injection at startup.\n\nThis vocabulary is exactly what hexagonal architecture formalizes: a core surrounded by ports, with adapters plugged into each one from the outside.\n\n**Testing:** whether you can name the two halves precisely and give a realistic example, not just recite the definitions.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Ports and adapters"
+    },
+    {
+      "id": "dependency-inversion-and-boundaries-iq3",
+      "question": "Your team defined a repository interface, but swapping databases still required changing business-layer code. What likely went wrong?",
+      "answerMarkdown": "Almost certainly the interface leaked implementation details — it exists, but it's shaped around one storage technology instead of the domain's vocabulary, so a different technology can't satisfy it without changing callers.\n\nA concrete version of this bug: the interface has a method like `findWhere(sqlClause: str)` or `executeQuery(sql)`. It's technically an abstraction — there's a class boundary — but it presumes SQL semantics. Move to DynamoDB or an in-memory store and there's no `WHERE` clause to hand it, so every caller that built a SQL string now has to change, which is exactly the coupling dependency inversion was supposed to remove.\n\nMy test for whether a port is actually domain-shaped: could I implement it with a plain dictionary and a for-loop, no query language at all? `findOverdueOrders()` — yes, trivially, iterate and filter by a date field. `findWhere(\"status = 'overdue'\")` — no, I'd need to either write a tiny SQL interpreter or special-case it, which tells me the abstraction isn't actually abstract.\n\nThe fix is going back to the domain and asking \"what operations does the business logic actually need,\" naming each one explicitly, and re-deriving the interface from there — not from what the current database happens to make easy.\n\n**Testing:** whether you can diagnose a leaky abstraction from a symptom, which is the most common real DIP failure.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "dependency-inversion-and-boundaries-iq4",
+      "question": "Is dependency inversion worth the extra ceremony for a small CRUD service with one database that's never going to change?",
+      "answerMarkdown": "Honestly, sometimes no — and I'd say that directly in a design review rather than applying it reflexively.\n\nThe cost is real: an extra interface file, a wiring step to hand the concrete adapter to the domain at startup, one more layer of indirection for someone reading the code to trace through. For a genuinely small, short-lived CRUD service — an internal admin tool, a throwaway migration script — that ceremony can cost more than it returns, especially if the team is small and the \"test\" is just clicking through the UI manually anyway.\n\nWhere it earns its cost is when at least one of these is true: the domain logic is non-trivial enough that you actually want fast unit tests without a database; the underlying technology is genuinely likely to change (a startup evaluating databases, a library meant to support multiple backends); or the codebase is going to be maintained by people other than its original author, where the interface also documents \"here's exactly what this component needs from persistence,\" independent of implementation noise.\n\nThe failure mode I watch for is the opposite of over-engineering: teams skip it on a service that then grows business complexity for two years, and by the time someone wants to add real unit tests or swap a vendor, the business logic and the SQL are so entangled that inverting later is a multi-week refactor instead of a design choice made on day one.\n\n**Testing:** whether you can right-size the pattern to the situation instead of treating it as a universal best practice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

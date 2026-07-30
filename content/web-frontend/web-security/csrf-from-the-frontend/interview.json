@@ -1,0 +1,37 @@
+{
+  "topicId": "csrf-from-the-frontend",
+  "interviewQuestions": [
+    {
+      "id": "csrf-from-the-frontend-iq1",
+      "question": "Why does this endpoint need a CSRF token when that one doesn't?",
+      "answerMarkdown": "It comes down to one question: **does the browser attach the credential automatically?**\n\nIf the endpoint authenticates with a **cookie**, it's CSRF-able. Cookies are scoped to a domain, so any page in the browser can cause a request to yours and the browser attaches the session — the credential travels based on where the request is going, not who caused it. That's ambient authority, and it's the whole vulnerability.\n\nIf it authenticates with a **bearer token in an `Authorization` header** that the SPA sets from memory, it isn't. A cross-site page can trigger the request, but it can't read your token, so the request arrives unauthenticated and gets a 401.\n\nThe same test catches the less obvious cases. HTTP Basic auth, Kerberos on an intranet, and TLS client certs are all attached automatically, so all three are CSRF-able. And a **login** form needs a token even though there's no session yet — login CSRF signs the victim into the *attacker's* account, so their subsequent searches, uploads and saved payment methods land there.\n\nAlso worth saying: whether the endpoint changes state. A genuinely read-only GET has nothing to forge, which is why keeping mutations out of GET is a security rule as well as a REST one.\n\n**Testing:** whether you can derive CSRF exposure from the auth mechanism instead of memorising which endpoints have tokens.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "csrf-from-the-frontend-iq2",
+      "question": "Explain SameSite cookies. Which value would you pick for a session cookie?",
+      "answerMarkdown": "`SameSite` tells the browser whether to attach a cookie on requests originating from a different site, which attacks CSRF at the root rather than detecting it.\n\n- **`Strict`** — never sent cross-site. Safest, and it breaks a real workflow: clicking a link from an email or a search result arrives logged-out, which users read as \"it signed me out.\"\n- **`Lax`** — sent on top-level navigations with safe methods, not on cross-site POSTs, iframes, images or `fetch`. Blocks the classic auto-submitted-form attack while keeping inbound links working.\n- **`None`** — always sent, requires `Secure`. Needed for genuine embedding: payment iframes, chat widgets, some SSO flows.\n\nFor a general session cookie I'd pick **`Lax`**, and set it explicitly rather than leaning on Chrome's default, so behaviour doesn't vary by browser. A nice refinement is two cookies: a `Lax` one that keeps you signed in, and a `Strict` one required for destructive actions.\n\nThe limitation I'd raise unprompted: **SameSite is site-scoped, not origin-scoped.** `promo.example.com` and `app.example.com` are the same site, so a compromised or dangling subdomain bypasses it completely. That's precisely why I'd still run CSRF tokens underneath — the two fail in different ways.\n\n**Testing:** whether you know the values and their UX costs, and whether you know where SameSite stops working.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanisms"
+    },
+    {
+      "id": "csrf-from-the-frontend-iq3",
+      "question": "Our CORS config only allows our own origin. Doesn't that already prevent CSRF?",
+      "answerMarkdown": "No — the two govern different things, and this is one of the most common confusions in web security.\n\n**CORS controls whether JavaScript may read a cross-origin response.** It's a read-side relaxation of the same-origin policy. It does not decide whether the request is sent, and the browser will happily deliver it and let your server process it before any CORS check on the response matters.\n\nCSRF needs only the request to arrive. And the classic delivery vectors aren't subject to CORS at all: a cross-site form POST, an `<img>` load, a top-level navigation. None of those are \"CORS requests\" — they're the plain, always-allowed web.\n\nWhere the confusion has a grain of truth: a cross-origin `fetch` with a custom header does trigger a **preflight**, which your CORS policy will refuse. So a JavaScript-driven attack against a JSON API expecting `Content-Type: application/json` is often blocked as a side effect. That's incidental, not a designed defense — a form POST with `Content-Type: application/x-www-form-urlencoded` is preflight-exempt and sails past.\n\nAlso worth noting the inverse: a permissive CORS config — reflecting arbitrary origins with `Access-Control-Allow-Credentials: true` — is its own serious bug, letting an attacker *read* your authenticated responses. Restrictive CORS is necessary; it just isn't the CSRF control.\n\n**Testing:** whether you can separate request-sending from response-reading, which is the axis the whole browser security model turns on.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "csrf-from-the-frontend-iq4",
+      "question": "Design CSRF protection for an app that also has to be embeddable in customers' own sites.",
+      "answerMarkdown": "I'd separate the two surfaces rather than weaken one cookie for both.\n\n**Main app.** Session cookie `HttpOnly; Secure; SameSite=Lax; Path=/`. Every state-changing endpoint requires a CSRF token — synchronizer tokens if a subdomain could be hostile, double-submit otherwise, since double-submit trusts a cookie to be its own witness and a subdomain can set cookies on the parent domain.\n\n**Embedded surface.** A *separate* cookie, `SameSite=None; Secure`, scoped by `Path` to the embed routes, carrying a narrower set of privileges — enough for the widget, not enough for account settings or payments. The main session cookie is never touched.\n\n**Layers underneath both.** Reject cross-site state-changing requests generically using **Fetch Metadata** (`Sec-Fetch-Site: cross-site` plus `Sec-Fetch-Mode: navigate` on a POST is almost always an attack), with an explicit allowlist for the embed origins. Validate the `Origin` header rather than `Referer`, since `Referer` is stripped by privacy settings and forces a fail-open/fail-closed choice.\n\n**Operationally:** a test asserting the cookie attributes on every deploy, because the realistic failure isn't a clever attack — it's someone flipping the main cookie to `None` to unblock one integration and nobody noticing for a year.\n\n**Testing:** whether you can scope a security exception to the surface that needs it instead of globally relaxing a control.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design"
+    }
+  ]
+}

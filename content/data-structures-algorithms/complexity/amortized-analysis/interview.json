@@ -1,0 +1,37 @@
+{
+  "topicId": "amortized-analysis",
+  "interviewQuestions": [
+    {
+      "id": "amortized-analysis-iq1",
+      "question": "Why is appending to a dynamic array considered O(1) when it sometimes has to copy the entire array?",
+      "answerMarkdown": "It's O(1) **amortized**, not worst-case — those are different guarantees, and the distinction is the actual answer here.\n\nThe mechanism: when the array fills up, it doesn't grow by a fixed amount — it **doubles** its capacity, copies the existing elements into the new block, and continues. Doubling means resizes happen at sizes 1, 2, 4, 8, 16, … — only log n times for n total pushes — and even though each resize is more expensive than the last, the total copy work across all of them forms a geometric series that sums to roughly 2n, still O(n) overall. Spread that O(n) total resize cost across n pushes and each push's *average* share is O(1).\n\nConcretely: pushing a million elements does roughly two million total copy operations across all resizes combined — under 2 copies per push on average, even though a handful of those million pushes individually did O(n) work.\n\nThe caveat I'd always add: this is an average over the whole sequence, not a per-call promise. Any single push — specifically the one that triggers a resize — really does cost O(n). A system with a hard per-call latency budget can't rely on this and should pre-allocate capacity instead.\n\n**Testing:** whether you can explain amortized analysis mechanically, not just recite \"O(1) amortized\" as a memorized fact.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "amortized-analysis-iq2",
+      "question": "Why does a dynamic array double its capacity instead of growing by a fixed amount like +10 or +100 each time?",
+      "answerMarkdown": "Because growing by a fixed amount is quadratic overall, and doubling is the specific choice that makes it linear.\n\nWith a fixed increment of +10: starting from empty, a resize happens every 10 pushes, and the copy sizes climb linearly — 10, then 20, then 30 elements copied, and so on. Summing that arithmetic series over n/10 resizes gives O(n²) total copy work for n pushes — an amortized cost of O(n) per push, not O(1). I'd point out this is easy to miss because each individual resize still looks cheap; it's the accumulation across all of them that blows up.\n\nWith doubling, resizes happen at sizes 1, 2, 4, 8, …, only log n times total, and the copy sizes form a **geometric** series (1+2+4+...+n), which sums to roughly 2n — linear in the final size, regardless of how many resizes happened. That's the whole trick: doubling makes total resize cost proportional to the final array size, not to the number of resizes times their individual cost.\n\nThe same logic is why hash tables double their bucket count on resize rather than adding a fixed number of buckets — it's the identical amortized argument applied to a different backing structure.\n\n**Testing:** whether you can derive why the growth factor matters, rather than just knowing 'doubling is standard.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "amortized-analysis-iq3",
+      "question": "You're building a system with a strict per-request latency SLO, and one code path calls `list.append()` in a loop. Is amortized O(1) good enough here?",
+      "answerMarkdown": "Not automatically — I'd want to know whether the SLO is measured per individual call or aggregated over a request, because amortized O(1) only satisfies the second kind.\n\nAmortized O(1) guarantees the *total* cost across a sequence of appends is O(n), so the average per call is O(1) — but it says nothing about any single call. If one append in the sequence happens to trigger a doubling resize on a large array, that one call does real O(n) work, and if that call lands inside the request that's closest to violating the SLO, the aggregate guarantee doesn't help — you've already blown the per-call budget.\n\nMy actual fix would depend on what's known ahead of time: if the final size is roughly predictable, **pre-allocate capacity** up front (`list(maxlen)`-style reservation) so no resize happens during the hot path at all, converting the amortized bound into a real worst-case O(1). If the size truly isn't predictable, I'd consider whether the resize can be moved off the request path entirely — batching growth during a warmup phase, or accepting the tail latency and sizing the SLO with that in mind.\n\nThe general principle: amortized bounds are the right tool for total throughput; worst-case bounds are the right tool for tail latency, and mixing them up is a real production bug, not just a theory nitpick.\n\n**Testing:** whether you can translate an asymptotic guarantee into a concrete production trade-off, which is where this topic actually gets tested at the senior level.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production trade-offs"
+    },
+    {
+      "id": "amortized-analysis-iq4",
+      "question": "Give an example of amortized analysis outside of dynamic array resizing.",
+      "answerMarkdown": "Hash table resizing is the closest cousin — a hash map doubles its bucket array and rehashes every key when its load factor crosses a threshold, and the same geometric-series argument applies: O(n) total rehashing work across n inserts, so O(1) amortized per insert, with the identical caveat that any single insert can trigger the O(n) rehash.\n\nA less obvious one: an algorithm that pushes and pops from a stack where **each element is pushed at most once and popped at most once** across the entire run — even if a single call site looks like it could loop unpredictably, bounding total pushes-plus-pops by 2n proves the whole algorithm is O(n), not O(n²), because no element does repeated work. This shows up in monotonic-stack style algorithms (like computing next-greater-element for every array position): a naive read might worry that the inner \"pop while...\" loop makes it quadratic, but since every element can only be popped once ever, the amortized total across the whole outer loop is linear.\n\nSelf-adjusting structures like splay trees push this further — they let some operations do extra restructuring work in exchange for a genuinely better amortized bound (O(log n) per operation) than any single operation's worst case would suggest on its own.\n\nThe pattern across all of these: whenever \"this thing happens rarely, and gets cheaper to happen because of what already occurred,\" or \"each element is only ever touched a bounded number of times,\" that's amortized reasoning, whether or not the problem calls itself one.\n\n**Testing:** whether your understanding of amortized analysis generalizes past the one textbook example, or is memorized specifically to dynamic arrays.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Generalizing the technique"
+    }
+  ]
+}

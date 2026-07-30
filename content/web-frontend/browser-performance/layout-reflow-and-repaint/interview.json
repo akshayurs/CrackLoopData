@@ -1,0 +1,37 @@
+{
+  "topicId": "layout-reflow-and-repaint",
+  "interviewQuestions": [
+    {
+      "id": "layout-reflow-and-repaint-iq1",
+      "question": "Here are two animations that move an element the same distance — one animates `left`, the other `transform: translateX()`. Why is the first janky and the second smooth?",
+      "answerMarkdown": "Because they enter the rendering pipeline at different stages. The browser goes **Style → Layout → Paint → Composite**, and a change re-runs every stage from wherever it invalidates.\n\n- **`left` invalidates Layout.** Every frame the browser recomputes geometry, repaints the affected region, then composites. On a 300ms transition that's roughly 18 full layout-paint-composite cycles, all on the main thread.\n- **`transform` invalidates only Composite.** The element is already painted into a GPU texture, so each frame is the GPU redrawing that texture with a new matrix. Typically under 1ms, and the cost barely varies with element size.\n\nThe bigger reason, and the one I'd lead with in production terms: a composited `transform` animation can run on the **compositor thread**. If some JavaScript blocks the main thread for 200ms, the transform animation keeps moving and the `left` animation freezes solid. That's usually what users actually notice.\n\nThe caveat is that transform isn't literally free — promoting the element costs a one-time rasterisation and GPU memory (a full-screen layer at 1080p is about 8MB), so I promote deliberately rather than blanket-applying `will-change`.\n\nI'd confirm rather than assert: record the interaction in the Performance panel and look for purple Layout bars repeating once per frame.\n\n**Testing:** whether you know the pixel pipeline as a mechanism, or have just memorised \"use transform.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "layout-reflow-and-repaint-iq2",
+      "question": "What is the difference between reflow and repaint?",
+      "answerMarkdown": "**Reflow** (layout) is the browser recomputing *geometry* — how big each box is and where it sits. **Repaint** is filling in *pixels* for boxes whose geometry hasn't changed.\n\n- **Reflow triggers:** changing `width`, `height`, `padding`, `margin`, `top`/`left`, `display`, `font-size`; adding or removing DOM nodes; changing text; resizing the window; a web font loading with different metrics.\n- **Repaint triggers:** `background-color`, `color`, `visibility`, `border-color`, `box-shadow`, `border-radius`.\n\nThe cost difference comes from reflow being **relational**. In normal flow, one box's position depends on its siblings and ancestors, so widening a single element can push everything after it and force re-measuring thousands of nodes. On a large page that's routinely 10-30ms on a mid-range phone — the whole 16.7ms frame budget in one stage. A repaint is bounded by the *area* redrawn, so it's often under a millisecond, though large blurred `box-shadow`s or `filter: blur()` can make it just as expensive.\n\nThe ordering matters too: **reflow always implies repaint**, since moved boxes must be redrawn. Repaint does not imply reflow.\n\nThe practical consequence is the `display: none` versus `visibility: hidden` choice — one is a full reflow, the other repaint-only.\n\n**Testing:** whether you can name the trigger sets and explain *why* layout costs more, not just that it does.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "layout-reflow-and-repaint-iq3",
+      "question": "Which CSS properties are cheap to animate, and what does \"cheap\" actually mean here?",
+      "answerMarkdown": "Only two families are genuinely cheap: **`transform`** (translate, scale, rotate, skew) and **`opacity`**. Everything else re-enters the pipeline at layout or paint.\n\n\"Cheap\" means three concrete things:\n\n- **Layout and paint are skipped.** The GPU already holds the element's rasterised texture; a frame is a matrix multiply or an alpha multiply.\n- **Cost is roughly independent of size.** A full-screen slide costs about what a 40px one does, because it's the same texture operation.\n- **It can run off the main thread**, so it survives JavaScript blocking.\n\nA typical composited frame lands under 1ms against a ~10ms practical budget (16.7ms refresh minus browser overhead), and 120Hz displays cut that to about 8.3ms.\n\nWhere it stops being free: the element must first be **painted into its own layer**, which is a real one-time cost at the start of the animation, and each layer consumes GPU memory — about 8MB for a full-screen layer at 1080p. Scaling up a texture can also look blurry, since it was rasterised at one size.\n\nSo the reframing I'd offer: transform doesn't remove cost, it moves the cost from per-frame to one-time. That's a great trade for a discrete animation and a bad one applied across a whole page.\n\n**Testing:** whether you understand the mechanism behind the advice and its limits, rather than reciting a two-property list.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "layout-reflow-and-repaint-iq4",
+      "question": "A product feed page renders 5,000 rows and the initial render takes over two seconds on a mid-range Android device. How would you attack it?",
+      "answerMarkdown": "First I'd confirm where the time goes with a Performance recording — if the flame chart is dominated by purple **Layout** bars, this is a geometry problem and not a JavaScript one, which changes the fix entirely.\n\nAssuming it is layout, the levers in order of payoff:\n\n- **`content-visibility: auto` on each row**, paired with `contain-intrinsic-size` so the scrollbar doesn't jump. Offscreen rows skip layout and paint entirely until they scroll near the viewport. On a 5,000-row list this typically turns a full-tree layout into a viewport-sized one — often a several-hundred-millisecond win for two CSS lines.\n- **Virtualise the list** if the rows are complex or interactive: keep ~30 nodes in the DOM regardless of dataset size. More invasive than containment, but it also caps memory and event-handler count.\n- **`contain: layout` on row containers**, so a change inside one row can't force the whole document to re-measure.\n- **Flatten the DOM.** Deeply nested wrapper divs multiply the work of every layout pass; cutting nesting depth per row is a real, measurable saving at this scale.\n\nWhat I'd avoid is guessing. \"5,000 rows is slow\" could equally be JSON parsing, a per-row `offsetHeight` read causing forced synchronous layout, or oversized images — and each has a different fix.\n\n**Testing:** whether you measure before optimising, and whether you know the modern containment primitives rather than only \"virtualise it.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}
