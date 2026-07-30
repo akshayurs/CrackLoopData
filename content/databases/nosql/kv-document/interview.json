@@ -1,0 +1,45 @@
+{
+  "topicId": "kv-document",
+  "interviewQuestions": [
+    {
+      "id": "kv-document-iq1",
+      "question": "How would you decide whether to embed or reference related data in a document database?",
+      "answerMarkdown": "I'd ask two questions about the child data: is it read together with the parent almost every time, and does it change independently of the parent after creation? If both are true, I'd embed — an order's line items are a good example, since they're always read with the order and are effectively frozen once the order is placed.\n\nIf the child data is shared across many parents or updated independently, I'd reference instead — a product referenced by thousands of orders shouldn't have its price update require touching every order that ever referenced it. I'd also apply a hard check regardless: can I state a reasonable maximum size for the embedded collection? If not — comments on a post, for instance, which can grow unbounded — that's a strong signal to reference, since MongoDB caps documents at 16 MB and unbounded arrays degrade both read and write performance well before hitting that limit.\n\nIn a system with both patterns, like an order with a handful of embedded line items but a reference to a shared product catalog, I'd mix the two deliberately rather than picking one rule for the whole schema.\n\n**Testing:** whether you have a concrete decision rule instead of treating embed-vs-reference as a coin flip.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Embed vs reference decision"
+    },
+    {
+      "id": "kv-document-iq2",
+      "question": "Why would you use Redis alongside a relational database rather than replacing it entirely?",
+      "answerMarkdown": "I wouldn't frame it as a replacement — Redis and a relational database solve different problems. Redis is in-memory and gives sub-millisecond get/put by key, but it's schemaless, has no real query language, and durability is weaker by default. A relational database gives ACID transactions, rich querying, and strong durability, but a disk-backed query typically costs several to tens of milliseconds.\n\nThe pattern I'd reach for is cache-aside: put data that's read far more often than it changes — session tokens, feature flags, rate-limit counters, frequently-viewed product pages — in Redis, keyed for exact lookup, and fall back to the relational database on a cache miss. This shaves latency off the hottest paths and takes real load off the primary database, without giving up the primary's transactional guarantees for the data that actually needs them.\n\nThe trade I'd flag explicitly: now there are two sources of truth in effect, and cache invalidation — making sure Redis doesn't serve stale data after a write — becomes a real engineering problem, not an afterthought.\n\n**Testing:** whether you understand caching as a targeted latency optimization with its own consistency cost, not a database replacement.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why cache alongside a database"
+    },
+    {
+      "id": "kv-document-iq3",
+      "question": "Walk me through designing a DynamoDB single-table schema for a user and their orders.",
+      "answerMarkdown": "I'd start from the access patterns, since that's what single-table design actually optimizes for — say, \"get a user's profile,\" \"get a user and all their orders,\" and \"get one specific order.\" I'd use a generic partition key and sort key: `PK=USER#<id>` with `SK=PROFILE` for the profile item, and `PK=USER#<id>` with `SK=ORDER#<orderId>` for each order — all sharing the same partition key.\n\nA query for `PK=USER#123` with no sort-key filter returns the profile and every order in one request, sorted by sort key — that's the payoff, replacing what would be a join in a relational schema with a single partition read.\n\nI'd flag the real limitation honestly: if a new access pattern shows up later — say \"find all orders across all users placed today\" — that query isn't naturally servable by this key design, and would need a secondary index or a schema change, not just a new query. That upfront rigidity is the actual price of single-table design's efficiency.\n\n**Testing:** whether you can design real PK/SK structure from stated access patterns, and honestly name the trade-off, not just the benefit.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Designing a single-table schema"
+    },
+    {
+      "id": "kv-document-iq4",
+      "question": "A DynamoDB table is throttling for one specific tenant even though the table's overall provisioned capacity looks fine. What's happening, and how would you fix it?",
+      "answerMarkdown": "This is a hot partition. If the table's partition key is something like `PK=TENANT#<id>`, and one tenant is far larger or more active than the others, all of that tenant's traffic lands on the same physical partition, which has its own throughput ceiling regardless of the table's aggregate provisioned capacity elsewhere.\n\nI'd confirm this by checking DynamoDB's per-partition throttling metrics rather than just table-level capacity, since the table-level view can look healthy while one partition is saturated.\n\nThe fix is to spread that tenant's traffic artificially: add a random or hashed suffix to the partition key for high-volume tenants — `TENANT#<id>#0` through `TENANT#<id>#9`, say — and fan reads out across all the suffixes, aggregating results in the application. This trades some query simplicity for distributing load across multiple physical partitions.\n\n**Testing:** whether you recognize hot-partition symptoms and know the standard mitigation, not just that DynamoDB \"can scale.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing a hot partition"
+    },
+    {
+      "id": "kv-document-iq5",
+      "question": "What's the risk of relying on partial update operators like MongoDB's `$set` and `$inc` under concurrent writes, and how do they help?",
+      "answerMarkdown": "The alternative to a partial update is read-modify-write: fetch the document, change a field in application memory, write the whole thing back. Under concurrency, two clients doing this on the same document can race — client A reads, client B reads the same version, both modify different fields, and whichever writes last silently overwrites the other's change (a lost update).\n\n`$set` and `$inc` avoid this because they're applied atomically server-side against the current document state, not against a client-held copy — incrementing `revisionCount` with `$inc` is safe under concurrent writes because MongoDB serializes the increment at the document level, rather than each client computing `current + 1` from a possibly-stale read.\n\nThe remaining risk is at a coarser grain: if two concurrent operations need to make a decision based on multiple fields together (check a balance, then conditionally deduct), a single `$inc` doesn't give you that — you'd want a conditional update (`findOneAndUpdate` with a filter on the current value) or a multi-document transaction, which is a different guarantee than a single partial-field update provides.\n\n**Testing:** whether you understand what atomic per-field updates actually protect against, and where their guarantee stops.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Partial updates and concurrency"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "buffering-caching-spooling",
+  "interviewQuestions": [
+    {
+      "id": "buffering-caching-spooling-iq1",
+      "question": "You called write() and it returned — is your data safe on disk?",
+      "answerMarkdown": "No, and I'd walk through exactly why before answering what to do. A normal `write()` on most operating systems only copies your data into the kernel's **page cache** — it returns as soon as that in-memory copy succeeds, which is why it's fast (microseconds) regardless of the actual disk's speed. The kernel marks those pages **dirty** and flushes them to disk later, asynchronously, on its own schedule (a timer, memory pressure, or the page being evicted).\n\nIf the machine crashes, loses power, or the kernel panics before that flush happens, the data you thought you wrote is gone — even though `write()` reported zero errors. This is a genuine, common misunderstanding because a successful syscall feels like it should imply durability, but POSIX's actual guarantee is weaker: visible to subsequent reads on this machine, not necessarily durable across a crash.\n\nThe fix is calling `fsync()` (data and metadata) or `fdatasync()` (data only, often cheaper) at the specific point durability actually matters — and paying its real cost, typically 1-10ms on an HDD, when you do. This exact trade-off is why databases batch many logical writes into one WAL entry and call `fsync()` once per batch rather than per write.\n\n**Testing:** whether you know the actual durability contract of write() versus assuming success implies safety.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "write() success vs actual durability"
+    },
+    {
+      "id": "buffering-caching-spooling-iq2",
+      "question": "How would you explain the performance difference between a page-cache hit and a page-cache miss, with real numbers?",
+      "answerMarkdown": "I'd give the concrete magnitudes because the gap is large enough to change how you'd design around it. A page cache hit serves a 4KB page essentially at RAM bandwidth — sub-microsecond latency, tens of gigabytes per second of aggregate throughput. A miss on an HDD costs roughly 1-10 milliseconds (a mechanical seek plus rotational latency); even a fast NVMe SSD miss costs tens to low hundreds of microseconds. That's a 100-1000x latency gap between a hit and a miss.\n\nThe practical consequence I'd highlight: whether a workload's \"working set\" — the data it actually touches repeatedly — fits in available RAM for caching is often the single biggest lever on real-world performance, bigger than most application-level optimizations. A database server with enough RAM to cache its hot dataset can behave completely differently under load than an identical server with slightly less RAM that's constantly missing to disk, even though the disk and CPU hardware are otherwise the same.\n\nI'd close with the operational tell: watching cache hit-rate metrics (or simply `free -h`'s cache column trending toward capacity) is often more informative for diagnosing a slow system than CPU or raw disk IOPS numbers, because it tells you whether you're paying the RAM-speed cost or the disk-speed cost for your actual access pattern.\n\n**Testing:** whether you can reason with real numbers rather than vaguely stating \"caching is faster.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Quantifying the cache hit/miss gap"
+    },
+    {
+      "id": "buffering-caching-spooling-iq3",
+      "question": "Why would a database engine deliberately bypass the OS page cache with O_DIRECT instead of relying on it?",
+      "answerMarkdown": "I'd frame this as the database betting it can manage memory better than the OS's generic policy for its specific access pattern. The OS page cache uses a general-purpose eviction policy (roughly LRU-like) that doesn't know which pages are actually hot from the database's perspective — a database like PostgreSQL or InnoDB tracks its own buffer pool with access patterns tuned to its query engine, indexes, and workload, and doesn't want the OS caching the exact same pages a second time in a separate, redundant copy of RAM.\n\nWith `O_DIRECT`, reads and writes go straight between the device and the application's own buffers, skipping the page cache entirely. The database gets full control over what stays resident in memory and for how long, instead of competing with the OS's generic heuristics — and avoids wasting RAM on double-buffered copies of the same pages.\n\nI'd be explicit about the cost, since this is the part that shows real understanding: `O_DIRECT` has strict alignment requirements (buffer address, size, and file offset must match the device's block size, commonly 512 bytes or 4KB), loses the OS's free read-ahead and write-behind optimizations, and makes the application fully responsible for its own caching correctness — a real engineering investment, not a free performance switch. This is exactly why it's a deliberate choice made by mature database engines, not a general recommendation for most applications.\n\n**Testing:** whether you can articulate a genuine engineering trade-off rather than treating O_DIRECT as a magic performance flag.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "When bypassing the page cache makes sense"
+    }
+  ]
+}

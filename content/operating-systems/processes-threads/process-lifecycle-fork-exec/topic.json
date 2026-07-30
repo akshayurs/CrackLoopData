@@ -1,0 +1,187 @@
+{
+  "id": "process-lifecycle-fork-exec",
+  "title": "Process Lifecycle — fork/exec/wait",
+  "area": "operating-systems",
+  "group": "processes-threads",
+  "order": 3,
+  "slug": "process-lifecycle-fork-exec",
+  "summary": "How Unix actually creates and tears down processes — fork(), exec(), wait(), zombies, orphans, and why splitting creation from loading is the design that makes shells possible.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "process-lifecycle-fork-exec-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every process on a Unix system except the very first one is created the same way: an existing process calls **`fork()`**, which clones itself, and the clone typically calls **`exec()`** to replace its own code with a different program. When that program finishes, its parent calls **`wait()`** to collect its exit status and let the OS free its resources.\n\nThis fork/exec/wait cycle is how every shell runs every command you type, and it's a near-guaranteed interview topic — both the mechanics (\"what does fork return?\") and the failure modes (zombies, orphans) that show up in real production incidents.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s02",
+      "order": 2,
+      "sectionTitle": "Creating a process: fork() semantics",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`fork()` creates a new process — the **child** — as a near-exact copy of the **parent** that called it: same code, same data (initially), same open file descriptors, a new PID. Execution continues in *both* processes, right after the `fork()` call.\n\nThe strange but crucial part: `fork()` returns twice. In the parent, it returns the child's PID (a positive number). In the child, it returns `0`. That single return value is the only way your code can tell which process it's now running in — everything else about the two processes looks identical at that instant.\n\nThis is different from function calls you're used to: one call site, two separate processes continuing from the same point, each seeing a different return value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "process-lifecycle-fork-exec-s02-q1"
+      ]
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s03",
+      "order": 3,
+      "sectionTitle": "Code: fork() example and what prints where",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\n#include <stdio.h>\n#include <unistd.h>\n\nint main() {\n    pid_t pid = fork();\n    if (pid < 0) {\n        perror(\"fork failed\");\n    } else if (pid == 0) {\n        printf(\"child: my pid=%d, parent's pid=%d\\n\", getpid(), getppid());\n    } else {\n        printf(\"parent: my pid=%d, child's pid=%d\\n\", getpid(), pid);\n    }\n    return 0;\n}\n```\n\nThis prints **two lines**, one from each process, in an order that isn't guaranteed — the OS scheduler decides which of parent or child runs first. Both branches of the `if` genuinely execute, just in different processes; a beginner mistake is expecting only one branch to run, as you would with an ordinary `if`/`else`.\n\nA negative return means `fork()` failed (usually a resource limit like max processes per user) and no child was created at all.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "process-lifecycle-fork-exec-s03-q1"
+      ]
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s04",
+      "order": 4,
+      "sectionTitle": "exec() family: replacing a process image",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`exec()` (really a family: `execve`, `execvp`, `execl`, …) replaces the **current process's** code, data, and stack with a different program's — same PID, same open file descriptors (unless marked close-on-exec), but everything else is wiped and reloaded from the new executable.\n\nCritically, a successful `exec()` **never returns** — there's no \"after exec\" code in the original program, because that program no longer exists in this process; the new program starts from its own `main`. If `exec()` does return, that itself means it failed (e.g., file not found), and the original program's code keeps running.\n\nThis is the mechanism a shell uses to run `ls`: it doesn't need a copy of `ls`'s code lying around — it just tells the kernel to swap in `ls`'s executable image.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s05",
+      "order": 5,
+      "sectionTitle": "The fork+exec pattern — why Unix splits creation from loading",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Unix deliberately splits \"create a process\" (`fork`) from \"load a program into it\" (`exec`) into two calls, instead of one \"spawn this program\" call. Why bother?\n\nBecause the **gap between fork and exec is exactly where a shell does its setup work**: redirecting stdin/stdout to a file (`ls > out.txt`), setting up a pipe between two commands (`ls | grep foo`), changing environment variables, or changing the working directory — all done in the child, using ordinary process operations, before the child calls `exec` to become the actual program. If creation and loading were one atomic step, none of that setup would have anywhere to happen.\n\nThis is why redirection and piping in shells look so simple to use but rely on a genuinely elegant piece of process-lifecycle design underneath.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "process-lifecycle-fork-exec-s05-q1"
+      ]
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s06",
+      "order": 6,
+      "sectionTitle": "wait() and exit() — how a parent reaps a child",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a child process finishes — by returning from `main` or calling `exit()` explicitly — it doesn't just vanish. Its exit status is kept by the kernel until the parent retrieves it by calling `wait()` (or `waitpid()` for a specific child).\n\n`wait()` does two things at once: it blocks the parent until a child exits (if none has already), and it tells the kernel \"I've collected this child's exit status, you can now free its remaining resources.\" That second part — freeing the child's PCB and PID — is called **reaping**, and it's the parent's responsibility, not automatic.\n\nThis is why a long-running server that forks worker processes must always call `wait()`/`waitpid()` for children it expects to exit, typically inside a `SIGCHLD` handler — skip that, and exited children pile up unreaped.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: parent-child timeline across fork/exec/wait/exit",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![fork, exec, and wait timeline between parent and child](assets/fork-exec-timeline.svg)\n\nThe timeline makes the ordering concrete: `fork()` splits one track into two running independently, the child typically calls `exec()` almost immediately to become a different program, and the parent's `wait()` call blocks it (shown as a gap) until the child's `exit()` sends back a status. The parent resumes only after that handoff — everything between the child's `fork()` and `exit()` is invisible to the parent except for that final status code.",
+      "assets": [
+        {
+          "alt": "fork, exec, and wait timeline between parent and child",
+          "path": "assets/fork-exec-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s08",
+      "order": 8,
+      "sectionTitle": "Zombie processes: what they are and why they linger",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **zombie** is a process that has called `exit()` but whose parent hasn't yet called `wait()` to collect its status. The child's memory, code, and file descriptors are already freed — but the kernel keeps a minimal PCB entry around (PID, exit status) because the parent might still ask for it.\n\nA zombie is not \"stuck\" or malfunctioning — it's working exactly as designed, holding just enough state for the parent to retrieve. The problem is entirely about **how long** it lingers: if the parent never calls `wait()`, the zombie stays forever, consuming a PID slot (a finite resource — see the pitfall slide) until the parent itself exits, at which point `init`/`systemd` reaps it automatically.\n\nOn `ps`, zombies show up with `STAT` code `Z` and are often labelled `<defunct>` in the command column.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "process-lifecycle-fork-exec-s08-q1"
+      ]
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s09",
+      "order": 9,
+      "sectionTitle": "Orphan processes and reparenting to init/systemd",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **orphan** is the opposite problem: a child whose *parent* dies (or exits) before the child does. The child doesn't vanish or become invalid — the kernel immediately **reparents** it to PID 1 (`init` or `systemd`), which adopts every orphan on the system.\n\nThis matters because PID 1 is written to always call `wait()` for its (adopted) children, so an orphan will get properly reaped when it eventually exits — it just reports to a new parent in the meantime. You can see this directly: background a long-running process, close the terminal that spawned its parent shell, then check `ps -ef` — its PPID is now `1`.\n\nOrphaning and zombie-hood are different failure surfaces: orphaning is handled automatically by the kernel; zombie accumulation is *not* — it requires the (possibly still-alive) parent to actually call `wait()`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s10",
+      "order": 10,
+      "sectionTitle": "Copy-on-write fork — how modern OSes make fork cheap",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Naively, `fork()` sounds expensive: copy the entire parent's address space — potentially gigabytes — just to immediately overwrite most of it with `exec()`. Modern OSes avoid that with **copy-on-write (COW)**: right after `fork()`, parent and child share the *same physical memory pages*, marked read-only in both page tables. No actual copying happens yet.\n\nThe copy happens lazily, one page at a time, only if either process tries to *write* to a shared page — the CPU's memory protection triggers a page fault, the kernel copies just that one page, and the writer gets its own private copy from then on. If the child immediately calls `exec()` (the overwhelmingly common case), it never writes to most of the parent's pages at all, so most of the copying in copy-on-write never actually happens.\n\nThis is what makes `fork()`+`exec()` practical to call on every single shell command, even for a process with a huge memory footprint. (See Demand Paging in Virtual Memory & Paging for the same lazy-copy mechanism applied more generally.)",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "process-lifecycle-fork-exec-s10-q1"
+      ]
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: forgetting to reap children → zombie accumulation",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A zombie process uses no memory or CPU, so a growing pile of them is harmless.\"\n\n**Why it's wrong:** each zombie still occupies a **PID slot**, and PIDs are a finite, kernel-configured resource (`/proc/sys/kernel/pid_max` on Linux, historically 32768). A long-running server that forks workers per request but never calls `wait()`/`waitpid()` — or doesn't handle `SIGCHLD` — will accumulate zombies until the system runs out of available PIDs, at which point `fork()` itself starts failing for *everything* on the box, not just the buggy service.\n\n**Correct model:** treat reaping as a mandatory part of forking, not an optional cleanup step. Real fixes: call `waitpid()` in a `SIGCHLD` handler, use a process-reaper utility (`tini`, `dumb-init` in containers, which are exactly built to solve this for PID-1 processes in a container that don't naturally reap), or use a library/framework that manages the fork/wait lifecycle for you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "process-lifecycle-fork-exec-s11-q1"
+      ]
+    },
+    {
+      "id": "process-lifecycle-fork-exec-s12",
+      "order": 12,
+      "sectionTitle": "Why containers care about PID 1 specifically",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This isn't just textbook trivia — it's a real, common production bug. In a Docker container, the process you launch (say, your app's entrypoint) runs as **PID 1** *inside the container's PID namespace*. If that app spawns child processes and doesn't explicitly reap them, there's no `systemd` inside the container to fall back on — PID 1 itself has to do the reaping, and most application code was never written expecting to be PID 1.\n\nThe standard fix is exactly what the pitfall slide hints at: run a minimal init process like `tini` as the container's actual PID 1, with your app as its child — `tini` does nothing but reap zombies and forward signals correctly, restoring the safety net a normal OS gives you for free outside a container.\n\nA staff-level answer to \"why does our container have thousands of defunct processes\" is this exact chain: no real init as PID 1 → no automatic reaping → zombie accumulation → eventual PID exhaustion.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "journaling-and-crash-consistency",
+  "interviewQuestions": [
+    {
+      "id": "journaling-and-crash-consistency-iq1",
+      "question": "Why does ext4 journal metadata but not always file data?",
+      "answerMarkdown": "I'd start from what each type of corruption actually costs. Metadata — inodes, directory entries, free-space bitmaps — is small but structurally load-bearing: one bad pointer can make an entire file, or a whole directory subtree, unreachable or cause two files to silently share a block. File data, by contrast, is large but its damage is contained — if a data block is stale after a crash, only that one file's bytes are affected, not the file system's structural integrity.\n\nGiven that asymmetry, journaling everything (data journaling) doubles write I/O — every byte gets written once to the journal and once to its final location — for a guarantee that, for most workloads, exceeds what's actually needed. Ordered mode, ext4's default, journals only metadata but still guarantees data is flushed to disk before the metadata pointing to it commits — so you can never end up with metadata referencing garbage, only occasionally slightly stale data.\n\nConcretely: a database or financial ledger that truly cannot tolerate even a stale data block can opt into `data=journal` mode and pay the throughput cost; most workloads (web servers, general file storage) don't need that and get near-full write speed with ordered mode's weaker-but-sufficient guarantee.\n\n**Testing:** whether you understand journaling as a tunable trade-off between throughput and guarantee strength, not a fixed all-or-nothing feature.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Metadata-only journaling trade-off"
+    },
+    {
+      "id": "journaling-and-crash-consistency-iq2",
+      "question": "You called write() and it returned successfully — is your data safe on disk?",
+      "answerMarkdown": "No, and I'd explain exactly why before answering what to do about it. `write()` on a normal file typically only copies your data into the kernel's **page cache** — it returns as soon as that in-memory copy succeeds, which is why it's fast (microseconds) regardless of the underlying disk's speed. The kernel flushes dirty pages to disk asynchronously, on its own schedule, unless you explicitly ask otherwise.\n\nIf the machine crashes or loses power before that flush happens, the data you thought you wrote is gone — even though `write()` returned zero errors. This surprises people because success from `write()` feels like it should mean durability, but POSIX only promises the data is visible to other reads on this machine, not that it survived a crash.\n\nThe actual durability call is `fsync()` (or `fdatasync()` to skip some metadata), which blocks until the data is genuinely on stable storage — at the cost of real latency, often 1-10ms on an HDD. This is exactly the trade-off database WAL implementations navigate: batch writes, then `fsync()` once per batch, rather than paying that latency per row.\n\n**Testing:** whether you know the actual POSIX durability contract instead of assuming a successful syscall implies the data is safe.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "write() vs real durability"
+    },
+    {
+      "id": "journaling-and-crash-consistency-iq3",
+      "question": "How would you explain the connection between file system journaling and a database's write-ahead log to someone who's only heard of one of them?",
+      "answerMarkdown": "I'd name it as the same pattern applied at two different layers. Both solve identical problems: a multi-step update that must appear atomic, using storage that can only guarantee one small write is atomic at a time, with a process that can die mid-update. The fix in both cases is: write down what you're about to do, durably, before doing it — so recovery is always \"replay the log,\" never \"guess what state we were in.\"\n\nA database's WAL (Postgres's WAL, MySQL's InnoDB redo log) protects the database's own internal structures — its B-tree pages, its transaction commit state — from a crash mid-transaction. A file system's journal protects its structures — inodes, directory entries, bitmaps — from a crash mid-operation. Same mechanism, different layer of the stack.\n\nThe subtlety I'd raise for a senior discussion: the database's WAL durability *depends* on the file system's durability underneath it. When Postgres calls `fsync()` on its WAL file, it's trusting the file system (and the disk beneath that) to actually make those bytes durable. A misconfigured disk controller that lies about write completion — claims data is persisted when it's only in a volatile cache — can silently defeat both layers of protection at once, which is a real, documented class of production data-loss incidents.\n\n**Testing:** whether you can generalize a specific mechanism into a reusable systems pattern, and reason about layered trust between components.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Journaling as a general WAL pattern"
+    },
+    {
+      "id": "journaling-and-crash-consistency-iq4",
+      "question": "Before journaling was standard, how did file systems recover from a crash, and why was that approach eventually replaced?",
+      "answerMarkdown": "I'd describe `fsck` (file system check) concretely: on boot after an unclean shutdown, it walks the *entire* file system — every inode, every directory entry, every free-space bitmap bit — cross-checking them for consistency and heuristically fixing anything that doesn't add up (orphaned inodes, blocks claimed by two files, directory entries pointing at invalid inodes).\n\nThe problem was scale: this scan's cost is proportional to the size of the file system, not to how much was actually in flight when the crash happened. On a multi-terabyte disk with millions of inodes, a full `fsck` could take minutes to hours — an unacceptable delay for a server that needs to come back online quickly after a power event, and a genuinely bad experience for a personal machine too.\n\nJournaling changed the recovery cost model entirely: instead of scanning the whole disk, recovery only needs to check a small, bounded journal for committed-but-not-checkpointed transactions and replay them — typically well under a second, regardless of total disk size. `fsck` isn't gone; it's still the fallback when the journal itself is corrupted or missing, but it stopped being the primary recovery mechanism industry-wide once journaling file systems (ext3/ext4, NTFS, XFS) became standard.\n\n**Testing:** whether you understand why the shift to journaling happened as a genuine engineering improvement, not just a newer feature.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "fsck vs journaling, the historical shift"
+    }
+  ]
+}

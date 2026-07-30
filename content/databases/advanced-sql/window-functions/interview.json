@@ -1,0 +1,45 @@
+{
+  "topicId": "window-functions",
+  "interviewQuestions": [
+    {
+      "id": "window-functions-iq1",
+      "question": "How would you write a query to find the top 3 highest-paid employees in each department?",
+      "answerMarkdown": "I'd reach for `ROW_NUMBER()` over `RANK()` here, since the question asks for exactly 3 per department and `RANK()` can return more than 3 rows if there's a tie for third place.\n\nThe shape is: partition by department, order by salary descending, number each row, then filter to `<= 3` in an outer query — you can't filter on the window function's alias in the same `WHERE`, since `WHERE` runs before window functions are computed.\n\n```sql\nSELECT * FROM (\n  SELECT employee_id, department_id, salary,\n         ROW_NUMBER() OVER (PARTITION BY department_id ORDER BY salary DESC) AS rn\n  FROM employees\n) ranked\nWHERE rn <= 3;\n```\n\nI'd flag the ambiguity up front: if the interviewer actually wants ties included (\"anyone tied for 3rd also counts\"), that's `RANK()` instead, and I'd confirm which behavior they want before committing.\n\n**Testing:** whether you know the ROW_NUMBER/RANK/DENSE_RANK distinction and can articulate why WHERE can't filter a window alias directly.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Top-N per group"
+    },
+    {
+      "id": "window-functions-iq2",
+      "question": "What's the difference between a window function and GROUP BY, and when would you use each?",
+      "answerMarkdown": "`GROUP BY` collapses rows into one row per group and can only return aggregate columns — you lose the individual row. A window function computes a value using a related set of rows but returns every original row unchanged, so you can show a row's own data next to a group-level aggregate in the same result.\n\nI'd use `GROUP BY` for pure summary reports — total revenue per region, count of orders per customer. I'd reach for a window function the moment I need both levels at once: each transaction plus its share of the customer's lifetime spend, or each employee's salary next to their department's average. If I catch myself writing a `GROUP BY` query and then self-joining it back to the original table to get row-level detail, that's the signal I should have used a window function from the start — it does both in one pass without the extra join.\n\n**Testing:** whether you understand these solve genuinely different problems, not that one is a fancier version of the other.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Window functions vs GROUP BY"
+    },
+    {
+      "id": "window-functions-iq3",
+      "question": "You've written SUM(revenue) OVER (PARTITION BY region ORDER BY order_date) expecting a per-region total, but you're getting a running total instead. What's happening and how do you fix it?",
+      "answerMarkdown": "This is the single most common window-function bug I've seen in production dashboards. The moment you add `ORDER BY` inside `OVER()`, the implicit default frame switches from \"the whole partition\" to `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — a running total up to the current row, not a partition-wide sum. The exact same `SUM()` call means two different things depending only on whether `ORDER BY` is present.\n\nThe fix is to be explicit rather than relying on the default. If I want the whole-partition total, I drop the `ORDER BY` for that particular window spec: `SUM(revenue) OVER (PARTITION BY region)`. If I genuinely want a running total, I keep the `ORDER BY` but write the frame out loud — `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — so the next engineer reading the query doesn't have to know the implicit-default rule to understand it.\n\nI'd also mention `RANGE` vs `ROWS`: `RANGE` treats duplicate order-by values as one peer group, which produces a different running total than `ROWS` when the ordering column has ties — another silent source of \"why don't these two dashboards agree.\"\n\n**Testing:** whether you've actually been bitten by the implicit-frame behavior, since it's not obvious from reading the SQL standard casually.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging the default frame"
+    },
+    {
+      "id": "window-functions-iq4",
+      "question": "How would you compute month-over-month revenue growth using SQL?",
+      "answerMarkdown": "I'd reach for `LAG()` rather than a self-join. `LAG(revenue) OVER (ORDER BY month)` reads the prior row's revenue directly into the current row, so a percentage-change calculation is a single arithmetic expression away.\n\n```sql\nSELECT month, revenue,\n       revenue - LAG(revenue) OVER (ORDER BY month) AS mom_change,\n       ROUND(100.0 * (revenue - LAG(revenue) OVER (ORDER BY month))\n             / LAG(revenue) OVER (ORDER BY month), 1) AS mom_pct\nFROM monthly_revenue;\n```\n\nI'd call out the first-row edge case: `LAG()` returns `NULL` when there's no prior row, so the earliest month's growth is undefined by design, not a bug — I'd either leave it `NULL` or use `LAG()`'s optional default argument if the consumer needs a `0` instead. I'd also mention that if revenue is scattered across multiple rows per month (e.g., per-product), I need to aggregate to one row per month first, or partition by product before applying `LAG`, otherwise the \"previous row\" isn't the previous month at all.\n\n**Testing:** whether you default to LAG/LEAD instead of a self-join, and whether you think about the NULL edge case and grouping granularity up front.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Period-over-period metrics"
+    },
+    {
+      "id": "window-functions-iq5",
+      "question": "A query with four different window function specs is slow on a large table. How would you investigate and improve it?",
+      "answerMarkdown": "I'd start by checking whether each window function has a genuinely different `PARTITION BY`/`ORDER BY` combination — each distinct spec typically forces its own sort or hash pass over the data, so four different specs can mean four full sorts of the same rows. I'd look at `EXPLAIN ANALYZE` for repeated `Sort` or `WindowAgg` nodes stacked on top of each other as the tell.\n\nThe fix, where the specs genuinely overlap, is to consolidate them under a single named `WINDOW` clause (`WINDOW w AS (PARTITION BY customer_id ORDER BY order_date)`) so functions sharing that spec reuse one sort instead of repeating it. Where specs are genuinely different, I'd check whether an index matching the partition/order columns lets the engine avoid an explicit sort entirely — a B-tree index on `(customer_id, order_date)` can sometimes let the optimizer stream pre-sorted data straight into the window operator.\n\nIf none of that's enough, I'd consider whether the query actually needs all four window results in one pass, or whether splitting it into two queries against a smaller pre-filtered CTE reduces the row count each sort has to handle.\n\n**Testing:** whether you can connect a slow query symptom to the actual execution-plan mechanism, not just suggest \"add an index\" blindly.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging window function performance"
+    }
+  ]
+}

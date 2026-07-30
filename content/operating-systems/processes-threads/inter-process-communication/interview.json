@@ -1,0 +1,29 @@
+{
+  "topicId": "inter-process-communication",
+  "interviewQuestions": [
+    {
+      "id": "inter-process-communication-iq1",
+      "question": "How would two unrelated processes exchange a large amount of data fast?",
+      "answerMarkdown": "I'd reach for shared memory, because it's the only IPC mechanism that avoids kernel copies entirely — a pipe, message queue, or socket all copy the data at least twice (once from sender into a kernel buffer, once from the kernel out to the receiver), while shared memory maps the same physical pages into both processes' address spaces so both can read and write it directly, like ordinary memory, after a one-time setup.\n\nI'd immediately flag the catch: the OS gives you a fast channel, not a safe one — it does zero synchronization for you. So I'd pair the shared memory region with a named semaphore or a `PTHREAD_PROCESS_SHARED` mutex placed inside the region itself, so the two processes coordinate who's reading and who's writing, exactly the way two threads would need to coordinate over shared heap memory.\n\nA concrete design I'd describe: a producer writes into a ring buffer inside the shared region, a consumer reads from it, and a pair of semaphores (or mutex + condition variable) track how much data is available and how much free space remains — this is roughly how high-throughput local IPC (some database client libraries, some video pipeline tools) is actually built in practice.\n\n**Testing:** whether you know shared memory is the throughput answer *and* that you can't stop at \"use shared memory\" without also solving synchronization.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fast IPC for large data"
+    },
+    {
+      "id": "inter-process-communication-iq2",
+      "question": "Why does shared memory need its own synchronization when pipes and message queues don't?",
+      "answerMarkdown": "Because a pipe or message queue's entire API is mediated by the kernel — every read or write is a system call that the kernel serializes and sequences for you, so a reader naturally blocks until there's data and a writer naturally blocks until there's space. That mediation is where the implicit safety comes from.\n\nShared memory skips exactly that mediation, which is also the source of its speed: once the pages are mapped, reading and writing them is ordinary memory access with no system call and no kernel involvement at all. But that means there's no kernel in the loop to serialize concurrent access either — two processes writing to the same shared struct at the same time can interleave their writes and corrupt it, or a reader can observe a half-updated value, exactly like an unsynchronized data race between threads.\n\nI'd frame the trade-off explicitly: pipes and queues buy you safety by paying a kernel-mediation cost on every operation; shared memory skips that cost but pushes the responsibility for safety back onto you, via your own semaphores or mutexes placed in or alongside the shared region.\n\n**Testing:** whether you understand *why* the safety difference exists mechanically (kernel mediation vs. none), not just that one 'needs sync' and the other doesn't.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why shared memory needs manual sync"
+    },
+    {
+      "id": "inter-process-communication-iq3",
+      "question": "A microservice you own currently talks to a sibling service on the same machine over a Unix domain socket. Product wants to move the sibling service to a separate machine for scaling reasons. What has to change in your IPC layer?",
+      "answerMarkdown": "Ideally, very little — that's exactly the case sockets are designed for. If the code is already using a standard socket API (connect/send/recv) rather than something Unix-domain-specific, moving from a Unix domain socket to a TCP socket is often close to a drop-in change: swap the address family and connection target from a filesystem path to a host:port pair, and the read/write logic on top stays the same, since both are byte-stream, connection-oriented interfaces.\n\nI'd flag the things that genuinely do change and aren't free: latency goes up (a real network round-trip instead of a same-host kernel handoff), the connection can now fail in new ways (partial network partition, not just 'the other process died'), and I'd need to add real timeouts and retry/backoff logic that wasn't necessary when both processes shared a kernel. I'd also double check whether anything was relying on Unix-domain-socket-specific features like passing file descriptors between processes (`SCM_RIGHTS`), since that has no TCP equivalent.\n\nI'd contrast this with what happens if the original design had used shared memory or a plain pipe instead: that would be a much bigger rewrite, since neither works across machines at all — which is exactly the argument for defaulting to sockets even for same-host IPC when a service might ever need to scale out.\n\n**Testing:** whether you understand sockets' cross-machine generality as a real architectural reason to prefer them, and can name the non-free parts of a same-host-to-network transition.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Scaling IPC across machines"
+    }
+  ]
+}

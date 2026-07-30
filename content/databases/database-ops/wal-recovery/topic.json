@@ -1,0 +1,169 @@
+{
+  "id": "wal-recovery",
+  "title": "Durability, WAL & Crash Recovery",
+  "area": "databases",
+  "group": "database-ops",
+  "order": 1,
+  "slug": "wal-recovery",
+  "summary": "How committed data survives a crash: write-ahead logging, checkpoints, and the ARIES-style analysis-redo-undo recovery that runs the instant the database restarts.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "wal-recovery-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A database crashes. Power fails, the process is OOM-killed, the host reboots. **How does committed data survive that?** The answer is the **write-ahead log (WAL)**: before any change touches the actual data pages, a record of that change is written to a sequential log first.\n\nThis single idea — log first, apply later — is what makes [durability](acid-lifecycle) possible without requiring every write to update data pages synchronously (which would be far too slow). This topic covers the mechanism and the recovery process that runs every time a database restarts after an unclean shutdown.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "wal-recovery-s02",
+      "order": 2,
+      "sectionTitle": "Write-ahead logging: redo and undo",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **write-ahead logging rule**: before a change to a data page is allowed to reach disk, the log record describing that change must already be durably on disk. This sounds backward — write the *log* of a change before the change itself — but it's exactly what makes recovery possible with cheap, sequential I/O instead of expensive random writes on every transaction.\n\nEach log record typically carries enough information for two purposes. **Redo** information lets recovery reapply a committed change that never made it to the data page before a crash. **Undo** information lets recovery reverse a change from a transaction that was still active (uncommitted) when the crash happened. A single WAL record often carries both — the old value (for undo) and the new value (for redo) — which is why WAL is sometimes called a \"physiological\" log: physical enough to redo/undo directly, logical enough to be compact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "wal-recovery-s02-q1"
+      ]
+    },
+    {
+      "id": "wal-recovery-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: WAL then page-flush ordering",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline of a WAL record fsync followed by a delayed data page flush, with a crash in between requiring redo](assets/wal-then-flush-timeline.svg)\n\nThe data page write is the expensive, random-I/O part; the WAL write is a cheap, sequential append. Deferring the page write and only guaranteeing the log is durable is exactly what makes commits fast — the commit only has to wait for the log's fsync, not for the (much slower) data page to actually land on disk.",
+      "assets": [{"alt": "Timeline of a WAL record fsync followed by a delayed data page flush, with a crash in between requiring redo", "path": "assets/wal-then-flush-timeline.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "wal-recovery-s04",
+      "order": 4,
+      "sectionTitle": "Checkpoints and the ARIES idea",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If the WAL just grows forever, recovery after a crash would have to replay the *entire* log since the database was created — clearly untenable. A **checkpoint** periodically records \"every change logged before this point has been safely applied to the data pages on disk,\" so recovery only ever needs to start from the most recent checkpoint, not from the beginning of time.\n\n**ARIES** (Algorithm for Recovery and Isolation Exploiting Semantics) is the classic, highly influential recovery algorithm — the basis for Postgres's and most commercial engines' actual implementations — built on three principles: write-ahead logging (log before page write), repeating history on redo (redo *everything* since the checkpoint, even changes from transactions that will ultimately be undone — simpler and provably correct, rather than trying to cleverly redo only the \"right\" changes), and logging changes made *during* undo itself (so a crash during recovery doesn't restart undo from scratch).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "wal-recovery-s04-q1"
+      ]
+    },
+    {
+      "id": "wal-recovery-s05",
+      "order": 5,
+      "sectionTitle": "Recovery: analysis → redo → undo",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a database restarts after a crash, ARIES-style recovery runs three passes over the log, always starting from the last checkpoint. **Analysis** scans forward to determine two things: which transactions were still active (uncommitted) at crash time, and which data pages were \"dirty\" (modified but not yet flushed) — this rebuilds the exact state the engine had in memory right before the crash. **Redo** scans forward again from the point analysis determined is safe, reapplying *every* logged change since then, regardless of whether that transaction eventually committed — this restores the data pages to exactly their state at the moment of the crash. **Undo** then scans backward, reversing the changes made by transactions that were still active (never committed) at crash time, using the undo information in their log records.\n\nThe order matters: redo-everything-then-undo-the-losers is simpler to prove correct than trying to redo only the winners, and it's the reason ARIES-based recovery is robust even against a crash happening *during* recovery itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "wal-recovery-s05-q1"
+      ]
+    },
+    {
+      "id": "wal-recovery-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: fsync disabled → silent durability loss",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Disabling fsync (or setting `fsync=off` in Postgres, or a similar 'turbo' write-caching setting) just makes the database faster with no real downside as long as the OS eventually flushes to disk.\"\n\n**Why it's wrong:** without `fsync`, the WAL record only reaches the OS page cache, not durable storage — a crash of the *OS itself* (not just the database process), a power loss, or a VM host failure can lose writes the database already told clients were committed. This isn't a performance trade-off with a small, bounded blast radius; it's a correctness hole that can corrupt the WAL's own consistency, since ARIES recovery assumes log records are durable in the exact order they were written.\n\n**Correct model:** `fsync=off` is appropriate only for genuinely disposable data (a from-scratch data load you can safely restart, a throwaway test database) — never for a system where \"the client was told it committed\" needs to remain true after any kind of crash.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "wal-recovery-s06-q1"
+      ]
+    },
+    {
+      "id": "wal-recovery-s07",
+      "order": 7,
+      "sectionTitle": "The WAL is also how replication works",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The same log built for crash recovery does double duty as the mechanism for **replication**. A Postgres streaming replica is, at its core, continuously receiving the primary's WAL records over the network and replaying them — the exact same redo logic recovery uses after a crash, just applied continuously to a different machine's copy of the data instead of once after a restart.\n\nThis is why WAL retention matters operationally beyond crash recovery: if a replica falls too far behind and the primary has already recycled (deleted) the WAL segments it needs, that replica can never catch up and must be rebuilt from a fresh base backup. Production Postgres setups configure `wal_keep_size` or replication slots specifically to prevent the primary from deleting WAL a lagging replica still needs — a real operational trade-off between disk usage on the primary and replica resilience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "wal-recovery-s08",
+      "order": 8,
+      "sectionTitle": "Group commit: batching fsyncs for throughput",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If every single commit needed its own `fsync`, and `fsync` costs, say, several hundred microseconds to a few milliseconds depending on storage, throughput would cap out at a few thousand transactions per second no matter how fast the CPU is. **Group commit** solves this: the engine batches the WAL records of multiple transactions that are ready to commit around the same instant into a single `fsync` call, then releases all of them together.\n\nThis is a genuinely free lunch under concurrent load — batching ten transactions into one fsync doesn't make any of them individually slower in any way that matters, and it multiplies achievable commit throughput by roughly the batch size. It only helps when there's enough concurrent commit traffic to batch in the first place; a single-threaded workload gets no benefit and pays the same one-fsync-per-commit cost either way.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "wal-recovery-s08-q1"
+      ]
+    },
+    {
+      "id": "wal-recovery-s09",
+      "order": 9,
+      "sectionTitle": "What a real WAL record looks like",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Postgres exposes WAL contents for inspection via `pg_waldump`, which is genuinely useful when diagnosing a replication or recovery issue:\n\n```\n$ pg_waldump 000000010000000000000005\nrmgr: Heap        len (rec/tot):     54/    54, tx:        731, lsn: 0/05001A80, \\\n  desc: INSERT off 3, blkref #0: rel 1663/16384/16390 blk 0\nrmgr: Transaction len (rec/tot):     34/    34, tx:        731, lsn: 0/05001AB8, \\\n  desc: COMMIT 2024-01-15 10:22:03 UTC\n```\n\nEach line is one log record: a resource manager (`Heap` for table data, `Transaction` for commit/abort markers), the transaction ID, an **LSN** (log sequence number — the record's exact byte offset in the WAL stream, which is how replicas and recovery track exactly how far they've applied), and a description of the change. Recovery and replication are both, at their core, walking a sequence of records that look exactly like this.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "wal-recovery-s10",
+      "order": 10,
+      "sectionTitle": "Compare: synchronous vs asynchronous commit",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Synchronous commit (default) | Asynchronous commit |\n|---|---|---|\n| When COMMIT returns | After the WAL record is fsync'd to durable storage | Immediately, before the fsync happens |\n| Durability on crash | Guaranteed — a committed transaction survives any crash | The last fraction of a second of commits (typically well under a second) can be lost on crash |\n| Throughput | Bounded by fsync latency (mitigated by group commit) | Much higher — no per-commit fsync wait |\n| Postgres setting | `synchronous_commit = on` (default) | `synchronous_commit = off` |\n| When it's the right call | Anything where \"the client was told it committed\" must remain true | High-volume, loss-tolerant data — metrics ingestion, some event logging |\n\n**How to decide:** default to synchronous; only relax it for a specific, named data path where losing the last moment of writes on a crash is an accepted, documented trade-off — not a blanket setting.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "wal-recovery-s10-q1"
+      ]
+    },
+    {
+      "id": "wal-recovery-s11",
+      "order": 11,
+      "sectionTitle": "The staff-level nuance: recovery time is a real SLA input",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer stops at \"WAL makes durability work.\" A staff-level answer connects WAL configuration to **recovery time objective**: the longer the interval since the last checkpoint, the more log a crash forces recovery to redo before the database can accept traffic again — a database that checkpoints every hour under heavy write load can take many minutes to recover after a crash, purely from redo work, even though no data was lost.\n\nThis is a real, tunable trade-off (Postgres's `checkpoint_timeout` and `max_wal_size`): more frequent checkpoints mean faster crash recovery but more sustained background I/O from continuously flushing dirty pages; less frequent checkpoints mean cheaper steady-state I/O but a longer outage window on every unclean restart. Sizing this against an actual recovery-time SLA — not just tuning for steady-state throughput — is exactly the kind of trade-off senior database interviews probe for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

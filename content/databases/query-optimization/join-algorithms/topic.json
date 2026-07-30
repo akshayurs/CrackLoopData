@@ -1,0 +1,187 @@
+{
+  "id": "join-algorithms",
+  "title": "Join Algorithms",
+  "area": "databases",
+  "group": "query-optimization",
+  "order": 2,
+  "slug": "join-algorithms",
+  "summary": "The three ways engines actually join two tables — nested-loop, hash, and sort-merge — and the cost shape that makes each one the right or catastrophically wrong choice.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "join-algorithms-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "`JOIN` in SQL is one keyword, but underneath it a database engine picks between three fundamentally different algorithms: **nested-loop**, **hash**, and **sort-merge**. Each has a different cost shape depending on table sizes, indexes, and whether the inputs are already sorted.\n\nThis is one of the highest-value topics for a database interview: naming which join algorithm fits a given scenario, and why, is a direct signal of whether a candidate understands databases mechanically or just knows SQL syntax.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "join-algorithms-s02",
+      "order": 2,
+      "sectionTitle": "Nested-loop join: the naive baseline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **nested-loop join** does exactly what it sounds like: for every row in the outer table, scan the entire inner table looking for matches. With no index, this costs roughly `O(N × M)` row comparisons for tables of size N and M — for two 100,000-row tables, that's up to 10 billion comparisons.\n\n```sql\n-- Conceptually:\nfor each row r1 in outer_table:\n    for each row r2 in inner_table:\n        if r1.key == r2.key: emit (r1, r2)\n```\n\nDespite the scary cost, it's not always bad: if the outer table has very few rows (say, a filtered result of 5 rows), a nested loop only means 5 lookups into the inner table — cheap regardless of the inner table's size, as the next slide covers.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "join-algorithms-s02-q1"
+      ]
+    },
+    {
+      "id": "join-algorithms-s03",
+      "order": 3,
+      "sectionTitle": "The indexed nested-loop variant",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **indexed nested-loop join** replaces the inner table's full scan with an index lookup: for each outer row, use an index on the inner table's join column to find matches directly, instead of scanning every inner row. Cost drops from `O(N × M)` to roughly `O(N × log M)` — for the outer table's N rows, each does a cheap index probe instead of a full inner scan.\n\nThis is why nested-loop joins dominate in practice for small-outer, indexed-inner scenarios: a query fetching one customer's 20 orders by joining `customers` (filtered to 1 row) against `orders` (indexed on `customer_id`) does one index probe, not a full scan of the orders table. The algorithm's reputation as \"the slow one\" only holds when the inner side isn't indexed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "join-algorithms-s04",
+      "order": 4,
+      "sectionTitle": "Hash join",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hash join** runs in two phases. **Build**: scan the smaller input (the \"build side\") and load it into an in-memory hash table keyed on the join column. **Probe**: scan the larger input (the \"probe side\") row by row, hashing each row's join key and checking the hash table for matches.\n\nCost is roughly `O(N + M)` — each table is scanned once — which beats an unindexed nested loop by a wide margin on large tables. The catch is memory: the build side's hash table must fit in the memory the engine allocates for the operation (`work_mem` in Postgres), or the engine has to spill to disk in batches (a \"grace hash join\"), which is far slower.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "join-algorithms-s04-q1"
+      ]
+    },
+    {
+      "id": "join-algorithms-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: hash join build/probe phases",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Hash join build phase feeding a probe phase](assets/hash-join-build-probe.svg)\n\nThe build phase must fully complete — the whole hash table constructed — before the probe phase can start checking even its first row, which is why a hash join is a materializing operator on its build side even though it can pipeline its probe side.",
+      "assets": [
+        {
+          "alt": "Hash join build phase feeding a probe phase",
+          "path": "assets/hash-join-build-probe.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "join-algorithms-s06",
+      "order": 6,
+      "sectionTitle": "Sort-merge join",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **sort-merge join** first sorts both inputs by the join key (if they aren't already sorted — e.g. via an index), then walks both sorted lists with two pointers in lockstep, advancing whichever pointer has the smaller current key and emitting matches when the keys align. Because both sides are sorted, no side needs to fully fit in memory the way a hash join's build side does — you can merge two sorted streams with a small constant amount of working memory.\n\nCost is dominated by the sort: `O(N log N + M log M)` if sorting is needed, or close to `O(N + M)` if both inputs are already sorted (e.g., both scanned via an index on the join key) — that second case is where sort-merge shines and can beat a hash join outright.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "join-algorithms-s07",
+      "order": 7,
+      "sectionTitle": "Compare: cost profile of each algorithm",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Nested-loop | Hash join | Sort-merge join |\n|---|---|---|---|\n| Best case | Outer table tiny, inner indexed — near O(N) | Neither side sorted, one side fits in memory — O(N+M) | Both sides already sorted — near O(N+M) |\n| Worst case | Both large, no index — O(N × M) | Build side too large for memory — spills to disk, much slower | Neither side sorted and both huge — sort cost dominates |\n| Memory need | Minimal | Build side must (ideally) fit in work memory | Small if pre-sorted; a sort step needs its own memory/disk |\n| Needs equality join? | No — works for any join condition, including ranges | Yes — needs an equality condition to hash on | Yes — needs an orderable, typically equality, condition |\n| Output order | Whatever the outer scan order is | Unordered (hash-based) | Sorted by join key, for free |\n\n**How to decide:** small-outer-plus-index favors nested-loop; large unsorted tables with a memory budget favor hash join; already-sorted inputs (or a need for sorted output downstream) favor sort-merge.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "join-algorithms-s07-q1"
+      ]
+    },
+    {
+      "id": "join-algorithms-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: nested loops on two large unindexed tables",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The optimizer will never actually pick a bad plan — if it chose nested-loop, that must be fine.\"\n\n**Why it's wrong:** the optimizer picks based on **estimated** cost, and estimates come from statistics that can be stale or simply wrong for a given predicate (correlated columns, an unusual filter value). If the optimizer underestimates how many rows the outer side will produce — say, it thinks a filter returns 10 rows but it actually returns 2 million — it may pick a nested-loop join expecting a cheap 10-iteration loop and get a catastrophic 2-million-iteration one instead, each iteration scanning or probing the inner table.\n\n**Correct model:** when a query is unexpectedly slow, check `EXPLAIN ANALYZE` (not just `EXPLAIN`) for a nested-loop join whose outer side's *actual* row count wildly exceeds its *estimated* row count — that mismatch, not the join algorithm's name alone, is the real diagnostic signal of this failure mode.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "join-algorithms-s08-q1"
+      ]
+    },
+    {
+      "id": "join-algorithms-s09",
+      "order": 9,
+      "sectionTitle": "Join order matters as much as join algorithm",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For a query joining more than two tables, the optimizer must also decide *what order* to join them in — and this compounds with algorithm choice. Joining a heavily filtered table first (few rows survive) keeps every subsequent join's input small; joining two large, unfiltered tables first before applying a selective filter can produce a huge, wasted intermediate result that later steps must then filter down.\n\nFor N tables, the number of possible join orders grows factorially, which is why optimizers use heuristics and dynamic programming (or, for very large N, randomized search) rather than exhaustively trying every order — cost-based optimization is a search problem, not a lookup.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "join-algorithms-s10",
+      "order": 10,
+      "sectionTitle": "Reading join algorithms in real EXPLAIN output",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Real plans name the algorithm directly, which is the fastest way to confirm what actually ran versus what you assumed would run.\n\n```\nHash Join  (cost=320.00..8500.30 rows=48000 width=72) (actual time=4.1..92.3 rows=47850 loops=1)\n  Hash Cond: (o.customer_id = c.customer_id)\n  ->  Seq Scan on orders o  (cost=0.00..5200.00 rows=200000 width=40) (actual time=0.02..38.4 rows=200000 loops=1)\n  ->  Hash  (cost=250.00..250.00 rows=5600 width=32) (actual time=3.9..3.9 rows=5600 loops=1)\n        Buckets: 8192  Batches: 1  Memory Usage: 412kB\n        ->  Seq Scan on customers c  (cost=0.00..250.00 rows=5600 width=32) (actual time=0.01..1.2 rows=5600 loops=1)\n```\n\n`Batches: 1` confirms the hash table fit in memory in one pass — `Batches: 4` or higher would mean it spilled and had to process the probe side in multiple passes, a strong sign to raise `work_mem` or reduce the build side's size.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "join-algorithms-s10-q1"
+      ]
+    },
+    {
+      "id": "join-algorithms-s11",
+      "order": 11,
+      "sectionTitle": "Senior nuance: why range joins can't use a hash join",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A subtlety that separates a senior answer: hash joins fundamentally need an **equality** condition, because hashing only tells you \"these two keys are equal\" or \"they're not\" — it can't tell you \"this key is less than that one.\" A join condition like `a.start_date <= b.end_date AND a.end_date >= b.start_date` (a classic interval-overlap join) can't be hashed on directly, so the optimizer falls back to nested-loop or sort-merge with a range comparison.\n\nThis explains a real production pattern: an interval-overlap or range-based join is often dramatically slower than an equivalent equality join on similarly sized tables, purely because it's structurally locked out of the fastest algorithm — recognizing that up front, rather than being surprised by `EXPLAIN`, is what a staff engineer brings to a schema or query review.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "join-algorithms-s11-q1"
+      ]
+    },
+    {
+      "id": "join-algorithms-s12",
+      "order": 12,
+      "sectionTitle": "Interview signal: matching the algorithm to the scenario",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A strong answer to \"which join algorithm would you expect here\" always ties the choice to three concrete facts: relative table sizes, whether the join columns are indexed, and whether the inputs are already sorted (or needed sorted downstream, e.g. by an `ORDER BY` on the same key). Naming the algorithm alone (\"probably a hash join\") without those facts reads as memorized trivia rather than understanding.\n\nA fully worked example: joining a 50-row lookup table against a 50-million-row fact table on an indexed foreign key — nested-loop, since the outer side is tiny and the inner side is indexed, beats building a 50-million-row hash table outright.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "free-space-management",
+  "interviewQuestions": [
+    {
+      "id": "free-space-management-iq1",
+      "question": "How would you quickly find a run of N free contiguous blocks?",
+      "answerMarkdown": "I'd assume a bitmap-based file system, since that's what nearly everything real uses. Each block is one bit, so finding N contiguous free blocks becomes finding N consecutive 0 bits in the bitmap — I'd scan word by word (64 bits at a time on a 64-bit CPU) using a find-first-zero or similar bit instruction, rather than testing one bit at a time, which turns a linear scan into something closer to a handful of instructions per word.\n\nTo make this fast in practice, I'd keep a cached hint of the last known free region, since allocations and frees cluster spatially — most real allocators don't rescan from block zero every time, they resume near where they last found space. For a large disk, I'd also split the bitmap into per-block-group chunks (what ext4 does), so a small allocation only needs to lock and scan its local chunk instead of contending on one giant global bitmap under concurrent writers.\n\nIf I were stuck with a plain linked free list instead, the honest answer is that this query is fundamentally worse — you'd have to walk the list checking physical adjacency between consecutive entries, which is why grouping and counting optimizations exist to blunt that cost.\n\n**Testing:** whether you can reason about the actual bit-level mechanics of an allocator, not just recite \"use a bitmap.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Finding a contiguous free run efficiently"
+    },
+    {
+      "id": "free-space-management-iq2",
+      "question": "Why can a file system show plenty of free space in df but still fail to allocate space correctly after a crash?",
+      "answerMarkdown": "I'd connect this to free-space metadata being just as crash-sensitive as file data, which people underestimate. The bitmap (or free list) is itself a data structure on disk that has to be updated in step with real allocations. If a crash happens between \"block 500 was handed to file X\" and \"bit 500 in the bitmap was flipped to allocated,\" the file system's on-disk state disagrees with reality — the bitmap still says block 500 is free.\n\nConcretely, the next file created after that crash could be handed block 500 too, because the allocator trusts the (stale) bitmap. Now two files' metadata both point at the same block, and whichever writes to it last silently overwrites the other's data — real corruption, not just a bookkeeping error.\n\nThis is exactly why free-space updates are wrapped into the same journal transaction as the block allocation and inode update they accompany — the journal guarantees that either both changes land, or neither does, so a crash mid-way replays cleanly instead of leaving the bitmap and reality out of sync.\n\n**Testing:** whether you connect free-space tracking to the broader crash-consistency problem instead of treating it as separate bookkeeping.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Free-space metadata and crash consistency"
+    },
+    {
+      "id": "free-space-management-iq3",
+      "question": "Would you ever choose a linked free list over a bitmap for a new file system design, and why or why not?",
+      "answerMarkdown": "I'd lead with the honest answer: for a general-purpose file system today, no — bitmaps dominate on nearly every axis that matters, which is why ext4, NTFS, and essentially every mainstream file system uses one. A bitmap gives fast contiguous-run scans, O(1) total-free-space tracking via a running counter, and fixed, small space overhead regardless of how fragmented the disk gets.\n\nThe one scenario where a free list's argument used to hold was extreme space pressure on tiny embedded systems, where even a fixed-size bitmap for the whole device felt like meaningful overhead — but modern flash and disk capacities have made that concern nearly moot; a bitmap for a multi-terabyte drive is well under 1% of capacity.\n\nIf pressed to defend a free list anyway, I'd only do it for a workload with pathologically low fragmentation and enormous, rarely-changing free extents, where grouping and counting shrink the list to a handful of entries — but I'd flag that this is a narrow, unusual case, not a general recommendation.\n\n**Testing:** whether you can make and defend an actual engineering trade-off decision rather than just listing both options as equally valid.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Defending a design choice under pressure"
+    }
+  ]
+}

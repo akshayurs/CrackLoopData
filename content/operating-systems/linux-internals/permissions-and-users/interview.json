@@ -1,0 +1,37 @@
+{
+  "topicId": "permissions-and-users",
+  "interviewQuestions": [
+    {
+      "id": "permissions-and-users-iq1",
+      "question": "What does the setuid bit do, and why is it risky on a root-owned binary?",
+      "answerMarkdown": "The setuid bit tells the kernel that whenever this file is executed, the process's effective UID should become the file's owner rather than the calling user's UID. On a root-owned binary, that means anyone who can execute it briefly runs with root's permissions for the duration of that program — which is how ordinary users can do specific privileged things, like `passwd` updating `/etc/shadow`, without being granted general root access.\n\nThe risk is that the elevated privilege applies to the entire execution, not just the narrow operation the binary was designed for. If the binary has any exploitable bug — a buffer overflow, trusting an inherited `PATH` or environment variable the caller controls, following a symlink it shouldn't — that bug is now exploitable with full root privilege, because euid is root for the whole run. The classic historical exploits are exactly this: a setuid-root program calls another command via a relative path or environment-controlled lookup, and the attacker substitutes their own binary.\n\nThat's why secure setuid programs are written narrowly: drop the elevated privilege as soon as the specific privileged operation is done, ignore or sanitize the inherited environment, and use absolute paths for anything they invoke.\n\n**Testing:** whether you understand the mechanism (euid change at exec) and can name the actual exploit pattern, not just recite \"setuid is dangerous.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "setuid mechanism and risk"
+    },
+    {
+      "id": "permissions-and-users-iq2",
+      "question": "How does the kernel decide which permission bits — owner, group, or other — apply when a process accesses a file?",
+      "answerMarkdown": "It's a fixed, ordered check against the process's effective UID and group IDs: first, does the euid match the file's owner? If yes, the owner bits apply, and the check stops there — full stop, even if group or other would have been more permissive. Only if the euid doesn't match the owner does the kernel check whether any of the process's group IDs match the file's group; if so, group bits apply. Only if neither matches does it fall through to \"other.\"\n\nThe part that surprises people: this isn't \"take the most permissive applicable set\" — it's strictly ordered, and owner match short-circuits everything else. A real, if unusual, consequence is that a file's owner can end up with *less* access than group members if they clear their own read bit while leaving group-read set — because the owner check matches first and the kernel never looks at the group bits at all in that case.\n\nI'd tie this back to why `chmod` mistakes are a common self-inflicted lockout: people assume permissions are additive across classes when they're actually mutually exclusive per access.\n\n**Testing:** whether you know the check is ordered and exclusive, not cumulative — this is the detail that separates rote memorization from real understanding.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Permission check ordering"
+    },
+    {
+      "id": "permissions-and-users-iq3",
+      "question": "A user tells you they set a directory to --x------ thinking it would fully lock others out, but a colleague was still able to read a specific file inside it. What happened, and how would you actually secure it?",
+      "answerMarkdown": "What happened is a common mix-up between what read and execute mean on a directory. Read controls whether you can *list* the directory's contents — without it, `ls` shows nothing. Execute controls whether you can *traverse into* the directory and reach an entry by name, entirely independent of read. With `--x------`, the owner removed read (blocking listing) but left execute on, which still lets anyone who already knows the exact filename open it directly — assuming the file itself is readable to them.\n\nTo actually lock the directory down, you need to remove execute as well — `------ ---` or at minimum drop the group/other execute bits, depending on who should still have access. I'd also point out this isn't a bug in the permission model; execute-without-read is a legitimate, sometimes intentional pattern (a web server reaching `~/public_html/index.html` by known path while directory listing stays disabled), so the fix depends on which behavior was actually intended.\n\nI'd close by checking the permissions on the file itself too — even a fully locked-down directory doesn't matter if the file inside is independently world-readable and reachable through some other path.\n\n**Testing:** whether you can distinguish directory read from execute precisely, and translate that into the correct chmod fix rather than a vague 'lock it down more' answer.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging a permissions misconfiguration"
+    },
+    {
+      "id": "permissions-and-users-iq4",
+      "question": "You see a file listed as -rwxr-xr--. What can each class of user actually do with it, and what's the octal equivalent?",
+      "answerMarkdown": "I'd read it in three groups of three after the leading file-type character: `rwx` for the owner, `r-x` for the group, `r--` for everyone else. The owner can read the file, write to it, and execute it — this looks like an executable script or binary owned by whoever created it. The group can read and execute it but not modify it. Everyone else can only read it.\n\nFor the octal form, I'd sum read=4, write=2, execute=1 per class: owner `rwx` = 7, group `r-x` = 5, other `r--` = 4, giving `754` — so `chmod 754 file` reproduces exactly this. I'd mention both notations exist because octal is terser and unambiguous for scripting (`chmod 754 file` in one shot), while the symbolic form (`chmod u+x,g-w file`) is easier when you want to change just one bit without knowing or disturbing the others.\n\nA concrete real-world shape this matches: a deployment script the owning user can edit and run, that the rest of their team can execute but not modify, and that other users on the box can at least read for auditing.\n\n**Testing:** whether you can fluently translate between the letter and octal notations without hesitating — this comes up constantly in real configs, not just interviews.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Reading permission strings"
+    }
+  ]
+}

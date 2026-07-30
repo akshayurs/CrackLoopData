@@ -1,0 +1,45 @@
+{
+  "topicId": "process-lifecycle-fork-exec",
+  "interviewQuestions": [
+    {
+      "id": "process-lifecycle-fork-exec-iq1",
+      "question": "What does fork() return, and how do you use it?",
+      "answerMarkdown": "`fork()` clones the calling process and returns twice — once in each process, with different values. In the parent, it returns the newly created child's PID, a positive integer. In the child, it returns `0`. If it fails (usually because a process or resource limit was hit), it returns a negative value and no child is created at all.\n\nThe pattern I'd write is a three-way branch on that return value: negative means handle the error, zero means \"I'm the child\" — typically do child-specific setup and then call `exec()` to become a different program — and positive means \"I'm the parent, and this number is my child's PID,\" which I'd usually save so I can `wait()`/`waitpid()` on it later.\n\nThe part that trips people up first: right after `fork()`, both processes are executing the *exact same line of code* they were about to run — the branch on the return value is the only thing that makes them behave differently from that point on. I'd also mention copy-on-write here: the child's memory looks fully copied but is actually shared read-only with the parent until either writes to it, which is why `fork()` is cheap even for a large process.\n\n**Testing:** whether you know fork returns twice with different values, and can reason about what code runs where — this is table stakes before any question about process creation gets harder.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "fork() return value"
+    },
+    {
+      "id": "process-lifecycle-fork-exec-iq2",
+      "question": "Why does Unix split process creation (fork) from loading a new program (exec) into two separate system calls, instead of one?",
+      "answerMarkdown": "I'd anchor the answer in what a shell needs to do. Between forking a child and having it become the actual command, the shell needs a window to set things up — redirect the child's stdout to a file for `>`, wire up a pipe between two children for `cmd1 | cmd2`, change environment variables, change working directory. All of that is done in the child using ordinary process operations, on its own file descriptors, without touching the parent shell at all.\n\nIf process creation and program loading were one atomic \"spawn\" call — like Windows' `CreateProcess`, which actually does combine them and has to pass all that setup as parameters instead — there would be no place for this setup to happen with plain, composable system calls. Splitting them means redirection and piping don't need special-cased spawn parameters; they're just \"do some fd manipulation, then exec.\"\n\nI'd contrast this directly with Windows to show I understand it's a real design choice, not the only possible one: Windows' single combined call needs its API to anticipate every kind of setup you might want in advance, whereas Unix's split lets you compose arbitrary setup out of already-existing primitives.\n\n**Testing:** whether you see this as a deliberate design trade-off with a concrete payoff (shells), not just memorized fork/exec mechanics.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why fork and exec are separate"
+    },
+    {
+      "id": "process-lifecycle-fork-exec-iq3",
+      "question": "What's the difference between a zombie process and an orphan process?",
+      "answerMarkdown": "They're opposite failure surfaces around the same parent-child relationship. A **zombie** is a child that has already exited, but its parent hasn't called `wait()` yet to collect its exit status — the kernel keeps a minimal record (PID, exit code) around until it does. An **orphan** is the reverse: the parent dies (or exits) while the child is still running.\n\nThe key difference is who's responsible for cleanup and whether it happens automatically. Orphans are handled automatically — the kernel immediately reparents an orphan to PID 1 (`init`/`systemd`), which is written to always reap its children, so an orphan will eventually be cleaned up without any extra work. Zombies are *not* automatically resolved this way while their original parent is still alive — that parent has to explicitly call `wait()`/`waitpid()`, and if it never does (a bug, or a `SIGCHLD` handler that's missing), the zombie lingers indefinitely, consuming a PID slot.\n\nI'd give the production-relevant version: orphaning is basically harmless by design; zombie accumulation is a real bug class that can exhaust a system's PID space if left unfixed.\n\n**Testing:** whether you can precisely separate these two commonly-confused terms and know which one is actually dangerous.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Zombie vs orphan"
+    },
+    {
+      "id": "process-lifecycle-fork-exec-iq4",
+      "question": "How does copy-on-write make fork() practical even for a process with a large memory footprint?",
+      "answerMarkdown": "Naively, `fork()` sounds like it should copy the entire parent's address space — potentially gigabytes — which would make it far too slow to call on every shell command. Copy-on-write avoids that: right after `fork()`, the parent and child share the exact same physical memory pages, with both processes' page tables marking those pages read-only.\n\nNo actual duplication happens at fork time. If either process later tries to *write* to one of those shared pages, the write triggers a page fault (the CPU catches the illegal write to a read-only page), and only then does the kernel copy that one specific page and give the writer its own private copy — hence \"copy-on-write.\" Pages neither process ever writes to are never duplicated at all.\n\nThe part that makes this genuinely elegant in practice: the overwhelmingly common pattern is fork() immediately followed by exec(), and exec() throws away the entire inherited address space to load a new program — so in the common case, essentially zero pages ever get copied. You get the simplicity of \"clone the whole process\" with close to the cost of \"just create a new PID.\"\n\n**Testing:** whether you understand copy-on-write as a lazy, page-level mechanism rather than a vague performance hand-wave, and can connect it to why fork+exec scales in practice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Copy-on-write fork"
+    },
+    {
+      "id": "process-lifecycle-fork-exec-iq5",
+      "question": "Your team's Docker container is accumulating thousands of defunct (zombie) processes over a few days. How do you debug and fix it?",
+      "answerMarkdown": "I'd start by confirming it with `ps aux` inside the container, looking for `Z` state entries with `<defunct>`, and check their PPID — in a container, that's very often PID 1, which is usually the application's own entrypoint process, not a real init system.\n\nThat's the root cause in the common case: outside a container, `init`/`systemd` (PID 1 on the host) automatically reaps orphaned processes. Inside a container, the app you launched *is* PID 1 within its PID namespace, and most application code was never written expecting to handle reaping — it doesn't call `wait()` for processes it spawns (or its children spawn), so they become zombies that nothing collects.\n\nThe standard fix is to not let the application be PID 1 at all: run a minimal init process like `tini` or `dumb-init` as the actual container entrypoint, with the application as its child. These do nothing but reap zombies and correctly forward signals (like `SIGTERM` on container stop), restoring the safety net a normal OS gives for free outside a container. I'd also check whether the app itself spawns subprocesses it should be reaping directly, since fixing PID 1 doesn't help if the app's own immediate children are the ones being orphaned.\n\n**Testing:** whether you've hit this specific, very common real-world container bug and know the actual fix, not just the textbook zombie definition.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging zombies in containers"
+    }
+  ]
+}

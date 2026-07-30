@@ -1,0 +1,37 @@
+{
+  "topicId": "locking",
+  "interviewQuestions": [
+    {
+      "id": "locking-iq1",
+      "question": "What's the difference between a shared lock and an exclusive lock, and why does that distinction exist?",
+      "answerMarkdown": "A **shared lock** allows any number of transactions to hold it on the same row at once — it's what a plain read takes, because multiple readers observing the same value can never conflict with each other. An **exclusive lock** is held by exactly one transaction at a time and blocks every other lock, shared or exclusive, on that row — it's what a write takes, because a write changes the value, and letting anyone else read or write it mid-change would expose an inconsistent state.\n\nThe practical rule that falls out of this: reads can proceed in parallel with other reads, but a write always excludes everyone else touching that row until it's done. I'd also mention `SELECT ... FOR UPDATE`, which takes an exclusive-*intent* lock on a read specifically because the code plans to write based on that read shortly after — using a plain shared lock there would let two transactions both read the same value and race to write conflicting updates.\n\n**Testing:** whether you can connect the lock type to the actual conflict it's preventing, not just recite the two names.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Shared vs exclusive locks"
+    },
+    {
+      "id": "locking-iq2",
+      "question": "Explain two-phase locking and why almost every real database uses the strict variant instead of plain 2PL.",
+      "answerMarkdown": "Two-phase locking splits a transaction's life into a growing phase, where it can only acquire locks, and a shrinking phase, where it can only release them — once it releases its first lock it can never take a new one. That shape is what guarantees the resulting execution is conflict-serializable, which is the formal correctness property databases are actually trying to deliver.\n\nPlain 2PL still has a gap: it lets a transaction release some locks before it commits, which means another transaction can read a value the first transaction wrote and then build further work on it — if the first transaction later aborts, that second transaction has based real work on data that never actually existed, a cascading-abort risk similar in shape to a dirty read.\n\n**Strict 2PL** closes this by holding every lock, shared and exclusive, until the transaction actually commits or aborts — nothing is visible or unblocked until the outcome is final. Postgres and InnoDB both implement strict 2PL for exactly this reason: the marginal concurrency gain from releasing locks early isn't worth reintroducing cascading aborts.\n\n**Testing:** whether you understand 2PL as a proof technique for serializability, and can explain the specific failure strict 2PL is closing, not just define both terms.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "2PL vs strict 2PL"
+    },
+    {
+      "id": "locking-iq3",
+      "question": "Production throughput has collapsed on a service where one product's inventory row is hit by hundreds of checkouts per second, even though CPU and disk look fine. How do you diagnose and fix it?",
+      "answerMarkdown": "I'd start from the symptom: healthy CPU and disk with collapsed throughput points at waiting, not working — so I'd check for lock contention specifically. In Postgres, `pg_locks` joined against `pg_stat_activity` shows which sessions are blocked and on what; in MySQL, `SHOW ENGINE INNODB STATUS` surfaces the current lock waits and, if it's gone far enough, a deadlock. I'd expect to find dozens of transactions queued waiting for an exclusive lock on that one inventory row.\n\nOnce confirmed, I'd treat it as a hot-row problem, not a general capacity problem — adding more app servers or database CPU won't help if everyone is serialized on one row. Real fixes: shard the counter (maintain N sub-counters and sum them, trading exact real-time accuracy for parallelism), move the decrement to a queue that processes checkouts for that SKU serially but off the critical request path, or shorten the transaction holding the lock so each hold is as brief as possible.\n\nI'd also check whether the transaction is doing anything else — an external API call, unrelated writes — while holding that lock, since shrinking the critical section is often the cheapest fix before reaching for sharding.\n\n**Testing:** whether you can distinguish contention from raw capacity problems using real diagnostic tools, and propose a fix that targets the actual hot row.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing lock contention in production"
+    },
+    {
+      "id": "locking-iq4",
+      "question": "Why can InnoDB's Repeatable Read cause an INSERT to block on what looks like an unrelated UPDATE, in a way Postgres's Repeatable Read wouldn't?",
+      "answerMarkdown": "This comes down to two different mechanisms both engines use to hit the same guarantee — preventing phantom reads at Repeatable Read — with very different side effects. InnoDB does it with **gap locks and next-key locks**: a range-scanning statement like `UPDATE ... WHERE id BETWEEN 10 AND 20 FOR UPDATE` locks not just the matching rows but the gaps between their index values, so a later `INSERT` with `id = 15` blocks even though no existing row it touches was locked — it's colliding with a lock on the *space* between rows, not a row itself.\n\nPostgres, by contrast, prevents phantoms through its MVCC snapshot mechanism: a Repeatable Read transaction simply doesn't see rows committed after its snapshot was taken, with no extra locking required for the read side. An INSERT from another transaction succeeds immediately; the original transaction just won't see it.\n\nI'd flag this as a real portability trap: engineers moving between MySQL and Postgres, or reading generic 'Repeatable Read' documentation, often assume identical behavior and get surprised — either by an unexpected blocked INSERT on MySQL, or by assuming Postgres has the same gap-lock protection it doesn't need.\n\n**Testing:** whether you know isolation-level names don't imply identical mechanisms across engines, and can name the actual mechanism (gap lock vs MVCC snapshot) each uses.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "InnoDB gap locks vs Postgres MVCC"
+    }
+  ]
+}

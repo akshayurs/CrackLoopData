@@ -1,0 +1,37 @@
+{
+  "topicId": "multilevel-queue-and-mlfq",
+  "interviewQuestions": [
+    {
+      "id": "multilevel-queue-and-mlfq-iq1",
+      "question": "Design a scheduler that favors interactive jobs without starving batch jobs.",
+      "answerMarkdown": "I'd propose an MLFQ-style design directly, since it's built to solve exactly this. Set up several priority queues, top to bottom, with quantum size increasing as priority decreases — short quanta up top for fast interactive turnaround, long quanta at the bottom since CPU-bound jobs there don't need frequent revisits. Every new process starts at the top queue, since the scheduler can't know its behavior in advance.\n\nThe core rule: if a process uses its entire quantum without voluntarily yielding, demote it one level — that's a CPU-bound signal. If it yields early (typically blocking on I/O), keep it at its current level — that's an interactive signal. After a few rounds, genuinely interactive jobs cluster near the top with fast response times, and genuinely CPU-bound batch jobs sink toward the bottom, still running, just less frequently interrupted.\n\nTo prevent starvation at the bottom, I'd add a periodic priority boost — every fixed interval, reset every process back to the top queue, guaranteeing a bounded worst-case wait for even the most demoted batch job. I'd also mention the gaming loophole and its fix: track cumulative CPU time across bursts, not just whether a single burst technically ended \"voluntarily,\" so a process can't fake interactivity with tiny strategic I/O calls.\n\n**Testing:** whether you can synthesize a full working scheduler design from first principles, including its own fairness safeguard, not just describe one algorithm in isolation.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing MLFQ from scratch"
+    },
+    {
+      "id": "multilevel-queue-and-mlfq-iq2",
+      "question": "What's the practical difference between a multilevel queue and a multilevel feedback queue?",
+      "answerMarkdown": "I'd anchor the difference in one word: feedback. A plain multilevel queue assigns each process to a queue once, at creation, based on some external classification (system, interactive, batch) — and that assignment never changes, no matter how the process actually behaves afterward. If a batch job later behaves interactively, it's stuck being treated as batch for its whole lifetime.\n\nMLFQ adds exactly the missing piece: processes move between queues based on observed runtime behavior, which is where \"feedback\" comes from — the scheduler watches what a process actually does and feeds that observation back into where it's scheduled next. This is what lets MLFQ approximate SJF's benefit (favor short/interactive work) without ever needing to know burst time in advance, something a static multilevel queue has no way to achieve.\n\nI'd give a concrete failure case for the static version: a video-encoding job kicked off from an interactive terminal session gets classified as \"interactive\" at creation and never reclassified, even though it immediately starts behaving like a long CPU-bound batch job — exactly the misclassification problem MLFQ is designed to correct automatically.\n\n**Testing:** whether you understand *why* the feedback mechanism specifically was added, not just that MLFQ has more queues or complexity.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Multilevel queue vs MLFQ"
+    },
+    {
+      "id": "multilevel-queue-and-mlfq-iq3",
+      "question": "MLFQ has a lot of tunable parameters — number of queues, quantum per queue, boost interval. How would you go about tuning them for a real workload?",
+      "answerMarkdown": "I'd start by profiling the actual workload's behavior rather than guessing at numbers — measuring the distribution of typical CPU bursts and I/O-wait patterns for representative jobs, since MLFQ's whole design assumes there's a real distinction between short/interactive and long/CPU-bound work worth exploiting.\n\nFor queue count and quantum sizing, I'd aim for enough queues to meaningfully separate a few clusters, but not so many that a genuinely long job takes forever to demote to where it belongs (each demotion step costs response time along the way) — I'd start with something like 3-4 levels and measure rather than assume more is always better.\n\nFor the boost interval, I'd pick it based on how quickly the workload's behavior actually changes — a system with jobs that shift character often (compile-then-test cycles) needs more frequent boosting than one with long-lived, stable batch jobs, and I'd validate the choice by measuring actual worst-case wait times under load, not just trusting the formula.\n\nI'd close with the honest caveat that this fragility — many interacting parameters, no clean closed-form optimum — is a real reason Linux eventually moved away from MLFQ-style scheduling toward CFS's more principled, largely parameter-light fairness model.\n\n**Testing:** whether you can reason about empirical tuning methodology instead of treating scheduler parameters as magic constants.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Tuning MLFQ's many parameters"
+    },
+    {
+      "id": "multilevel-queue-and-mlfq-iq4",
+      "question": "How would a process try to cheat an MLFQ scheduler, and how would you defend against it?",
+      "answerMarkdown": "I'd describe the classic exploit directly: since demotion is triggered by using a full quantum without yielding, a process can deliberately issue a tiny, near-instant I/O call (reading one byte, say) just before its quantum would expire — technically \"yielding voluntarily\" every time, while actually consuming nearly the full quantum's worth of real computation. To a naive demotion rule watching only the most recent burst, this process looks interactive and stays parked at high priority indefinitely, even though it behaves like a greedy CPU-bound job.\n\nThe defense is to change what the rule measures: instead of judging demotion based on whether the *most recent single burst* ended voluntarily, track *cumulative* CPU time consumed by that process at its current priority level across multiple bursts. Once that cumulative total crosses the level's quantum threshold, demote it regardless of how cleverly it split its work into technically-yielding chunks — the gaming strategy stops working because it's the total consumption being measured, not the shape of any one burst.\n\nI'd note this is a general pattern worth recognizing beyond MLFQ specifically: any scheduling rule based on a single observable action is more gameable than one based on accumulated behavior over a window, which is exactly the kind of robustness real production schedulers are built to have.\n\n**Testing:** whether you can think adversarially about a scheduling rule and propose a fix that closes the specific loophole, not just acknowledge that gaming is theoretically possible.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Defending against scheduler gaming"
+    }
+  ]
+}

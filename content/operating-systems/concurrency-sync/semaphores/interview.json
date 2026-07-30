@@ -1,0 +1,37 @@
+{
+  "topicId": "semaphores",
+  "interviewQuestions": [
+    {
+      "id": "semaphores-iq1",
+      "question": "What's the actual difference between a mutex and a binary semaphore?",
+      "answerMarkdown": "On the surface they look identical — both restrict access to one thread at a time, with a value of 0 or 1. The real difference is ownership and intended use, not the counting behavior.\n\nA mutex tracks which thread holds it, and only that thread can unlock it — most implementations treat an unlock by a non-owner as an error or undefined behavior. A binary semaphore is just an integer with no concept of who decremented it; any thread can call `signal()` regardless of who called `wait()`. That makes a semaphore strictly more flexible but also strictly less safe when what you actually want is mutual exclusion, because nothing stops a bug where the wrong thread signals, or signals twice, silently letting an extra thread into a section meant to be exclusive.\n\nWhere this distinction actually matters in practice: semaphores are the right tool for *signaling* between threads that don't have a natural \"owner\" relationship — thread A produces something and thread B, a completely different thread, consumes the signal. A mutex can't do that cleanly since the thread that locks is supposed to be the one that unlocks. So I'd frame it as: use a mutex when you want \"the thread that entered is the thread that leaves,\" use a semaphore when you want counting or cross-thread signaling.\n\n**Testing:** whether you know these aren't interchangeable just because a binary semaphore looks like a lock.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Mutex vs binary semaphore"
+    },
+    {
+      "id": "semaphores-iq2",
+      "question": "How would you use a semaphore to implement a connection pool, and how would you decide its initial count?",
+      "answerMarkdown": "I'd initialize a counting semaphore to the pool's capacity — say 20 for a pool of 20 connections. Every request calls `wait()` before checking out a connection, which blocks if all 20 are in use, and calls `signal()` when it returns the connection. The semaphore enforces the cap without any single thread needing global knowledge of how many others are currently active.\n\nSizing the count is the part that actually requires judgment. It's tempting to just pick a generous number, but the pool's cap has to respect the backend's real limits, not just what feels safe locally: if I have 500 app instances each running a pool of 20, that's a combined 10,000 potential connections against a database that might only allow 100 total. I'd size each instance's pool as roughly `backend_max_connections / expected_instance_count`, with headroom for other consumers of that database, and validate under a load test rather than guessing.\n\nI'd also flag the failure modes on both sides: too small and requests queue on `wait()` even when the backend has spare capacity, adding latency for no reason; too large and a traffic spike can overwhelm or get connections rejected by the backend. Real systems usually find the right number after an incident on one side or the other — I'd rather size it deliberately up front.\n\n**Testing:** whether you can reason about a resource limit across the whole system, not just within one process.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Sizing a semaphore-backed pool"
+    },
+    {
+      "id": "semaphores-iq3",
+      "question": "Walk me through the bounded-buffer producer-consumer solution using semaphores — why does it need two semaphores plus a mutex, not just one?",
+      "answerMarkdown": "The buffer needs three separate jobs done, and trying to collapse them into one synchronization object is where most naive attempts go wrong.\n\nFirst, I need to count how many empty slots are left, so a producer blocks when the buffer is full — that's a semaphore `empty`, initialized to the buffer size. Second, I need to count how many filled slots exist, so a consumer blocks when the buffer is empty — a semaphore `full`, initialized to 0. These two counts move in opposite directions and their sum always equals the buffer size; a producer's `wait(empty)` and `signal(full)` mirror a consumer's `wait(full)` and `signal(empty)`.\n\nThird, and separately, the actual read or write of the buffer's internal pointers needs mutual exclusion — if two producers wrote at the same time, they could corrupt the buffer's index even though there was theoretically room for both. That's what the plain mutex is for, and it's a fundamentally different job than the counting the other two semaphores do.\n\nA common mistake is trying to do all of this with one semaphore, which either loses the count of empty vs. full slots or creates a deadlock where the mutex and the count get tangled — for example, locking the mutex before waiting on `full` can deadlock a consumer that's holding the mutex while blocked, since a producer then can't get the mutex to add an item.\n\n**Testing:** whether you understand *why* three separate synchronization primitives are needed, not just whether you've memorized the code.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Bounded buffer with semaphores"
+    },
+    {
+      "id": "semaphores-iq4",
+      "question": "You inherit a codebase where a semaphore is used like a lock, and occasionally two threads seem to end up inside a section that's supposed to be exclusive. How would you debug and fix this?",
+      "answerMarkdown": "The symptom — occasionally two threads inside a supposedly exclusive section — is the classic signature of a semaphore count drifting upward from a mismatched `wait()`/`signal()` pair, since semaphores have no ownership check to catch this the way a mutex would.\n\nI'd start by auditing every call site that touches this semaphore, specifically looking for asymmetric paths: an early return or an exception that skips the matching `wait()` or `signal()`, a code path that calls `signal()` on cleanup regardless of whether `wait()` ever succeeded, or two different functions each assuming they own the release. I'd also check for double-`signal()` bugs — a retry path or an error handler calling `signal()` a second time after a first attempt already released it.\n\nTo actually catch it happening live, I'd add a counter or an assertion at each `wait()`/`signal()` site, or, if the language supports it, a debug build that logs a stack trace on `signal()` calls so I can pair them against `wait()` calls after the fact and spot the odd one out. If reproducing it needs concurrent load, I'd write a stress test that hammers the code path with many threads to force the timing window open rather than waiting for it in production.\n\nThe long-term fix is usually to replace the semaphore with an actual mutex if what's wanted is true mutual exclusion — since a mutex's ownership check would have made this bug loud and immediate instead of silent and rare — and to wrap acquire/release in an RAII-style guard or try/finally so a skipped release becomes structurally impossible.\n\n**Testing:** whether you have a concrete debugging process for a synchronization bug with no obvious crash, not just \"add a mutex and hope.\"",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging a semaphore misuse bug"
+    }
+  ]
+}

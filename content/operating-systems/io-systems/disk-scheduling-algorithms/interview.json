@@ -1,0 +1,29 @@
+{
+  "topicId": "disk-scheduling-algorithms",
+  "interviewQuestions": [
+    {
+      "id": "disk-scheduling-algorithms-iq1",
+      "question": "Why doesn't seek-minimizing disk scheduling matter much for SSDs?",
+      "answerMarkdown": "I'd start from what problem these algorithms actually solve. FCFS, SSTF, SCAN, C-LOOK — all of them exist to minimize the physical distance a mechanical read/write arm has to travel between requests, because on an HDD that seek costs real milliseconds, often dwarfing the actual data transfer time. The entire family of algorithms is an optimization against a specific physical cost: arm movement.\n\nAn SSD has no arm, no platters, no mechanical seek at all. Any flash page — cylinder 5 or cylinder 50,000, if we're borrowing HDD vocabulary loosely — is electrically addressable in roughly the same, small constant time. Reordering requests by numerical proximity optimizes for a cost that structurally doesn't exist on this hardware; at best it's neutral, at worst it adds CPU overhead for zero benefit.\n\nThis is exactly why Linux's default scheduler for SSD block devices is `none` or `mq-deadline` rather than the HDD-era `CFQ`/`deadline` schedulers — those older ones spend real logic reordering by cylinder proximity, which is pure waste on flash. I'd close by naming what *does* still matter for SSDs: exploiting the device's internal parallelism across multiple flash channels and hardware queues, and managing wear leveling — a genuinely different scheduling problem, not an absence of one.\n\n**Testing:** whether you understand *why* the algorithm family exists, so you can correctly reason about when its premise stops applying, rather than just reciting that SSDs are 'fast so scheduling doesn't matter.'",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Why HDD scheduling logic doesn't transfer to SSDs"
+    },
+    {
+      "id": "disk-scheduling-algorithms-iq2",
+      "question": "Walk me through why SSTF can starve a request, and how SCAN fixes it.",
+      "answerMarkdown": "I'd trace the failure mode concretely. SSTF is purely greedy: at every step, it services whichever pending request sits closest to the head's current cylinder. If the head is at cylinder 20 and requests keep arriving near cylinder 15-25 from a busy nearby process, a request sitting at cylinder 190 loses every single comparison — it's never the closest — and can wait indefinitely as long as nearer requests keep showing up. This isn't a rare edge case; any workload with one far-flung outlier request among a cluster of nearby ones triggers it.\n\nSCAN removes the possibility structurally rather than trying to patch SSTF's greediness. The head commits to sweeping all the way to one end of the disk, servicing everything it passes along the way, then reverses and sweeps back. Because the head physically passes every cylinder on each full sweep, no request can be skipped indefinitely — the absolute worst case for any request is waiting for the current sweep to reach it, bounded by one traversal of the disk.\n\nI'd note the honest trade-off: SCAN sacrifices some of SSTF's raw efficiency (it won't always pick the locally optimal next request) to buy that fairness guarantee — a classic throughput-vs-fairness trade seen across scheduling problems generally, not unique to disks.\n\n**Testing:** whether you can explain a starvation bug mechanistically and connect the fix to what property it specifically restores.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "SSTF starvation and SCAN's fix"
+    },
+    {
+      "id": "disk-scheduling-algorithms-iq3",
+      "question": "If seek-minimizing scheduling is irrelevant on SSDs, does I/O scheduling matter at all for modern flash storage?",
+      "answerMarkdown": "I'd push back gently on the framing: the specific technique (seek-distance minimization) becomes irrelevant, but scheduling as a broader problem doesn't disappear — it just optimizes against a different cost model. Modern NVMe SSDs expose many parallel hardware command queues, capable of thousands of outstanding requests at once, so the interesting question shifts from 'which cylinder is closest' to 'how do I get maximum parallelism out of the device without adding scheduling overhead that costs more than it saves.'\n\nConcretely, Linux's `mq-deadline` scheduler for SSDs still enforces a latency bound per request — making sure no single request waits arbitrarily long even under heavy queue depth — without any seek-based reordering logic. The `none` scheduler goes further and does essentially no software-side reordering at all, betting that the SSD controller's own internal parallelism and wear-leveling logic will order things better than a software heuristic guessing blind.\n\nI'd give the practical read: for most modern NVMe deployments, `none` or `mq-deadline` are both reasonable, and the actual bottleneck has usually moved elsewhere — CPU overhead of the I/O stack itself, PCIe bandwidth, or the application's own concurrency model — rather than anything a smarter disk-scheduling algorithm could fix.\n\n**Testing:** whether you understand this as a shift in optimization target rather than a disappearance of the problem, and can name what actually replaced it.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "What scheduling still means for SSDs"
+    }
+  ]
+}

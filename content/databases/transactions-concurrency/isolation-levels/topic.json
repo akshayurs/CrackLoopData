@@ -1,0 +1,187 @@
+{
+  "id": "isolation-levels",
+  "title": "Isolation Levels & Anomalies",
+  "area": "databases",
+  "group": "transactions-concurrency",
+  "order": 2,
+  "slug": "isolation-levels",
+  "summary": "The dial between correctness and concurrency: which anomalies dirty read, non-repeatable read, phantom, and write skew each represent, and which level actually blocks them.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "isolation-levels-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Isolation** controls how much of one transaction's in-progress work another transaction can see. Perfect isolation (true serial execution) is the safest but slowest option; real engines offer weaker levels that trade correctness for throughput.\n\nThe SQL standard names four levels — Read Uncommitted, Read Committed, Repeatable Read, Serializable — each defined by which **anomalies** it permits. This topic is the most commonly probed database topic in interviews at every seniority: knowing the anomaly names is fresher-level, knowing which anomalies your production database's *default* level actually allows is senior-level.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "isolation-levels-s02",
+      "order": 2,
+      "sectionTitle": "The anomalies: dirty read, non-repeatable read, phantom",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **dirty read** happens when transaction B reads a row that transaction A wrote but hasn't committed yet — if A then rolls back, B has read data that never officially existed.\n\nA **non-repeatable read** happens when transaction B reads the same row twice and gets different values, because transaction A updated and committed that row in between B's two reads.\n\nA **phantom read** happens when transaction B runs the same range query twice (`WHERE amount > 100`) and gets a different *set of rows* the second time, because transaction A inserted or deleted a row that now matches the condition.\n\nThe distinction between non-repeatable read and phantom matters: one is about a specific row changing value, the other is about the *set* of rows matching a predicate changing — which is why preventing them requires different locking (row locks vs range/gap locks, covered in the next topic).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "isolation-levels-s02-q1"
+      ]
+    },
+    {
+      "id": "isolation-levels-s03",
+      "order": 3,
+      "sectionTitle": "Compare: the four SQL standard levels",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Level | Dirty read | Non-repeatable read | Phantom |\n|---|---|---|---|\n| Read Uncommitted | Possible | Possible | Possible |\n| Read Committed | Prevented | Possible | Possible |\n| Repeatable Read | Prevented | Prevented | Possible (standard) / prevented (Postgres, MySQL) |\n| Serializable | Prevented | Prevented | Prevented |\n\nEach level going down the table prevents strictly more anomalies at the cost of more blocking or more abort-and-retry. The Repeatable Read row has an asterisk worth remembering: the **SQL standard** allows phantoms at that level, but **Postgres's snapshot-based Repeatable Read and MySQL/InnoDB's next-key-lock Repeatable Read both happen to prevent phantoms in practice** — a frequent point of confusion because \"Repeatable Read\" doesn't mean the same guarantee on every engine.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "isolation-levels-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: which anomaly each level permits",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A 4x3 grid of isolation levels versus anomalies, showing a staircase of possible-to-prevented cells going down the levels](assets/anomaly-matrix.svg)\n\nRead this as a staircase: each level down turns one more column from red to green, and Serializable is the only level with an all-green row. Memorize the staircase shape, not just the table — it's what lets you reason about a level you've never memorized directly (\"Read Committed prevents dirty reads only, so non-repeatable reads and phantoms are both still possible\").",
+      "assets": [
+        {
+          "alt": "A 4x3 grid of isolation levels versus anomalies, showing a staircase of possible-to-prevented cells going down the levels",
+          "path": "assets/anomaly-matrix.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "isolation-levels-s04-q1"
+      ]
+    },
+    {
+      "id": "isolation-levels-s05",
+      "order": 5,
+      "sectionTitle": "Write skew: the anomaly Serializable-but-snapshot misses",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Write skew** is the anomaly that survives even at levels that look airtight. Classic example: a hospital rule requires at least one doctor on call. Two doctors, Alice and Bob, are both on call. Both simultaneously check \"is at least one other doctor on call besides me?\", both see yes, and both then remove themselves — because each transaction only reads and writes its *own* row, no ordinary conflict is detected, yet the invariant (at least one doctor on call) is now violated with zero doctors on call.\n\nThe crucial nuance: **snapshot isolation** — what Postgres calls Repeatable Read, and what many engines market loosely as \"Serializable-like\" — does **not** prevent write skew, because it only detects conflicts on rows a transaction actually *wrote*, not rows it only *read* to make a decision. True **Serializable** (Postgres's actual `SERIALIZABLE` level, using serializable snapshot isolation) does prevent it, by tracking read-write dependencies, not just write-write ones.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "isolation-levels-s05-q1"
+      ]
+    },
+    {
+      "id": "isolation-levels-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: assuming the default level is Serializable",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"My database uses transactions, so I'm protected from all the anomalies by default.\"\n\n**Why it's wrong:** almost no production database defaults to Serializable, because it's the slowest option. **Postgres defaults to Read Committed.** **MySQL/InnoDB defaults to Repeatable Read** (and its Repeatable Read, unusually, does prevent phantoms via gap locks — see the locking topic). **Oracle defaults to Read Committed.** Code written assuming full serial correctness, tested only on a lightly-loaded database, can silently produce lost updates or write skew in production under real concurrency.\n\n**Correct model:** know your engine's actual default, and explicitly `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` (accepting the throughput cost and the need to retry on serialization failures) for any operation whose correctness genuinely depends on it — don't assume the default protects you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "isolation-levels-s06-q1"
+      ]
+    },
+    {
+      "id": "isolation-levels-s07",
+      "order": 7,
+      "sectionTitle": "SET TRANSACTION ISOLATION LEVEL …",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Setting the level is per-transaction (or per-session) in most engines:\n\n```sql\n-- Postgres / standard SQL\nBEGIN;\nSET TRANSACTION ISOLATION LEVEL SERIALIZABLE;\nSELECT ... ;\nUPDATE ... ;\nCOMMIT;\n```\n\n```sql\n-- MySQL: session-scoped, applies to the next transaction\nSET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;\n```\n\nAt Serializable, both engines can raise a **serialization failure** (Postgres: `40001`, \"could not serialize access due to concurrent update\") when they detect a conflict that would violate serializability — the application is expected to **catch this and retry the whole transaction**. This is the real cost of Serializable: it's not slower per se, it's that correctness now depends on your retry logic existing at all.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "isolation-levels-s08",
+      "order": 8,
+      "sectionTitle": "How Read Committed actually behaves under the hood",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Read Committed sounds simple (\"never read uncommitted data\") but its real behavior surprises people: each individual **statement** in the transaction sees a fresh snapshot as of when that statement started, not one snapshot for the whole transaction. So within one Read Committed transaction, a `SELECT` run twice can see different data if another transaction committed in between — that's the non-repeatable read the level explicitly allows.\n\nThis has a sharp practical consequence: an `UPDATE ... WHERE balance > 100` under Read Committed will re-check the `WHERE` clause against the latest committed version of each row it's about to lock, potentially updating rows that didn't match when the statement began (or skipping ones that no longer match) — a subtlety called the \"Halloween problem\" family that trips up engineers who assume a statement's view of the world is frozen for its whole duration.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "isolation-levels-s09",
+      "order": 9,
+      "sectionTitle": "Lost updates: the anomaly outside the classic list",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The four SQL-standard anomalies don't include one of the most common real-world bugs: the **lost update**. Two transactions both read a counter as 5, both compute 5+1=6 in application code, both write 6 — the counter should be 7, but one increment is silently lost.\n\nRead Committed does **not** prevent this, because each transaction's read and write are separate statements with no lock held between them. Repeatable Read and Serializable both prevent it, but for different reasons: Repeatable Read (snapshot-based) detects the second writer's conflict and aborts it; row-level locking approaches prevent it by making the read acquire a lock that blocks the second reader until the first writer commits. The practical fix at any isolation level is to avoid read-then-write-in-app-code entirely — use `UPDATE counters SET n = n + 1` (a single atomic statement) or `SELECT ... FOR UPDATE` to lock the row before computing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "isolation-levels-s09-q1"
+      ]
+    },
+    {
+      "id": "isolation-levels-s10",
+      "order": 10,
+      "sectionTitle": "Choosing a level: the senior-level trade-off",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A staff engineer doesn't reach for Serializable by default — they match the level to what the operation actually needs.\n\n| Scenario | Reasonable choice | Why |\n|---|---|---|\n| Simple single-row read/write, no cross-row invariant | Read Committed | Cheapest; the default is usually fine |\n| Report/analytics query needing a stable view across many rows | Repeatable Read | One consistent snapshot for the whole read, no locking overhead |\n| Multi-row invariant enforced across concurrent writers (the doctor-on-call case) | Serializable, with retry logic | Only level that catches write skew |\n| High-contention counter/inventory decrement | Neither — use `SELECT ... FOR UPDATE` or an atomic `UPDATE ... SET n = n - 1 WHERE n >= 1` | Avoids the abort storm Serializable causes under heavy contention on the same rows |\n\n**How to decide:** default to Read Committed, escalate only for the specific invariant at risk, and prefer explicit row locking over Serializable when the contention is on a small, known set of rows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "isolation-levels-s11",
+      "order": 11,
+      "sectionTitle": "Isolation levels are about correctness, not raw performance alone",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It's tempting to treat isolation level purely as a performance dial, but the real trade is **which bugs you're willing to risk** in exchange for concurrency. Weakening isolation doesn't just make things \"a bit less safe\" in the abstract — it reintroduces a named, specific anomaly with a real production shape: a payment double-processed, an inventory count that goes negative, a report that doesn't foot to the general ledger.\n\nInterviewers listen for whether you can name which specific anomaly a weaker level reintroduces for the scenario in front of you, rather than a vague \"lower isolation is riskier.\" Tie every isolation-level recommendation back to a concrete anomaly the business would actually notice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "isolation-levels-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: testing only under low concurrency",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our integration tests pass and staging looks fine, so our isolation level choice is correct.\"\n\n**Why it's wrong:** anomalies like lost updates, write skew, and phantoms are **probabilistic under concurrency** — they only manifest when two transactions actually interleave within a narrow timing window. A test suite that runs transactions one at a time, or staging traffic that's a fraction of production load, can pass for months and then fail the moment real concurrent load hits that code path.\n\n**Correct model:** reason about isolation anomalies from the schedule (what interleavings are *possible*), not from what you've observed in testing — and load-test the specific code paths where a wrong isolation choice would produce a business-visible anomaly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "isolation-levels-s12-q1"
+      ]
+    }
+  ]
+}

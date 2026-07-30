@@ -1,0 +1,37 @@
+{
+  "topicId": "query-execution",
+  "interviewQuestions": [
+    {
+      "id": "query-execution-iq1",
+      "question": "Walk me through what happens between a client sending a SQL query and getting results back.",
+      "answerMarkdown": "I'd frame it as four stages. First, **parsing** — the engine checks the SQL is grammatically valid and resolves every table and column name against the schema, producing a syntax tree with no notion of cost yet. Second, **rewriting** — cost-independent logical transformations get applied: inlining views, unnesting subqueries into joins, pushing predicates down, simplifying redundant conditions. This produces a normalized logical plan that says what to compute, not how.\n\nThird, the **optimizer** takes that logical plan and, using table statistics like row counts and histograms, searches the space of possible physical plans — different join algorithms, join orders, and access paths — and picks the one with the lowest estimated cost. Fourth, the **executor** runs that physical plan, typically as a tree of operators using a pull-based iterator model, and streams rows back to the client.\n\nI'd close by connecting this to `EXPLAIN`: it shows you the output of stage three, which is why understanding these stages is what makes a plan readable instead of mysterious.\n\n**Testing:** whether you can decompose 'run a query' into distinct stages rather than treating it as one opaque black box.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The full execution pipeline"
+    },
+    {
+      "id": "query-execution-iq2",
+      "question": "How do you read an EXPLAIN plan — where do you start?",
+      "answerMarkdown": "I never start at the top line, even though it's printed first — that's the root operator, which runs last. I start at the leaves: the most-indented nodes, usually table or index scans, since those run first and their output feeds everything above them.\n\nAt each leaf, I check estimated versus actual row counts if I have `EXPLAIN ANALYZE` output — a big gap there is the single strongest signal something's wrong, usually stale statistics. Then I trace upward through each parent operator, checking what it does with its children's output: does a join look reasonable given both input sizes, is a sort or hash step spilling to disk, is a filter appearing after an expensive join that could have run earlier.\n\nI'd give a concrete example: seeing a `Nested Loop` at the top with a `Seq Scan` estimating 10 rows but actually returning 2 million tells me immediately the optimizer picked nested-loop join because it trusted a wildly wrong row estimate — that's the plan's real story, not the top-line join itself.\n\n**Testing:** whether you read plans bottom-up by instinct and know which signal (est vs actual rows) to hunt for first.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Reading a plan systematically"
+    },
+    {
+      "id": "query-execution-iq3",
+      "question": "What's the difference between a logical plan and a physical plan, and why does the distinction matter in practice?",
+      "answerMarkdown": "A logical plan describes intent — join these two tables, filter to this condition, aggregate by this key — with no commitment to an algorithm. A physical plan commits: hash join versus nested loop, index scan versus sequential scan, hash aggregate versus sorted aggregate, plus a concrete order of operations.\n\nThe practical reason this split matters: the same correct logical plan maps to many valid physical plans, all producing identical results but at wildly different costs, and the optimizer's whole job is searching that space using table statistics. That's why the same query text can perform completely differently on a table with 100 rows versus 100 million — the logical plan the SQL implies never changes, but the best physical plan does, because the cost trade-offs shift with data size and distribution.\n\nI'd add that this is also why forcing a specific physical plan via a hint is a narrower, more brittle fix than addressing why the optimizer's cost estimate was wrong in the first place — a hint pins the answer without fixing the input that produced the wrong one.\n\n**Testing:** whether you can explain why plan choice is data-dependent rather than fixed by the query text alone.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Logical vs physical plans"
+    },
+    {
+      "id": "query-execution-iq4",
+      "question": "Why do some queries appear to hang with no output and then suddenly return all their rows at once?",
+      "answerMarkdown": "This is the signature of a materializing operator somewhere in the plan — most commonly a hash join's build side, a full sort, or a blocking aggregate. Those operators can't emit even one output row until they've consumed their *entire* input, unlike a pipelining operator like a filter, which passes a row upward the instant it's checked.\n\nConcretely: if a query does `ORDER BY` on an unindexed column over ten million rows, the sort operator has to read and sort all ten million rows before it can emit the smallest one — that's the pause. Once the sort is done, the rows above it in the plan can stream through quickly, which is the burst.\n\nI'd use this to reason about a fix: if the pause is unacceptably long, I'd look at whether an index could let the engine avoid the materializing step entirely — an index on the `ORDER BY` column can let the scan return pre-sorted rows, skipping the sort operator altogether.\n\n**Testing:** whether you connect an observed runtime symptom to the underlying pipelining-vs-materialization mechanism, not just \"it's slow.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing pause-then-burst query behavior"
+    }
+  ]
+}

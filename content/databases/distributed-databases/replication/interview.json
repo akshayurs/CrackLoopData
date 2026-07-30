@@ -1,0 +1,37 @@
+{
+  "topicId": "replication",
+  "interviewQuestions": [
+    {
+      "id": "replication-iq1",
+      "question": "Walk me through what happens end to end when a write is made to a leader with two asynchronous followers.",
+      "answerMarkdown": "The client sends the write to the leader, which is the only node allowed to accept it. The leader appends the change to its own **write-ahead log (WAL)** and applies it to its local data — that's the durability boundary for the leader itself.\n\nIndependently, each follower has an open replication stream pulling (or receiving a push of) new WAL entries from the leader. The leader doesn't wait for either follower before acknowledging the client — that's what makes this **asynchronous**. Each follower applies the entries in the same order it received them, so it converges to the same state the leader had, just slightly behind.\n\nConcretely: if the leader is on `us-east-1` and one follower is same-region while the other is in `ap-south-1`, I'd expect the same-region follower to lag single-digit milliseconds and the cross-region one 100–250ms under normal load — and both to spike higher if either is also serving heavy read traffic, since replaying the WAL competes with query execution for CPU and I/O.\n\nThe implication I'd flag: the client gets a fast acknowledgment, but a crash on the leader in that gap loses whatever hadn't reached a follower yet — durability and latency are the trade-off this is buying.\n\n**Testing:** whether you understand replication as an ongoing log-shipping process, not a one-time copy, and can reason about the latency/durability trade-off it creates.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "End-to-end write path"
+    },
+    {
+      "id": "replication-iq2",
+      "question": "Your application shows a user their own comment as missing right after they post it, even though the write clearly succeeded. What's going on and how would you fix it?",
+      "answerMarkdown": "This is the **read-your-writes** problem: the write landed on the leader, but the page reload's read got routed to a follower that hadn't replicated that write yet — normal behavior under asynchronous replication, not a bug in the write path.\n\nI'd confirm it by checking replication lag on the follower that served the read at that timestamp — if it shows even a few hundred milliseconds of lag around the write time, that's the smoking gun.\n\nThree fixes I'd consider, in order of how much complexity they add: first, route a user's reads to the leader for a short window (say 5–10 seconds) right after they write — cheapest, works for most UX cases. Second, track a log sequence number with the write and have the read path wait for a follower that's caught up past it before querying — more precise, more plumbing. Third, pin that user's session to a specific follower so their own view is at least internally consistent even if globally lagging — weaker guarantee, but avoids leader load entirely.\n\nI'd default to the first option unless the product genuinely needs strict read-your-writes for every read, since routing to the leader briefly is cheap and simple.\n\n**Testing:** whether you can connect an abstract consistency term to a concrete, debuggable production symptom and propose a proportionate fix.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging stale reads"
+    },
+    {
+      "id": "replication-iq3",
+      "question": "When would you choose leaderless (Dynamo-style) replication over single-leader, and what do you give up?",
+      "answerMarkdown": "I'd reach for leaderless when write availability during a network partition matters more than avoiding write conflicts — think a shopping cart service or a sensor-ingestion pipeline, where accepting a write from *any* reachable node beats rejecting it because the one designated leader is unreachable.\n\nMechanically, leaderless systems like Cassandra or DynamoDB send writes to several replicas directly and use quorum reads to reconcile — with `R + W > N`, a read is guaranteed to overlap with the latest acknowledged write on at least one node it queries.\n\nWhat you give up: single-leader systems make conflict resolution someone else's problem, since one node orders every write. Leaderless systems can accept two writes to the same key on different nodes with no coordination between them, so the client (or the database's built-in logic — last-write-wins, vector clocks, CRDTs) has to reconcile that after the fact. That's real engineering cost, and it's easy to lose data silently with a naive last-write-wins policy.\n\nI'd avoid leaderless for anything needing strict transactional guarantees across multiple keys — that's a much better fit for a single-leader system with real transactions.\n\n**Testing:** whether you can name the actual trade-off (availability vs. conflict-free-by-construction) instead of treating leaderless as strictly \"more advanced\" or better.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Choosing a replication model"
+    },
+    {
+      "id": "replication-iq4",
+      "question": "How would you design failover for a single-leader database so that a slow-but-alive leader can't cause split-brain?",
+      "answerMarkdown": "I'd start from the failure it prevents: automatic failover reacting to a leader that just looks dead (network blip, GC pause, overloaded) rather than one that's actually dead, resulting in two nodes both accepting writes and diverging silently — the worst kind of bug because it corrupts data quietly instead of erroring loudly.\n\nThe mechanism I'd put in place is **fencing**: every time a new leader is elected, it gets a monotonically increasing epoch or term number. Followers and any client-facing proxy are configured to reject writes or replication traffic tagged with an older epoch than the one they've last seen. That way, even if the old leader wakes back up believing it's still in charge, nothing downstream will accept what it says.\n\nFor extra safety in on-prem or self-managed setups, I'd add **STONITH**-style fencing — actually cutting power or network access to a node believed dead — so it physically can't keep writing even before it notices the epoch changed. In practice, most teams get this via a managed consensus layer (etcd, ZooKeeper, or the database's built-in Raft implementation) rather than hand-rolling it.\n\nI'd close by noting manual failover, while slower, is sometimes the safer default for the highest-stakes primaries, precisely because automatic failover's speed is what makes split-brain possible.\n\n**Testing:** whether you know fencing by name and can explain why it's necessary even when failover already \"looks\" correct.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Designing safe failover"
+    }
+  ]
+}

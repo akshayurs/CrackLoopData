@@ -1,0 +1,192 @@
+{
+  "id": "mvcc-deadlocks",
+  "title": "MVCC & Deadlocks",
+  "area": "databases",
+  "group": "transactions-concurrency",
+  "order": 4,
+  "slug": "mvcc-deadlocks",
+  "summary": "The optimistic path to isolation — multi-version reads without blocking writers — plus the classic failure mode locking introduces: deadlocks, how they're detected, and how to stop causing them.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "mvcc-deadlocks-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**MVCC** (multi-version concurrency control) lets reads never block writers and writers never block readers, by keeping multiple versions of each row and giving every transaction a consistent snapshot instead of making it wait. Postgres, MySQL/InnoDB, and Oracle all use it for reads.\n\nThe second half of this topic is the classic failure mode of any locking system: the **deadlock**, where two transactions each wait on a lock the other holds, and neither can ever proceed without intervention. Both halves come up constantly in interviews because both are things a candidate has to have actually seen break, not just read about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "mvcc-deadlocks-s02",
+      "order": 2,
+      "sectionTitle": "Multi-version reads without blocking writers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a pure locking system, a long-running writer blocks every reader of that row until it commits. MVCC avoids this entirely: instead of overwriting a row, an `UPDATE` creates a **new version** of the row, tagged with the transaction ID that created it, while the old version stays put, tagged with when it stopped being current.\n\nA reader is given a **snapshot** — effectively, a cutoff of \"which transaction IDs count as already committed as of now\" — and always reads the newest row version that was committed before its snapshot was taken, ignoring newer versions entirely. This is why a report that takes 10 minutes to run sees a perfectly consistent view of the data even while thousands of writes happen underneath it, without ever blocking those writes or being blocked by them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "mvcc-deadlocks-s02-q1"
+      ]
+    },
+    {
+      "id": "mvcc-deadlocks-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: version chain per row and snapshot visibility",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A row as a chain of three physical versions with two reader snapshots pointing at the version each actually reads](assets/version-chain.svg)\n\nEach row is really a small linked list of versions in Postgres (heap tuples with `xmin`/`xmax`) or reconstructed on the fly in InnoDB (via the undo log applied backward from the current row). Garbage collection — `VACUUM` in Postgres, the purge thread in InnoDB — later removes versions no live snapshot can possibly need anymore.",
+      "assets": [
+        {
+          "alt": "A row as a chain of three physical versions with two reader snapshots pointing at the version each actually reads",
+          "path": "assets/version-chain.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "mvcc-deadlocks-s04",
+      "order": 4,
+      "sectionTitle": "Deadlock conditions and the wait-for graph",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **deadlock** requires four conditions simultaneously: mutual exclusion (a resource only one transaction can hold), hold-and-wait (a transaction holds one lock while waiting for another), no preemption (a lock can't be forcibly taken away), and circular wait (a cycle of transactions each waiting on the next). Databases can't prevent the first three without abandoning locking entirely, so they detect the fourth.\n\nThe detection mechanism is a **wait-for graph**: a node per transaction, an edge from transaction A to B if A is waiting for a lock B holds. No cycle means every transaction will eventually proceed once the ones ahead of it finish. A cycle means deadlock — those transactions will wait forever unless something intervenes, which is exactly the graph structure the engine periodically scans for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "mvcc-deadlocks-s04-q1"
+      ]
+    },
+    {
+      "id": "mvcc-deadlocks-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a two-transaction deadlock cycle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A deadlock cycle: T1 holds row A and waits on row B, T2 holds row B and waits on row A](assets/deadlock-cycle.svg)\n\nThis is the canonical example: T1 runs `UPDATE accounts SET ... WHERE id='A'` then tries to update `id='B'`; T2 concurrently updates `id='B'` then tries to update `id='A'`. T1 holds A and wants B; T2 holds B and wants A. Neither can proceed — this is precisely the scenario the lock-ordering discipline from the locking topic exists to prevent.",
+      "assets": [
+        {
+          "alt": "A deadlock cycle: T1 holds row A and waits on row B, T2 holds row B and waits on row A",
+          "path": "assets/deadlock-cycle.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "mvcc-deadlocks-s06",
+      "order": 6,
+      "sectionTitle": "Detection vs prevention vs timeout",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Engines take one of three approaches once a wait-for cycle is possible. **Detection** (Postgres, InnoDB) periodically scans the wait-for graph, and when it finds a cycle, picks a **victim** — usually the transaction that's done the least work, or holds the fewest locks — and kills it with a deadlock error, letting the others proceed. **Prevention** avoids ever entering a state that could deadlock, typically by requiring locks be acquired in a global order or by aborting a transaction the moment it would have to wait on an \"older\" transaction (wound-wait, wait-die schemes). **Timeout** is the blunt fallback: if a lock wait exceeds a threshold, assume deadlock (or just intolerable contention) and abort — simpler to implement, but it also kills transactions that were merely slow, not actually deadlocked.\n\nMost mainstream relational databases use detection, because it only aborts transactions when a real cycle exists, unlike timeout's false positives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "mvcc-deadlocks-s06-q1"
+      ]
+    },
+    {
+      "id": "mvcc-deadlocks-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: inconsistent lock ordering causing deadlocks",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Deadlocks are rare edge cases the database handles for me — I don't need to design around them.\"\n\n**Why it's wrong:** the database *recovers* from a deadlock by killing a victim transaction, but that transaction's work is lost and must be retried — if the application has no retry logic, the user just sees an error. And deadlocks aren't rare: any code path that locks two or more rows in an order that depends on caller input (which account is \"source\" vs \"destination\", which two rows a batch job happens to process first) will deadlock under real concurrent load, reliably, not occasionally.\n\n**Correct model:** treat \"could this code path lock rows in different orders depending on input\" as a design question during code review, enforce a canonical lock order (sort IDs before locking), and always wrap multi-row transactions in retry logic that specifically catches the engine's deadlock error code and retries the whole transaction from the start.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "mvcc-deadlocks-s07-q1"
+      ]
+    },
+    {
+      "id": "mvcc-deadlocks-s08",
+      "order": 8,
+      "sectionTitle": "Compare: MVCC vs pure locking",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | MVCC (reads) | Pure locking (reads) |\n|---|---|---|\n| Reader vs writer | Never block each other | Reader can block a writer (S lock) and vice versa |\n| Storage cost | Multiple row versions kept until no snapshot needs them | One copy of each row |\n| Cleanup | Needs garbage collection (VACUUM, purge thread) — a real operational job | None required |\n| What a read sees | A consistent snapshot as of a point in time | The latest committed value at the moment of the read |\n| Write-write conflicts | Still exist — writers still take real locks against each other | Same |\n\n**How to decide:** you rarely choose this directly — it's set by your engine — but knowing it explains real symptoms: unexplained table bloat and the need to tune autovacuum in Postgres are the operational cost of MVCC's core benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "mvcc-deadlocks-s09",
+      "order": 9,
+      "sectionTitle": "Reading a real deadlock log",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Both engines log the wait-for cycle when they detect and resolve a deadlock. A trimmed Postgres example:\n\n```\nERROR:  deadlock detected\nDETAIL: Process 1234 waits for ShareLock on transaction 5678; blocked by process 4321.\n        Process 4321 waits for ShareLock on transaction 1357; blocked by process 1234.\n        Process 1234: UPDATE accounts SET balance = balance - 100 WHERE id = 'B';\n        Process 4321: UPDATE accounts SET balance = balance - 50 WHERE id = 'A';\n```\n\nReading this: process 1234 is stuck wanting a lock 4321 holds, and 4321 is stuck wanting a lock 1234 holds — the classic two-transaction cycle. Postgres kills one side (here, likely 1234, the one whose error you're reading) and the application must catch this specific SQLSTATE (`40P01`) and retry. InnoDB's equivalent lives in `SHOW ENGINE INNODB STATUS` under \"LATEST DETECTED DEADLOCK,\" showing each transaction's held and waited-for locks in the same shape.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "mvcc-deadlocks-s10",
+      "order": 10,
+      "sectionTitle": "MVCC's operational cost: bloat and the transaction ID wraparound",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "MVCC's \"free\" concurrency isn't actually free — it moves the cost from blocking to cleanup. In Postgres specifically, two real production hazards come directly from MVCC: **table bloat**, where dead row versions accumulate faster than `autovacuum` can reclaim them (often because a long-running transaction is pinning the cleanup horizon, as covered in the ACID topic), and **transaction ID wraparound**, a genuinely staff-level hazard where Postgres's 32-bit transaction ID counter would eventually wrap around and make old committed rows look like they're from the future — Postgres forces an aggressive, database-wide `VACUUM FREEZE` and can eventually refuse new writes entirely to prevent this, which has caused real production outages when autovacuum was disabled or badly tuned.\n\nThe interview-relevant takeaway: \"MVCC means no blocking\" is true but incomplete — a staff engineer also knows what MVCC costs operationally, and that cost is monitoring and tuning vacuum, not something you can ignore.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "mvcc-deadlocks-s10-q1"
+      ]
+    },
+    {
+      "id": "mvcc-deadlocks-s11",
+      "order": 11,
+      "sectionTitle": "Deadlocks vs lock waits: telling them apart in production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A query that's \"just slow\" and a query that's genuinely deadlocked look identical from the outside — both appear stuck. The distinguishing signal: a real deadlock is a **cycle**, and the engine's own detector resolves it automatically within its detection interval (Postgres checks every `deadlock_timeout`, default 1 second), producing an explicit error in the logs. A merely slow or contended query has no cycle — it's waiting on a lock that will eventually be released, and it will simply keep waiting (or hit a statement timeout you've configured) rather than getting an automatic deadlock error.\n\nSo in practice: if you see a deadlock error in the logs, the engine already resolved it for you — your job is to fix the lock-ordering bug so it stops recurring. If you see queries stuck without any deadlock error, you have contention, not a deadlock, and the fix is the hot-row remediation from the locking topic, not deadlock retry logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "mvcc-deadlocks-s11-q1"
+      ]
+    },
+    {
+      "id": "mvcc-deadlocks-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: retrying a deadlock victim without backoff",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I added retry logic for deadlock errors, so I'm done — the transaction just retries immediately and succeeds.\"\n\n**Why it's wrong:** if the two transactions that deadlocked are retried immediately, with no delay and no change in ordering, they can simply deadlock again on the retry — especially under sustained concurrent load where the same access pattern repeats continuously. Immediate, tight retry loops can also amplify load exactly when the database is already contended, making the underlying hot-row problem worse.\n\n**Correct model:** retry with a small randomized backoff (jitter) so the two transactions don't retry in lockstep, cap the number of retries with a clear failure path, and — the actual fix, not just the mitigation — resolve the lock-ordering inconsistency that caused the deadlock in the first place so the retry rarely needs to fire at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

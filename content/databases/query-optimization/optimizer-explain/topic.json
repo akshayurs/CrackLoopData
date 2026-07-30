@@ -1,0 +1,200 @@
+{
+  "id": "optimizer-explain",
+  "title": "Optimizer, Statistics & EXPLAIN",
+  "area": "databases",
+  "group": "query-optimization",
+  "order": 3,
+  "slug": "optimizer-explain",
+  "summary": "Why the planner picks the plan it picks, what statistics it's actually reasoning from, and how to read EXPLAIN ANALYZE well enough to trust or override it.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "optimizer-explain-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The **query optimizer** doesn't try every possible plan and time them — it estimates the cost of candidate plans using **statistics** about the data (row counts, value distributions) and picks the cheapest estimate. `EXPLAIN` shows you that estimate; `EXPLAIN ANALYZE` actually runs the query and shows you what really happened.\n\nThe gap between those two — estimated cost and actual behavior — is where almost every real-world query performance problem lives. This topic is about reading that gap fluently: not just running `EXPLAIN`, but knowing which numbers in the output tell you the optimizer got it right or catastrophically wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "optimizer-explain-s02",
+      "order": 2,
+      "sectionTitle": "Cost-based optimization and the search space",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **cost-based optimizer** assigns a numeric cost estimate to each candidate physical plan — a function of estimated I/O (pages read), CPU (rows processed), and for some engines, memory. It doesn't invent these numbers from nothing: they come from **statistics** the engine maintains about each table (covered next), combined with a per-operator cost model (a sequential scan of P pages costs roughly P times a page-read cost constant; a sort of R rows costs roughly `R log R` times a comparison cost constant).\n\nFor anything beyond a trivial query, the search space of possible plans (which access path per table, which join order, which join algorithm per join) is enormous, so the optimizer uses dynamic programming for a moderate number of tables and heuristics or randomized search for many — it's finding a *good* plan cheaply, not guaranteed to find the provably *optimal* one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "optimizer-explain-s03",
+      "order": 3,
+      "sectionTitle": "Statistics, histograms, and cardinality estimation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cardinality estimation** — predicting how many rows a filter or join will produce — is the single input the entire cost model depends on, and it's built from statistics the engine keeps per column: total row count, number of distinct values, most-common values and their frequencies, and a **histogram** that buckets the value range so the optimizer can estimate selectivity for a range predicate (`WHERE price > 500`) without scanning the actual data.\n\nThese statistics are collected by sampling, not exhaustively — `ANALYZE` in Postgres reads a random sample of rows, not every row, to build them. That sampling is usually good enough, but it means statistics can be meaningfully wrong on skewed or rapidly changing data, which is exactly where cardinality estimates — and therefore the whole plan choice — go wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "optimizer-explain-s04",
+      "order": 4,
+      "sectionTitle": "Reading EXPLAIN ANALYZE output line by line",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`EXPLAIN ANALYZE` actually executes the query and annotates each node with real numbers, letting you compare them to the estimate.\n\n```\nSeq Scan on orders  (cost=0.00..18334.00 rows=1000 width=48)\n                     (actual time=0.021..142.887 rows=487213 loops=1)\n  Filter: (status = 'pending')\n  Rows Removed by Filter: 4512787\n```\n\n`cost=0.00..18334.00` is the estimated cost range (startup cost .. total cost, in arbitrary cost units, not milliseconds). `rows=1000` is the estimated row count after the filter. `actual time=0.021..142.887` is real elapsed milliseconds (startup .. total). `actual rows=487213` is what the filter really returned — nearly 500x the estimate. `Rows Removed by Filter` tells you how many rows were scanned and discarded, which is your signal that an index on `status` could avoid reading all 5 million rows just to throw most of them away.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "optimizer-explain-s04-q1"
+      ]
+    },
+    {
+      "id": "optimizer-explain-s05",
+      "order": 5,
+      "sectionTitle": "Estimated vs actual rows as the debugging signal",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If you learn to check exactly one number in an `EXPLAIN ANALYZE` output, make it this one: at every node, does `rows=` (estimated) roughly match `actual rows=`? A close match means the optimizer's model of your data was accurate at that point, and the plan it picked was likely a reasonable one for the numbers it believed. A wide mismatch — off by 10x, 100x, or more — means every decision the optimizer made *downstream* of that node (which join algorithm, which join order) was made on false information, even if each individual decision was locally \"correct\" given the wrong input.\n\nThis is why experienced engineers scan a plan hunting for the first big estimate/actual gap from the bottom up, rather than reading every cost number carefully — that one gap is usually the whole story, and everything above it in the tree is a downstream consequence.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "optimizer-explain-s05-q1"
+      ]
+    },
+    {
+      "id": "optimizer-explain-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: stale statistics causing a catastrophic plan",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The optimizer always sees my data as it currently is.\"\n\n**Why it's wrong:** statistics are a snapshot, refreshed only when `ANALYZE` runs (manually, or via autovacuum's automatic analyze threshold in Postgres). A table that grows from 1,000 rows to 10 million rows in a bulk load, without a fresh `ANALYZE`, still looks like a 1,000-row table to the optimizer — it may pick a nested-loop join expecting to touch a handful of rows and instead iterate millions of times, or estimate a filter is highly selective when it no longer is.\n\n**Correct model:** after any bulk load, large delete, or major data shape change, run `ANALYZE` explicitly rather than trusting autovacuum's timing — the threshold-based automatic trigger can lag well behind a sudden change, and query performance can fall off a cliff in the gap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "optimizer-explain-s06-q1"
+      ]
+    },
+    {
+      "id": "optimizer-explain-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: parameter sniffing and plan caching surprises",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A prepared statement or stored procedure with parameters gets re-optimized fresh for every call, so it always picks the best plan for that call's values.\"\n\n**Why it's wrong:** many engines (SQL Server, and Postgres for prepared statements after enough executions) **cache** a plan the first time a parameterized query runs and reuse it for later calls with *different* parameter values — this is **parameter sniffing**. If the first call happens to use a parameter value with an unusual data distribution (a highly selective filter), the cached plan optimized for that value can be badly wrong for a later call whose value is common and returns a much larger result.\n\n**Correct model:** if a stored procedure or prepared statement performs inconsistently — fast sometimes, slow other times, with no code change — suspect a cached plan optimized for the wrong parameter value before suspecting data growth or hardware. The fix is engine-specific: forcing a recompile, using `OPTION (RECOMPILE)` in SQL Server, or disabling generic plan caching for that statement in Postgres (`plan_cache_mode`).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "optimizer-explain-s07-q1"
+      ]
+    },
+    {
+      "id": "optimizer-explain-s08",
+      "order": 8,
+      "sectionTitle": "Buffers, I/O, and where EXPLAIN ANALYZE's numbers can mislead",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`EXPLAIN ANALYZE` reports real elapsed time, but that time depends heavily on whether data was already cached in memory — running it twice in a row on the same query often shows the second run dramatically faster purely from OS/buffer-cache warmup, not from anything about the query itself. Comparing two different queries' `EXPLAIN ANALYZE` times without accounting for cache state is a common analysis mistake.\n\nAdding `BUFFERS` surfaces the cache hit/read split per node:\n\n```\nEXPLAIN (ANALYZE, BUFFERS) SELECT * FROM orders WHERE status = 'pending';\n-- Buffers: shared hit=42 read=5108\n```\n\n`shared hit` is pages found in cache; `shared read` is pages actually pulled from disk. A high `read` count on a supposedly \"fast\" query is a sign the good time you measured was a cache-warm fluke that won't hold in production under real cache pressure.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "optimizer-explain-s09",
+      "order": 9,
+      "sectionTitle": "Why EXPLAIN ANALYZE can itself distort timing",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"EXPLAIN ANALYZE's reported time is exactly what the query would take running normally.\"\n\n**Why it's wrong:** instrumenting every operator with per-row timing has real overhead — on some engines and query shapes, `EXPLAIN ANALYZE` can add double-digit percentage overhead or more compared to the query running unmeasured, especially for plans with a huge number of rows flowing through many operators. The relative comparison between two plans is usually still valid, but the absolute number should be read as \"roughly this, plus instrumentation overhead,\" not a precise SLA measurement.\n\n**Correct model:** use `EXPLAIN ANALYZE` to compare plan shapes and find the row-estimate mismatch, not as a substitute for actually timing the query from the application or via a lighter-weight tool when you need a precise number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "optimizer-explain-s10",
+      "order": 10,
+      "sectionTitle": "When multi-column correlation breaks the optimizer's assumptions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "By default, most optimizers assume columns are **independent** — that a filter on column A and a filter on column B each reduce the row count independently, so their combined selectivity is roughly the product of each one's selectivity alone. This assumption is often wrong: `WHERE city = 'San Francisco' AND state = 'CA'` are heavily correlated (every San Francisco row is already in California), so multiplying their individual selectivities dramatically *underestimates* the actual matching row count.\n\nSome engines let you fix this directly:\n\n```sql\nCREATE STATISTICS city_state_stats (dependencies) ON city, state FROM customers;\nANALYZE customers;\n```\n\nThis tells the Postgres optimizer to track correlation between these specific columns instead of assuming independence. Recognizing \"this cardinality estimate is wrong because these two columns are correlated, not because statistics are stale\" is a distinctly senior-level diagnosis, different from the stale-statistics pitfall earlier.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "optimizer-explain-s10-q1"
+      ]
+    },
+    {
+      "id": "optimizer-explain-s11",
+      "order": 11,
+      "sectionTitle": "Diagram: from statistics to plan choice",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Chain from table statistics to cardinality estimates to the chosen plan](assets/statistics-to-plan-chain.svg)\n\nEvery box in this chain depends entirely on the one before it — a wrong number at the statistics stage propagates all the way to the final plan choice with no correction along the way, which is why fixing bad statistics (not tuning the query text) is so often the actual fix for a bad plan.",
+      "assets": [
+        {
+          "alt": "Chain from table statistics to cardinality estimates to the chosen plan",
+          "path": "assets/statistics-to-plan-chain.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "optimizer-explain-s12",
+      "order": 12,
+      "sectionTitle": "A worked EXPLAIN ANALYZE diff: before and after an index",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Seeing the before/after of adding an index makes the whole chapter concrete.\n\n```\n-- Before: no index on status\nSeq Scan on orders  (cost=0.00..18334.00 rows=1000 width=48)\n                     (actual time=0.021..142.887 rows=487213 loops=1)\n  Filter: (status = 'pending')\n\n-- After: CREATE INDEX idx_orders_status ON orders(status);\nIndex Scan using idx_orders_status on orders\n           (cost=0.43..1205.62 rows=480000 width=48)\n           (actual time=0.031..9.240 rows=487213 loops=1)\n```\n\nTwo things changed: the operator switched from `Seq Scan` to `Index Scan`, and the row *estimate* also jumped from 1000 to 480000 — because building the index also refreshed the table's statistics in this example, fixing a stale-stats problem alongside adding the faster access path. The actual time dropped from 143ms to 9ms: the index let the engine skip reading and discarding the ~4.5 million non-matching rows entirely.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "optimizer-explain-s12-q1"
+      ]
+    },
+    {
+      "id": "optimizer-explain-s13",
+      "order": 13,
+      "sectionTitle": "Senior nuance: knowing when NOT to trust EXPLAIN alone",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A staff-level answer knows `EXPLAIN` (without `ANALYZE`) only shows estimates — it never runs the query, so on a production system where you're worried about side effects (an `UPDATE`/`DELETE`, or a read against a system already under load), plain `EXPLAIN` is the safe first look. `EXPLAIN ANALYZE` actually executes the statement, which means an `EXPLAIN ANALYZE` on a write statement really performs the write (Postgres does roll it back by default for `INSERT`/`UPDATE`/`DELETE` unless you add `ANALYZE` inside a transaction you commit, but this varies by engine and is a genuine footgun).\n\nThe broader nuance: `EXPLAIN ANALYZE` on a busy production system adds real load and real timing noise from concurrent activity — a senior engineer runs it against a replica or a representative snapshot when precision matters, and treats a single run's timing as a data point, not a verdict.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

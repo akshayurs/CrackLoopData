@@ -1,0 +1,161 @@
+{
+  "id": "sql-select",
+  "title": "SELECT Fundamentals",
+  "area": "databases",
+  "group": "sql",
+  "order": 1,
+  "slug": "sql-select",
+  "summary": "The statement you write most in any database job — how SQL actually evaluates a SELECT, and the NULL trap that catches almost everyone at least once.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "sql-select-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "`SELECT` is the statement you'll write thousands of times more than any other — every dashboard, report, and API endpoint eventually reduces to one. It looks trivial, which is exactly why interviewers use it to catch shaky fundamentals.\n\nThe catch: SQL is **declarative**. You describe *what* rows you want, not *how* to fetch them — the engine decides the how. That gap between what you write and what actually happens is where most SELECT bugs live, starting with the very order clauses run in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "sql-select-s02",
+      "order": 2,
+      "sectionTitle": "Logical clause order vs written order",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "You *write* a query as `SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY`, but the engine *evaluates* it in a different order: **FROM → WHERE → GROUP BY → HAVING → SELECT → DISTINCT → ORDER BY → LIMIT**.\n\nThis is why a `WHERE` clause can't reference a column alias defined in `SELECT` — logically, `WHERE` runs before `SELECT` even exists. It's also why `HAVING` filters on aggregates and `WHERE` can't: `WHERE` runs before `GROUP BY` has produced any aggregates to filter on.\n\nMemorize this order once — it explains half of the \"why doesn't this query work\" confusion you'll ever hit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "sql-select-s02-q1"
+      ]
+    },
+    {
+      "id": "sql-select-s03",
+      "order": 3,
+      "sectionTitle": "The basic shape: SELECT … FROM … WHERE",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The core skeleton, before anything gets fancy:\n\n```sql\nSELECT id, email, created_at\nFROM users\nWHERE status = 'active'\n  AND created_at >= '2026-01-01';\n```\n\n`FROM` names the table (or join), `WHERE` filters rows one at a time using the row's own columns, and `SELECT` picks which columns (or expressions) survive into the output. Multiple `WHERE` predicates combine with `AND`/`OR`, evaluated with normal operator precedence — parenthesize mixed `AND`/`OR` explicitly, since `AND` binds tighter and a missing paren silently changes which rows match.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "sql-select-s04",
+      "order": 4,
+      "sectionTitle": "DISTINCT and column expressions/aliases",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`SELECT` isn't limited to raw columns — you can compute expressions and name them: `SELECT price * quantity AS line_total FROM orders`. The `AS` name is an **alias**, and it only exists after `SELECT` runs, which is why (per the logical order) `WHERE` can't use it but `ORDER BY` usually can.\n\n`DISTINCT` removes duplicate *entire rows* from the result, after `SELECT` has picked the columns — `SELECT DISTINCT status FROM orders` returns each status once. It's evaluated late and over the full row, so `SELECT DISTINCT a, b` dedupes on the *pair* `(a, b)`, not on `a` and `b` independently — a common misread.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "sql-select-s04-q1"
+      ]
+    },
+    {
+      "id": "sql-select-s05",
+      "order": 5,
+      "sectionTitle": "Three-valued logic: TRUE, FALSE, UNKNOWN",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "SQL doesn't have two-valued Boolean logic — it has three: `TRUE`, `FALSE`, and **`UNKNOWN`**. Any comparison involving `NULL` — `NULL = 5`, `NULL <> 5`, `NULL = NULL` — evaluates to `UNKNOWN`, not `TRUE` or `FALSE`, because `NULL` means \"no known value,\" so the database can't say whether two unknowns are equal.\n\n`WHERE` keeps a row only when its condition is `TRUE` — `UNKNOWN` rows are silently dropped, same as `FALSE` ones. This one rule is the root cause of nearly every NULL-related SQL bug you'll debug in your career, including the very next slide's.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": [
+        "sql-select-s05-q1"
+      ]
+    },
+    {
+      "id": "sql-select-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: WHERE col = NULL never matches",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"To find rows where `deleted_at` is unset, write `WHERE deleted_at = NULL`.\"\n\n**Why it's wrong:** per three-valued logic, `deleted_at = NULL` evaluates to `UNKNOWN` for every row, even ones where `deleted_at` actually is `NULL` — `UNKNOWN` is never `TRUE`, so `WHERE` returns **zero rows**, silently, with no error. This is one of the most common production bugs in real codebases: a filter that looks correct and returns an empty result set instead of failing loudly.\n\n**Correct model:** use `IS NULL` / `IS NOT NULL`, which are dedicated tests for \"has no value\" that return real `TRUE`/`FALSE`:\n\n```sql\nSELECT * FROM users WHERE deleted_at IS NULL;\n```",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "sql-select-s06-q1"
+      ]
+    },
+    {
+      "id": "sql-select-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: the clause-evaluation pipeline",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Logical evaluation order of a SELECT statement](assets/select-evaluation-order.svg)\n\nEach box only sees the output of the box before it — `SELECT`'s column aliases don't exist yet when `WHERE` runs, and `ORDER BY` sees rows that are already deduped by `DISTINCT`.\n\nKeep this picture in mind whenever a query \"should obviously work\" but doesn't — the bug is almost always a clause trying to use something that doesn't exist yet at its point in the pipeline.",
+      "assets": [
+        {
+          "alt": "Logical evaluation order of a SELECT statement",
+          "path": "assets/select-evaluation-order.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "sql-select-s08",
+      "order": 8,
+      "sectionTitle": "Why the optimizer can reorder things but you still can't",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The logical order in §2 describes *semantics*, not *execution* — a real query planner (Postgres, MySQL, SQL Server) is free to push a `WHERE` predicate down, evaluate it earlier than written, or run it alongside a join, as long as the final result is identical to the logical order.\n\nThis is why an index on a filtered column can make `WHERE` run \"first\" physically, yet the alias-visibility rules from §2 never relax — the optimizer can change *when* work happens, never *what the query is allowed to see*. A staff-level answer distinguishes these two orders explicitly instead of treating \"the planner reordered it\" as a contradiction of the logical rules.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "sql-select-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a SELECT alias isn't visible in its own WHERE",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I named it in `SELECT`, so I can filter on it in the same query's `WHERE`.\"\n\n```sql\nSELECT price * quantity AS line_total\nFROM order_items\nWHERE line_total > 100;   -- error: column \"line_total\" does not exist\n```\n\n**Why it's wrong:** per the logical order, `WHERE` runs before `SELECT` — the alias `line_total` doesn't exist yet at that point in the pipeline.\n\n**Correct model:** repeat the expression in `WHERE`, or wrap the query in a subquery/CTE so the alias exists by the time you filter on it:\n\n```sql\nSELECT * FROM (\n  SELECT price * quantity AS line_total FROM order_items\n) t\nWHERE line_total > 100;\n```",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "sql-select-s09-q1"
+      ]
+    },
+    {
+      "id": "sql-select-s10",
+      "order": 10,
+      "sectionTitle": "Production nuance: functions on a column break index use",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"An index on `email` means `WHERE UPPER(email) = 'A@B.COM'` is fast too.\"\n\n**Why it's wrong:** a normal B-tree index stores raw column values, not the result of applying a function to them. Wrapping an indexed column in a function makes the predicate **non-sargable** — the planner can't use the index and falls back to scanning every row to compute `UPPER(email)` for comparison. On a 50-million-row table, that's the difference between a sub-millisecond index lookup and a multi-second full scan.\n\n**Correct model:** normalize at write time (store a lowercase `email_lower` column) or build a matching **expression index**: `CREATE INDEX ON users (UPPER(email))`. A staff engineer checks the query plan (`EXPLAIN`), not just \"is there an index,\" before signing off on a query as fast.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "sql-select-s10-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+{
+  "id": "column-graph",
+  "title": "Wide-Column & Graph Databases",
+  "area": "databases",
+  "group": "nosql",
+  "order": 3,
+  "slug": "column-graph",
+  "summary": "The two specialized NoSQL families and their sweet spots — Cassandra-style partition-plus-clustering-key writes at massive scale, and graph databases for relationship-deep queries relational joins choke on.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "column-graph-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Wide-column and graph databases sit at opposite ends of the NoSQL spectrum: **wide-column** (Cassandra, HBase, Bigtable) is built for enormous, predictable write throughput at the cost of query flexibility; **graph** (Neo4j, Neptune) is built for exactly the query flexibility wide-column gives up — deep, multi-hop relationship traversal — at the cost of horizontal write scale.\n\nNeither is a general-purpose default; both are the right answer only when the workload genuinely matches their specific shape, which is exactly why interviewers ask \"when would you use this\" rather than \"explain how it works.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "column-graph-s02",
+      "order": 2,
+      "sectionTitle": "Wide-column: partition + clustering keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A Cassandra table's primary key has two parts with very different jobs. The **partition key** decides which physical node(s) own a row — Cassandra hashes it and routes accordingly, so all rows sharing a partition key live together on the same replica set. The **clustering key** decides sort order *within* that partition — rows in a partition are stored on disk sorted by it.\n\nA time-series table `CREATE TABLE sensor_readings (sensor_id text, reading_time timestamp, value double, PRIMARY KEY (sensor_id, reading_time))` uses `sensor_id` as partition key and `reading_time` as clustering key: all readings for one sensor land on the same nodes, physically sorted by time — so \"give me sensor 42's readings from the last hour\" is a fast, sequential range read within one partition, not a scatter-gather across the cluster.\n\nThe design discipline this forces: you choose the partition key based on how you'll query, not based on a natural entity boundary — get it wrong and you either create hot partitions or force cross-partition scatter-gather queries, both expensive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "column-graph-s02-q1"
+      ]
+    },
+    {
+      "id": "column-graph-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: wide-column physical layout",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Partition keys hashed and routed to Node A, B, C, with a zoomed callout on Node B showing rows sorted by clustering key with sparse columns](assets/partition-layout.svg)\n\nPartition keys route rows to nodes (the funnel); within a node, each partition's rows are physically stored sorted by clustering key. The \"sparse columns\" detail matters too: unlike a relational table, different rows in the same wide-column table can have different sets of populated columns without wasting space on nulls.\n\nThis physical picture is the direct answer to \"why is Cassandra fast for time-series ingestion\": writes for a given partition always land on the same known nodes, sequentially ordered — no cross-node coordination needed per write.",
+      "assets": [
+        {"alt": "Partition keys hashed and routed to Node A, B, C, with a zoomed callout on Node B showing rows sorted by clustering key with sparse columns", "path": "assets/partition-layout.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "column-graph-s04",
+      "order": 4,
+      "sectionTitle": "Query-first modeling in wide-column",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Cassandra enforces a hard rule that shapes all modeling around it: you can efficiently query a table only by its partition key (and clustering key range within that partition) — there's no ad-hoc `WHERE` on arbitrary columns without either a secondary index (Cassandra's are limited and often discouraged at scale) or scanning the whole cluster.\n\nThe consequence is **query-first modeling**, sometimes summarized as \"one table per query\": if you need to look up orders both by `customer_id` and by `order_status`, you don't build one orders table and add a secondary index — you build two tables, `orders_by_customer` and `orders_by_status`, each denormalized with the exact columns that query needs, and write to both on every order creation.\n\nThis inverts the relational instinct of \"model the entities, then write whatever query you need\" into \"enumerate every query you'll ever run, then build one table per query, duplicating data across them deliberately.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "column-graph-s05",
+      "order": 5,
+      "sectionTitle": "Graph databases: nodes, edges, traversals",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A graph database stores **nodes** (entities, e.g. a `Person` or `Product`) and **edges** (labeled, directed relationships between them, e.g. `FOLLOWS`, `PURCHASED`), both of which can carry their own properties. The defining trait is **index-free adjacency**: each node physically stores direct pointers to its connected edges, so traversing from one node to its neighbors is a pointer-following operation, not a search.\n\nThis matters enormously for depth: finding \"friends of friends of friends\" (3 hops) in a relational database means 3 chained joins, and each join's cost grows with table size — a query that gets slower as the social graph grows, often dramatically past 2-3 hops. In a graph database, the same traversal follows a fixed number of pointer hops regardless of how many total nodes exist in the graph — cost scales with the size of the *traversed neighborhood*, not the size of the dataset.\n\nCypher (Neo4j's query language) expresses this directly: `MATCH (a:Person)-[:FOLLOWS]->(b)-[:FOLLOWS]->(c) WHERE a.name = 'Ana' RETURN c` reads almost like the traversal itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "column-graph-s05-q1"
+      ]
+    },
+    {
+      "id": "column-graph-s06",
+      "order": 6,
+      "sectionTitle": "Compare: graph DB vs relational join for deep relationships",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Relational (joins) | Graph database |\n|---|---|---|\n| 1-2 hop query | Fast — a single join is cheap and well-optimized | Fast — comparable or slightly better |\n| 3+ hop query | Cost compounds — each join re-searches, often needs query rewriting or denormalization | Stays cheap — each hop is a pointer follow, cost driven by neighborhood size |\n| Schema flexibility for relationships | Rigid — adding a new relationship type often means a new join table | Flexible — a new edge label is just a new relationship type, no schema migration |\n| Aggregate/analytical queries (SUM, GROUP BY over millions of rows) | Strong — this is relational's home turf | Weak — graph databases aren't built for bulk aggregation |\n| Typical use | Most business data, transactional systems | Social graphs, recommendation engines, fraud-ring detection, knowledge graphs |\n\n**How to decide:** if the actual, recurring query is \"how are these two things connected, possibly through several intermediate hops\" — graph wins decisively past 2-3 hops. If the query is \"aggregate or filter across many rows,\" relational (or a columnar analytical store) wins; graph databases are a poor fit for bulk analytics.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "column-graph-s06-q1"
+      ]
+    },
+    {
+      "id": "column-graph-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: modeling a highly-relational domain in a key-value store",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We picked DynamoDB for its managed scaling, so we'll just store our social graph as a list of friend IDs inside each user's item.\"\n\n**Why it's wrong:** a plain key-value or even single-table document approach can answer \"who are Ana's direct friends\" cheaply, but \"who are Ana's friends-of-friends, excluding people she already knows\" requires fetching Ana's friend list, then fetching *each* friend's friend list, then de-duplicating and filtering in application code — a fan-out that gets exponentially more expensive per additional hop, entirely outside the database's optimized path.\n\n**Correct model:** a domain whose core queries are fundamentally about relationship depth and connectivity — social graphs, recommendation \"people who bought X also bought Y,\" fraud rings sharing devices or payment methods — is a graph database's actual sweet spot. Forcing it into key-value or document storage doesn't just cost some performance; multi-hop queries become application-level graph traversal code that the database should have been doing natively.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "column-graph-s07-q1"
+      ]
+    },
+    {
+      "id": "column-graph-s08",
+      "order": 8,
+      "sectionTitle": "Numbers: partition size limits and the 100 MB rule of thumb",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Cassandra's documentation and practitioners commonly cite keeping a single partition under roughly **100 MB**, and ideally under 100,000 rows, even though the hard technical limit is much higher (2 billion cells). Past that soft threshold, a partition becomes slow to compact, slow to repair, and risks memory pressure when read, since operations often need to touch the partition's data as a unit.\n\nThis is exactly why a naive `sensor_readings` table partitioned only by `sensor_id` breaks down for a sensor reporting every second over years — that single partition grows without bound. The standard fix is **bucketing**: add a time component to the partition key, like `sensor_id + date` (one partition per sensor per day), which caps partition growth at a predictable size regardless of how long the sensor has been running.\n\nThe interview-ready number: knowing \"keep partitions under ~100 MB, add a time or hash bucket to the key when a single logical entity would otherwise grow unbounded\" is worth more than any theoretical description of the partitioning mechanism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "column-graph-s08-q1"
+      ]
+    },
+    {
+      "id": "column-graph-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: cross-partition queries in Cassandra",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I can add a `WHERE` clause on any column and Cassandra will just filter, the way SQL does.\"\n\n**Why it's wrong:** a `WHERE` on a non-partition, non-clustering column forces Cassandra to add `ALLOW FILTERING`, which makes the driver scan across potentially every partition in the cluster to find matches — turning a query that should touch one node into one that touches all of them, with latency that scales with total cluster data size, not result size. This silently defeats the entire reason Cassandra was chosen.\n\n**Correct model:** if a query needs to filter by a column that isn't your partition/clustering key, that's a signal you're missing a table — build a second table denormalized for that exact query (query-first modeling), don't reach for `ALLOW FILTERING` as a shortcut except for genuinely rare, low-volume ad-hoc debugging queries.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "column-graph-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: relational join depth vs graph traversal cost",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Two line charts of query cost versus relationship hops: relational joins rise steeply after hop 2, graph traversal stays nearly flat](assets/join-vs-traversal-cost.svg)\n\nThe shapes of these two curves are the entire argument for choosing a graph database: relational join cost compounds with each additional hop because each join re-searches a growing intermediate result set, while graph traversal cost grows with the size of the neighborhood actually visited, largely independent of how many hops that takes.\n\nFor 1-2 hop queries the two are often comparable — the graph database's advantage becomes decisive specifically once queries need 3+ hops, which is exactly the territory recommendation engines and fraud detection live in.",
+      "assets": [
+        {"alt": "Two line charts of query cost versus relationship hops: relational joins rise steeply after hop 2, graph traversal stays nearly flat", "path": "assets/join-vs-traversal-cost.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "column-graph-s11",
+      "order": 11,
+      "sectionTitle": "Tunable consistency and replication in Cassandra",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Cassandra replicates each partition to **N** nodes (the replication factor, commonly 3), and lets you tune consistency per query independently of that replication factor. A write at consistency `QUORUM` with RF=3 must be acknowledged by 2 of 3 replicas before returning success; a read at `QUORUM` similarly needs 2 of 3 to respond and agree.\n\nThe reason `QUORUM`/`QUORUM` is a common default rather than `ONE`/`ONE`: with RF=3, reading and writing at quorum guarantees the read and write sets always overlap by at least one replica (2+2 > 3), so a read is guaranteed to see the most recent write — this is the mechanism behind Cassandra's \"tunable strong consistency,\" not a marketing claim.\n\nThe trade-off a staff engineer names explicitly: `QUORUM` costs more latency than `ONE` (waiting on 2 replicas instead of 1) and reduces availability slightly (needs 2 of 3 nodes up, not just 1) — the classic CAP-theorem trade made concrete and tunable per operation rather than fixed for the whole system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "column-graph-s11-q1"
+      ]
+    },
+    {
+      "id": "column-graph-s12",
+      "order": 12,
+      "sectionTitle": "Snapshot recap: matching workload shape to family",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The through-line across both families: neither is chosen for general-purpose use — each earns its complexity only when the workload's actual shape matches it precisely. Wide-column earns its keep when write volume is enormous and every query can be pre-enumerated into a partition-key lookup; graph earns its keep when the core business question is fundamentally about multi-hop connectivity.\n\nA staff-level answer to \"what database would you use for X\" always names the workload's dominant shape first — write volume and query predictability for wide-column, relationship depth for graph — rather than the technology name, because the technology follows directly once the shape is named correctly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+{
+  "id": "dynamic-memory-allocation-heap",
+  "title": "Dynamic Memory Allocation — the Heap",
+  "area": "operating-systems",
+  "group": "memory-management",
+  "order": 6,
+  "slug": "dynamic-memory-allocation-heap",
+  "summary": "What malloc/free actually do under the hood — how allocators get memory from the OS, manage free lists, and the classic bugs that heap mismanagement enables.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "dynamic-memory-allocation-heap-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "`malloc(64)` looks like a single, simple operation. Underneath, it's a small program: a **userspace allocator library** that manages a pool of memory it periodically requests from the OS in bulk, then subdivides and hands out to your `malloc` calls without going back to the kernel every time.\n\nUnderstanding this split — OS gives the allocator big chunks, the allocator gives you small ones — explains both why `malloc`/`free` are fast (usually no syscall at all) and why heap bugs like use-after-free and double-free are so dangerous: you're not corrupting the OS's bookkeeping, you're corrupting the allocator's, which every future allocation in your process then trusts.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s02",
+      "order": 2,
+      "sectionTitle": "What malloc() actually does: OS memory vs the allocator's job",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The OS's job stops at handing a process large regions of virtual memory. The **allocator** (glibc's `ptmalloc`, or alternatives like `jemalloc`/`tcmalloc`) sits in userspace, inside your process, and does everything below that: it asks the OS for memory in big batches, then slices those batches into the small, precisely-sized chunks your `malloc(n)` calls actually receive.\n\nThis two-layer design exists because syscalls are expensive relative to a typical allocation — a program doing millions of small `malloc`/`free` calls per second cannot afford a kernel round-trip for each one. The allocator amortizes that cost: one syscall might back thousands of individual `malloc` calls.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "dynamic-memory-allocation-heap-s02-q1"
+      ]
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s03",
+      "order": 3,
+      "sectionTitle": "brk/sbrk and mmap — how allocators get memory from the OS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Allocators get bulk memory from the kernel through two mechanisms. **`brk`/`sbrk`** move the end of the traditional heap segment — a single contiguous region right after a process's data segment — up or down; it's cheap but only ever grows or shrinks one region, and shrinking is awkward if anything past the new boundary is still in use.\n\n**`mmap`** asks the kernel for an entirely separate mapping anywhere in the address space, not tied to the heap segment at all. Most allocators use `sbrk` for many small allocations (cheap, no per-region overhead) and switch to `mmap` for large ones (glibc's default threshold is 128 KB) — a big allocation gets its own mapping that can be `munmap`'d and returned to the OS immediately on `free`, instead of sitting in the heap's free list waiting to be reused.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "dynamic-memory-allocation-heap-s03-q1"
+      ]
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s04",
+      "order": 4,
+      "sectionTitle": "Free list management: tracking available chunks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once the allocator has bulk memory, it needs to track which parts are free versus given out. The classic structure is a **free list**: a linked list threaded through the free chunks themselves (a freed chunk's first few bytes hold a pointer to the next free chunk, since nobody's using that memory for data anyway).\n\nEvery chunk — free or allocated — typically carries a small header just before it: at minimum a size field, so `free(ptr)` knows how many bytes to release without being told again, plus often a flag marking whether the *previous* chunk in memory is free (used for coalescing, next). This header is exactly why writing one byte before a pointer you got from `malloc` (an off-by-one) can corrupt the allocator's own metadata — a bug class distinct from overwriting your own data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a heap with allocated/free chunks and a free list",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![heap free list linking free chunks](assets/heap-free-list.svg)\n\nThe free list only threads through free chunks — allocated chunks are invisible to it until they're freed and rejoin the list.",
+      "assets": [
+        {
+          "alt": "heap free list linking free chunks",
+          "path": "assets/heap-free-list.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 26,
+      "mcqIds": []
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s06",
+      "order": 6,
+      "sectionTitle": "Allocation strategies inside allocators: first-fit, segregated free lists, buddy system",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A naive allocator could use a single free list and first-fit, the same placement idea from contiguous memory allocation — but real allocators go further because allocation-size patterns are predictable in practice (lots of small, similarly-sized objects).\n\n**Segregated free lists** (used by glibc's `ptmalloc`, and central to `tcmalloc`/`jemalloc`) keep *separate* free lists per size class — one list for 16-byte chunks, one for 32-byte, one for 64-byte, and so on. A request for 30 bytes rounds up to the 32-byte class and pulls straight from that list — no scanning required, O(1) instead of O(n). The **buddy system** (next slide) is a different strategy built around power-of-two splitting, used more at the OS level (Linux's physical page allocator) than inside typical userspace allocators.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "dynamic-memory-allocation-heap-s06-q1"
+      ]
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s07",
+      "order": 7,
+      "sectionTitle": "The buddy allocation algorithm",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **buddy system** manages memory in power-of-two-sized blocks. To satisfy a request, it takes the smallest available block that's big enough; if that block is more than twice the request size, it splits in half repeatedly, creating a pair of same-size \"buddy\" blocks, until the piece is as small as it can be while still fitting the request.\n\nThe elegant part is freeing: when a block is freed, the allocator checks whether its buddy (the other half of the split that created it) is also free — if so, they merge back into the original larger block immediately, and that merge can cascade upward. This bounds fragmentation tightly and makes coalescing cheap and automatic, at the cost of some internal fragmentation (a 130 KB request rounds up to a 256 KB block). This is exactly the algorithm behind Linux's physical page frame allocator.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "dynamic-memory-allocation-heap-s07-q1"
+      ]
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s08",
+      "order": 8,
+      "sectionTitle": "Code: a minimal free-list allocator sketch",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A stripped-down mental model of what `malloc`/`free` do, ignoring size classes and alignment for clarity:\n\n```c\ntypedef struct chunk {\n    size_t size;\n    int free;\n    struct chunk *next;   // free-list link, only meaningful when free\n} chunk_t;\n\nvoid *my_malloc(size_t n) {\n    chunk_t *c = free_list_head;\n    while (c) {\n        if (c->free && c->size >= n) {   // first-fit scan\n            c->free = 0;\n            return (void *)(c + 1);      // memory right after the header\n        }\n        c = c->next;\n    }\n    return request_more_from_os(n);      // sbrk/mmap when nothing fits\n}\n\nvoid my_free(void *ptr) {\n    chunk_t *c = (chunk_t *)ptr - 1;      // header sits right before ptr\n    c->free = 1;\n    coalesce_with_neighbors(c);           // merge adjacent free chunks\n}\n```\n\nEvery pointer `malloc` returns to you is really `header + n` — which is exactly why corrupting the bytes just before your pointer (a classic off-by-one) corrupts the header the next `free()` on that chunk will trust.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s09",
+      "order": 9,
+      "sectionTitle": "Fragmentation inside the heap and why allocators coalesce free blocks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The heap has its own internal version of external fragmentation: repeated allocate/free cycles of different sizes leave the free list splintered into small chunks that individually can't satisfy a larger request, even if their sizes sum to enough — precisely the pattern from the [Fragmentation](fragmentation) topic, one layer down inside a single process.\n\n**Coalescing** — merging a freed chunk with its immediately-adjacent free neighbors (before it, after it, or both) — is the allocator's main defense: it undoes the splintering as it happens, rather than letting it accumulate. This is exactly why the free-chunk header tracks whether the previous chunk is free (from the free-list slide) — coalescing needs to check both neighbors in O(1), not scan the whole heap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s10",
+      "order": 10,
+      "sectionTitle": "Common heap bugs: use-after-free, double-free, heap overflow",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because the allocator's bookkeeping lives in the same memory your program writes to, corrupting your own data can corrupt the allocator too. Three classic bugs:\n\n- **Use-after-free** — reading or writing through a pointer after calling `free()` on it. The memory might now be reused by an unrelated allocation, so you're silently corrupting someone else's data (or reading garbage/stale data).\n- **Double-free** — calling `free()` twice on the same pointer. The chunk gets added to the free list twice, so a future allocation can hand out the *same* memory to two different callers simultaneously — a severe bug that's also a well-known exploit primitive.\n- **Heap overflow** — writing past the end of an allocated chunk, into the next chunk's header or data. This can corrupt the next chunk's size field, which later corrupts wherever `free()` or coalescing trusts that field.\n\nAll three share a root cause: the allocator trusts metadata that lives adjacent to attacker- or bug-reachable memory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "dynamic-memory-allocation-heap-s10-q1"
+      ]
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: memory leaks are a lost pointer, not \"the OS forgetting\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A memory leak means the operating system failed to reclaim memory.\"\n\n**Why it's wrong:** the OS reclaims *all* of a process's memory the instant it exits, without exception — leaks are never about the OS forgetting anything. A leak happens purely at the application level: the program allocates memory, then loses every pointer that could reach it (overwrites the last reference, forgets to call `free`, or a container grows without ever being cleared) — the memory is still allocated and perfectly valid, just permanently unreachable from the program's own code.\n\n**Correct model:** a leak is a *reachability* bug, not a reclamation bug. This is exactly why long-running processes (servers, daemons) are the ones that suffer from leaks in practice — a short-lived script leaks too, but the process exit cleans it all up before anyone notices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "dynamic-memory-allocation-heap-s11-q1"
+      ]
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s12",
+      "order": 12,
+      "sectionTitle": "How malloc decides where to get memory, and what happens on free()",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Putting the pieces together, a call to `malloc(n)` roughly: rounds `n` up to a size class, checks that class's free list for an available chunk, and returns it immediately if one exists — no syscall. If none exists, it asks the OS for more memory (`sbrk` to extend the heap, or `mmap` for a large request), carves the new region into chunks, and returns one.\n\n`free(ptr)` looks up the chunk header just before `ptr`, marks it free, attempts to coalesce with adjacent free neighbors, and — for `mmap`-backed large allocations specifically — may `munmap` the region back to the OS immediately rather than keeping it in a free list at all. Small/medium `sbrk`-backed memory almost never goes back to the OS promptly; it stays in the process's free lists for the next `malloc` to reuse, which is why a process's resident memory (RSS) often doesn't shrink right after a large batch of `free()` calls.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-s13",
+      "order": 13,
+      "sectionTitle": "Compare: glibc ptmalloc vs jemalloc vs tcmalloc — why production systems swap allocators",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | glibc ptmalloc (default) | jemalloc | tcmalloc |\n|---|---|---|---|\n| Design focus | General-purpose, per-process arenas for threading | Fragmentation control, strong per-thread caches | Speed, per-thread caches, used heavily at Google |\n| Multithreaded scaling | Can contend under heavy concurrent alloc/free | Designed to minimize cross-thread contention | Designed to minimize cross-thread contention |\n| Typical reason to switch | — (the default) | Long-running services seeing heap growth/fragmentation over time | High-throughput services where allocator CPU cost shows up in profiles |\n| Adopted by | Most Linux binaries by default | Redis, FreeBSD's libc, many databases | Chrome, many Google services |\n\nA staff-level signal: recognizing that swapping the allocator (a link-time or `LD_PRELOAD` change, no code rewrite) is a real, low-risk lever for both memory fragmentation and raw allocation throughput in production services — not just a micro-optimization.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

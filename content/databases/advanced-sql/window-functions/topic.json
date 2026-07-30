@@ -1,0 +1,174 @@
+{
+  "id": "window-functions",
+  "title": "Window Functions",
+  "area": "databases",
+  "group": "advanced-sql",
+  "order": 1,
+  "slug": "window-functions",
+  "summary": "Per-row calculations over a related window of rows without collapsing them — the SQL feature that separates a senior candidate from one who only knows GROUP BY.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "window-functions-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **window function** computes a value for each row using a set of *related* rows — a \"window\" — without collapsing those rows into one, the way `GROUP BY` does. You get a running total, a rank, or a previous row's value, and you still get every row back.\n\nThink ranking a leaderboard: you want every player's row plus their rank *relative to others*, not one aggregated row per rank. That's a window function's whole reason to exist, and it shows up constantly in interviews — rankings, running totals, period-over-period deltas.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "window-functions-s02",
+      "order": 2,
+      "sectionTitle": "The OVER clause: PARTITION BY and ORDER BY",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every window function is written as `function() OVER (PARTITION BY ... ORDER BY ...)`. **`PARTITION BY`** splits rows into independent groups — like a `GROUP BY` that doesn't collapse rows, each partition gets its own calculation. **`ORDER BY`** inside `OVER` defines the row sequence *within* a partition, which matters for ranking and running totals but not for a plain aggregate like a per-partition `SUM`.\n\n```sql\nSELECT employee_id, department_id, salary,\n       AVG(salary) OVER (PARTITION BY department_id) AS dept_avg\nFROM employees;\n```\n\nEvery row keeps its identity — you get the individual salary *and* the department average side by side, which a `GROUP BY` query cannot do in one pass.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "window-functions-s02-q1"
+      ]
+    },
+    {
+      "id": "window-functions-s03",
+      "order": 3,
+      "sectionTitle": "Ranking rows: ROW_NUMBER, RANK, DENSE_RANK",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Three ranking functions differ only in how they handle ties. **`ROW_NUMBER()`** assigns a unique sequential number regardless of ties — arbitrary tiebreak order. **`RANK()`** gives tied rows the same rank, then skips the next number (1, 1, 3). **`DENSE_RANK()`** gives tied rows the same rank with no gap (1, 1, 2).\n\n```sql\nSELECT name, score,\n       ROW_NUMBER() OVER (ORDER BY score DESC) AS rn,\n       RANK()       OVER (ORDER BY score DESC) AS rnk,\n       DENSE_RANK() OVER (ORDER BY score DESC) AS drnk\nFROM leaderboard;\n-- scores 90, 90, 80 -> rn: 1,2,3 | rnk: 1,1,3 | drnk: 1,1,2\n```\n\nInterview tell: \"top 3 per group\" almost always wants `ROW_NUMBER` filtered to `<= 3` in an outer query, since `RANK` can return more than 3 rows on a tie.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "window-functions-s03-q1"
+      ]
+    },
+    {
+      "id": "window-functions-s04",
+      "order": 4,
+      "sectionTitle": "Row-to-row deltas: LAG and LEAD",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "**`LAG(col, n)`** reads a value from `n` rows before the current row in the ordered window; **`LEAD(col, n)`** reads `n` rows ahead. Both default to `n=1` and take an optional default for rows with no prior/next row (otherwise `NULL`).\n\n```sql\nSELECT order_date, revenue,\n       revenue - LAG(revenue) OVER (ORDER BY order_date) AS day_over_day_change\nFROM daily_sales;\n```\n\nThis replaces a self-join you'd otherwise write to compare a row to its neighbor — one query instead of joining a table to a date-shifted copy of itself. It's the standard tool for period-over-period metrics: day-over-day, month-over-month, session-to-session.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "window-functions-s05",
+      "order": 5,
+      "sectionTitle": "Running totals and moving averages via frames",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **frame** narrows the window to a sliding sub-range of the partition, specified with `ROWS BETWEEN ... AND ...`. This is what turns a window function into a running total or a moving average instead of a whole-partition aggregate.\n\n```sql\nSELECT order_date, revenue,\n       SUM(revenue) OVER (ORDER BY order_date\n           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total,\n       AVG(revenue) OVER (ORDER BY order_date\n           ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS trailing_7day_avg\nFROM daily_sales;\n```\n\n`UNBOUNDED PRECEDING AND CURRENT ROW` means \"every row from the start of the partition to here\" — a running total. `6 PRECEDING AND CURRENT ROW` means a 7-row trailing window — a moving average.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "window-functions-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: the default frame silently changes with ORDER BY",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If I don't write `ROWS BETWEEN`, the window function just looks at the whole partition.\"\n\n**Why it's wrong:** as soon as you add an `ORDER BY` inside `OVER()`, the *implicit default frame* becomes `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — not the whole partition.\n\n```sql\nSUM(revenue) OVER (ORDER BY order_date)        -- silently a running total\nSUM(revenue) OVER ()                            -- whole-partition sum, no ORDER BY\n```\n\nThe exact same function name gives you two completely different results depending only on whether `ORDER BY` is present.\n\n**Correct model:** always write the frame explicitly (`ROWS BETWEEN ...`) when you intend a running or moving calculation, and never rely on the implicit default — it's a top cause of \"why is my total wrong\" bugs in production dashboards.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "window-functions-s06-q1"
+      ]
+    },
+    {
+      "id": "window-functions-s07",
+      "order": 7,
+      "sectionTitle": "RANGE vs ROWS: the other frame gotcha",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`RANGE` and `ROWS` both define frames but compare differently: `ROWS` counts physical rows; `RANGE` groups by the *value* in the `ORDER BY` column, so peer rows with an equal order-by value are treated as one unit. If two orders share the exact same `order_date`, `RANGE ... CURRENT ROW` includes *both* of them in the running total the moment either is reached — not just the current physical row.\n\nThis is why two engineers can write what looks like the same running-total query and get different numbers on duplicate order-by values. Default to `ROWS` unless you specifically want value-based peer grouping — it's the one that matches most people's mental model of \"running total.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "window-functions-s08",
+      "order": 8,
+      "sectionTitle": "Compare: window function vs GROUP BY",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Window function | GROUP BY |\n|---|---|---|\n| Row count in output | Unchanged — every input row returned | Collapsed — one row per group |\n| Can mix detail + aggregate | Yes, in the same row | No — needs a self-join or subquery |\n| Runs relative to | `WHERE`/`FROM` evaluated, before `SELECT` list, after `GROUP BY`/`HAVING` | Standard aggregation pipeline stage |\n| Typical use | Rankings, running totals, row-to-row comparison | Summary reports, totals per category |\n\n**How to decide:** if the question is \"what's the total per group\" you want `GROUP BY`; if it's \"what's this row's rank/running total/neighbor value while keeping the row\" you want a window function. Needing both at once (e.g., \"each order plus its category's average\") is the classic window-function tell.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "window-functions-s08-q1"
+      ]
+    },
+    {
+      "id": "window-functions-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: a partition with an ordered running calculation",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Running total resetting at each PARTITION BY boundary](assets/partition-running-total.svg)\n\nEach partition computes its running total independently — the West partition's running total starts back at its own first row's value, it does not continue from wherever the East partition left off. Forgetting this and expecting one continuous running total across all partitions is a common mistake when `PARTITION BY` is added after the query was already working without it.",
+      "assets": [
+        {
+          "alt": "Running total resetting at each PARTITION BY boundary",
+          "path": "assets/partition-running-total.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "window-functions-s10",
+      "order": 10,
+      "sectionTitle": "Where window functions run in the query pipeline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Window functions execute **after** `WHERE`, `GROUP BY`, and `HAVING`, but **before** `ORDER BY` and `SELECT DISTINCT` are applied to the final result. That ordering explains a recurring confusion: you cannot filter directly on a window function's result using `WHERE` in the same query, because `WHERE` runs before the window function has produced a value.\n\n```sql\n-- This fails: rank_num doesn't exist yet when WHERE runs\nSELECT name, RANK() OVER (ORDER BY score DESC) AS rank_num\nFROM players WHERE rank_num <= 3;\n\n-- Correct: wrap in a subquery or CTE, filter in the outer query\nSELECT * FROM (\n  SELECT name, RANK() OVER (ORDER BY score DESC) AS rank_num FROM players\n) ranked WHERE rank_num <= 3;\n```",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "window-functions-s10-q1"
+      ]
+    },
+    {
+      "id": "window-functions-s11",
+      "order": 11,
+      "sectionTitle": "Senior nuance: performance and when window functions beat self-joins",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A staff-level answer doesn't stop at syntax — it names the cost. Window functions typically require the engine to **sort or hash the data per partition** once, then stream through it; a self-join to get the same \"previous row\" result usually costs an extra full join, which scales worse as the table grows. On a well-indexed table, `LAG()` over an ordered scan tends to beat a self-join by a wide margin at scale.\n\nThe trade-off: many small window functions on the same query can each trigger their own sort if their `PARTITION BY`/`ORDER BY` clauses differ, so a query with several *different* window specs can do multiple full sorts of the same data. Reusing one `WINDOW` clause (`WINDOW w AS (PARTITION BY ... ORDER BY ...)`) for functions that share a spec lets the optimizer share that sort instead of repeating it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "window-functions-s11-q1"
+      ]
+    }
+  ]
+}

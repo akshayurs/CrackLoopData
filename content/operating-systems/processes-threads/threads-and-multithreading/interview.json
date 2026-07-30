@@ -1,0 +1,29 @@
+{
+  "topicId": "threads-and-multithreading",
+  "interviewQuestions": [
+    {
+      "id": "threads-and-multithreading-iq1",
+      "question": "When would you choose multiple threads over multiple processes?",
+      "answerMarkdown": "I'd frame it as a trade between sharing and isolation. I'd reach for threads when the work genuinely needs to share state cheaply and frequently — a connection pool, an in-memory cache, counters multiple workers update — because threads in one process see the same heap directly, with no serialization or IPC overhead. I'd reach for processes instead when I need fault isolation: if one unit of work crashing shouldn't be able to corrupt or take down everything else, a separate address space is the only thing that actually guarantees that.\n\nConcretely: a web server handling many simultaneous connections that all need to read the same in-memory cache is a good fit for threads — spawning a thread per connection is cheap, and they all see the cache without copying it. A system running untrusted or independently-versioned plugins is a bad fit for threads, because a bug in one plugin's thread can corrupt the whole process's memory; there I'd isolate each plugin in its own process.\n\nI'd also mention the hybrid that most real systems land on: worker processes for isolation, with a thread pool inside each worker for cheap concurrency — Nginx and PostgreSQL both do a version of this.\n\n**Testing:** whether you can name the actual trade-off (sharing vs isolation) instead of reciting \"threads are lighter weight\" as the whole answer.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Threads vs processes, when to choose"
+    },
+    {
+      "id": "threads-and-multithreading-iq2",
+      "question": "What exactly does a thread share with other threads in its process, and what stays private to it?",
+      "answerMarkdown": "Shared: the code (text segment), global and static variables, the heap, and open file descriptors — everything that makes up the process's resources. Private to each thread: its own stack (local variables and call frames), its own program counter, and its own CPU register values, plus usually a small chunk of thread-local storage.\n\nI'd explain *why* the split falls exactly there: a thread needs its own stack and registers because it's independently making function calls and executing instructions — you can't share a call stack between two things running at once without them corrupting each other's frames. But there's no similar need to duplicate the heap or code, since those aren't being independently \"moved through\" the way a call stack is.\n\nI'd close with the practical consequence: because the heap and globals are shared with zero isolation, any thread can immediately see (and corrupt) any other thread's writes to shared data. That's not a bug in the design — it's the whole point of using threads instead of processes — but it's exactly why synchronization primitives exist as a separate, mandatory topic once you use threads.\n\n**Testing:** whether you know the shared/private split cold, since almost every follow-up question (race conditions, why thread creation is cheap) depends on it.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "What threads share vs keep private"
+    },
+    {
+      "id": "threads-and-multithreading-iq3",
+      "question": "If threads are so much cheaper to create than processes, why not always spawn a new thread per unit of work instead of using a bounded thread pool?",
+      "answerMarkdown": "Because \"cheaper than a process\" doesn't mean \"free,\" and the failure mode of unbounded thread creation under load is real. Each thread reserves its own stack — commonly a few megabytes of address space by default — and needs kernel bookkeeping (a thread control structure, scheduler entries). Spawn tens of thousands under a traffic spike and you can exhaust address space or hit an OS-level thread limit well before you exhaust raw CPU.\n\nThere's a second, subtler cost: once the number of *runnable* threads exceeds the number of CPU cores, extra threads don't add parallelism — they just give the scheduler more entities to time-slice, which increases context-switch overhead and can actually reduce throughput under heavy load, right when you need it most.\n\nA bounded thread pool avoids both: it caps resource usage predictably, and it lets you tune the pool size to the actual bottleneck — for I/O-bound work you can oversubscribe cores a bit (say 2-4x core count) since threads spend time waiting, not computing; for CPU-bound work you size close to core count.\n\n**Testing:** whether you understand thread cost as \"cheap but not zero,\" and can connect that to a concrete production failure mode (thread-per-request under a spike) rather than treating threads as an unlimited resource.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why bounded thread pools, not thread-per-request"
+    }
+  ]
+}

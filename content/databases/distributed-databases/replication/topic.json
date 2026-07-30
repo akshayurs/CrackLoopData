@@ -1,0 +1,169 @@
+{
+  "id": "replication",
+  "title": "Replication",
+  "area": "databases",
+  "group": "distributed-databases",
+  "order": 1,
+  "slug": "replication",
+  "summary": "Copying data across nodes for availability and read scale — leader/follower topologies, sync vs async trade-offs, and the failure modes that show up once you run this in production.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "replication-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Replication** means keeping the same data on more than one machine. You do it for two reasons: **availability** — if one node dies, another already has the data — and **read scale** — spread read traffic across copies instead of hammering one machine.\n\nEvery replication scheme has to answer the same question: when a write happens on one node, how and when does every other copy find out? The answer you pick determines whether a follower can ever return stale data, how a cluster survives a network partition, and what happens when the machine holding the \"real\" copy disappears.\n\nThis topic covers the three replication topologies (single-leader, multi-leader, leaderless), the sync/async trade-off, and the two failure modes — stale reads and split-brain — every production database eventually has to handle.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-s02",
+      "order": 2,
+      "sectionTitle": "Single-leader replication",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Single-leader** (primary-replica) replication designates one node the **leader**: every write goes to it, and it streams the resulting changes to one or more **followers**, which apply them in the same order. Reads can go to the leader or, for scale, to any follower.\n\nThis is the default in Postgres, MySQL, and MongoDB because it's the easiest model to reason about — there's exactly one node deciding write order, so followers never have to reconcile conflicting writes with each other. The cost is that the leader is a **write bottleneck** and, until a follower is promoted, a single point of failure for writes.\n\nMost systems you'll be asked about in an interview default to this model unless the question specifically calls for multi-region active-active writes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "replication-s02-q1"
+      ]
+    },
+    {
+      "id": "replication-s03",
+      "order": 3,
+      "sectionTitle": "Multi-leader replication",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Multi-leader** replication lets more than one node accept writes, each replicating its changes to the others. It's most common across **data centers**: a write in the US region shouldn't have to round-trip to a leader in Europe.\n\nThe price is that two leaders can accept **conflicting writes** to the same record at nearly the same time — a customer updates their address on two continents in the same second. Someone has to resolve that: last-write-wins (simple, silently loses data), custom merge logic (e.g. CRDTs for counters/sets), or surfacing the conflict to the application.\n\nMulti-leader trades write availability and locality for this conflict-resolution burden — it's the right call when write latency across regions matters more than avoiding conflicts entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-s04",
+      "order": 4,
+      "sectionTitle": "Leaderless replication",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Leaderless** replication (Dynamo-style — Cassandra, Riak, DynamoDB) drops the idea of a leader entirely: a client sends a write to **several** nodes directly, and reads query several nodes and reconcile the answer. There's no single node whose failure blocks writes.\n\nCorrectness comes from **quorums**: with `N` replicas, a write is acknowledged after `W` nodes confirm it, and a read queries `R` nodes and returns the most recent version it sees. Choosing `W` and `R` so that `R + W > N` guarantees every read overlaps with the last successful write on at least one node — you'll see this formalized in the Consensus & Distributed Transactions topic.\n\nThe trade-off: no single leader means better write availability during a partition, but the client (or a background process) has to handle version conflicts that single-leader systems avoid by construction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "replication-s04-q1"
+      ]
+    },
+    {
+      "id": "replication-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: leader/follower replication flow",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Leader streams its write-ahead log to Follower A and Follower B, with Follower B lagging two positions behind](assets/leader-follower-replication.svg)\n\nThe leader never waits for followers to finish applying a change before accepting the next write (unless it's running synchronous replication — next slide). Each follower pulls or receives the leader's write-ahead log and replays it independently, which is exactly why followers can drift out of sync at different rates.\n\nA follower that falls behind isn't broken — it's just applying the same log slower, and it will catch up once load drops or its own I/O keeps pace.",
+      "assets": [
+        {"alt": "Leader streams its write-ahead log to Follower A and Follower B, with Follower B lagging two positions behind", "path": "assets/leader-follower-replication.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-s06",
+      "order": 6,
+      "sectionTitle": "Compare: synchronous vs asynchronous replication",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "The leader has a choice: wait for a follower to confirm a write before telling the client it succeeded (**synchronous**), or tell the client immediately and replicate in the background (**asynchronous**).\n\n| | Synchronous | Asynchronous |\n|---|---|---|\n| Durability if leader dies | Guaranteed on the synced follower | Recent writes can be lost |\n| Write latency | Higher — bounded by the slowest synced follower | Lower — leader doesn't wait |\n| Leader unavailability impact | A slow/down synced follower blocks writes | Writes proceed regardless |\n| Typical use | One \"semi-sync\" follower for safety (Postgres, MySQL) | Read replicas for scale (most followers) |\n\n**In practice** most production systems use a hybrid: one follower synchronous for durability (\"semi-synchronous\"), the rest asynchronous for read scale — pure fully-synchronous replication to every follower is rare because it ties your write latency to your slowest node.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "replication-s06-q1"
+      ]
+    },
+    {
+      "id": "replication-s07",
+      "order": 7,
+      "sectionTitle": "Replication lag and read-your-writes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Replication lag** is the delay between a write landing on the leader and that write becoming visible on a follower. With async replication this is normal, not a bug — but it creates a real user-facing problem: **read-your-writes consistency**. A user posts a comment (write goes to the leader), the page reloads and reads from a follower that hasn't caught up yet, and their own comment appears to have vanished.\n\nCommon fixes: route a user's reads to the leader for a short window after they write; track a **log sequence number** per write and only read from a follower that's caught up past it; or pin a user's session to one follower so at least their own view is internally consistent, even if lagging.\n\nThis is a specific case of a broader idea — client-facing consistency guarantees — that shows up again under CAP/consistency models.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: reading stale data from a lagging follower",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We added read replicas, so all reads are safe to send to any follower.\"\n\n**Why it's wrong:** every follower in async replication can be an arbitrary amount behind the leader — under normal load it might be milliseconds, but under a load spike, a long-running query, or a network blip it can be seconds or more. A read routed to the wrong follower at the wrong moment returns data that's simply wrong for that moment, not just \"a little old\": a payment marked pending when it already cleared, an inventory count that's already sold out.\n\n**Correct model:** decide per read path whether staleness is acceptable. Analytics dashboards and search indexes tolerate lag fine; anything showing a user their own just-made change, or anything feeding a decision (fraud checks, inventory holds) needs a lag-aware read — from the leader, or from a follower confirmed caught up to the write in question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "replication-s08-q1"
+      ]
+    },
+    {
+      "id": "replication-s09",
+      "order": 9,
+      "sectionTitle": "Failover and split-brain risk",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a leader dies, someone has to promote a follower to the new leader — **failover**. Manual failover is safe but slow (minutes of downtime while a human decides). Automatic failover is fast but dangerous: if the old leader isn't actually dead — it's just slow to respond, or on the wrong side of a network partition — you can end up with two nodes both believing they're the leader, both accepting writes. That's **split-brain**, and it silently produces two diverging, conflicting histories of the same data.\n\nProduction systems guard against this with **fencing**: giving each leader generation a monotonically increasing epoch/term number, having followers and clients reject writes from a leader with a stale epoch, and sometimes physically cutting off (STONITH — \"shoot the other node in the head\") a leader believed to be dead so it can't come back and keep writing.\n\nThe deeper fix — a proper consensus protocol to elect exactly one leader — is covered in Consensus & Distributed Transactions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "replication-s09-q1"
+      ]
+    },
+    {
+      "id": "replication-s10",
+      "order": 10,
+      "sectionTitle": "Replication lag in real numbers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete numbers make lag less abstract. On a healthy Postgres streaming-replication setup on the same cloud region, lag is typically **single-digit milliseconds to low tens of milliseconds** — dominated by network round-trip, not disk. Cross-region async replication (say, us-east to ap-south) adds real network latency, commonly **100–250ms** of baseline lag before any load-driven backlog.\n\nUnder load, lag behaves non-linearly: a follower that's keeping up at 10ms lag can jump to multiple **seconds** if it's also serving a burst of expensive read queries, since replaying the write-ahead log competes with those queries for the same CPU and I/O. This is why production systems alert on replication lag as a first-class metric (commonly a few seconds as the warning threshold) — not just on replica uptime.\n\nInterview signal: naming a plausible lag number (milliseconds same-region, hundreds of ms cross-region) shows you've thought about this as an engineering constraint, not just a diagram arrow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "replication-s11",
+      "order": 11,
+      "sectionTitle": "Staff-level nuance: chained and hierarchical replication",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer stops at \"leader replicates to N followers.\" A staff-level answer knows that **fan-out from one leader doesn't scale indefinitely** — at some replica count, the leader spends meaningful CPU and network bandwidth just serving replication streams, competing with write throughput.\n\nThe fix production systems use is **cascading (chained) replication**: the leader replicates to a small number of followers, and those followers replicate onward to further followers, forming a tree. This trades a bit more lag at the leaves for near-zero added load on the leader as replica count grows — MySQL, MongoDB, and most managed cloud databases support this explicitly for cross-region fan-out.\n\nThe deeper point to make in an interview: replication topology is itself a scaling decision, not just an availability one — and it composes with the AKF-style horizontal scaling ideas from system design, applied specifically to the data tier.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

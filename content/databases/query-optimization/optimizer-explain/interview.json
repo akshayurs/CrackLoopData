@@ -1,0 +1,45 @@
+{
+  "topicId": "optimizer-explain",
+  "interviewQuestions": [
+    {
+      "id": "optimizer-explain-iq1",
+      "question": "Walk me through how you'd debug a slow query using EXPLAIN ANALYZE.",
+      "answerMarkdown": "I'd run `EXPLAIN (ANALYZE, BUFFERS)` rather than plain `EXPLAIN`, since I need actual execution numbers, not just estimates, and buffer info tells me whether timing was flattered by a warm cache.\n\nI'd start at the leaves — the most-indented nodes, usually scans — and check one thing first at every level working upward: does the estimated `rows=` roughly match `actual rows=`? A close match means the optimizer's model was accurate there; a 10x or 100x gap means everything the optimizer decided above that node was based on wrong information, regardless of how sensible each individual decision looked in isolation.\n\nConcretely, if I see `Seq Scan on orders (rows=1000) (actual rows=487213)` with `Filter: status = 'pending'`, that's the story: the optimizer thought this filter was highly selective and probably chose a nested-loop join expecting a small outer side, but got hit with half a million rows instead. From there I'd check whether statistics are stale (`ANALYZE` the table) or whether an index on `status` would let the engine skip the wasted scan work entirely, shown by `Rows Removed by Filter`.\n\n**Testing:** whether you have a repeatable method — bottom-up, hunting the estimate/actual gap — rather than eyeballing cost numbers randomly.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Systematic EXPLAIN ANALYZE debugging"
+    },
+    {
+      "id": "optimizer-explain-iq2",
+      "question": "What's the difference between EXPLAIN and EXPLAIN ANALYZE, and when would you avoid using ANALYZE?",
+      "answerMarkdown": "`EXPLAIN` alone shows the optimizer's estimated plan and cost without running anything — safe to use anywhere, including against a query you're worried has side effects, since it never executes. `EXPLAIN ANALYZE` actually executes the statement and annotates the plan with real timing and row counts — which is far more informative for debugging, but means the query genuinely runs.\n\nI'd avoid `EXPLAIN ANALYZE` on a write statement (`UPDATE`/`DELETE`) against production data unless I'm confident about the engine's rollback behavior and I'm inside a transaction I control — some engines don't cleanly no-op the write, and this is a well-known footgun. I'd also be cautious running it against a busy production primary purely for the extra load and timing noise from concurrent activity it introduces; a replica or a representative snapshot gives cleaner, safer numbers.\n\nI'd also flag that `EXPLAIN ANALYZE`'s own instrumentation adds overhead, so I treat its absolute timings as directionally useful for comparing plans, not as an exact SLA measurement.\n\n**Testing:** whether you know ANALYZE actually executes and can name the real operational risk, not just the syntax difference.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "EXPLAIN vs EXPLAIN ANALYZE safety"
+    },
+    {
+      "id": "optimizer-explain-iq3",
+      "question": "A report query filtering on both city and state is returning way more rows than the optimizer expected, even though statistics were refreshed recently. What's going on?",
+      "answerMarkdown": "My first instinct with fresh statistics still producing a bad estimate is column correlation, not staleness. By default, optimizers assume columns are independent and multiply each filter's individual selectivity to estimate the combined selectivity. `city = 'San Francisco'` and `state = 'CA'` are heavily correlated — every San Francisco row is already in California — so multiplying their selectivities badly underestimates how many rows actually match, even with perfectly current statistics.\n\nI'd confirm this by checking whether the individual filters' estimates look reasonable on their own but the combined AND estimate is far off — that pattern points specifically at correlation, distinct from the stale-statistics failure mode. Where the engine supports it, I'd fix this directly — Postgres's `CREATE STATISTICS` lets you tell the optimizer to track dependency between specific columns instead of assuming independence, which corrects the joint estimate without touching the query itself.\n\n**Testing:** whether you can distinguish a correlation problem from a staleness problem, since 'refresh your statistics' is the reflexive but wrong answer here.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Diagnosing correlated-column misestimation"
+    },
+    {
+      "id": "optimizer-explain-iq4",
+      "question": "How would you explain parameter sniffing to someone who's never heard the term, and how would you fix it?",
+      "answerMarkdown": "Parameter sniffing happens when a database caches the physical plan chosen for a parameterized query — a prepared statement or stored procedure — based on the parameter value used the *first* time it ran, then reuses that same plan for later calls with different values, even if a different plan would fit those values much better.\n\nA concrete example: a `WHERE status = ?` query on an orders table where 99% of rows are `'completed'` and 1% are `'pending'`. If the first call uses `'pending'`, the optimizer sees a highly selective filter and picks an index scan — great for that call. If that plan gets cached and reused for a later call with `'completed'`, the same index scan now has to fetch 99% of the table through an index, which is often far worse than a sequential scan would have been.\n\nThe fix is engine-specific: SQL Server offers `OPTION (RECOMPILE)` to force a fresh plan per call, or query hints to stabilize a specific plan; Postgres's prepared statements switch from a custom (per-call) plan to a generic (cached) plan after several executions, and `plan_cache_mode` can force custom plans if sniffing is causing real problems. I'd only reach for these once I've confirmed via `EXPLAIN` that different calls genuinely warrant different plans — forcing recompilation has its own overhead cost.\n\n**Testing:** whether you can explain the mechanism in plain language and name a real, engine-specific mitigation rather than a vague 'it's a caching bug.'",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Explaining parameter sniffing"
+    },
+    {
+      "id": "optimizer-explain-iq5",
+      "question": "How does the query optimizer actually decide which plan to use — is it trying every possible option?",
+      "answerMarkdown": "No — for anything beyond a trivial query, the space of possible plans (which access path per table, which join order, which algorithm per join) is combinatorially enormous, so the optimizer can't exhaustively try and time every option. Instead it's a cost-based search: it estimates each candidate plan's cost using a cost model — rough formulas for scan cost, sort cost, join cost — fed by statistics about the actual data (row counts, histograms, most-common values), and picks the cheapest estimate it can find within a reasonable search budget.\n\nFor a moderate number of joined tables, engines typically use dynamic programming to search join orders efficiently; beyond some threshold they switch to heuristics or randomized search, trading optimality for a bounded search time. The key implication: the optimizer is finding a *good* plan cheaply, not guaranteed to find the provably *best* one — and its output is only as good as the statistics feeding the cost model, which is why stale or correlated statistics produce visibly bad plans even though the search algorithm itself is working correctly.\n\n**Testing:** whether you understand optimization as a bounded search problem driven by statistics, not a mysterious black box or an exhaustive brute force.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "How the optimizer searches for a plan"
+    }
+  ]
+}

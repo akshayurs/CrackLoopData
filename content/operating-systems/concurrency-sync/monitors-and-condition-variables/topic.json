@@ -1,0 +1,172 @@
+{
+  "id": "monitors-and-condition-variables",
+  "title": "Monitors & Condition Variables",
+  "area": "operating-systems",
+  "group": "concurrency-sync",
+  "order": 4,
+  "slug": "monitors-and-condition-variables",
+  "summary": "Bundling a lock with the data it protects, and waiting on an arbitrary condition instead of just a lock — the primitive behind most modern synchronized code.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "monitors-and-condition-variables-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **monitor** packages a mutex together with the shared data it protects, plus one or more **condition variables** that let a thread wait for an arbitrary condition — \"the queue is non-empty,\" not just \"the lock is free.\" It's the primitive behind `synchronized` in Java, Python's `Condition`, and C++'s `std::condition_variable`.\n\n[Semaphores](semaphores) can express counting and signaling, but juggling raw counts across a large codebase is error-prone. Monitors fix that by encapsulating the lock with the data and letting you wait on real predicates — this is what most application-level concurrent code actually reaches for today.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "monitors-and-condition-variables-s02",
+      "order": 2,
+      "sectionTitle": "The monitor: bundling a lock with the data it protects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A monitor is a language- or library-level construct that pairs a mutex with a specific chunk of shared state, and enforces that the mutex is always held while any code touches that state. In Java, marking a method `synchronized` makes the object's intrinsic lock guard the whole method body; in Python, a `Condition` object bundles a lock plus wait/notify.\n\nThe benefit over a bare mutex passed around by convention: the lock and the data it protects live together, so it's much harder to accidentally touch the shared state without holding the lock — a mistake that's easy to make with a standalone mutex where nothing enforces the pairing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "monitors-and-condition-variables-s03",
+      "order": 3,
+      "sectionTitle": "Why raw semaphores get error-prone at scale",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The bounded-buffer solution from the semaphores topic works, but it required getting three synchronization objects — `empty`, `full`, a mutex — perfectly paired across every call site. In a codebase with dozens of producer-consumer relationships, each hand-rolled with its own semaphores, small mistakes accumulate: a `wait()` without a matching `signal()` on an error path, a semaphore reused for two logically separate conditions, an ordering bug between acquiring the mutex and waiting on a counting semaphore that causes a deadlock.\n\nSemaphores also only express \"count is nonzero\" — there's no direct way to wait for a richer condition like \"the queue has fewer than N items AND a shutdown flag isn't set\" without composing multiple semaphores awkwardly. Monitors were designed specifically to remove this class of bug by giving you a lock plus a way to wait on any boolean expression over the protected state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "monitors-and-condition-variables-s04",
+      "order": 4,
+      "sectionTitle": "Condition variables: waiting for a condition, not just a lock",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **condition variable** is always used together with a mutex. A thread that finds the condition it needs isn't true — the queue is empty, a buffer is full — calls `wait()` on the condition variable, which **atomically releases the mutex and blocks** the thread. Some other thread that changes the condition calls `signal()` or `broadcast()` on the same condition variable, waking one or all waiters, which then re-acquire the mutex before continuing.\n\nThe atomic release-and-block is the critical detail: if releasing the mutex and starting to wait were two separate steps, another thread could change the condition and signal in the gap between them, and the waiter would sleep through a wakeup it needed — a **lost wakeup** (covered as a pitfall later in this topic).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "monitors-and-condition-variables-s04-q1"
+      ]
+    },
+    {
+      "id": "monitors-and-condition-variables-s05",
+      "order": 5,
+      "sectionTitle": "wait(), signal(), broadcast() semantics",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three operations, each with a distinct job:\n\n- **`wait(cv, mutex)`** — releases `mutex`, blocks the calling thread on `cv`, and on wakeup re-acquires `mutex` before returning. Must always be called while holding `mutex`.\n- **`signal(cv)`** (also `notify()`) — wakes exactly one waiting thread, if any are waiting. If none are waiting, the signal is lost — it is **not** remembered for a future waiter (unlike a semaphore's counter).\n- **`broadcast(cv)`** (also `notifyAll()`) — wakes **all** currently waiting threads; they each re-acquire the mutex one at a time and recheck the condition.\n\nThat last point about `signal()` — a call with no one listening does nothing, permanently — is the single most common source of monitor bugs, and it's why the condition itself, not just a wakeup, must always be re-checked after waking (next slide).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "monitors-and-condition-variables-s06",
+      "order": 6,
+      "sectionTitle": "Code: producer-consumer with a mutex + condition variable",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\npthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;\npthread_cond_t not_full  = PTHREAD_COND_INITIALIZER;\npthread_cond_t not_empty = PTHREAD_COND_INITIALIZER;\nint count = 0;\n\nvoid producer(int item) {\n    pthread_mutex_lock(&mutex);\n    while (count == CAPACITY)\n        pthread_cond_wait(&not_full, &mutex);   // wait for space\n    buffer_put(item);\n    count++;\n    pthread_cond_signal(&not_empty);            // wake a consumer\n    pthread_mutex_unlock(&mutex);\n}\n\nvoid consumer() {\n    pthread_mutex_lock(&mutex);\n    while (count == 0)\n        pthread_cond_wait(&not_empty, &mutex);  // wait for an item\n    int item = buffer_get();\n    count--;\n    pthread_cond_signal(&not_full);             // wake a producer\n    pthread_mutex_unlock(&mutex);\n}\n```\n\nCompare this to the semaphore version: one mutex protects `count` and the buffer directly, and each condition variable expresses one specific predicate over that shared state (`not_full`, `not_empty`) instead of a standalone counter. The `while` loop, not `if`, is load-bearing — the next slide is entirely about why.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "monitors-and-condition-variables-s06-q1"
+      ]
+    },
+    {
+      "id": "monitors-and-condition-variables-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: thread states around a condition variable wait queue",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Condition variable wait and wake state diagram](assets/condition-variable-states.svg)\n\nThe loop-back arrow from Ready to Waiting is the visual reminder that waking up is not a promise the condition is now true — only a promise it's worth rechecking.",
+      "assets": [
+        {
+          "alt": "Condition variable wait and wake state diagram",
+          "path": "assets/condition-variable-states.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "monitors-and-condition-variables-s08",
+      "order": 8,
+      "sectionTitle": "Why you re-check the condition in a while-loop, not an if — spurious wakeups",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A thread can wake up from `wait()` even when nobody explicitly signaled the condition it cares about — a **spurious wakeup**. POSIX explicitly permits this (some implementations do it for internal reasons, like handling signals or optimizing wakeup batching), so portable code must treat it as a real possibility, not an edge case to ignore.\n\nBeyond spurious wakeups, there's a subtler reason even a \"real\" signal doesn't guarantee the condition still holds by the time this thread gets the mutex back: with `broadcast()`, multiple threads wake up, but only one gets the mutex first and consumes the resource — by the time the second thread runs, the condition it was told is now true (\"there's an item\") may already be false again.\n\nBoth reasons point to the same fix: always wrap `wait()` in a `while (!condition) wait(...)`, never `if (!condition) wait(...)`. The `while` re-checks the actual condition after every wakeup, spurious or not, and only proceeds once it's genuinely true.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "monitors-and-condition-variables-s08-q1"
+      ]
+    },
+    {
+      "id": "monitors-and-condition-variables-s09",
+      "order": 9,
+      "sectionTitle": "Hoare vs Mesa monitor semantics",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Hoare semantics | Mesa semantics |\n|---|---|---|\n| On signal | Signaler immediately hands off the mutex and CPU to the waiter | Signaler keeps running; waiter is just moved to the ready queue |\n| Guarantee for waiter | Condition is guaranteed true the instant it resumes | Condition might change again before the waiter actually runs |\n| Requires `while` recheck? | Not strictly, by design | Yes, always |\n| Used by | Mostly theoretical / original monitor papers | Nearly all real systems: pthreads, Java, Windows |\n\nAlmost every language and OS you'll actually use implements **Mesa semantics** — the signaling thread keeps running and the waiter just becomes eligible to run later, with no handoff guarantee. This is precisely why the `while`-loop recheck from the previous slide isn't a defensive nicety, it's a correctness requirement under the semantics real systems actually use.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "monitors-and-condition-variables-s09-q1"
+      ]
+    },
+    {
+      "id": "monitors-and-condition-variables-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: signaling before the waiter checks — a lost wakeup",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll check the condition, and if it's false, call `wait()` right after — that's basically atomic enough.\"\n\n**Why it's wrong:** if the check and the `wait()` call aren't protected by the same mutex the whole time, another thread can change the condition and call `signal()` in the gap between your check and your `wait()` call. Since a signal with no one currently waiting is simply lost — not queued for later — your thread then calls `wait()` and blocks forever on a condition that already became true. This is the **lost wakeup** problem.\n\n**Correct model:** the check-condition, wait-if-false, and hold-the-mutex-throughout steps must be one atomic unit — which is exactly what `wait(cv, mutex)`'s atomic release-and-block guarantees, as long as the mutex is held continuously from the check until inside the `wait()` call. Never check the condition, then separately lock and wait — always hold the mutex across both the check and the call to `wait()`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "monitors-and-condition-variables-s11",
+      "order": 11,
+      "sectionTitle": "signal() vs broadcast() in production: the thundering herd trade-off",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Choosing `signal()` vs `broadcast()` is a real production performance decision, not a style preference. `broadcast()` is always correct if every waiter rechecks its condition in a `while` loop (§8), but waking every waiter when only one can actually proceed causes a **thundering herd**: dozens of threads wake up, all race to re-acquire the same mutex, most find the condition false again, and go back to sleep — burning CPU and contending the lock for no benefit.\n\nThis shows up concretely in a connection-pool or task-queue implementation: if 50 threads are waiting for one freed slot and the code calls `broadcast()` instead of `signal()`, you get 50 wakeups and 49 wasted context switches every time a single slot frees up. Production code typically calls `signal()` when only one waiter's condition can possibly be satisfied by the change (a single slot freed), and reserves `broadcast()` for when the change could satisfy many waiters at once (a shutdown flag, or when all waiters share the exact same condition). Debugging an unexplained CPU/lock-contention spike on a queue-like structure is a good place to check which one is being called.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "monitors-and-condition-variables-s11-q1"
+      ]
+    }
+  ]
+}

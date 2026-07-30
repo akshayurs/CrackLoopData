@@ -1,0 +1,169 @@
+{
+  "id": "backup-ha",
+  "title": "Backup & High Availability",
+  "area": "databases",
+  "group": "database-ops",
+  "order": 2,
+  "slug": "backup-ha",
+  "summary": "Keeping data safe and the service up: backup strategies, RPO vs RTO, point-in-time recovery via WAL archiving, and failover to standby replicas.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "backup-ha-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Two related but distinct promises: **backup** answers \"can we get the data back after it's destroyed or corrupted,\" and **high availability** answers \"can the service keep serving traffic when a component fails.\" A system can have great HA and terrible backups (a bad `DELETE` replicates everywhere instantly) or great backups and terrible HA (data is safe but the service is down for hours during restore).\n\nThis topic covers both: how backups actually work and how to reason about their real recovery guarantees, and how failover keeps a service up when a database node dies.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "backup-ha-s02",
+      "order": 2,
+      "sectionTitle": "Compare: full, incremental, and differential backups",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Full | Incremental | Differential |\n|---|---|---|---|\n| Captures | Everything, every time | Only what changed since the last backup (of any type) | Only what changed since the last *full* backup |\n| Backup size over time | Constant, large | Small, grows slightly each cycle | Grows until the next full backup |\n| Restore process | Restore the one full backup | Restore the full backup, then apply every incremental in order since | Restore the full backup, then apply just the one latest differential |\n| Restore speed | Fastest | Slowest — many files to apply in sequence | Middle — at most two files |\n| Failure risk | None beyond the backup itself | One corrupted/missing incremental in the chain breaks every backup after it | Losing the differential only costs you back to the last full |\n\n**How to decide:** incrementals minimize storage and backup time but maximize restore complexity and risk (a broken link in a long chain); differentials are the common middle ground for most production setups.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "backup-ha-s02-q1"
+      ]
+    },
+    {
+      "id": "backup-ha-s03",
+      "order": 3,
+      "sectionTitle": "RPO vs RTO",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**RPO (Recovery Point Objective)** — how much data can we afford to lose, measured in time? If backups run nightly and disaster strikes right before the next one, RPO is \"up to 24 hours of data loss.\" **RTO (Recovery Time Objective)** — how long can we afford to be down while recovering? If a full restore takes 3 hours, RTO is 3 hours regardless of how little data was actually lost.\n\nThese are independent numbers that must both be set deliberately by the business, not derived from whatever the current backup tooling happens to produce. A payments system might need an RPO of seconds (any lost transaction is a real financial and trust problem) and an RTO of minutes; an internal analytics warehouse might tolerate an RPO of a day and an RTO of most of a day. Confusing the two, or picking a backup strategy without first agreeing these numbers with stakeholders, is a common and expensive mistake.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "backup-ha-s03-q1"
+      ]
+    },
+    {
+      "id": "backup-ha-s04",
+      "order": 4,
+      "sectionTitle": "Point-in-time recovery via WAL archiving",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A nightly full backup alone gives you an RPO of up to 24 hours. **Point-in-time recovery (PITR)** closes that gap by continuously archiving the write-ahead log (the same mechanism the wal-recovery topic covers) to separate, durable storage as it's generated, in addition to periodic full backups.\n\nTo recover to a specific moment — \"right before the bad `DROP TABLE` ran at 14:32\" — you restore the most recent full backup taken *before* that moment, then replay archived WAL records forward up to (but not including) the destructive statement. This turns RPO from \"as bad as your backup interval\" into \"as good as your WAL archiving lag,\" often seconds, and it's the standard technique for recovering from an accidental destructive query rather than a hardware failure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "backup-ha-s05",
+      "order": 5,
+      "sectionTitle": "Failover, standby replicas, and health checks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **standby replica** continuously receives and replays the primary's WAL, staying nearly current. **Failover** is promoting that standby to be the new primary when the original primary fails, so the service keeps accepting writes with minimal interruption.\n\nThe mechanics that make this safe matter: a **health check** system must reliably distinguish \"the primary is actually dead\" from \"the primary is just slow or network-partitioned but still alive\" — promoting a standby while the old primary is still up and accepting writes creates **split-brain**, two nodes both believing they're primary, which can produce silently diverging or conflicting data. Production failover systems (Patroni for Postgres, MySQL's Group Replication or Orchestrator) use a consensus mechanism or a fencing step — actively ensuring the old primary can no longer accept writes — specifically to prevent this, not just a naive \"can't ping it, promote the standby\" check.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "backup-ha-s05-q1"
+      ]
+    },
+    {
+      "id": "backup-ha-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: backups that were never test-restored",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We have a backup job that's run successfully every night for two years, so we're covered.\"\n\n**Why it's wrong:** a backup job reporting success only confirms that *writing* the backup succeeded — it says nothing about whether that backup file is actually restorable. Silent corruption, an incompatible tool version, a schema change the restore script doesn't handle, or a WAL archive with a gap in it can all make a backup useless, and none of these show up until someone actually tries to restore from it — typically during a real incident, which is the worst possible time to discover the backup doesn't work.\n\n**Correct model:** regularly perform an actual **test restore** — ideally automated, into an isolated environment, on a schedule — and verify the restored data is complete and queryable. A backup that has never been restored is, for all practical purposes, an unverified hypothesis, not a safety net.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "backup-ha-s06-q1"
+      ]
+    },
+    {
+      "id": "backup-ha-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: PITR restore timeline",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline of a point-in-time restore replaying WAL from a full backup and stopping just before an accidental DROP TABLE](assets/pitr-restore-timeline.svg)\n\nThe key detail worth internalizing visually: PITR doesn't restore to \"now\" or even to \"the last backup\" — it restores to any arbitrary point you choose along the WAL stream, which is exactly what makes it useful for surgically undoing one bad statement without losing every other write that happened after the last full backup but before the disaster.",
+      "assets": [{"alt": "Timeline of a point-in-time restore replaying WAL from a full backup and stopping just before an accidental DROP TABLE", "path": "assets/pitr-restore-timeline.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "backup-ha-s08",
+      "order": 8,
+      "sectionTitle": "Synchronous vs asynchronous replication for HA",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Synchronous replication | Asynchronous replication |\n|---|---|---|\n| When primary's COMMIT returns | After at least one standby confirms it has received (and often applied) the WAL | Immediately, without waiting for any standby |\n| Data loss on failover | Zero — the promoted standby has everything the primary committed | Possible — the standby may be slightly behind, so recent commits can be lost on failover |\n| Write latency | Higher — bounded by network round-trip to the standby | Lower — unaffected by standby distance or load |\n| Typical use | Financial systems, anything where a lost committed write on failover is unacceptable | Most general-purpose HA setups, especially across regions where latency would be too costly |\n\n**How to decide:** synchronous replication trades write latency for a zero-data-loss failover guarantee — reach for it specifically when the business cost of losing a just-committed write exceeds the cost of slower writes, not by default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "backup-ha-s09",
+      "order": 9,
+      "sectionTitle": "The staff-level nuance: HA doesn't replace backups",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A common architecture mistake: treating a multi-replica, auto-failover setup as making backups unnecessary. It doesn't — replication protects against **hardware failure**, but it faithfully propagates **logical errors** (an accidental `DROP TABLE`, a bad migration, a bug that corrupts data) to every replica within milliseconds to seconds. High availability and backup/recovery protect against different failure classes, and a mature architecture needs both: HA for \"a node died,\" backups plus PITR for \"a human or a bug destroyed data on purpose, correctly, everywhere.\"\n\nThe staff-level framing an interviewer wants to hear: name the specific failure each mechanism protects against, rather than treating \"we have replicas\" as a blanket answer to \"how do you protect the data.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "backup-ha-s09-q1"
+      ]
+    },
+    {
+      "id": "backup-ha-s10",
+      "order": 10,
+      "sectionTitle": "Automated failover: the trade-off nobody mentions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Automated failover sounds strictly better than manual — faster response, no human needed at 3 a.m. But it introduces a real risk: a **false-positive failover**, where a transient network blip or a brief GC pause on the primary is misdiagnosed as a failure, triggering an unnecessary promotion. Every failover has a cost — connection resets across every client, a period of read-only or degraded availability during promotion, and, for asynchronous replication, potential data loss from the gap between the standby's last applied WAL and the primary's actual last commit.\n\nProduction systems tune this by requiring a health check to fail consistently across multiple checks over a meaningful window (not a single missed heartbeat) before triggering promotion — accepting a slightly slower response to a real failure in exchange for far fewer unnecessary, disruptive failovers triggered by noise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "backup-ha-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: RPO/RTO chosen by the tooling, not the business",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Our backup tool defaults to nightly full backups with a two-hour restore time, so that's our RPO and RTO.\"\n\n**Why it's wrong:** this inverts the correct process — the business should decide how much data loss and downtime it can tolerate first, and the backup strategy should be engineered to meet those numbers. Letting whatever the default tooling happens to produce become the de facto RPO/RTO means you find out those numbers were unacceptable only during a real incident, when it's far too late to change them.\n\n**Correct model:** get explicit RPO and RTO numbers agreed with stakeholders for each system based on real business impact, then design the backup and replication strategy (full/incremental cadence, WAL archiving, standby count and placement) to meet those numbers — and periodically re-verify via test restores that the numbers are still actually being met as the database grows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "backup-ha-s11-q1"
+      ]
+    }
+  ]
+}

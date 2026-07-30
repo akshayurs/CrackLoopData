@@ -1,0 +1,37 @@
+{
+  "topicId": "locks-and-mutexes",
+  "interviewQuestions": [
+    {
+      "id": "locks-and-mutexes-iq1",
+      "question": "When would you choose a spinlock over a regular mutex?",
+      "answerMarkdown": "I'd choose a spinlock when the expected wait for the lock is shorter than the cost of a context switch — typically low single-digit microseconds — and I'm confident the critical section itself will never block, sleep, or take a page fault while holding it.\n\nThe mechanism: a spinning thread just keeps checking the lock in a tight loop, so the moment it's released, the spinner notices almost instantly, with no round-trip through the OS scheduler. Compare that to a blocking mutex, which puts the waiter to sleep and costs two context switches — one to sleep, one to wake — which for a genuinely short wait is pure overhead.\n\nA concrete example: inside a kernel or a low-level allocator, a lock might guard just a handful of instructions — updating a free-list pointer, say. Spinning there for a few dozen cycles is far cheaper than sleeping. But I'd never spin around a critical section that might call into user code, do I/O, or take an unbounded amount of time — on a single-core machine that can spin until the time slice expires with zero chance the holder runs, and even on multicore it just wastes a whole core doing nothing useful.\n\nIn practice, many real mutex implementations hedge by spinning briefly, then falling back to blocking — I'd mention that as the pragmatic middle ground production systems actually use.\n\n**Testing:** whether you understand the context-switch-cost trade-off, not just \"spinlocks are faster.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Spinlock vs blocking mutex"
+    },
+    {
+      "id": "locks-and-mutexes-iq2",
+      "question": "What does it mean for a mutex to have 'ownership,' and why does that matter compared to a semaphore?",
+      "answerMarkdown": "A mutex tracks which specific thread currently holds it, and only that thread is allowed to call `unlock()` — that's ownership. Most implementations treat it as an error, or outright undefined behavior, for a different thread to unlock a mutex it never locked.\n\nThis matters for two reasons. First, it lets tooling and the runtime catch a real class of bugs: a thread accidentally unlocking someone else's lock, or unlocking twice, becomes detectable rather than silently corrupting state. Second, it shapes what a mutex is *for*: since only the owner can release it, a mutex naturally expresses \"I'm the one protecting this critical section right now,\" which maps directly onto mutual exclusion.\n\nA semaphore has no such concept — any thread can call `signal()` regardless of who called `wait()`, which makes it more flexible for signaling between threads (one thread waits, a completely different thread signals) but also means it can't enforce the same discipline a mutex can. I'd give the concrete failure mode: using a semaphore where you meant mutual exclusion, and having a bug where the wrong thread signals it twice, silently letting two threads into what should be a protected section — a mutex's ownership check would have caught that immediately.\n\n**Testing:** whether you know mutex and binary semaphore aren't interchangeable despite looking similar on paper.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Ownership vs semaphores"
+    },
+    {
+      "id": "locks-and-mutexes-iq3",
+      "question": "Why is holding a lock across a slow or blocking call a serious production risk, and how would you fix code that does it?",
+      "answerMarkdown": "Holding a lock across a blocking call — a network request, a disk read, anything with unpredictable latency — means every other thread that needs that same lock waits for the full duration of that slow operation, not just for the fast in-memory work the lock was meant to protect.\n\nUnder normal load this might go unnoticed. Under load or when the downstream call gets slow — a timeout, a degraded dependency — it becomes a pile-up: request threads queue up behind whoever's holding the lock, latency spikes across the board, and what was a localized slow dependency turns into an application-wide outage. I've seen this pattern described as a single slow call \"holding the whole service hostage\" through one shared lock.\n\nThe fix is to shrink the critical section to just the shared-state access: copy out what you need under the lock, release it, do the slow work against your private copy outside the lock, then reacquire briefly only to write results back if needed. As a general discipline, I treat any I/O call, any call into code I don't control, or anything with unbounded latency as something that must never happen while holding a lock.\n\nIf I were debugging this in an existing system, I'd look for exactly this pattern first when I see threads piling up on one lock during a downstream slowdown — it's one of the most common root causes of a cascading production incident.\n\n**Testing:** whether you can connect a design mistake to its concrete production blast radius, not just recite \"don't do I/O under a lock.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Lock scope and blocking calls"
+    },
+    {
+      "id": "locks-and-mutexes-iq4",
+      "question": "A service's throughput has plateaued and latency is climbing, but CPU usage is only moderate. How would you figure out if lock contention is the cause?",
+      "answerMarkdown": "Moderate CPU with high latency and stalled throughput is exactly the signature I'd check lock contention for first, since threads waiting on a blocking mutex are asleep, not burning CPU — the resource graph looks deceptively healthy while requests queue up.\n\nConcretely, I'd take a thread dump — `jstack` on the JVM, or the equivalent for the runtime in question — and look for many threads in a `BLOCKED` state waiting on the same monitor or lock object. If I see a dozen threads all blocked on one lock, that's a strong signal. On Linux I'd also reach for `perf lock` or similar tracepoints to see aggregate time spent waiting versus holding. Go's built-in mutex profiler or a language-specific equivalent gives the same picture more directly if it's available.\n\nOnce confirmed, the fix is rarely to add more threads — that increases contention, not throughput, since more threads just queue up behind the same lock. Instead I'd look at shrinking the critical section to the minimum needed, splitting one coarse lock into several guarding independent pieces of data (lock striping), or, if the workload is read-heavy, switching to a reader-writer lock so reads stop serializing against each other.\n\n**Testing:** whether you have concrete tools and a diagnostic path for contention, not just \"scale it up,\" which is the instinctive wrong answer here.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Diagnosing contention in production"
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+{
+  "id": "locks-and-mutexes",
+  "title": "Locks & Mutexes",
+  "area": "operating-systems",
+  "group": "concurrency-sync",
+  "order": 2,
+  "slug": "locks-and-mutexes",
+  "summary": "How a mutex actually provides mutual exclusion, the spinlock vs blocking-lock trade-off, and the reentrant and reader-writer variants built on top.",
+  "level": "beginner",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "locks-and-mutexes-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **mutex** (mutual exclusion lock) is the most common answer to [the critical section problem](race-conditions-and-critical-sections): only one thread can hold it at a time, so wrapping shared data access in `lock()`/`unlock()` calls makes the read-modify-write from the previous topic safe.\n\nThe interesting engineering decisions live below that simple interface: how does a thread wait when the lock is already held — burn CPU spinning, or sleep and let the OS wake it later? Both exist, and picking wrong costs real performance. This topic is the mutex's mechanics, its variants, and the mistakes that turn a simple lock into a production incident.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "locks-and-mutexes-s02",
+      "order": 2,
+      "sectionTitle": "What a mutex actually is: lock/unlock and ownership",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mutex is a shared object with two operations, `lock()` and `unlock()`, and one invariant: at most one thread holds it at a time. A thread calls `lock()` before touching shared data; if another thread already holds it, the caller waits until `unlock()` is called by the holder.\n\nThe key detail interviewers probe: a mutex has **ownership** — the thread that locked it is the only one allowed to unlock it. This is different from a semaphore (next topic), where any thread can signal regardless of who waited. Ownership is what lets a mutex detect misuse: many implementations make it undefined behavior, or an outright error, for a thread to unlock a mutex it never locked.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "locks-and-mutexes-s03",
+      "order": 3,
+      "sectionTitle": "Code: fixing the counter race with a mutex",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\npthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;\nint counter = 0;\n\nvoid* increment(void* arg) {\n    for (int i = 0; i < 1000000; i++) {\n        pthread_mutex_lock(&lock);\n        counter++;               // now protected\n        pthread_mutex_unlock(&lock);\n    }\n    return NULL;\n}\n```\n\nThis prints exactly 2,000,000 every time. The lock/unlock pair around `counter++` makes the whole load-add-store sequence appear atomic to every other thread — either a thread runs the entire critical section, or it hasn't started yet. Note the cost: 2 million lock/unlock pairs now serialize what used to be two threads running fully in parallel, which is why real code locks the smallest region that needs it, not the whole loop.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "locks-and-mutexes-s04",
+      "order": 4,
+      "sectionTitle": "Spinlocks: busy-waiting for a lock",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **spinlock** makes a waiting thread loop, repeatedly checking if the lock is free, instead of yielding the CPU:\n\n```c\nwhile (atomic_test_and_set(&lock)) {\n    // spin — do nothing, just keep checking\n}\n```\n\nThe upside: the moment the lock is released, a spinning thread notices almost instantly — no OS scheduler round-trip. That makes spinlocks a good fit when the expected wait is shorter than the cost of a context switch (roughly 1–10 microseconds), which is exactly the situation inside an OS kernel or a low-level allocator holding a lock for a handful of instructions.\n\nThe downside is just as sharp: a spinning thread burns 100% of a CPU core doing no useful work, and on a single-core machine it can spin until its time slice runs out with zero chance the lock-holder gets to run and release it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "locks-and-mutexes-s04-q1"
+      ]
+    },
+    {
+      "id": "locks-and-mutexes-s05",
+      "order": 5,
+      "sectionTitle": "Blocking locks: sleeping instead of spinning",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **blocking mutex** puts a waiting thread to sleep instead of spinning: it's moved off the CPU entirely and placed on a wait queue associated with the lock. When the holder calls `unlock()`, it wakes one waiter, which the scheduler eventually runs.\n\nThis costs a context switch on the way in and another on the way out — real overhead, typically low microseconds on a modern OS — but it frees the CPU for other work while waiting, which matters when the hold time is long or unpredictable (a network call, a disk read, an unbounded amount of work).\n\nMost general-purpose mutex implementations (glibc's `pthread_mutex_t`, for instance) are actually **hybrid**: spin briefly first, then fall back to blocking if the lock isn't free quickly — trying to get the best of both without the caller having to choose.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "locks-and-mutexes-s06",
+      "order": 6,
+      "sectionTitle": "Compare: spinlock vs blocking mutex — when each wins",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Spinlock | Blocking mutex |\n|---|---|---|\n| Waiting thread does | Busy-loops, burns CPU | Sleeps, yields CPU |\n| Best when hold time is | Very short (a few instructions) | Long or unpredictable |\n| Cost to acquire when free | Near-zero, no scheduler involved | Small — check + maybe futex syscall |\n| Cost when contended | Wastes CPU cycles the whole wait | Context switch in, context switch out |\n| Typical users | Kernel code, low-level allocators, lock-free data structure fallbacks | Application-level code, anything that might block on I/O |\n\n**Rule of thumb:** if the critical section is a handful of instructions and you're never going to sleep, block, or page-fault inside it, a spinlock can win. Anywhere a thread might do real work — or worse, I/O — while holding the lock, use a blocking mutex; spinning there just burns cores waiting on something slow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "locks-and-mutexes-s06-q1"
+      ]
+    },
+    {
+      "id": "locks-and-mutexes-s07",
+      "order": 7,
+      "sectionTitle": "Reentrant (recursive) locks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A plain mutex deadlocks if the thread holding it tries to lock it again — `lock()` blocks waiting for the lock to be released, but the only thread that can release it is itself, currently blocked. This happens easily with recursive functions or when function A calls function B and both lock the same mutex.\n\nA **reentrant** (recursive) lock fixes this by tracking both the owning thread and a hold count. If the current holder calls `lock()` again, it just increments the count and proceeds instead of blocking; `unlock()` decrements it, and the lock is only actually released when the count hits zero.\n\nThe trade-off: reentrant locks make accidental recursive-locking bugs invisible instead of deadlocking loudly, which can hide a design where a critical section is larger and more tangled than it should be. Many style guides prefer plain mutexes and refactor away recursive locking, treating the reentrant lock as a compatibility tool rather than a default choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "locks-and-mutexes-s08",
+      "order": 8,
+      "sectionTitle": "Reader-writer locks as a refinement",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A plain mutex is all-or-nothing: even two threads that only want to *read* shared data must take turns, even though concurrent reads can never corrupt anything. A **reader-writer lock** (rwlock) distinguishes the two: any number of readers can hold the lock simultaneously in shared mode, but a writer needs it in exclusive mode, blocking out both readers and other writers.\n\nThis is a big win for read-heavy workloads — a cache or config store read thousands of times per write can let all its readers run in parallel and only serialize on the rare update. The catch: rwlocks have more overhead per acquisition than a plain mutex, so for write-heavy or low-contention data, a plain mutex can actually be faster despite looking less sophisticated.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "locks-and-mutexes-s08-q1"
+      ]
+    },
+    {
+      "id": "locks-and-mutexes-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: holding a lock across a blocking call",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just hold the lock for this whole function, including the network call — it's simpler and the data's protected the whole time.\"\n\n**Why it's wrong:** every other thread that wants that lock now waits for the full duration of the network call, disk read, or any other blocking operation — turning a fast in-memory critical section into one bounded by the slowest external dependency. Under load this is how a single slow downstream service turns into total application lockup: every request thread piles up behind the one holding the lock during a timeout.\n\n**Correct model:** copy the data you need out of the shared structure, release the lock, then do the slow work on your private copy. Reacquire the lock only for the brief moment you need to write results back. As a rule, a critical section should never contain I/O, a call to code you don't control, or anything that could block indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "locks-and-mutexes-s09-q1"
+      ]
+    },
+    {
+      "id": "locks-and-mutexes-s10",
+      "order": 10,
+      "sectionTitle": "Diagnosing lock contention in production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a service's throughput plateaus despite CPUs not being saturated, **lock contention** is a common suspect: threads spend their time waiting for a mutex instead of doing work. The symptom is often confusing at first — CPU usage looks moderate, yet latency is high, because waiting threads (if blocking, not spinning) are asleep, not burning cycles.\n\nProduction tools for this: **perf** with lock-related tracepoints or `perf lock` on Linux, language-level profilers that sample \"time spent blocked\" (Go's `mutex` profile, Java's `jstack` thread dumps showing threads `BLOCKED` on the same monitor), or simply logging lock-wait duration at the point of acquisition. The signature to look for: many threads blocked on the *same* lock, especially one guarding a large or hot critical section.\n\nThe staff-level fix is rarely \"add more threads\" — that makes contention worse. It's shrinking the critical section, splitting one lock into several guarding independent pieces of data (lock striping), or switching a read-heavy path to a reader-writer lock or lock-free structure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "locks-and-mutexes-s10-q1"
+      ]
+    },
+    {
+      "id": "locks-and-mutexes-s11",
+      "order": 11,
+      "sectionTitle": "Diagram: spinlock vs blocking mutex under contention",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Spinlock vs blocking mutex CPU usage](assets/spinlock-vs-blocking.svg)\n\nThe visual point: a spinning thread's CPU graph never drops, even though it's doing no useful work, while a blocking thread's CPU graph drops to idle during the wait — the trade-off is CPU cycles now vs. two context switches later.",
+      "assets": [
+        {
+          "alt": "Spinlock vs blocking mutex CPU usage",
+          "path": "assets/spinlock-vs-blocking.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    }
+  ]
+}

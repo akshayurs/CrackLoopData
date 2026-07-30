@@ -1,0 +1,37 @@
+{
+  "topicId": "serializability",
+  "interviewQuestions": [
+    {
+      "id": "serializability-iq1",
+      "question": "What does it mean for a schedule to be serializable, and why don't databases just run transactions one at a time?",
+      "answerMarkdown": "A schedule is serializable if its result — the final data and everything each transaction read — matches what you'd get from running the same transactions one at a time, in some order, even though they actually ran interleaved. It's a statement about the *outcome*, not about how much overlap actually happened.\n\nDatabases don't just run transactions serially because that throws away all concurrency: on multi-core hardware with hundreds of simultaneous clients, serial execution would leave almost all capacity idle waiting for one transaction to finish before the next can even start. The entire point of concurrency control — locking, MVCC, isolation levels — is to let transactions actually overlap in time while still guaranteeing the result is indistinguishable from some serial order.\n\nI'd tie this back concretely: two-phase locking is a mechanism that provably produces only conflict-serializable schedules, and MVCC's serializable snapshot isolation is a different mechanism aiming at the same target. Neither one runs things serially; both just guarantee the *result* looks like they did.\n\n**Testing:** whether you understand serializability as an outcome guarantee, not an execution strategy — a distinction a lot of engineers blur.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Serializability fundamentals"
+    },
+    {
+      "id": "serializability-iq2",
+      "question": "How would you determine whether a given interleaved schedule is conflict-serializable?",
+      "answerMarkdown": "I'd build the schedule's **precedence graph**: one node per transaction, and a directed edge from Ti to Tj whenever an operation of Ti conflicts with an operation of Tj — same data item, at least one is a write — and Ti's operation happened first. Read-read pairs never create an edge, since they can never conflict.\n\nOnce the graph is built, the schedule is conflict-serializable if and only if the graph has **no cycle** — a topological sort of an acyclic graph directly gives you an equivalent serial order. A cycle means there's no consistent ordering: if T1 must come before T2, which must come before T3, which must come before T1, that's a contradiction, so no serial execution could have produced this schedule's effects.\n\nI'd note this is exactly the same graph-cycle technique used for deadlock detection, just applied to conflicts recorded after the fact rather than lock waits observed live — which is a nice example of one underlying idea (cycle detection in a dependency graph) showing up twice in the same subject area.\n\n**Testing:** whether you can actually construct and reason about a precedence graph, not just recite that one exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Precedence graphs in practice"
+    },
+    {
+      "id": "serializability-iq3",
+      "question": "What's the difference between a recoverable schedule and a serializable one, and why do you need both?",
+      "answerMarkdown": "These answer completely different questions, and conflating them is a common mistake. **Serializability** asks: is the final result correct — equivalent to some serial execution? **Recoverability** asks: is it safe to handle an abort — specifically, if transaction Tj read a value Ti wrote, does Tj wait to commit until Ti's outcome (commit or abort) is known? A schedule can be recoverable while still producing a result no serial execution could produce, and a schedule can be serializable in its happy path while still risking a cascading mess if a transaction aborts mid-flight.\n\nA concrete example: if Tj commits immediately after reading Ti's uncommitted write, and Ti then aborts, there's no way to undo Tj's already-committed work — that's a recoverability violation, entirely independent of whether the schedule would have been serializable had everyone committed. Going further, a **cascadeless** schedule prevents even reading an uncommitted write in the first place, avoiding the abort from rippling to Tj and beyond; a **strict** schedule — what strict 2PL and MVCC snapshots both deliver — prevents reading *or writing* a value another transaction has touched until it resolves, which is why cascading aborts essentially never occur on production engines running with default settings.\n\nYou need both properties because they protect against different failures: serializability protects the happy path's correctness, recoverability (and its stronger variants) protects what happens when something goes wrong.\n\n**Testing:** whether you treat these as genuinely separate axes rather than assuming one implies the other.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Recoverability vs serializability"
+    },
+    {
+      "id": "serializability-iq4",
+      "question": "A teammate reports a bug where two transactions running under Serializable isolation appear to have produced a result that shouldn't be possible. How would you investigate whether this is a real correctness bug?",
+      "answerMarkdown": "I'd reconstruct the actual sequence of reads and writes from the logs — timestamps, statements, and which rows each transaction touched — and build the precedence graph from what actually happened, exactly as the theory prescribes: a node per transaction, an edge for every conflicting operation pair in the order they occurred.\n\nIf that graph has no cycle, then despite how the result looks, it's actually consistent with some serial order — the surprise is usually a misunderstanding of which order that was, not a real bug (a common cause: an index or default value the team forgot the application relies on, making a 'surprising' result actually correct once you account for it). If the graph *does* have a cycle while the isolation level in use is supposed to guarantee acyclicity, that's evidence of a genuine violation — at that point I'd look for a specific known gap first (was this actually running at a weaker isolation level than assumed — the isolation-levels topic's pitfall about wrong defaults — or hitting a real engine bug, which is rare but not impossible and worth checking release notes for) before assuming a novel database bug.\n\nI'd present the precedence graph itself as the evidence, not just a conclusion — it's the artifact that turns 'this looks wrong' into a provable statement about what happened.\n\n**Testing:** whether you'd actually apply the formal tool to a real incident instead of treating it as academic trivia disconnected from debugging.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Using the theory to debug a real anomaly"
+    }
+  ]
+}

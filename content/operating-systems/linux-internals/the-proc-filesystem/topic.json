@@ -1,0 +1,174 @@
+{
+  "id": "the-proc-filesystem",
+  "title": "The /proc Filesystem",
+  "area": "operating-systems",
+  "group": "linux-internals",
+  "order": 2,
+  "slug": "the-proc-filesystem",
+  "summary": "/proc turns kernel and process state into ordinary files — the mechanism every monitoring tool from ps to top is quietly built on.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "the-proc-filesystem-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**/proc** is a virtual filesystem — no bytes live on disk — that exposes live kernel and process state as files you can `cat`, `read()`, or `grep` like any other. Want a process's memory map, open file descriptors, or CPU info for the whole box? It's a file path away, not a system call away.\n\nThis is one of the highest-leverage things to actually know: nearly every process-inspection tool you already use (`ps`, `top`, `lsof`) is, underneath, just reading `/proc`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "the-proc-filesystem-s02",
+      "order": 2,
+      "sectionTitle": "/proc: kernel state, shaped like files",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**/proc** is a **pseudo-filesystem** — mounted like any other filesystem, but generated on the fly by the kernel rather than backed by disk blocks. When you read a file under `/proc`, the kernel intercepts the read and formats live internal state as text at that instant; nothing is stored.\n\nThis matters because it means /proc content can change between two reads a microsecond apart, and every read has some (usually tiny) cost — the kernel is doing real work to produce that text, not returning a cached blob. It also means tools that don't want a system-call interface for every piece of kernel state get one anyway, for free, using the most universal API in Unix: `open`/`read`/`close`.\n\nMost of /proc is read-only, but a few files under `/proc/sys/` are writable — that's how you tune live kernel parameters (like `/proc/sys/net/ipv4/ip_forward`) without a reboot.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "the-proc-filesystem-s02-q1"
+      ]
+    },
+    {
+      "id": "the-proc-filesystem-s03",
+      "order": 3,
+      "sectionTitle": "/proc/[pid]/ — one directory per process",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every running process gets its own directory, `/proc/<pid>/`, populated the moment it's created and removed the moment it exits. A few entries you'll actually use:\n\n- `status` — human-readable snapshot: state, memory usage, uid/gid, signal masks.\n- `cmdline` — the exact command and arguments the process was launched with (null-separated).\n- `fd/` — a directory of symlinks, one per open file descriptor, pointing at what each one refers to.\n- `maps` — the process's full virtual memory layout: every mapped region, its permissions, and what backs it.\n- `cwd`, `exe`, `root` — symlinks to the process's current directory, the binary it's running, and its filesystem root.\n\n`/proc/self` is a special shortcut — it always resolves to whichever process is doing the reading, so a program can introspect its own state without knowing its own PID in advance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "the-proc-filesystem-s04",
+      "order": 4,
+      "sectionTitle": "Code: reading /proc/[pid]/status to inspect a process",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "No special tool is needed — /proc files are plain text, so standard shell tools work directly:\n\n```bash\n$ cat /proc/1234/status\nName:   nginx\nState:  S (sleeping)\nPid:    1234\nPPid:   1\nUid:    0       0       0       0\nVmRSS:      8420 kB\nThreads:    1\nSigBlk: 0000000000000000\n```\n\n`State` shows one of a handful of letters — `R` running, `S` interruptible sleep, `D` uninterruptible sleep (usually blocked on I/O), `Z` zombie, `T` stopped. `VmRSS` is the actual resident memory (the real physical-RAM cost), distinct from virtual size. `PPid` gives you the parent without walking `ps` output.\n\n```bash\n$ grep VmRSS /proc/1234/status   # just the memory line, scriptable\n```\n\nThis is exactly the kind of one-liner you should be able to produce live in an interview when asked \"how would you check X about a running process.\"",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "the-proc-filesystem-s04-q1"
+      ]
+    },
+    {
+      "id": "the-proc-filesystem-s05",
+      "order": 5,
+      "sectionTitle": "/proc/meminfo and /proc/cpuinfo — system-wide state",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Not everything under /proc is per-process — some files describe the whole machine. `/proc/meminfo` breaks down total, free, and cached memory, swap usage, and dozens of finer-grained counters; it's the raw data `free` formats for you. `/proc/cpuinfo` lists every logical CPU with its model, clock speed, and feature flags (`flags` line — this is how you check for AVX or virtualization support without a separate tool).\n\nOther system-wide files worth knowing: `/proc/loadavg` (the three load-average numbers plus the running/total process count), `/proc/uptime`, and `/proc/mounts` (every currently mounted filesystem, live).\n\nThese are the actual data source for `top`, `free`, `uptime`, and `mount` — none of those commands have privileged access you don't; they're reading the same files you can `cat` yourself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "the-proc-filesystem-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: how ps and top are really just /proc readers",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![proc filesystem read by ps, top, htop, and free](assets/proc-filesystem-readers.svg)\n\n`ps` walks every `/proc/<pid>/` directory, reading `stat` and `status` to build its table. `top` does the same thing in a loop, re-reading and re-rendering every refresh interval. Neither has privileged kernel access beyond normal file permissions — you could reimplement a crude `ps` yourself with nothing but `cat` and a shell loop.\n\nThe practical payoff: when a tool's output looks wrong or is missing a field, you can go straight to the source file and see exactly what the kernel is actually reporting, instead of trusting the tool's interpretation.",
+      "assets": [
+        {
+          "alt": "proc filesystem read by ps, top, htop, and free",
+          "path": "assets/proc-filesystem-readers.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": [
+        "the-proc-filesystem-s06-q1"
+      ]
+    },
+    {
+      "id": "the-proc-filesystem-s07",
+      "order": 7,
+      "sectionTitle": "/proc/[pid]/fd — inspecting open file descriptors live",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`/proc/<pid>/fd/` contains one symlink per open file descriptor the process holds, named by its integer fd number. Reading where each symlink points tells you exactly what that process has open right now, without stopping it or needing its source code:\n\n```bash\n$ ls -l /proc/1234/fd\nlrwx------ 1 www-data www-data 64 Jul 30 10:02 0 -> /dev/null\nlrwx------ 1 www-data www-data 64 Jul 30 10:02 3 -> /var/log/nginx/access.log\nlrwx------ 1 www-data www-data 64 Jul 30 10:02 8 -> socket:[884213]\n```\n\nRegular files show their path directly; sockets show as `socket:[inode]` (cross-reference `/proc/net/tcp` by that inode to identify the connection); pipes show as `pipe:[inode]`. This is the manual, first-principles version of what `lsof -p <pid>` automates for you.\n\nA process silently holding thousands of file descriptors open — visible as thousands of entries here — is one of the fastest ways to spot a leaking connection pool or unclosed-file bug.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "the-proc-filesystem-s08",
+      "order": 8,
+      "sectionTitle": "/proc/[pid]/maps — reading a process's memory layout live",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`/proc/<pid>/maps` lists every region of virtual memory the process has mapped — one line per contiguous region, showing the address range, permissions, and what backs it:\n\n```\n55a1e2a3b000-55a1e2a5c000 r-xp 00000000 08:01 131074  /usr/bin/nginx\n55a1e2c5f000-55a1e2c72000 rw-p 00021000 08:01 131074  /usr/bin/nginx\n7f2c1a000000-7f2c1a021000 rw-p 00000000 00:00 0       [heap]\n7ffd6b3f0000-7ffd6b411000 rw-p 00000000 00:00 0       [stack]\n```\n\nEach mapping shows permissions (`r-xp` = readable, executable, private) and its backing — a file on disk (the binary, a shared library), or an anonymous region like `[heap]` or `[stack]` backed only by memory. Executable-and-writable regions (`rwx`) are worth flagging in a security review; legitimate code rarely needs both at once.\n\nThis is exactly what `pmap <pid>` formats for you, and it's the file a debugger reads to resolve which shared library an instruction pointer address belongs to during a crash.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "the-proc-filesystem-s08-q1"
+      ]
+    },
+    {
+      "id": "the-proc-filesystem-s09",
+      "order": 9,
+      "sectionTitle": "Compare: reading /proc directly vs using ps/lsof/top",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Reading /proc directly | ps / lsof / top |\n|---|---|---|\n| Speed to a specific fact | Instant if you know the file | Slower — parsing formatted, aggregated output |\n| Scriptability | Trivial — grep/awk a known file format | Requires parsing tool-specific column output |\n| Portability across tool versions | Stable — kernel ABI changes rarely | Tool output format can change between versions |\n| Discoverability | Requires knowing which file has what | Self-documenting, human-friendly by design |\n| Best for | Automated checks, debugging when tools disagree with reality | Everyday interactive inspection |\n\n**When to reach for /proc directly:** writing a lightweight monitoring script, or when a tool's output looks suspicious and you want to see the kernel's raw numbers with nothing in between.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "the-proc-filesystem-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: treating /proc reads as free",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"/proc is just files, so reading them is as cheap as reading any small text file.\"\n\n**Why it's wrong:** most /proc files aren't stored anywhere — every read triggers the kernel to compute the content fresh, right then. `/proc/<pid>/maps` on a process with a huge number of memory mappings, or `/proc/<pid>/smaps` (the even more detailed per-mapping breakdown), can take real, measurable kernel time to generate. A monitoring script that polls `/proc` for thousands of processes every second is doing thousands of on-demand kernel computations per second, not thousands of cheap file reads.\n\n**Correct model:** treat /proc reads like lightweight system calls, not like reading a cached config file — batch them, poll at a sensible interval, and be especially careful with expensive files like `smaps` in a tight loop across many PIDs, since that pattern has caused real production CPU spikes from monitoring agents.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "the-proc-filesystem-s10-q1"
+      ]
+    },
+    {
+      "id": "the-proc-filesystem-s11",
+      "order": 11,
+      "sectionTitle": "How this shows up in production: debugging without stopping a process",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The single most useful property of /proc in an incident: you can inspect a live process's state — its open connections, memory map, and status — without pausing it, attaching a debugger, or having its source code. That matters because attaching `strace` or a debugger changes timing and can mask a race condition (the observer effect, covered in the strace topic), whereas a `/proc` read is just a file read.\n\nA real on-call sequence: a process is suspected of leaking file descriptors. `ls /proc/<pid>/fd | wc -l` gives an instant count; watching it grow over a minute confirms the leak without touching the running service. Cross-referencing `/proc/<pid>/status`'s `VmRSS` against `/proc/meminfo`'s available memory tells you how close the box is to OOM before you decide whether to restart now or gather more evidence first.\n\nThis is why `/proc` is standard on-call vocabulary: it's the fastest path from \"something's wrong with this process\" to a concrete, checkable fact.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "the-proc-filesystem-s11-q1"
+      ]
+    }
+  ]
+}

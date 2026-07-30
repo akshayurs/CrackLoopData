@@ -1,0 +1,37 @@
+{
+  "topicId": "join-algorithms",
+  "interviewQuestions": [
+    {
+      "id": "join-algorithms-iq1",
+      "question": "What are the three main join algorithms, and how would you decide which one an engine should pick for a given query?",
+      "answerMarkdown": "The three are nested-loop, hash join, and sort-merge join, and I'd pick based on three facts: relative table sizes, whether the join column is indexed, and whether the inputs are already sorted.\n\nNested-loop wins when one side is small — for each of its few rows, probing the other side (ideally via an index) is cheap regardless of that side's total size. Hash join wins when both sides are large, unsorted, and there's no usable index — it scans each side once, at the cost of needing the smaller side's hash table to fit in memory. Sort-merge wins when both sides are already sorted by the join key, or need to end up sorted anyway — merging two sorted streams is close to linear and needs little memory.\n\nI'd give a concrete example: joining a 20-row config table against a 10-million-row events table on an indexed key is a clear nested-loop win; joining two 10-million-row tables with no relevant index is a hash join's territory.\n\n**Testing:** whether you reason from the actual cost trade-offs rather than reciting definitions with no scenario attached.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Choosing the right join algorithm"
+    },
+    {
+      "id": "join-algorithms-iq2",
+      "question": "A query joining two large tables is much slower than expected, and EXPLAIN ANALYZE shows a nested-loop join. What would you investigate?",
+      "answerMarkdown": "My first move is comparing estimated versus actual row counts on the outer side of that nested loop in the `ANALYZE` output. Nested-loop only makes sense when the outer side is small — if the optimizer estimated a handful of rows but the outer side actually produced millions, that mismatch is almost certainly why a nested-loop was chosen and why it's now catastrophic: each of those millions of outer rows triggers its own probe or scan against the inner table.\n\nI'd trace that mismatch back to its cause — usually stale statistics (fix with `ANALYZE` on the table), or a filter predicate the optimizer can't estimate well, like a correlated condition across two columns it assumes are independent. I'd fix the statistics or restructure the predicate rather than immediately reaching for a query hint, since a hint would mask the underlying estimation problem for this one query while leaving it broken for every similar query.\n\nIf statistics are already fresh and the estimate is still wrong, that points to a genuine optimizer limitation — correlated-column cardinality estimation is a known hard case — and a targeted hint or an extended statistics object (where the engine supports it) becomes reasonable.\n\n**Testing:** whether you diagnose from the estimate-vs-actual gap instead of guessing at generic 'add an index' fixes.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging a bad nested-loop choice"
+    },
+    {
+      "id": "join-algorithms-iq3",
+      "question": "Why might a hash join suddenly get much slower after a table grows past a certain size, with no code changes?",
+      "answerMarkdown": "The most likely cause is that the build side's hash table stopped fitting in the memory budget the engine allocates for the operation (`work_mem` in Postgres, for example). Below that size, the whole hash table lives in memory and the join runs in one pass. Once the build side outgrows that budget, the engine has to fall back to a 'grace hash join' — partitioning both sides and processing them in multiple batches with disk I/O in between — which is meaningfully slower even though the algorithm name in the plan doesn't change.\n\nI'd confirm this via `EXPLAIN ANALYZE`'s `Batches` count on the `Hash` node — `Batches: 1` means it fit; anything higher means it spilled. The fix is either to increase the memory budget for that operation, reduce the build side's size (filter it more aggressively before the join, or pick the genuinely smaller table as the build side), or accept the current plan if the data volume now genuinely requires more resources.\n\nI'd flag that this is a good example of a plan that looks unchanged in the query text but degrades silently as data grows — worth monitoring, not just fixing once.\n\n**Testing:** whether you know memory budget, not just table size, is what actually determines hash join performance.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Hash join degrading with data growth"
+    },
+    {
+      "id": "join-algorithms-iq4",
+      "question": "You need to join two tables on an interval-overlap condition (start/end date ranges) instead of a simple equality. Why is this join often much slower, and what would you do about it?",
+      "answerMarkdown": "Hash joins fundamentally require an equality condition, since hashing only answers 'are these two keys equal,' not 'is one less than the other.' An overlap condition like `a.start <= b.end AND a.end >= b.start` structurally can't be hashed on, so the optimizer is locked out of the fastest algorithm and falls back to nested-loop or sort-merge with a range comparison — often much slower on large tables, purely for structural reasons rather than anything wrong with the query itself.\n\nI'd look for ways to shrink the problem rather than expect the join itself to get faster: adding a range or GiST index (in Postgres) on the interval columns so a nested-loop can use an indexed range lookup instead of scanning, pre-filtering both sides to a narrower time window before the join if the use case allows it, or restructuring the problem — e.g., bucketing intervals into fixed-size time buckets and adding an equality condition on the bucket as a first-pass filter before the precise overlap check.\n\n**Testing:** whether you understand this as a structural limitation of hashing, not a tunable performance knob, and can propose a real mitigation.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Range joins and why they're slow"
+    }
+  ]
+}

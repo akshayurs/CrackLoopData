@@ -1,0 +1,37 @@
+{
+  "topicId": "dml-nulls",
+  "interviewQuestions": [
+    {
+      "id": "dml-nulls-iq1",
+      "question": "You need to run an UPDATE that touches a large number of production rows. Walk me through how you'd make sure it's safe.",
+      "answerMarkdown": "I'd never write the UPDATE cold. I start by writing the exact WHERE clause as a SELECT — `SELECT * FROM orders WHERE status = 'pending' AND created_at < now() - interval '30 days'` — and check both the row count and a sample of the actual rows against what I expect. Only once that looks right do I change the verb from `SELECT *` to `UPDATE ... SET`, keeping the WHERE clause character-for-character identical, since retyping it is exactly where a mismatch sneaks in.\n\nFor anything touching more than a handful of rows, I wrap the statement in an explicit transaction: `BEGIN`, run the UPDATE, check `SELECT COUNT(*)` or spot-check a few affected rows, and only `COMMIT` if the numbers match expectations — otherwise `ROLLBACK`. This turns 'I hope the WHERE clause is right' into something I can actually verify before it's permanent.\n\nFor a genuinely large table, I'd also consider batching the update (e.g. by primary key range) rather than one giant statement, to avoid a long-held lock blocking other writers, and I'd check whether the table has a trigger or cascading foreign key behavior that the UPDATE might unexpectedly interact with.\n\n**Testing:** whether you have a real, repeatable safety process for destructive writes, not just 'I'd be careful.'",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Safely running a bulk UPDATE"
+    },
+    {
+      "id": "dml-nulls-iq2",
+      "question": "How does NULL behave differently in arithmetic compared to how most people expect, and why does it matter for computed columns?",
+      "answerMarkdown": "Most people correctly know NULL breaks equality comparisons, but the same propagation rule applies to arithmetic and string operations too: `5 + NULL` is `NULL`, not `5`; `'a' || NULL` is `NULL`, not `'a'`. It's not treated as zero or empty — it's treated as 'unknown,' and you can't compute a known result from an unknown input.\n\nThe practical danger shows up in computed columns spanning multiple fields: `price * quantity * (1 - discount)` returns `NULL` for the *whole* expression the moment `discount` is `NULL` for that row — not the pre-discount price, `NULL`. If that feeds into `SUM(total)` for a revenue report, those rows don't get counted at full price; they vanish from the sum entirely, since aggregates skip NULLs. I've seen a bulk update that set `discount = NULL` to mean 'no discount' silently zero out affected orders from a revenue dashboard, and it went unnoticed for a week because there was no error anywhere in the pipeline.\n\nThe fix is to be deliberate at the point NULL enters the pipeline: if 'no discount' should mean the numeric value 0, write 0, not NULL — reserve NULL for genuinely unknown or not-applicable values, and wrap any expression that must tolerate NULL in `COALESCE`.\n\n**Testing:** whether you understand NULL propagation as a general rule across all operators, not just the equality-comparison case most people memorize.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "NULL propagation in computed columns"
+    },
+    {
+      "id": "dml-nulls-iq3",
+      "question": "What's the difference between a soft delete and a hard delete, and how would you decide which to use for a given table?",
+      "answerMarkdown": "A hard delete (`DELETE FROM ...`) physically removes the row — recoverable only from a backup, if at all. A soft delete instead flags the row, typically `UPDATE ... SET deleted_at = now()`, so the data still physically exists but application queries filter it out.\n\nI'd choose soft delete when undo or an audit trail genuinely matters — user-facing data like a deleted post or account is the classic case, where 'oops, undo that' or a compliance audit trail is a real requirement. I'd choose hard delete when there's an actual data-minimization or compliance requirement to genuinely remove data (some privacy regulations require this), or when the soft-delete pattern's biggest risk — every single query needs to remember `WHERE deleted_at IS NULL`, and it's forgotten more often than people expect — outweighs the recoverability benefit.\n\nA concrete failure mode I'd flag: a forgotten `deleted_at IS NULL` filter in a report or an API endpoint silently leaking 'deleted' data back to users, which is a surprisingly common real bug. Mitigations include a database view or row-level security policy that enforces the filter centrally, rather than trusting every query author to remember it by hand.\n\n**Testing:** whether you can weigh a real trade-off with concrete failure modes, rather than reciting 'soft delete is safer' as a blanket rule.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Soft delete vs hard delete"
+    },
+    {
+      "id": "dml-nulls-iq4",
+      "question": "How would you use transactions to make a multi-step write operation, like transferring money between two accounts, safe?",
+      "answerMarkdown": "I'd wrap both statements — debiting one account and crediting the other — in a single transaction: `BEGIN`, `UPDATE accounts SET balance = balance - 100 WHERE id = 1`, `UPDATE accounts SET balance = balance + 100 WHERE id = 2`, `COMMIT`. The key guarantee is atomicity: either both updates apply, or neither does — no other connection can ever observe a state where the debit happened but the credit didn't, and a crash mid-transaction leaves the database as if nothing happened.\n\nI'd also check both accounts' balances before committing, and add a `CHECK` constraint or an application-level guard against a negative balance where the business rule requires it, rolling back if a state that shouldn't be possible shows up. For real money movement, I'd also think about isolation level — a default read-committed isolation might allow another transaction to read the debited-but-not-yet-credited state in some engines' weaker configurations, so I'd confirm the isolation level matches the actual consistency requirement.\n\nAs a broader habit, I treat 'wrap it in a transaction and verify before committing' as the same safety pattern I'd use for a risky bulk UPDATE — check the state, and only commit once it looks right; rollback otherwise.\n\n**Testing:** whether you understand transactions as an atomicity and isolation guarantee, not just 'a way to group statements together.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Transactions for multi-step writes"
+    }
+  ]
+}

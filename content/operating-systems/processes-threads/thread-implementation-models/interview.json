@@ -1,0 +1,29 @@
+{
+  "topicId": "thread-implementation-models",
+  "interviewQuestions": [
+    {
+      "id": "thread-implementation-models-iq1",
+      "question": "Why can one blocking syscall stall all threads in a many-to-one model?",
+      "answerMarkdown": "Because in many-to-one, every user-level thread you create is invisible to the kernel — the kernel only ever sees a single kernel-schedulable entity representing the whole process, no matter how many threads your userspace library thinks it's managing. All the scheduling among those user-level threads happens entirely in userspace, without the kernel's involvement at all.\n\nSo when one of those user-level threads makes a blocking system call — a disk read, a network recv — the call goes to the kernel, and the kernel blocks the *one thing it can see*: that single underlying kernel thread. It has no idea there were four other user-level threads ready to run inside that same process, because they were never kernel-visible entities it could independently schedule. The whole process freezes even though most of its logical threads had useful work to do.\n\nI'd tie this to why it died out as a default: on a single-core machine in the 90s, this was a bearable trade for cheap thread switching. Once multi-core became standard, many-to-one also couldn't use more than one core (again, the kernel sees only one schedulable thing), which was the final nail — that's why Linux and Windows both moved to one-to-one.\n\n**Testing:** whether you can explain the failure mechanically — kernel visibility, not just \"it's a known limitation\" — since that's what lets you reason about newer models like Go's goroutines correctly.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Many-to-one blocking problem"
+    },
+    {
+      "id": "thread-implementation-models-iq2",
+      "question": "How do Go's goroutines get away with being far cheaper than OS threads while avoiding the classic many-to-one blocking bug?",
+      "answerMarkdown": "Goroutines are user-level threads, but Go's runtime doesn't use plain many-to-one — it uses many-to-many. A pool of real OS threads (sized by `GOMAXPROCS`, typically matching CPU cores) sits underneath potentially hundreds of thousands of goroutines, and the runtime's own scheduler multiplexes goroutines onto that pool.\n\nThe part that actually solves the blocking problem: when a goroutine is about to make a blocking call, the Go runtime intercepts it (for network I/O, this typically routes through a non-blocking, epoll/kqueue-based network poller rather than a real blocking syscall; for calls the runtime can't avoid blocking on, it detaches the OS thread and hands off to a fresh or idle one). Either way, the OS thread that goroutine was riding isn't stuck — it goes on to run other goroutines, so one goroutine waiting on I/O doesn't freeze the others.\n\nThe cost side of the trade: goroutines start with a tiny, growable stack (a few KB, versus a few MB reserved for a typical OS thread), so spawning hundreds of thousands of them is cheap in a way that would be impractical with one-to-one OS threads.\n\n**Testing:** whether you can explain *why* goroutines are cheap and safe rather than just knowing the marketing claim \"goroutines are lightweight.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "How goroutines solve the many-to-one problem"
+    },
+    {
+      "id": "thread-implementation-models-iq3",
+      "question": "You're debugging a multi-threaded C program on Linux where all threads mysteriously stall at once whenever a single thread does a slow file read. What threading model would explain this, and how would you confirm it?",
+      "answerMarkdown": "The symptom — one blocking call freezing every thread — is the textbook signature of a many-to-one threading model, where the kernel only ever sees a single schedulable entity for the whole process. On modern Linux this shouldn't happen with the standard pthreads implementation (NPTL), which is one-to-one, so I'd suspect either a very old/custom threading library, a green-thread runtime that isn't handling this particular blocking call specially, or a userland coroutine library that's making a genuinely blocking syscall instead of a non-blocking one it forgot to intercept.\n\nTo confirm, I'd check `ps -eLf` or `top -H` for the process — one-to-one kernel threads show up as separate visible LWPs (light-weight processes) in these tools; if I only ever see one kernel-visible entity no matter how many logical threads the app claims to run, that's many-to-one. I'd also strace the process during the stall: if the blocking read shows up as a real blocking syscall on the only visible thread, and nothing else executes until it returns, that confirms it.\n\nThe fix, if it is many-to-one somewhere in the stack, is either switching to the OS's native one-to-one threads or, if using a green-thread/coroutine runtime, finding and fixing the specific call that isn't going through the runtime's non-blocking interception path.\n\n**Testing:** whether you can turn the theoretical threading-model concept into an actual debugging procedure with real tools (`ps -eLf`, `strace`), not just recite the definition.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a many-to-one stall"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "file-system-fundamentals",
+  "interviewQuestions": [
+    {
+      "id": "file-system-fundamentals-iq1",
+      "question": "What does the OS actually do when you call open() on a file?",
+      "answerMarkdown": "I'd walk it top-down. The kernel takes the path and resolves it component by component through the **VFS** (virtual file system) layer — for `/home/user/notes.txt` it looks up `home` in the root directory's inode, then `user` in that directory, then `notes.txt`, each hop checking execute permission on the directory and read/write permission on the final target.\n\nOnce resolved, the kernel finds (or loads from disk) the file's **inode** — its metadata and block pointers — and allocates an entry in the **open file table** tracking the current offset and access mode. It then places a reference to that entry in the calling process's **file descriptor table** and returns the smallest unused integer, the file descriptor, to the caller.\n\nConcretely: `open(\"notes.txt\", O_RDONLY)` returning `3` means slot 3 in this process's fd table now points to an open-file-table entry pointing at that inode. No data has been read yet — that's what `read()` is for. If the path doesn't resolve or permissions fail, `open()` returns `-1` and sets `errno` (`ENOENT`, `EACCES`).\n\n**Testing:** whether you can trace a syscall through the actual kernel data structures instead of treating `open()` as a black box.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Tracing open() through the kernel"
+    },
+    {
+      "id": "file-system-fundamentals-iq2",
+      "question": "What's actually stored in a directory, and how is it different from a regular file?",
+      "answerMarkdown": "A directory is a regular file under the hood — it has an inode, occupies disk blocks, and gets read and written by the same mechanisms — but the kernel enforces that its **content** is a table of `(filename, inode number)` pairs rather than arbitrary bytes. That's why you can't `cat` a directory's raw content usefully but `ls` can.\n\nI'd give a concrete shape: an ext-family directory block is roughly a list of variable-length records, each with an inode number, a record length, a name length, and the name string itself — `ls -i` shows you that inode number column directly. Deleting a file is really removing its record from this table (`unlink`), not touching the inode unless the link count drops to zero.\n\nThe practical consequence: renaming or moving a file within the same file system is just editing this table entry, which is why it's instant regardless of file size — the actual data blocks referenced by the inode never move.\n\n**Testing:** whether you understand directories as data, not as a separate kernel concept from files.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Directories as files"
+    },
+    {
+      "id": "file-system-fundamentals-iq3",
+      "question": "Why can rm on a large file that's still open by another process fail to free any disk space?",
+      "answerMarkdown": "I'd frame this around reference counting rather than treating `rm` as \"delete.\" `rm` calls `unlink()`, which only removes the file's name from its directory — it decrements the inode's **link count** but doesn't touch the inode or its data blocks unless that link count, combined with the open-descriptor count, reaches zero.\n\nConcretely: process A has `bigfile.log` open and is actively writing to it. Process B runs `rm bigfile.log`. The name disappears from `ls`, but A still holds a valid file descriptor pointing at the same inode, so the kernel keeps the blocks allocated. `df` shows no change because, from the file system's bookkeeping, the file isn't actually gone — it's just unnamed.\n\nThis is the classic \"disk full but I deleted files\" production incident. The fix in the moment is finding and restarting (or `truncate`-ing via `/proc/<pid>/fd/<n>`) the process holding it open; `lsof +L1` or `lsof | grep deleted` finds these orphaned-but-open files.\n\n**Testing:** whether you understand deletion as reference counting rather than an atomic \"remove the file\" operation.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging phantom disk usage"
+    },
+    {
+      "id": "file-system-fundamentals-iq4",
+      "question": "Your program calls seek() to jump to byte 10,000,000 in a file and reads 4KB. How expensive is that on an HDD versus an SSD, and why?",
+      "answerMarkdown": "I'd separate the logical seek from the physical one. `lseek()` itself is cheap — it just updates an integer offset in the open-file-table entry, no I/O happens. The cost shows up on the next `read()`, when the file system has to translate that byte offset into a physical block and fetch it.\n\nOn an HDD, that fetch typically means moving the read/write head to a new cylinder (seek time, roughly 4-10ms on commodity drives) plus waiting for the platter to rotate the right sector under the head (rotational latency, ~2-4ms at 7200 RPM) — call it 6-14ms total for one random 4KB read, versus under a millisecond if the previous read left the head already positioned there.\n\nOn an SSD there's no mechanical seek at all — a random 4KB read costs roughly the same as a sequential one, typically tens of microseconds, because any flash page is electrically addressable in constant time. This is exactly why disk-scheduling algorithms built to minimize seek distance (SCAN, C-LOOK) matter enormously for HDDs and are essentially irrelevant for SSDs.\n\n**Testing:** whether you can put real numbers on \"random I/O is slow\" instead of treating it as a vague rule of thumb.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Real latency numbers for random reads"
+    }
+  ]
+}

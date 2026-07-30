@@ -1,0 +1,174 @@
+{
+  "id": "locking",
+  "title": "Locking & Two-Phase Locking",
+  "area": "databases",
+  "group": "transactions-concurrency",
+  "order": 3,
+  "slug": "locking",
+  "summary": "The pessimistic path to isolation: shared vs exclusive locks, two-phase locking, intention locks, and why lock granularity is the real throughput lever.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "locking-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Locking** enforces isolation pessimistically: before touching a row, a transaction acquires a lock that blocks conflicting access from others until it's released. This is the mechanism [isolation levels](isolation-levels) describe the *effect* of — this topic is the *how*.\n\nMySQL/InnoDB leans heavily on locking for its isolation guarantees; Postgres uses locking too, but layered under MVCC for reads (the next topic). Understanding real lock behavior — what blocks what, and for how long — is what separates \"I know the isolation levels\" from \"I can explain why this query is hanging in production.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "locking-s02",
+      "order": 2,
+      "sectionTitle": "Shared vs exclusive locks, and lock granularity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **shared lock (S)** lets multiple transactions read the same row concurrently — any number of readers can hold an S lock on the same row at once. An **exclusive lock (X)** is held by exactly one transaction and blocks every other lock, shared or exclusive, on that row: you're about to write it, so nobody else may read or write it until you're done.\n\n**Granularity** is the size of what a lock covers: a single row, a page (a fixed-size disk block holding many rows), or an entire table. Finer granularity (row-level) means more transactions can proceed concurrently on different rows, but tracking thousands of individual row locks costs memory and CPU. Coarser granularity (table-level) is cheap to track but serializes unrelated transactions that happen to touch the same table.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "locking-s02-q1"
+      ]
+    },
+    {
+      "id": "locking-s03",
+      "order": 3,
+      "sectionTitle": "Two-phase locking (2PL) and strict 2PL",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Two-phase locking** is a protocol, not a lock type: every transaction has a **growing phase**, where it may only acquire locks, and a **shrinking phase**, where it may only release them — once it releases its first lock, it can never acquire another. This shape is what guarantees the resulting schedule is conflict-serializable (the formal property the serializability topic defines).\n\nPlain 2PL has a gap: releasing locks before commit can still let another transaction read a value that's later rolled back, reintroducing a dirty-read-like problem. **Strict 2PL** closes it by holding **all** locks — shared and exclusive — until the transaction actually commits or aborts, so no other transaction ever sees a lock released mid-transaction. Virtually every production database implements strict 2PL, not plain 2PL, because plain 2PL's cascading-abort risk (covered in the serializability topic) isn't worth the marginally earlier lock release.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "locking-s03-q1"
+      ]
+    },
+    {
+      "id": "locking-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: growing and shrinking lock phases",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Two timelines: plain 2PL rising through a growing phase to a lock point then falling through a shrinking phase, versus strict 2PL holding locks flat until a single drop at commit](assets/2pl-phases.svg)\n\nThe shape of the curve is the whole idea: once a transaction starts releasing locks, it may never acquire a new one. Strict 2PL is the flat-then-cliff version — every lock released in one instant at commit — which is why it's sometimes drawn as a single step function instead of a peak.",
+      "assets": [
+        {
+          "alt": "Two timelines: plain 2PL rising through a growing phase to a lock point then falling through a shrinking phase, versus strict 2PL holding locks flat until a single drop at commit",
+          "path": "assets/2pl-phases.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "locking-s05",
+      "order": 5,
+      "sectionTitle": "Intention locks and lock escalation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a transaction holds row-level locks on 50 rows in a table, how does another transaction trying to lock the *whole table* know it can't, without scanning every row for a conflict? The answer is **intention locks**: before taking a row lock, a transaction first takes an intention lock (IS or IX) at the table level, announcing \"I hold (or intend to hold) finer-grained locks below.\" A table-level exclusive-lock request then only has to check the table's intention-lock state, not every row.\n\n**Lock escalation** is the engine's fallback when a transaction is holding so many fine-grained locks that tracking them becomes expensive — it converts many row locks into one coarser table (or page) lock automatically. This trades concurrency for memory: SQL Server does this by default and it can cause a bulk `UPDATE` to suddenly block unrelated queries on the whole table, a classic hard-to-diagnose production surprise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "locking-s05-q1"
+      ]
+    },
+    {
+      "id": "locking-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: lock contention and reduced throughput",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Locking only matters for correctness — as long as my code is right, performance is a separate concern.\"\n\n**Why it's wrong:** every transaction waiting on a lock is doing nothing — burning a connection and a thread while making zero progress. A single hot row (a popular product's inventory count, a global sequence counter) updated by many concurrent transactions can turn an otherwise-fast database into one where most connections are queued waiting for that one row's exclusive lock, collapsing throughput far below what the hardware could otherwise sustain.\n\n**Correct model:** treat lock contention as a first-class scalability concern — identify hot rows ahead of time and redesign around them (sharded counters, queue-based serialization of just that hot path, shorter transactions that hold the lock for less time) rather than discovering the bottleneck only under production load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "locking-s06-q1"
+      ]
+    },
+    {
+      "id": "locking-s07",
+      "order": 7,
+      "sectionTitle": "Compare: row vs page vs table locks",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Row lock | Page lock | Table lock |\n|---|---|---|---|\n| Concurrency | Highest — unrelated rows never block each other | Medium — unrelated rows on the same page block each other | Lowest — every row in the table blocks every other transaction |\n| Memory/CPU overhead | Highest — one lock entry per locked row | Medium | Lowest — one lock entry total |\n| Typical use | OLTP workloads: many small, targeted transactions | Rarely chosen directly; a side effect of escalation | Schema changes (`ALTER TABLE`), bulk loads, or explicit `LOCK TABLE` |\n| Real engine default | Postgres and InnoDB default to row-level locking for DML | SQL Server may escalate here under memory pressure | Used deliberately, not as a silent default, in most engines |\n\n**How to decide:** default to row-level (what your engine already does for normal DML) and only reach for an explicit table lock for genuinely table-wide operations like a schema migration.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "locking-s08",
+      "order": 8,
+      "sectionTitle": "Gap locks and next-key locks: InnoDB's answer to phantoms",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "InnoDB's Repeatable Read prevents phantom reads — unlike the SQL standard's minimum requirement — using **gap locks**: a lock on the *space between* index values, not just the values themselves. A **next-key lock** combines a row lock with the gap before it, so `SELECT ... WHERE id BETWEEN 10 AND 20 FOR UPDATE` locks not just the existing rows in that range but the gaps between them too, preventing another transaction from inserting a new row with `id = 15` until the first transaction commits.\n\nThis is the single most common source of \"unexpected deadlock\" reports from engineers moving from Postgres to MySQL, or vice versa: Postgres's Repeatable Read prevents phantoms via MVCC snapshots with no extra locking, while InnoDB does it via gap locks that can block inserts in ways that look, at first glance, like an unrelated `INSERT` is being blocked by an `UPDATE` on completely different rows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "locking-s08-q1"
+      ]
+    },
+    {
+      "id": "locking-s09",
+      "order": 9,
+      "sectionTitle": "SELECT ... FOR UPDATE and FOR SHARE in practice",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Application code that needs to read a row and then write it based on that read should take an explicit lock rather than relying on isolation level alone:\n\n```sql\nBEGIN;\nSELECT balance FROM accounts WHERE id = 'A' FOR UPDATE;\n-- other transactions trying to SELECT ... FOR UPDATE or UPDATE this row now block here\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nCOMMIT;\n```\n\n`FOR UPDATE` takes an exclusive-intent lock immediately, so a concurrent transaction attempting the same pattern blocks at its `SELECT`, not later at its `UPDATE` — this is exactly how you close the lost-update gap from a read-then-write pattern. `FOR SHARE` (or `LOCK IN SHARE MODE` in MySQL) takes a shared lock instead — useful when you need to guarantee a row won't change while you read it, but you're not planning to write it yourself.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "locking-s10",
+      "order": 10,
+      "sectionTitle": "Lock ordering as a design discipline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The single most effective deadlock-prevention technique isn't a database feature at all — it's a coding discipline: **always acquire locks on multiple rows in the same, consistent order** across every transaction in your codebase (for example, always by ascending primary key). If transaction A locks row 1 then row 2, and transaction B locks row 2 then row 1, they can deadlock; if both always lock in ascending ID order, that specific deadlock shape becomes structurally impossible.\n\nThis is a senior-level habit precisely because it's invisible in code review unless you're looking for it — a transfer function that locks `accounts WHERE id IN (A, B)` needs to sort A and B before locking them, every single time, regardless of which account initiated the transfer. Skipping this is the root cause behind a large share of real deadlocks (covered concretely in the next topic).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "locking-s10-q1"
+      ]
+    },
+    {
+      "id": "locking-s11",
+      "order": 11,
+      "sectionTitle": "Locking vs the alternative: a preview",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Locking's core trade-off: readers and writers block each other (or writers block writers, minimum), which is simple to reason about but caps concurrency under read-heavy or long-running-write workloads. The next topic covers **MVCC**, the alternative most modern engines use for reads: readers never block writers and writers never block readers, because readers see an older, consistent version of the row instead of waiting.\n\nThe honest framing for an interview: locking and MVCC aren't rivals where one is simply better — Postgres uses MVCC for reads but still uses real locks for writes and for explicit `FOR UPDATE`/DDL, so understanding locking is a prerequisite for understanding MVCC's real behavior, not a superseded topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

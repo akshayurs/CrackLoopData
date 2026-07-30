@@ -1,0 +1,29 @@
+{
+  "topicId": "page-table-structures",
+  "interviewQuestions": [
+    {
+      "id": "page-table-structures-iq1",
+      "question": "Why not just use one giant page table per process?",
+      "answerMarkdown": "Because \"giant\" understates it — a flat table for a modern 64-bit address space (a common 48-bit virtual layout) needs on the order of tens of terabytes per process. That isn't just inefficient, it's physically impossible to fit in any real machine's RAM, and every process would need its own copy.\n\nThe fix real systems use is multi-level (hierarchical) paging: split the virtual page number into several fields, each indexing a level of a tree of smaller tables, where a single \"not present\" entry at a high level can skip an entire unused region of address space at once. Since real programs use only a tiny, sparse fraction of their theoretical address space — a bit of code, a modest heap, a stack — the vast majority of that tree simply never gets allocated.\n\nI'd name the trade-off honestly rather than pretend it's free: a 4-level walk touches memory up to four times before reaching the actual data, versus one access for a flat table. That's exactly why the TLB exists — caching recent translations so most accesses don't pay the walk cost at all. Multi-level tables and TLBs are a package deal, not two independent decisions.\n\n**Testing:** whether you know the actual scale of the problem (terabytes, not just \"a lot\") and the concrete fix, not just that page tables \"can get big.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Why flat tables fail at scale"
+    },
+    {
+      "id": "page-table-structures-iq2",
+      "question": "Compare hierarchical and inverted page tables — why did mainstream CPUs converge on hierarchical?",
+      "answerMarkdown": "Hierarchical tables scale with how much of the address space a process actually uses — sparse usage means most of the tree is never allocated — but every process needs its own tree, and a translation costs one memory access per level of the tree. Inverted tables scale with physical RAM instead, which is bounded and usually much smaller than the virtual address space, and need only one table for the whole system rather than one per process — but flipping the index means finding an entry for a given virtual page requires a search or hash lookup instead of direct indexing.\n\nMainstream architectures like x86-64 and ARM64 went hierarchical, and I'd tie that to two practical reasons: direct multi-step indexing is simple to implement in hardware and easy to pipeline, and the TLB already absorbs most of the walk cost in practice, so the \"extra memory accesses\" downside rarely shows up on the hot path. Inverted tables' big win — memory savings — mattered more in eras or environments where RAM itself, not translation speed, was the truly scarce resource; some architectures like classic PowerPC did use them.\n\nThe honest framing: this isn't \"one is strictly better,\" it's a trade a CPU architecture commits to once, and hardware pipeline simplicity won out over table-size savings once TLBs made the walk cost manageable.\n\n**Testing:** whether you can articulate both sides of the trade-off and connect the historical choice to a concrete engineering reason, not just recite the two names.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Hierarchical vs inverted, and why one won"
+    },
+    {
+      "id": "page-table-structures-iq3",
+      "question": "A service touching several gigabytes of memory is seeing high TLB miss rates and page-walk overhead in a profiler. What would you try?",
+      "answerMarkdown": "I'd start by sizing the problem: with standard 4 KB pages, several gigabytes of active working set needs hundreds of thousands to millions of page table entries and TLB slots — far more than a TLB's typical few thousand entries can hold, so misses are expected, not a bug.\n\nThe direct fix is huge pages — 2 MB or 1 GB mappings instead of 4 KB — which shrink the number of entries needed to cover the same memory by three to six orders of magnitude. On Linux, that's `madvise(MADV_HUGEPAGE)` for transparent huge pages, or explicit `hugetlbfs` allocation for guaranteed huge pages; databases (Postgres, many JVM-based systems with `-XX:+UseLargePages`) do exactly this for large buffer pools and heaps.\n\nI'd flag the trade-off rather than present it as free: huge pages increase internal fragmentation (a 2 MB page wastes far more than a 4 KB one for a small allocation) and can hit allocation failures if physical memory is already fragmented, since the kernel needs a genuinely contiguous 2 MB physical region — which is where the buddy allocator's job gets harder. I'd apply huge pages selectively to the large, hot allocations causing the TLB pressure, not blanket the whole process.\n\n**Testing:** whether you'd reach for a concrete, correctly-scoped fix and articulate its cost, rather than either ignoring the trade-off or refusing to recommend anything.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging TLB pressure with huge pages"
+    }
+  ]
+}

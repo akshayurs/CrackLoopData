@@ -1,0 +1,29 @@
+{
+  "topicId": "thrashing-and-working-set",
+  "interviewQuestions": [
+    {
+      "id": "thrashing-and-working-set-iq1",
+      "question": "Throughput just collapsed as load increased — how do you tell if it's thrashing?",
+      "answerMarkdown": "The signature I'd look for is CPU utilization *dropping* while load or concurrency is *increasing* — that combination is what separates thrashing from an ordinary compute bottleneck, where utilization would stay high (often pegged near 100%) as throughput plateaus. Thrashing looks paradoxical on a dashboard: more work in flight, less actually getting done, CPU going idle despite that.\n\nTo confirm rather than guess, I'd pull paging or memory-reclaim metrics for the same window — `vmstat`'s `si`/`so` on a bare-metal or VM host, or a container's memory-reclaim/OOM-adjacent metrics in a containerized environment — alongside the CPU utilization graph. If paging activity is climbing at the exact moment utilization starts falling, that's confirmation: processes are blocked waiting on page faults rather than genuinely finished with their work or waiting on something else like a downstream service.\n\nThe reason this diagnosis matters practically is that the fix is the opposite of the naive one: reduce concurrent memory demand — fewer worker processes, smaller batch sizes, or a higher memory limit — rather than adding more compute or more concurrency, which is exactly what makes thrashing worse.\n\n**Testing:** whether you know the specific combined signature (falling utilization plus rising fault rate) and would check for it directly instead of assuming a generic capacity problem.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Diagnosing a throughput collapse under load"
+    },
+    {
+      "id": "thrashing-and-working-set-iq2",
+      "question": "Compare the working set model and Page-Fault Frequency (PFF) as strategies for preventing thrashing.",
+      "answerMarkdown": "Both are trying to answer the same question — how many frames does each process actually need right now — but from opposite directions. The working set model estimates it proactively: track which pages a process referenced in the last Δ window, and refuse to schedule it at all unless there are enough free frames to hold that entire working set. It prevents thrashing before it starts, at the cost of having to define and track reference windows per process, and tune Δ itself — too small undercounts real needs, too large wastes memory.\n\nPFF instead treats the fault rate itself as the signal: if a process's fault rate rises above an upper threshold, give it more frames (or throttle multiprogramming if none are free); if it falls below a lower threshold, take frames away. It's simpler to implement — no explicit page tracking — but it's inherently reactive, meaning some degree of faulting, and the performance hit that comes with it, happens before the system responds.\n\nIn practice I'd frame working set as the more principled, preventive model and PFF as the pragmatic, cheaper-to-implement approximation of the same goal — similar to how clock approximates true LRU for replacement. Neither is strictly better; PFF's simplicity is attractive exactly when precise working-set tracking is too expensive to maintain per process.\n\n**Testing:** whether you can compare the two on the actual axis that matters (proactive vs reactive) rather than just listing definitions.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Working set vs PFF"
+    },
+    {
+      "id": "thrashing-and-working-set-iq3",
+      "question": "A team wants to fix a slow service by adding more worker processes to use idle-looking CPU. When is this the wrong move?",
+      "answerMarkdown": "It's the wrong move whenever that idle-looking CPU is actually a symptom of thrashing rather than genuine spare capacity — and those two situations look identical if you only check one number. Below the thrashing cliff, adding workers is correct: more work in flight keeps the CPU busier whenever something blocks. Past the cliff, every new worker takes memory away from workers that already barely fit, pushing them into more faulting, more blocked time, and *more* apparent CPU idleness — which naturally invites adding still more workers, accelerating the exact collapse the team was trying to fix.\n\nBefore approving the change, I'd want to see the paging or memory-reclaim rate alongside CPU utilization for the current load. If utilization is low and fault/reclaim rate is flat or low, there's genuine spare capacity and more workers should help. If fault/reclaim rate is elevated or climbing, this is thrashing, and adding workers is close to the worst possible response — the actual fix is reducing per-worker memory footprint or reducing the worker count, freeing up frames for the ones that remain.\n\nI'd frame the general lesson: never read \"low CPU utilization\" as \"add more work\" without checking whether the CPU is idle because there's nothing to do, or idle because everything is blocked.\n\n**Testing:** whether you'd insist on checking the memory-pressure signal before accepting a plausible-sounding but potentially harmful fix.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Evaluating a proposed scale-up fix"
+    }
+  ]
+}

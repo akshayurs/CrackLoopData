@@ -1,0 +1,29 @@
+{
+  "topicId": "cap-consistency",
+  "interviewQuestions": [
+    {
+      "id": "cap-consistency-iq1",
+      "question": "Explain the CAP theorem and the most common misunderstanding about it.",
+      "answerMarkdown": "CAP says a distributed data system can't simultaneously guarantee consistency (every read sees the latest write) and availability (every request gets a response) **while the network is partitioned**. The most common misunderstanding is treating it as \"pick any two of three, always\" — as if partition tolerance were an optional feature you could design away by having reliable infrastructure.\n\nIn reality, any system spanning more than one node over a real network will experience partitions eventually — a switch fails, a cross-region link drops, packet loss spikes. So partition tolerance isn't a genuine design choice; the real decision CAP forces is what happens **during** that inevitable partition: reject requests to stay correct (CP), or keep answering and risk two sides disagreeing until the partition heals (AP).\n\nA concrete example I'd give: Postgres with a single leader is CP — if the leader gets isolated from its followers, it either keeps being the source of truth and followers stop serving fresh reads, or writes simply fail rather than risk two leaders diverging. Cassandra by default is AP — both sides of a partition keep accepting writes and reconcile later, which is exactly why quorum tuning (R+W>N) exists as a knob to dial consistency back up per operation.\n\n**Testing:** whether you can state CAP's actual constraint precisely, not the popularized \"pick two\" oversimplification.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "CAP theorem, precisely"
+    },
+    {
+      "id": "cap-consistency-iq2",
+      "question": "What does PACELC add to CAP, and why does that matter for a system that rarely, if ever, sees a partition?",
+      "answerMarkdown": "CAP only describes behavior during a network partition — but partitions are rare events, and CAP is silent about what happens the other 99.9% of the time when the network is healthy. PACELC fills that gap: *if Partitioned, choose Availability or Consistency; Else, choose Latency or Consistency.*\n\nThe practical weight is in the \"else\" half. Achieving strong consistency requires coordination — waiting for a quorum, or routing through a single leader — and that coordination costs latency on **every single operation**, partition or not. A system that instead accepts slightly stale reads can skip that coordination and respond faster, all the time, not just during rare bad-network events.\n\nConcretely: a single-region quorum write might add a few milliseconds of coordination overhead, which is nearly free. The same write spanning three geographic regions can add 150-300ms, because it has to wait on a far-away replica's acknowledgment — that's a cost paid on every write, every day, regardless of whether a partition ever happens.\n\nThis is why I'd evaluate a database against PACELC, not just CAP, when the actual decision is about steady-state latency budget, which for most systems matters far more often than the rare partition event.\n\n**Testing:** whether you understand PACELC as the more operationally relevant framework for everyday system behavior, not just an academic extension of CAP.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "PACELC vs CAP"
+    },
+    {
+      "id": "cap-consistency-iq3",
+      "question": "How would you decide what consistency guarantee to use for a specific feature, rather than for \"the whole system\"?",
+      "answerMarkdown": "I'd start by asking what a stale or out-of-order read actually costs for that specific feature — that cost, not a system-wide policy, should drive the choice.\n\nFor something like a checkout's inventory decrement, a stale read can mean overselling a physical product — real money and a customer-trust problem — so I'd want strong consistency or a proper transaction there, even at the latency cost. For a \"customers also viewed\" widget or a follower count, a few seconds of staleness is invisible to the user and costs nothing, so I'd default to eventual consistency and take the latency win.\n\nFor cases in between — a comment thread where replies must appear after their parent comment but unrelated threads don't need global ordering — I'd reach for causal consistency, which gives that ordering guarantee without paying for a fully strongly-consistent system.\n\nMechanically, this often comes down to picking the right database or the right quorum settings per table or per query — many systems (Cassandra, DynamoDB) let you tune `R`/`W` per operation rather than forcing one setting for everything. I'd treat \"our system is eventually consistent\" or \"our system is strongly consistent\" as a red flag in a design review — it usually means nobody made this decision deliberately per feature.\n\n**Testing:** whether you can apply consistency theory at the granularity real systems need it — per operation — rather than as a single system-wide label.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Consistency as a per-feature decision"
+    }
+  ]
+}

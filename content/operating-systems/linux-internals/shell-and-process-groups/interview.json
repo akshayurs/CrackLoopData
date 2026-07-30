@@ -1,0 +1,29 @@
+{
+  "topicId": "shell-and-process-groups",
+  "interviewQuestions": [
+    {
+      "id": "shell-and-process-groups-iq1",
+      "question": "Why does closing your SSH session kill a background job unless you used nohup?",
+      "answerMarkdown": "I'd start from the mechanism, not the symptom: your SSH session is one **session** with a controlling terminal, and `&` only ever changes whether a job sits in the foreground or background process group *within* that session — it says nothing about what happens when the session itself ends. When you close the SSH connection, the controlling terminal disconnects, and the kernel sends SIGHUP to the session leader, which by convention propagates to every process still in that session, background jobs included.\n\nSIGHUP's default action is termination, and unless something changed that, your backgrounded job dies along with everything else in the session, mid-execution. This is deliberate kernel behavior, not a bug — without it, every job anyone ever backgrounded and forgot about would keep accumulating on the machine forever.\n\n`nohup` fixes this by making the process ignore SIGHUP from the moment it starts, so the session ending has no effect on it. I'd also mention `disown` (detaches the job from the shell's own bookkeeping) and `tmux`/`screen` (the session itself persists independent of any one terminal) as the other common fixes, and that the right one depends on whether you decided *before* or *after* starting the job.\n\n**Testing:** whether you know backgrounding and surviving-logout are two separate mechanisms, not one — this trips up a lot of engineers in practice, not just interviews.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "SIGHUP and background jobs"
+    },
+    {
+      "id": "shell-and-process-groups-iq2",
+      "question": "What's the difference between a process group and a session?",
+      "answerMarkdown": "A process group is the smaller unit — a set of related processes the kernel treats as one target for signal delivery, typically all the commands in one pipeline. Every process group has a leader and a PGID, and a signal sent to the group (like Ctrl+C's SIGINT) reaches every member simultaneously — which is why interrupting a three-stage pipeline stops all three commands at once instead of leaving the later stages running on truncated input.\n\nA session is one level up: a collection of process groups, usually everything spawned from one login or one terminal connection. A session has exactly one controlling terminal and typically one foreground process group at a time (the rest are background), and it's the session — not any individual process group — that SIGHUP targets when the controlling terminal disconnects.\n\nThe practical distinction: process groups are what job-control keystrokes (Ctrl+C, Ctrl+Z) target, while sessions are what determines what survives when the terminal itself goes away. A background job and a foreground job in the same terminal are in different process groups but the same session — which is exactly why they behave differently under Ctrl+C but identically under a hangup.\n\n**Testing:** whether you can place these two levels correctly and connect each one to the signal it's actually associated with.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Process groups vs sessions"
+    },
+    {
+      "id": "shell-and-process-groups-iq3",
+      "question": "You need to run a multi-hour data migration over SSH and want to be able to check on its progress later, possibly from a different machine. How would you set it up?",
+      "answerMarkdown": "I wouldn't reach for `nohup` alone here, even though it would technically survive the disconnect — the real requirement is checking progress later, and `nohup` only redirects output to a log file, it doesn't let me reattach to a live, interactive view. I'd start the job inside a `tmux` (or `screen`) session instead: `tmux new -s migration`, run the migration inside it, then detach with `Ctrl+B D` and disconnect from SSH entirely. The tmux session itself keeps running on the server independent of my SSH connection — it isn't a child of my shell in the way a plain backgrounded job is.\n\nLater, from any machine, I'd SSH back in and run `tmux attach -t migration` to see the exact live output, as if I'd never left — which nohup's static log file can't give me, and which matters a lot if the migration hits an interactive prompt or I want to watch its last few lines in real time during a risky step.\n\nI'd combine this with `nohup`-equivalent safety only if I were paranoid about the tmux server process itself; in practice tmux sessions are already immune to the SSH session's SIGHUP since they don't share the controlling terminal.\n\n**Testing:** whether you pick a tool based on the actual requirement (reattach and observe) rather than defaulting to the first \"survives disconnect\" tool you remember.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Choosing the right persistence tool"
+    }
+  ]
+}

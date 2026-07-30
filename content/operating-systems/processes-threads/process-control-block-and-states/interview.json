@@ -1,0 +1,29 @@
+{
+  "topicId": "process-control-block-and-states",
+  "interviewQuestions": [
+    {
+      "id": "process-control-block-and-states-iq1",
+      "question": "A process is stuck — how do you tell if it's blocked, running, or dead?",
+      "answerMarkdown": "I'd start by actually checking its state instead of guessing from symptoms like \"it's not responding.\" On Linux, `ps -o pid,stat,cmd -p <pid>` gives a STAT code directly: `R` means running or runnable, `S` means sleeping (interruptible wait — the common case for blocked-on-I/O-or-lock), `D` means uninterruptible sleep (usually blocked deep in a kernel I/O path), and `Z` means zombie — terminated but not yet reaped by its parent.\n\nIf it's `D`, that's a real signal, not a false alarm: the process is genuinely alive and waiting on the kernel, and you often can't even `kill -9` it until the I/O completes — I'd go look at what device or filesystem it's blocked on, since `D`-state pileups usually point to a hung disk or network filesystem. If it's `Z`, the process itself is already dead; the fix is making the parent call `wait()`, not killing anything.\n\nA process using 0% CPU tells you almost nothing on its own — that's completely normal for a healthy process blocked waiting on a slow call.\n\n**Testing:** whether you reach for the actual state field instead of inferring aliveness from CPU usage or responsiveness.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Diagnosing process state"
+    },
+    {
+      "id": "process-control-block-and-states-iq2",
+      "question": "What information does the OS need to save on a context switch, and why does it matter for performance?",
+      "answerMarkdown": "It needs to save exactly enough to resume the process later as if nothing happened: the program counter and general-purpose register values, the stack pointer, and memory-management state like the page table pointer — essentially the live parts of the PCB. It does *not* need to copy the process's heap or stack contents, since those already live in memory and stay put; only the CPU's live working state needs saving and restoring.\n\nThe performance angle is what I'd emphasize for a senior answer: this happens on every single context switch, potentially thousands of times a second on a busy multi-core box, so it has to be fast. That's why register save/restore uses dedicated CPU instructions rather than a generic memory copy, and why switching page tables (needed between processes but not between threads of the same process) triggers TLB effects that make process switches measurably more expensive than thread switches.\n\nI'd close by connecting this to scheduler design: if context switches were cheap and free, schedulers could preempt far more aggressively; because they're not free, scheduler algorithms explicitly try to minimize unnecessary switches.\n\n**Testing:** whether you know the switch cost is real and where it comes from, not just that \"context switches happen.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "What a context switch saves"
+    },
+    {
+      "id": "process-control-block-and-states-iq3",
+      "question": "Why do operating systems have suspended states (ready-suspended, blocked-suspended) in addition to the basic five?",
+      "answerMarkdown": "They exist to handle memory pressure without killing processes. A basic five-state model assumes every process's memory stays resident in RAM, but under load the OS may need to reclaim physical memory from processes that aren't about to run — most obviously, ones that are already blocked and weren't going anywhere soon.\n\nI'd explain the mechanism: swapping a blocked process's memory out to disk gives you back RAM at essentially no cost, since that process wasn't runnable anyway — that's blocked-suspended. If the process later becomes eligible to run (its I/O finishes) but its memory is still swapped out, it moves to ready-suspended rather than straight to ready, because it needs its memory paged back in before the scheduler can actually put it on a core.\n\nI'd give the practical example: a system running near its memory limit with many idle background daemons blocked on sockets — suspending those first is a much better trade than swapping an actively running process's memory, which would immediately hurt whoever's on the CPU.\n\n**Testing:** whether you can connect an extra state to the real resource pressure (memory) that motivates it, rather than reciting it as an isolated fact.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why suspended states exist"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "interrupts-traps-exceptions",
+  "interviewQuestions": [
+    {
+      "id": "interrupts-traps-exceptions-iq1",
+      "question": "Walk me through what happens when you press a key on the keyboard?",
+      "answerMarkdown": "I'd trace it in three stages: hardware signal, interrupt handling, and delivery to the application. The keyboard controller detects the key press and asserts its interrupt line; the CPU finishes its current instruction, notices the pending interrupt, and looks up the keyboard's entry in the interrupt vector table to find its ISR.\n\nThe ISR itself does the bare minimum — the top half — reading the scan code from the controller's hardware buffer and stashing it, then returns quickly rather than doing full processing inline, exactly to avoid delaying other interrupts. The heavier work — translating the scan code to a character, applying keyboard layout and modifier state, and waking up whichever process is waiting for input — happens afterward, either in a bottom-half handler or once the kernel's input subsystem processes the queued event.\n\nFinally, the process blocked on a `read()` from the terminal or input device gets woken up and its syscall returns with the character, all without ever knowing the specific hardware sequence that produced it.\n\n**Testing:** whether you can connect a physical action to the full interrupt path, not just recite \"an interrupt fires.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Keyboard press, end to end"
+    },
+    {
+      "id": "interrupts-traps-exceptions-iq2",
+      "question": "What's the practical difference between a trap and an interrupt, and why does the distinction matter operationally?",
+      "answerMarkdown": "I'd anchor the difference in predictability. A trap is synchronous and deliberate — the running program executed an instruction specifically to enter the kernel (a syscall), so the kernel knows exactly what state the calling process is in and what it's asking for. An interrupt is asynchronous — it can arrive between any two instructions of any process, entirely unrelated to what that process was doing.\n\nOperationally this matters for correctness: kernel code handling a trap can assume it's running in the context of, and on behalf of, a specific known process. Interrupt handlers can't make that assumption — they might fire while any arbitrary process is running, so they must avoid touching per-process state carelessly and generally can't safely sleep or block, unlike code handling a trap.\n\nA concrete symptom of getting this wrong: a driver author who writes interrupt-handler code as if it were an ordinary syscall handler risks deadlocks or corrupted state, because they assumed context they don't actually have.\n\n**Testing:** whether you understand execution-context constraints, not just the definitional difference.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trap vs interrupt in practice"
+    },
+    {
+      "id": "interrupts-traps-exceptions-iq3",
+      "question": "Your service shows a spike in kernel-mode CPU time under heavy network load, with no obvious application-level cause. How would you investigate whether interrupts are the culprit?",
+      "answerMarkdown": "I'd start with `/proc/interrupts` (or `mpstat -P ALL` alongside it) to see the live per-CPU-core interrupt counts broken down by device — a lopsided distribution, where one core is absorbing nearly all of a busy NIC's interrupts while others sit idle, is the classic signature.\n\nIf that confirms it, I'd check whether `irqbalance` is running and actually spreading load, and consider manually pinning the NIC's interrupt affinity across multiple cores via `/proc/irq/<n>/smp_affinity` so no single core becomes the bottleneck. If the packet rate itself is simply too high for interrupt-per-packet handling to keep up, I'd look at whether the NIC driver supports NAPI-style polling under load, which trades interrupt overhead for a tight poll loop exactly when it's high-frequency enough to pay off.\n\nI'd give the concrete framing to whoever's reading the postmortem: this isn't a code bug, it's an interrupt-distribution and I/O-model problem, so the fix is infrastructure-level (affinity, polling mode) rather than anything in the service's own code.\n\n**Testing:** whether you can move from an OS concept to a real diagnostic workflow with actual commands.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing interrupt overload in production"
+    },
+    {
+      "id": "interrupts-traps-exceptions-iq4",
+      "question": "Is a page fault a bug? Why or why not?",
+      "answerMarkdown": "I'd push back gently on the premise: most page faults are completely normal and expected, not bugs. A **minor fault** — the page exists in memory but isn't yet mapped into this process (common right after `mmap` or a `fork`'s copy-on-write) — is resolved by just updating the page table, extremely cheap and constant background noise in any running system.\n\nA **major fault** — the data has to actually be pulled from disk — is more expensive but still routine; it's literally how demand paging works, letting a program reference far more virtual memory than is currently resident. Tools like `/usr/bin/time -v` report both counts, and a healthy process has plenty of minor faults and very few major ones.\n\nWhere it does become a real problem: if major fault counts climb and stay high, that's a strong signal of memory pressure or thrashing — the working set doesn't fit in RAM and the kernel is constantly evicting and re-reading pages, which is a performance bug even though the mechanism (page fault handling) is functioning exactly as designed.\n\n**Testing:** whether you can distinguish a mechanism operating correctly from a systemic symptom that mechanism happens to reveal.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Page faults: normal vs pathological"
+    }
+  ]
+}

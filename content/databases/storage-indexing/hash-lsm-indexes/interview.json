@@ -1,0 +1,45 @@
+{
+  "topicId": "hash-lsm-indexes",
+  "interviewQuestions": [
+    {
+      "id": "hash-lsm-indexes-iq1",
+      "question": "How does Cassandra handle a write, and why is it so fast compared to a traditional relational database?",
+      "answerMarkdown": "I'd walk through the LSM write path directly. A write first goes to a commit log on disk for durability — a pure sequential append — and simultaneously into an in-memory memtable, a sorted structure like a skip list. Both operations are sequential I/O, so there's no seek cost, unlike a B+Tree's random in-place update.\n\nWhen the memtable fills, commonly in the 32-128 MB range, it flushes to disk as an immutable SSTable. The write is durable and visible the moment it hits the commit log and memtable — the expensive part, merging and reorganizing data, happens later via background compaction, off the write's critical path.\n\nThe trade this makes explicit: Cassandra defers cost rather than eliminating it. Reads may need to check the memtable plus several SSTables, and compaction consumes background I/O — so the fast-write property comes with read amplification and space amplification I'd flag as the other half of the story.\n\n**Testing:** whether you can describe the mechanism precisely, not just say \"it's optimized for writes.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "How LSM writes work"
+    },
+    {
+      "id": "hash-lsm-indexes-iq2",
+      "question": "When would you choose a hash index over a B+Tree index?",
+      "answerMarkdown": "I'd anchor the decision on the query pattern, specifically whether range queries will ever run against this column. A hash index gives O(1) equality lookups — one hash computation, one bucket read — genuinely faster than a B+Tree's O(log n) descent for pure `=` lookups, because there's no multi-level traversal at all.\n\nThe catch is that hashing destroys key order, so `WHERE id > 100` or `ORDER BY id` can't use a hash index at all — it would have to fall back to a full scan. So I'd only reach for one when I'm confident the access pattern is exclusively equality — something like a session-token lookup or a exact-match cache key, never a range or sort.\n\nIn practice this makes hash indexes a narrower tool than B+Tree: Postgres supports them explicitly, but most schemas default to B+Tree because query patterns evolve and someone eventually adds a range filter the hash index can't serve.\n\n**Testing:** whether you understand the trade-off is about future query flexibility, not just current lookup speed.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Hash index vs B+Tree"
+    },
+    {
+      "id": "hash-lsm-indexes-iq3",
+      "question": "What is compaction in an LSM tree, and what happens if it falls behind?",
+      "answerMarkdown": "Compaction is the background process that merges SSTables together — combining overlapping key ranges, discarding values that were later overwritten, and physically removing tombstones once their delete is safely applied everywhere. Without it, the number of SSTables a read has to check grows without bound, and disk usage keeps climbing since old, overwritten data never gets reclaimed.\n\nIf compaction falls behind — often because write volume outpaces the background I/O budget — you get what's sometimes called a compaction storm: read latency degrades because each read checks more and more files, disk usage bloats well past the logical data size, and eventually compaction has to catch up by consuming even more I/O, competing directly with live traffic.\n\nI'd mention the operational fix concretely: monitoring pending compaction bytes/count (RocksDB and Cassandra both expose this), and either throttling write rate, giving compaction more I/O priority, or choosing a compaction strategy (leveled vs size-tiered) that better matches the read:write ratio.\n\n**Testing:** whether you understand compaction as a real operational concern with concrete failure modes, not just an abstract background job.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Compaction and its failure modes"
+    },
+    {
+      "id": "hash-lsm-indexes-iq4",
+      "question": "How do bloom filters make LSM tree reads practical, and what's the trade-off in using them?",
+      "answerMarkdown": "Without them, a point read in an LSM tree with 10 SSTables might need to check all 10 files to find a key, since any of them could hold the latest version. A bloom filter is a small in-memory bit array per SSTable that can definitively say \"this key is not here\" with zero false negatives, or \"probably here\" with a small false-positive rate — commonly tuned around 1%.\n\nChecking a bloom filter is a cheap in-memory operation, so the engine can skip most SSTables entirely before touching disk — turning \"read 10 files\" into \"read the 1 or 2 files the filters didn't rule out.\" This is the single biggest lever for keeping LSM read latency reasonable.\n\nThe cost is memory: a 1%-false-positive bloom filter runs about 1.2 bytes per key, so 100 million keys costs roughly 120 MB of RAM per SSTable generation — real enough that RocksDB and Cassandra both expose it as a tunable, trading memory for fewer false-positive disk reads.\n\n**Testing:** whether you know the specific mechanism, not just that \"LSM trees use bloom filters.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Bloom filters in LSM reads"
+    },
+    {
+      "id": "hash-lsm-indexes-iq5",
+      "question": "A team wants to switch their read-heavy relational workload to Cassandra because \"it scales better.\" What would you push back on?",
+      "answerMarkdown": "I'd start by separating scalability from index structure — Cassandra's horizontal scalability is real, but its LSM-based storage engine is optimized for write throughput, not for exactly the read-heavy pattern this team has. If the workload is mostly point reads with a strict latency SLA, moving to LSM means trading a B+Tree's predictable 3-4 page reads for a structure that may check a memtable plus several SSTables per read, mitigated but not eliminated by bloom filters and caching.\n\nI'd ask concretely: what's driving the perceived scale problem — write volume, data volume, or just node count? If it's really about horizontally scaling a relational workload, sharding or read replicas on the existing engine might solve it without inheriting LSM's read-amplification trade-off and Cassandra's eventual-consistency model.\n\nI'd frame my pushback as \"let's match the storage engine to the actual read:write ratio and consistency needs,\" not as a blanket \"Cassandra is wrong\" — for a genuinely write-heavy or horizontally-partitioned use case it would be the right call.\n\n**Testing:** whether you can push back on a trendy technology choice with a concrete trade-off analysis instead of dogma in either direction.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Pushing back on a technology choice"
+    }
+  ]
+}

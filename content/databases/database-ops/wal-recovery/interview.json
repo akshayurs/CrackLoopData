@@ -1,0 +1,37 @@
+{
+  "topicId": "wal-recovery",
+  "interviewQuestions": [
+    {
+      "id": "wal-recovery-iq1",
+      "question": "How does write-ahead logging make durability possible without every commit being extremely slow?",
+      "answerMarkdown": "The core idea: before any change touches the actual data page, a record describing that change is written to a sequential log file and fsync'd. Once the log record is durable, `COMMIT` can return — the actual data page update can happen later, asynchronously, whenever the buffer pool decides to flush it.\n\nThis matters for speed because a log write is a cheap, sequential append, while updating a data page in place is a random I/O operation that can be scattered across the disk. If every commit had to wait for its data pages to hit disk directly, commit latency would be dominated by random I/O; by deferring that and only guaranteeing the log is durable, commit latency is dominated by one fast, sequential append instead.\n\nIf a crash happens after the log record is durable but before the data page is flushed, recovery simply replays the log record — that's the redo mechanism — reconstructing exactly the state that should exist. So durability and performance aren't actually in tension here; WAL is the trick that gets both.\n\n**Testing:** whether you understand *why* logging first is faster, not just that it's the rule.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Why WAL exists"
+    },
+    {
+      "id": "wal-recovery-iq2",
+      "question": "Walk me through what happens, step by step, when Postgres restarts after an unclean shutdown.",
+      "answerMarkdown": "Recovery runs the ARIES-style three-pass process, starting from the most recent checkpoint rather than the beginning of the log. **Analysis** scans forward from there to reconstruct exactly what was happening at crash time: which transactions were still active (uncommitted), and which data pages were dirty (modified in memory but not yet flushed to disk).\n\n**Redo** then scans forward again and reapplies every logged change since that point — deliberately including changes from transactions that will later turn out to have never committed. This 'repeat history' approach restores the data pages to precisely their state at the instant of the crash, and it's simpler to prove correct than trying to selectively redo only the transactions that eventually committed.\n\n**Undo** then scans backward and reverses the changes made by whichever transactions were still active (never committed) at crash time, using the undo information embedded in their log records. Only after all three passes complete does the database open for new connections — which is why a database that crashed with a lot of uncommitted, in-flight write volume can take noticeably longer to come back up, purely from redo and undo work.\n\n**Testing:** whether you can name and order the three ARIES passes correctly and explain what each one is actually doing, not just that 'recovery happens.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "ARIES recovery walkthrough"
+    },
+    {
+      "id": "wal-recovery-iq3",
+      "question": "Your database has just crashed and recovery is taking eleven minutes before the service comes back up. Is that a problem, and what would you look at?",
+      "answerMarkdown": "Eleven minutes is a real outage, so I'd treat it as a problem worth root-causing rather than accepting as normal. The first thing I'd check is how much WAL had accumulated since the last checkpoint before the crash — recovery time is roughly proportional to how much redo work is needed, and that's driven directly by the interval between checkpoints and the write volume during that interval. If `checkpoint_timeout` or `max_wal_size` are set generously (favoring less frequent checkpoints for lower steady-state I/O), that's very plausibly why: fewer checkpoints means more accumulated log to redo on every unclean restart.\n\nThe fix is a genuine trade-off, not a free improvement: more frequent checkpoints shrink the redo window and thus recovery time, but cost more sustained background I/O in steady state from continuously flushing dirty pages. I'd frame the decision explicitly against a recovery-time objective — if the business needs the database back within two minutes of a crash, checkpoint frequency has to be tuned to make that true, even if it costs some steady-state throughput.\n\nI'd also separately check whether the crash itself had an avoidable cause (OOM kill, disk full) — fixing that prevents the next outage regardless of how recovery time is tuned.\n\n**Testing:** whether you connect checkpoint frequency to recovery time as a real, tunable operational trade-off, not an abstract fact from a textbook.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Diagnosing slow recovery"
+    },
+    {
+      "id": "wal-recovery-iq4",
+      "question": "When would you actually turn off synchronous commit, and how would you justify that decision to someone worried about data loss?",
+      "answerMarkdown": "I'd start by being precise about what `synchronous_commit = off` actually changes: `COMMIT` returns to the client before the WAL record is fsync'd, so a crash in that small window — typically well under a second of buffered commits — can lose writes the client was already told succeeded. It doesn't corrupt anything and doesn't affect durability for transactions that do get flushed; it only risks the most recent, still-buffered ones.\n\nI'd reach for it only for a specific, named, loss-tolerant data path — high-volume metrics ingestion, non-critical event logging, or a write-heavy analytics pipeline where losing a few seconds of data on a rare crash is an accepted cost against a real throughput requirement. I would never apply it as a blanket instance-wide setting for a service that also handles payments, orders, or anything else where 'the client was told it committed' has to remain true.\n\nTo justify it, I'd quantify both sides concretely: the throughput gain (often multiples, since it removes the per-commit fsync wait), and the worst-case loss window in absolute terms (bounded, small, and specific to this one workload) — and get that trade-off explicitly signed off rather than treating it as purely a performance tuning knob.\n\n**Testing:** whether you can articulate the actual bounded risk precisely, and whether you'd scope the change narrowly instead of applying it broadly.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Choosing async commit for a specific workload"
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "id": "views",
+  "title": "Views & Materialized Views",
+  "area": "databases",
+  "group": "advanced-sql",
+  "order": 3,
+  "slug": "views",
+  "summary": "Saving a query under a name versus saving its result — the trade-off between always-fresh and always-fast, and the config knobs that sit between them.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "views-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **view** is a saved `SELECT` statement you can query like a table — it runs the underlying query fresh every time. A **materialized view** saves the *result* of that query instead, so reads are fast but the data can go stale until it's refreshed.\n\nThat one distinction — recompute every time vs cache the answer — is the whole topic. Interviewers use views to check whether you understand the trade-off between correctness-by-construction (always fresh) and raw read speed (always fast, sometimes stale).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "views-s02",
+      "order": 2,
+      "sectionTitle": "A view is a stored query, not stored data",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When you query a regular view, the database substitutes the view's definition into your query and runs it against the live base tables — there's no separate copy of the data sitting anywhere. This means a view is always up to date by construction: the moment a base table changes, every query against the view reflects it, with zero refresh step needed.\n\nThe cost is that a view offers no performance benefit on its own — a view wrapping a expensive five-table join is exactly as expensive to query as writing that join out by hand every time, since that's literally what happens under the hood.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "views-s02-q1"
+      ]
+    },
+    {
+      "id": "views-s03",
+      "order": 3,
+      "sectionTitle": "Updatable views and their limits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Some views are **updatable** — you can `INSERT`/`UPDATE`/`DELETE` through them and the change lands on the underlying base table. This only works when the view maps unambiguously back to one base table's rows: a simple `SELECT` from a single table with no aggregation, no `DISTINCT`, no `GROUP BY`, and no joins across multiple tables.\n\nThe moment a view involves a join, an aggregate, or a computed column, the database can't reliably figure out which base-table row an `UPDATE` should target, so most engines reject the write or restrict it to columns from one specific underlying table. This is a real interview trap: candidates assume any view supports writes, then get tripped up explaining why a view over a `GROUP BY` can't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "views-s03-q1"
+      ]
+    },
+    {
+      "id": "views-s04",
+      "order": 4,
+      "sectionTitle": "Compare: regular view vs materialized view",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Regular view | Materialized view |\n|---|---|---|\n| Data freshness | Always current — runs live query | Stale until next refresh |\n| Query speed | Same as the underlying query, every time | Fast — reads a pre-computed result |\n| Storage | None — just stores the query text | Stores the full result set |\n| Indexable | No (the view itself) | Yes — you can index the materialized result |\n| Best for | Simple wrappers, always-fresh small queries | Expensive aggregations, dashboards, reporting |\n\n**How to decide:** if the underlying query is cheap and freshness matters, use a regular view. If the query is expensive (multi-table aggregation over millions of rows) and slightly-stale data is acceptable, materialize it and refresh on a schedule.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "views-s04-q1"
+      ]
+    },
+    {
+      "id": "views-s05",
+      "order": 5,
+      "sectionTitle": "Refresh strategies and staleness",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A materialized view's whole trade-off lives in its refresh strategy. **Full refresh** (`REFRESH MATERIALIZED VIEW`) recomputes the entire result from scratch — simple and always correct, but expensive on a large base table and briefly locks readers on some engines unless you use `CONCURRENTLY` (which needs a unique index on the view).\n\n**Incremental refresh** updates only the rows affected by recent base-table changes — much cheaper, but not natively supported by every engine (Postgres has no built-in incremental refresh; some warehouses and extensions do) and is harder to get correct for aggregations that need to \"un-count\" a deleted row.\n\nThe question to always ask: how stale can this data be before it matters to whoever reads it — a minute, an hour, a day? That answer picks your refresh schedule, not the other way around.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "views-s06",
+      "order": 6,
+      "sectionTitle": "CREATE VIEW and CREATE MATERIALIZED VIEW",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The syntax difference is small; the runtime behavior isn't.\n\n```sql\nCREATE VIEW active_customers AS\n  SELECT customer_id, name FROM customers WHERE status = 'active';\n\nCREATE MATERIALIZED VIEW monthly_revenue AS\n  SELECT DATE_TRUNC('month', order_date) AS month, SUM(amount) AS revenue\n  FROM orders GROUP BY 1;\n\n-- Materialized views need an explicit refresh:\nREFRESH MATERIALIZED VIEW CONCURRENTLY monthly_revenue;\n```\n\n`active_customers` reflects every insert/update instantly. `monthly_revenue` freezes at whatever it was when last refreshed — a query against it right after a new order lands will not show that order until the next `REFRESH`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "views-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: nested views hiding a monstrous query plan",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Views are just tables — building view C on top of view B on top of view A is fine, it's clean and modular.\"\n\n**Why it's wrong:** since a regular view is inlined at query time, stacking views means the final query the engine actually runs is the *full expansion* of all three definitions merged together — often with joins and filters duplicated or reordered in ways the optimizer struggles with. A three-layer view stack that looks simple in the editor can expand into a genuinely enormous, hard-to-optimize query plan, and `EXPLAIN` on it can be nearly unreadable.\n\n**Correct model:** treat deeply nested views as a smell. If you're stacking views for reuse, consider whether a single flatter view, a materialized view at one layer, or a well-indexed base table would give the optimizer a simpler problem to solve.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "views-s07-q1"
+      ]
+    },
+    {
+      "id": "views-s08",
+      "order": 8,
+      "sectionTitle": "Senior nuance: views for access control, not just convenience",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Beyond readability, views are a common **access-control mechanism**: grant a role `SELECT` on a view that exposes only certain columns or rows (a `WHERE tenant_id = current_tenant()` filter, or omitting a `salary` column), and revoke direct table access. The role can query the view but never see the restricted columns or rows, without the application needing to enforce that filtering in every query.\n\nThis is how many multi-tenant systems and \"redact PII from analysts\" policies are implemented in practice — it's cheaper and harder to accidentally bypass than remembering to add a `WHERE` clause in every application query. Naming this use case unprompted is a strong senior signal, since most candidates only think of views as a readability tool.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "views-s08-q1"
+      ]
+    },
+    {
+      "id": "views-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: assuming a materialized view auto-refreshes",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I created a materialized view, so it stays in sync with the base tables like a regular view does.\"\n\n**Why it's wrong:** a materialized view never refreshes itself. Without an explicit `REFRESH` call — run manually, on a cron schedule, or triggered by a job after a batch load — the data can silently drift arbitrarily far from the base tables while queries against it keep returning old numbers with no error or warning.\n\n**Correct model:** treat \"who refreshes this, and how often\" as a required part of creating any materialized view, not an afterthought. A dashboard built on a materialized view with no refresh job wired up will look correct on day one and be wrong forever after, which is a much worse failure mode than an obviously broken query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "views-s09-q1"
+      ]
+    }
+  ]
+}

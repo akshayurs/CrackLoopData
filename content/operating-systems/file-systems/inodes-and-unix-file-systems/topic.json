@@ -1,0 +1,200 @@
+{
+  "id": "inodes-and-unix-file-systems",
+  "title": "Inodes & Unix File Systems",
+  "area": "operating-systems",
+  "group": "file-systems",
+  "order": 3,
+  "slug": "inodes-and-unix-file-systems",
+  "summary": "The inode is everything about a file except its name — metadata, block pointers, and link count. This is the concrete Unix implementation of indexed allocation, plus hard vs soft links.",
+  "level": "intermediate",
+  "slideCount": 13,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "inodes-and-unix-file-systems-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "An **inode** (index node) holds everything about a file except its name: permissions, owner, size, timestamps, and the block pointers that locate its data. The filename lives entirely in a directory entry, pointing at an inode number.\n\nThis separation is why `ls -i` shows a number, why two names can point to the same file (hard links), and why deleting the last name doesn't necessarily delete the data. Think of the inode as the file's ID card and actual storage location, and the filename as a sticky note someone attached to it — you can peel off the sticky note without destroying what it was labeling.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s02",
+      "order": 2,
+      "sectionTitle": "The inode: everything about a file except its name",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every regular file, directory, and special file on a Unix file system has exactly one inode, identified by a number unique within that file system (not globally — inode 12 on `/dev/sda1` is unrelated to inode 12 on `/dev/sdb1`). The inode is a fixed-size on-disk record; the file system reserves a whole region (the **inode table**) for these when it's formatted.\n\nCrucially, the inode has no name field. Names exist only as directory entries mapping a string to an inode number. `ls -i myfile.txt` prints that number directly — run it next to `stat myfile.txt` and you'll see the same inode's metadata from two different commands.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "inodes-and-unix-file-systems-s02-q1"
+      ]
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s03",
+      "order": 3,
+      "sectionTitle": "What's inside an inode: metadata + block pointers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A typical inode packs: file type and permission bits, owner UID/GID, size in bytes, `atime`/`mtime`/`ctime`, a **link count** (how many directory entries point to it), and the block pointers that locate its data — the part covered next. It's a small, fixed-size structure, typically 128-256 bytes in ext4.\n\n```bash\n$ stat -c '%i %h %s %U' myfile.txt\n2359301 2 4096 akshay\n# inode number, link count, size in bytes, owner\n```\n\nBecause the inode is fixed-size but files vary from zero bytes to terabytes, the block-pointer portion has to work for both extremes without wasting space on tiny files — that's the design problem the next few slides solve.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s04",
+      "order": 4,
+      "sectionTitle": "Direct, single-, double-, and triple-indirect pointers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Classic Unix inodes (this is the traditional ext2-style layout; ext4 layers extents on top, covered in [Modern File Systems](modern-file-systems)) hold roughly 12 **direct pointers** straight to data blocks, then one **single-indirect** pointer to a block full of more pointers, one **double-indirect** pointer to a block of single-indirect blocks, and one **triple-indirect** pointer for the rare enormous file.\n\nWith 4KB blocks and 4-byte pointers, a single indirect block holds ~1024 pointers. So: 12 direct blocks (48KB) + 1024 single-indirect (4MB) + 1024×1024 double-indirect (4GB) + 1024³ triple-indirect (4TB) — each level buys roughly 1024x more addressable space at the cost of one more disk read to resolve.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "inodes-and-unix-file-systems-s04-q1"
+      ]
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: an inode's pointer structure reaching data blocks",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![inode direct and indirect pointer depth](assets/inode-indirect-pointers.svg)\n\nNotice the depth difference: a direct pointer is one hop from inode to data. A double-indirect pointer is three hops — inode to pointer block, to another pointer block, to data. Every extra level of indirection is an extra disk read (or cache hit) before you reach actual file content.\n\nThis is why reading byte 0 of a huge file is just as fast as reading byte 0 of a tiny one — direct pointers cover the file's beginning regardless of total size — but reading deep into a huge file costs a few extra lookups.",
+      "assets": [
+        {
+          "alt": "inode direct and indirect pointer depth",
+          "path": "assets/inode-indirect-pointers.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s06",
+      "order": 6,
+      "sectionTitle": "Why this design supports huge files with a small fixed inode",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The genius of the direct+indirect scheme is that the inode itself never grows, no matter how large the file gets — it always holds the same ~15 pointer slots. A 10KB file and a 10GB file have identically-sized inodes; only how many of the indirect levels get populated differs.\n\nThis matters operationally: the kernel can keep a fixed, predictable inode cache size in RAM (millions of inodes fit comfortably), and the inode table's on-disk size is fixed at format time, computed from expected file count rather than expected file size. The trade-off, covered in the next few slides, is that this scheme still has real limits and real failure modes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s07",
+      "order": 7,
+      "sectionTitle": "How a filename maps to an inode via a directory entry",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A directory's content is a table of `(name, inode number)` pairs. Opening `/home/akshay/notes.txt` means: read root's inode, find `home` in root's directory data, get its inode number; read that inode, find `akshay`, get its inode number; read that inode, find `notes.txt`, get its inode number — then finally read *that* inode to find the actual data blocks.\n\nEach path component costs one directory read plus one inode read, which is why deeply nested paths are marginally slower to resolve and why the kernel's **dentry cache** (caching recent name-to-inode lookups) matters so much for path-heavy workloads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s08",
+      "order": 8,
+      "sectionTitle": "Hard links: two names, one inode",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`ln original.txt alias.txt` creates a **hard link**: a second directory entry pointing at the same inode number, and increments that inode's link count to 2. Both names are fully equal — there's no \"original\" at the file-system level, just two paths to the same data.\n\n```bash\n$ ln original.txt alias.txt\n$ ls -i original.txt alias.txt\n2359301 alias.txt   2359301 original.txt\n$ stat -c '%h' original.txt\n2\n```\n\nEditing through either name changes the same underlying data, since both are the literal same inode — not a copy, not a reference to a separate object.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s09",
+      "order": 9,
+      "sectionTitle": "Symbolic (soft) links: a name pointing to a path",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`ln -s target.txt link.txt` creates a **symbolic link**: a small, distinct file whose own inode holds a *path string*, not a shared inode number. Opening `link.txt` makes the kernel read that path and re-resolve it from scratch, exactly as if you'd typed the target path yourself.\n\nBecause a symlink stores a path rather than an inode reference, it can point across file systems and even to paths that don't exist yet — the link itself is always valid; only *following* it can fail. That's the key asymmetry versus hard links, explored next.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": [
+        "inodes-and-unix-file-systems-s09-q1"
+      ]
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s10",
+      "order": 10,
+      "sectionTitle": "Compare: hard link vs soft link",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Hard link | Symbolic (soft) link |\n|---|---|---|\n| What it stores | Same inode number as the target | A path string to the target |\n| Crosses file systems | No — inode numbers are only unique within one file system | Yes — it's just a stored path |\n| Target deleted | Data survives as long as any hard link (or open handle) remains | Link becomes a dangling reference — \"file not found\" |\n| Target moved (renamed) | No effect — still the same inode | Breaks if the stored path was relative to a location that no longer resolves |\n| Can link a directory | No (mostly disallowed — would create cycles) | Yes |\n| `ls -l` link count | Increments the shared inode's link count | Own separate small inode; target's link count unaffected |\n\n**How to decide:** use a hard link when you need a true, resilient second name for the same data on the same disk; use a symlink when you need to point across file systems, to a directory, or accept that the reference can dangle.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "inodes-and-unix-file-systems-s10-q1"
+      ]
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: assuming a file with 2 hard links frees data on one delete",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I have `original.txt` and `alias.txt` pointing to the same file. If I `rm original.txt`, the data is gone.\"\n\n**Why it's wrong:** `rm` decrements the inode's link count and removes one directory entry — it does not touch the data unless the link count (combined with open-descriptor count) reaches zero. With `alias.txt` still present, the link count drops from 2 to 1 and the data is fully intact and accessible via `alias.txt`.\n\n**Correct model:** a hard-linked file's data is deleted only when the *last* name is removed and no process has it open. This is exactly the same reference-counting rule from [File System Fundamentals](file-system-fundamentals)'s delete pitfall — hard links are just a second, deliberate way to bump that same counter above one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "inodes-and-unix-file-systems-s11-q1"
+      ]
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s12",
+      "order": 12,
+      "sectionTitle": "Real numbers: inode exhaustion, a failure mode disk space alone doesn't show",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The inode table's size is fixed at format time — typically one inode per ~16KB of space by default on ext4 — so a file system can run out of *inodes* while still showing free *disk space*, if it holds huge numbers of tiny files (a common failure mode for mail spools, cache directories, or session-file stores with millions of small entries).\n\n`df -i` shows inode usage separately from `df`'s block usage:\n\n```bash\n$ df -i /var\nFilesystem     Inodes   IUsed   IFree IUse% Mounted on\n/dev/sda1     6553600 6553600       0  100% /var\n$ df -h /var\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        50G   12G   36G  25% /var\n```\n\nHere `/var` has 75% of its disk free but 0 inodes left — every `open()` for a new file fails with `ENOSPC` even though `df` looks healthy. This is a real, recurring production incident class, and `df -i` is the fix most engineers only learn about after hitting it once.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "inodes-and-unix-file-systems-s12-q1"
+      ]
+    },
+    {
+      "id": "inodes-and-unix-file-systems-s13",
+      "order": 13,
+      "sectionTitle": "Compare: what breaks when the target moves or is deleted",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Scenario | Hard link | Symbolic link |\n|---|---|---|\n| Target file renamed in place | No effect — same inode either way | Breaks if the link stored an absolute/relative path that no longer matches |\n| Target file moved to another directory (same FS) | No effect | Breaks unless the new location happens to match the stored path |\n| Target file deleted, link still exists | Data survives via the hard link | Link now points at nothing — opening it fails |\n| Target file's content edited | Both names see the new content instantly | Symlink re-resolves and sees the new content too, since it's the same underlying file once resolved |\n\n**How to decide:** hard links are immune to renames and moves because they don't reference a path at all — only true deletion (of every link) matters. Symlinks are convenient and cross-filesystem but fragile to anything that changes the path they stored.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

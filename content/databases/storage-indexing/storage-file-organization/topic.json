@@ -1,0 +1,163 @@
+{
+  "id": "storage-file-organization",
+  "title": "Storage & File Organization",
+  "area": "databases",
+  "group": "storage-indexing",
+  "order": 1,
+  "slug": "storage-file-organization",
+  "summary": "How rows actually live on disk — pages, the buffer pool, row vs column layout, and why random I/O is the enemy every storage engine is designed around.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "storage-file-organization-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every query you write eventually turns into disk reads of fixed-size chunks called **pages** — not individual rows. Understanding how rows pack into pages, how the **buffer pool** caches those pages in RAM, and why some layouts are faster to read than others explains almost every \"why is this query slow\" question in a database interview.\n\nThink of a table as a warehouse: pages are shelves, rows are boxes on a shelf, and the buffer pool is the loading dock that keeps the hottest shelves close by so forklifts don't have to walk to the back.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-file-organization-s02",
+      "order": 2,
+      "sectionTitle": "Pages, rows, and the buffer pool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A database never reads a single row from disk — it reads a fixed-size **page** (also called a block) that holds many rows, because disks are efficient at moving contiguous chunks, not single bytes. Postgres defaults to **8 KB pages**, MySQL InnoDB to **16 KB pages**.\n\nThe **buffer pool** is an in-memory cache of recently used pages. A read first checks the buffer pool; only a miss triggers actual disk I/O. A well-tuned OLTP workload should see a **buffer pool hit ratio above 99%** — anything much lower means your working set doesn't fit in RAM and you're paying disk latency on the hot path.\n\nWrites don't go straight to disk either: a page is modified in the buffer pool and marked **dirty**, then flushed later by a background writer — which is why crash recovery needs a write-ahead log.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "storage-file-organization-s02-q1"
+      ]
+    },
+    {
+      "id": "storage-file-organization-s03",
+      "order": 3,
+      "sectionTitle": "Compare: heap vs sorted vs hashed file organization",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "How rows are arranged **within** a table's pages changes the cost of every operation.\n\n| | Heap (unordered) | Sorted (clustered) | Hashed |\n|---|---|---|---|\n| Insert | O(1) — append anywhere with space | O(log n) — find the right slot, may shift rows | O(1) — hash to bucket |\n| Point lookup by key | Needs an index; O(1) with one | O(log n) via binary search, or O(1) with index | O(1) average |\n| Range scan | Needs an index; scattered I/O | Sequential — very fast | Not supported — hash destroys order |\n| Typical use | Postgres default table storage | MySQL InnoDB (clustered on primary key) | Hash indexes, partition routing |\n\n**How to decide:** if range scans (`WHERE created_at BETWEEN ...`) dominate your query pattern, sorted/clustered storage wins outright; if it's pure key lookups, hashing is simplest and fastest.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "storage-file-organization-s03-q1"
+      ]
+    },
+    {
+      "id": "storage-file-organization-s04",
+      "order": 4,
+      "sectionTitle": "Row-oriented vs column-oriented storage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Row-oriented** storage (Postgres, MySQL, Oracle) keeps a whole row contiguous on a page — great when a query needs most columns of a few rows, which is the shape of OLTP (`SELECT * FROM orders WHERE id = 42`).\n\n**Column-oriented** storage (Redshift, ClickHouse, Parquet-backed engines) keeps each column contiguous across rows instead. An analytical query like `SELECT AVG(amount) FROM orders` then reads only the `amount` column — skipping every other byte of every row — and same-typed values compress far better together, often **5–10x** compression versus row storage.\n\nThe trade-off flips for writes: inserting one row means touching every column file in a columnar store, so OLTP-style single-row writes are expensive there. This is why the two layouts map cleanly to OLTP vs OLAP, and why systems rarely try to be both.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "storage-file-organization-s04-q1"
+      ]
+    },
+    {
+      "id": "storage-file-organization-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a page with a slotted-row layout",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A slotted-page layout: header, slot array growing right, rows growing left, free space in the middle](assets/slotted-page-layout.svg)\n\nMost engines use a **slotted-page** layout: a small **slot array** near the top stores offsets pointing to variable-length rows packed from the bottom of the page upward. Rows can be deleted and the slot marked free without shifting every other row — only the slot array entry changes, not the row bytes.\n\nThis indirection is also what lets an index point at a stable **(page, slot)** location even though the row's exact byte offset inside the page can move as neighbors are added or removed.",
+      "assets": [
+        {
+          "alt": "A slotted-page layout: header, slot array growing right, rows growing left, free space in the middle",
+          "path": "assets/slotted-page-layout.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-file-organization-s06",
+      "order": 6,
+      "sectionTitle": "TOAST / overflow storage for large values",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A page has a fixed size, so a single row can't simply be arbitrarily large — a 2 MB JSON blob in an 8 KB page doesn't fit. Postgres solves this with **TOAST** (The Oversized-Attribute Storage Technique): any value over roughly **2 KB** gets compressed and, if still too big, sliced into chunks stored in a hidden side table, leaving just a small pointer in the main row.\n\nMySQL does the equivalent with **overflow pages** for `TEXT`/`BLOB` columns beyond InnoDB's inline limit.\n\nThe practical effect: `SELECT id, name FROM users` on a table with a huge `bio` column stays fast, because the main page never had to hold `bio`'s bytes — but `SELECT *` now pays extra I/O to follow the TOAST pointer, which is a common hidden cost in \"why is this simple query slow\" debugging.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "storage-file-organization-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: random I/O vs sequential I/O cost",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Reading 1,000 rows always costs about the same, however they're scattered.\"\n\n**Why it's wrong:** on spinning disks, a random read costs a **seek (~5–10 ms)** plus rotational latency before any data moves; a sequential read pays that seek **once** and then streams at hundreds of MB/s. 1,000 rows scattered across 1,000 pages can mean 1,000 seeks — seconds of wall time — versus a fraction of a second if they're packed into a handful of contiguous pages. SSDs shrink but don't erase this gap: random 4 KB reads still run roughly **an order of magnitude slower** than sequential throughput because of internal flash-page and garbage-collection effects.\n\n**Correct model:** a query plan's real cost is dominated by how many *distinct pages* it touches and whether those touches are contiguous, not by the row count alone — which is exactly why clustering and index range scans matter so much.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "storage-file-organization-s07-q1"
+      ]
+    },
+    {
+      "id": "storage-file-organization-s08",
+      "order": 8,
+      "sectionTitle": "Fill factor and page splits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If pages are packed to 100% full, any later `UPDATE` that grows a row (e.g. appending to a `varchar`) has nowhere to put the extra bytes on that page — the engine must move the row to a new page and rewrite pointers to it, which is expensive and fragments layout.\n\n**Fill factor** reserves headroom on write: Postgres and MySQL let you set a table's fill factor below 100% (e.g. 90%) so updates have room to grow in place. This is a real trade-off, not a default-and-forget setting: a lower fill factor wastes disk space and slightly hurts pure-read scan speed, but avoids expensive page splits on update-heavy tables.\n\nA staff-level tell: reaching for fill factor tuning only after confirming the workload is update-heavy on variable-length columns, not applying it blindly to every table.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "storage-file-organization-s08-q1"
+      ]
+    },
+    {
+      "id": "storage-file-organization-s09",
+      "order": 9,
+      "sectionTitle": "Numbers: sizing a table in pages",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Back-of-envelope math you should be able to do live in an interview: a `users` row with an int id, a few varchars and a timestamp averages roughly **200 bytes**. An 8 KB Postgres page reserves some space for the header and slot array, leaving about **7.8 KB** usable — so roughly **39 rows per page**.\n\nFor **10 million users**, that's about **256,000 pages**, or **~2 GB** of heap storage before counting indexes (a B+Tree index on the primary key alone often adds 10–20% more). This is the kind of number a system-design or DB-design interview wants you to produce on the spot to justify \"yes, this fits comfortably in a buffer pool sized at 4 GB\" or \"no, this workload needs sharding.\"\n\nThe habit that matters: estimate row size, divide into usable page size, multiply out to row count — not \"a database can store a lot of data\" hand-waving.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "storage-file-organization-s09-q1"
+      ]
+    },
+    {
+      "id": "storage-file-organization-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: MVCC row versions bloating the heap",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"An `UPDATE` just changes the row in place, so it's cheap and doesn't affect storage.\"\n\n**Why it's wrong:** engines using **MVCC** (Postgres, and InnoDB via undo logs) don't overwrite a row on update — they write a **new row version** and mark the old one as no-longer-visible to future transactions, so concurrent readers can still see a consistent snapshot. A table updated heavily without follow-up cleanup accumulates **dead tuples**, bloating it well past its logical row count — a table that should be 2 GB can balloon to 6+ GB.\n\n**Correct model:** MVCC trades storage bloat for lock-free reads; the mitigation is a background reclaim process — Postgres's `VACUUM`, InnoDB's purge thread — and a staff engineer watches dead-tuple counts, not just row counts, when a table \"feels\" slower than its data size suggests.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "storage-file-organization-s10-q1"
+      ]
+    }
+  ]
+}

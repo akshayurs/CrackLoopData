@@ -1,0 +1,37 @@
+{
+  "topicId": "aggregation",
+  "interviewQuestions": [
+    {
+      "id": "aggregation-iq1",
+      "question": "What's the difference between WHERE and HAVING, and why can't you always swap them?",
+      "answerMarkdown": "WHERE filters individual rows before any grouping happens; HAVING filters groups after GROUP BY has produced aggregates. They aren't interchangeable because of what exists at each stage: at the point WHERE runs, there's no COUNT or SUM yet — those only exist once GROUP BY has collapsed rows into groups.\n\nConcretely: `SELECT customer_id, COUNT(*) FROM orders WHERE status = 'completed' GROUP BY customer_id HAVING COUNT(*) >= 5` first drops non-completed orders row-by-row with WHERE, then keeps only customers with 5+ completed orders with HAVING. Writing `WHERE COUNT(*) >= 5` instead throws an error, since the aggregate doesn't exist at WHERE's point in the pipeline.\n\nI'd add the performance angle too: always push a filter into WHERE if it can go there, even one that feels aggregate-adjacent, because WHERE discards rows before the (often expensive) grouping step — HAVING only filters after the engine has already done that work, so an equivalent-looking HAVING-only query can be meaningfully slower on a large table.\n\n**Testing:** whether you understand the pipeline ordering behind the rule, not just 'HAVING is for aggregates' as a memorized fact.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "WHERE vs HAVING"
+    },
+    {
+      "id": "aggregation-iq2",
+      "question": "A metrics dashboard shows 'average order value' using AVG(total), and someone notices the number looks higher than expected. How would you investigate?",
+      "answerMarkdown": "My first question is what AVG is actually dividing by. Every aggregate except COUNT(*) silently skips NULL rows, so if `total` is NULL for some legitimate reason — say, orders still being priced, or a data pipeline bug leaving some rows unset — AVG(total) only averages the rows that do have a value, quietly excluding the rest from both the sum and the count.\n\nI'd run `COUNT(*)` versus `COUNT(total)` side by side to see how many rows are actually contributing to the average. If there's a meaningful gap, I'd ask whether the missing rows are random or systematically biased — for instance, if failed or abandoned orders never get a `total` written, the dashboard is effectively computing 'average value of successfully completed orders,' not 'average order value' as labeled, which is a materially different, likely inflated number.\n\nThe fix isn't necessarily a query change — it might be flagging that the metric's definition needs to be made explicit (should abandoned orders count as $0? Be excluded on purpose? That's a product decision), and showing the denominator alongside the average so anyone reading the dashboard can judge how complete the picture is.\n\n**Testing:** whether you treat a suspicious aggregate as a data question first, not just a bug to silently patch with COALESCE.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a skewed average"
+    },
+    {
+      "id": "aggregation-iq3",
+      "question": "When would you reach for a window function instead of GROUP BY?",
+      "answerMarkdown": "GROUP BY collapses many rows into one summary row per group — you lose the original rows entirely, which is fine when the question really is 'give me one number per group,' like total revenue per customer. A window function instead keeps one output row per original row while attaching an aggregate computed over a partition of related rows — the question 'annotate each order with that customer's running total' needs the individual order rows *and* an aggregate at the same time, which GROUP BY structurally can't produce without a self-join or a subquery.\n\nA concrete example I'd give: ranking each employee's salary within their department. `SELECT name, department, salary, RANK() OVER (PARTITION BY department ORDER BY salary DESC) FROM employees` gives every employee row back, each carrying its rank — GROUP BY department could only tell you the max salary per department, not each individual's rank within it.\n\nThe general test I use: if the output should have the same number of rows as the input, reach for a window function; if the output should have one row per group, reach for GROUP BY.\n\n**Testing:** whether you know window functions exist and can name a real scenario, rather than defaulting to GROUP BY plus a manual self-join whenever detail-plus-aggregate is needed.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "GROUP BY vs window functions"
+    },
+    {
+      "id": "aggregation-iq4",
+      "question": "What's the difference between COUNT(*), COUNT(column), and COUNT(DISTINCT column), and can you give an example where all three return different numbers?",
+      "answerMarkdown": "COUNT(*) counts rows, full stop — NULLs and duplicates included. COUNT(column) counts rows where that column is not NULL. COUNT(DISTINCT column) counts unique non-NULL values of that column, collapsing repeats.\n\nA concrete example: a `feedback` table with 100 rows, where 15 have a NULL `rating`, and among the 85 rated rows only 5 distinct rating values exist (1 through 5, repeated many times). COUNT(*) is 100, COUNT(rating) is 85, and COUNT(DISTINCT rating) is 5 — three meaningfully different numbers answering three different questions: how many feedback entries exist, how many were actually rated, and how many distinct rating values were used.\n\nI've seen this cause real reporting bugs when someone answers 'how many distinct X' with a plain COUNT(column) under time pressure — the number looks plausible (it's usually in a sensible range) and nobody double-checks it against the actual distinct-value question that was asked.\n\n**Testing:** whether you read the actual question carefully enough to pick the right COUNT variant, since all three compile and run without error regardless of which one is 'wrong' for the ask.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "COUNT variants"
+    }
+  ]
+}

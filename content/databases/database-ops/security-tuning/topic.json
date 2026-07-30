@@ -1,0 +1,182 @@
+{
+  "id": "security-tuning",
+  "title": "Database Security & Tuning",
+  "area": "databases",
+  "group": "database-ops",
+  "order": 3,
+  "slug": "security-tuning",
+  "summary": "Access control and day-to-day performance: authentication and row-level security, encryption, SQL injection, connection pooling, and the N+1 query problem.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "security-tuning-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Two everyday concerns that every production database needs, regardless of scale: **who is allowed to do what** (authentication, authorization, row-level security, encryption, injection defense), and **is the database being used efficiently** (connection pooling, the N+1 problem). Neither is glamorous, but both are where real incidents — breaches and outages — actually come from.\n\nThis topic is deliberately practical: every concept here maps to a specific, common production mistake, because that's how these come up in interviews — as a scenario to diagnose, not a definition to recite.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "security-tuning-s02",
+      "order": 2,
+      "sectionTitle": "AuthN/Z, roles, and row-level security",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Authentication (AuthN)** answers \"who are you\" — verifying identity via a password, certificate, or token. **Authorization (AuthZ)** answers \"what are you allowed to do,\" typically enforced via **roles**: a `readonly_analytics` role can `SELECT` from reporting tables but not write anywhere; an `app_writer` role can write to the tables its service owns but not touch billing tables it has no business in.\n\n**Row-level security (RLS)** goes finer-grained than table permissions: it restricts *which rows* a query can see or modify based on the querying user, enforced by the database itself rather than trusted to every application query remembering a `WHERE tenant_id = ?` clause. In Postgres, `CREATE POLICY` attaches a filter condition directly to a table, so even a query that forgets the tenant filter can't leak another tenant's rows — this is the standard defense-in-depth technique for multi-tenant databases where an application bug should not be able to cause a cross-tenant data leak.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "security-tuning-s02-q1"
+      ]
+    },
+    {
+      "id": "security-tuning-s03",
+      "order": 3,
+      "sectionTitle": "Encryption at rest and in transit",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Encryption in transit** (TLS between the client and the database) protects data from being read by anyone who can intercept network traffic — a compromised network device, a misconfigured cloud load balancer, or anyone on a shared network segment. Without it, credentials and query results travel as plaintext.\n\n**Encryption at rest** protects the data files themselves — if a disk is stolen, improperly decommissioned, or a storage snapshot is exposed by a cloud misconfiguration, the raw bytes are unreadable without the encryption key. It's important to be precise about what this does and doesn't protect against: encryption at rest doesn't help if an attacker gets valid database credentials and simply queries the running database normally — the database has to decrypt data to serve queries, so a live, authenticated connection sees plaintext regardless. Encryption at rest specifically protects against physical or storage-layer theft, not against a compromised application or leaked credentials.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "security-tuning-s04",
+      "order": 4,
+      "sectionTitle": "SQL injection and parameterized queries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**SQL injection** happens when untrusted input is concatenated directly into a query string, letting an attacker supply input that changes the query's actual structure rather than just its data. A login form built as `\"SELECT * FROM users WHERE name = '\" + input + \"'\"` lets an attacker submit `' OR '1'='1` to turn the `WHERE` clause into something always true, bypassing authentication entirely — or worse, chain in a second statement to read or destroy unrelated data.\n\nThe fix is not \"sanitize the input\" (escaping is easy to get subtly wrong and easy to forget in one code path) — it's **parameterized queries**, where the query structure and the data are sent to the database separately, so user input is never interpreted as SQL syntax no matter what characters it contains. Every mainstream database driver and ORM supports this natively; there's essentially no legitimate reason to build a query by string concatenation with untrusted input in 2026.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "security-tuning-s04-q1"
+      ]
+    },
+    {
+      "id": "security-tuning-s05",
+      "order": 5,
+      "sectionTitle": "Code: parameterized query vs string concatenation",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Vulnerable — user input becomes part of the SQL text itself:\n\n```python\n# NEVER do this\nquery = f\"SELECT * FROM users WHERE email = '{user_input}'\"\ncursor.execute(query)\n```\n\nIf `user_input` is `' OR '1'='1' --`, the executed query becomes `SELECT * FROM users WHERE email = '' OR '1'='1' --'` — every row matches, and the trailing `--` comments out anything after.\n\nSafe — the placeholder and the value are sent separately, so the value can never be interpreted as SQL:\n\n```python\nquery = \"SELECT * FROM users WHERE email = %s\"\ncursor.execute(query, (user_input,))\n```\n\nThe database driver handles quoting and escaping correctly regardless of what characters `user_input` contains — including characters that would otherwise be dangerous — because the value is never parsed as part of the query grammar in the first place.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "security-tuning-s06",
+      "order": 6,
+      "sectionTitle": "Connection pooling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Opening a new database connection is expensive — a TCP handshake, TLS negotiation, authentication, and on Postgres specifically, forking an entire new backend process per connection — often tens of milliseconds of pure overhead before a single query runs. A naive application that opens a fresh connection per request pays this cost on every single request and can exhaust the database's max connection limit under moderate load, since each connection also holds real memory on the database server regardless of whether it's doing anything.\n\nA **connection pool** (PgBouncer, application-framework pools, RDS Proxy) maintains a set of already-open connections and hands them out to requests as needed, returning them to the pool when the request finishes instead of closing them. This amortizes the expensive setup cost across many requests and, critically, caps the number of real database connections regardless of how many concurrent application requests are in flight — protecting the database from being overwhelmed by connection count alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "security-tuning-s06-q1"
+      ]
+    },
+    {
+      "id": "security-tuning-s07",
+      "order": 7,
+      "sectionTitle": "The N+1 query problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **N+1 problem**: fetch a list of N parent records with one query, then loop over them and run one additional query per record to fetch related data — 1 query becomes N+1. Rendering a page of 50 blog posts, each showing its author's name, by running one query for the posts and then 50 separate queries (one per post) for each author, is the textbook case — and it's exceptionally common with ORMs, whose lazy-loading defaults make this pattern easy to write by accident and easy to miss in code review, since each individual query looks completely reasonable in isolation.\n\nThe fix is to fetch the related data in bulk: a single `JOIN`, or a single `WHERE author_id IN (...)` query covering all 50 posts at once, replacing 50 round trips with 1. At small scale N+1 is invisible; at real traffic, it's a query-count explosion that shows up as database CPU and connection-pool exhaustion long before anyone traces it back to one specific unbatched loop.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "security-tuning-s07-q1"
+      ]
+    },
+    {
+      "id": "security-tuning-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: over-privileged application DB accounts",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"It's simpler to give the application's database account full admin privileges — one less thing to configure, and the app can always do whatever it needs.\"\n\n**Why it's wrong:** if the application is ever compromised — a dependency vulnerability, a SQL injection bug that does get through, a leaked credential — an attacker inherits *exactly* whatever privileges that database account has. An admin-privileged app account turns any application-layer compromise into a total database compromise: dropping tables, reading every other tenant's data, altering permissions, exfiltrating everything. A properly scoped account limits the blast radius to what that specific service actually needs.\n\n**Correct model:** apply least privilege deliberately — grant each application account only the specific tables and operations (`SELECT`, `INSERT`, `UPDATE` on named tables) it actually requires, use separate accounts for separate services even against the same database, and never let day-to-day application traffic run as a superuser or owner role.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "security-tuning-s08-q1"
+      ]
+    },
+    {
+      "id": "security-tuning-s09",
+      "order": 9,
+      "sectionTitle": "Compare: fixing N+1 with JOIN vs batching vs a data loader",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Single JOIN | Batched IN query | Data loader / eager-loading |\n|---|---|---|---|\n| Round trips | 1 | 1 (per batch) | 1 per unique entity type, per request |\n| Best for | Data genuinely needed together, simple shape | ORM code that already has the ID list handy | GraphQL/nested resolvers where the N+1 site isn't obvious from the code structure |\n| Risk | Result set duplication if the join is one-to-many and not handled carefully | Requires collecting all IDs before issuing the query — awkward mid-loop | Adds a library/abstraction layer; can mask the underlying query cost if misused |\n| Typical fix location | The query itself | The data-access layer | A resolver-level batching utility (e.g. GraphQL's DataLoader) |\n\n**How to decide:** reach for a plain `JOIN` first when the shapes are simple; reach for batching or a data loader when the N+1 is buried inside nested object graphs or resolver code where rewriting as one JOIN isn't natural.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "security-tuning-s10",
+      "order": 10,
+      "sectionTitle": "Diagnosing an N+1 problem in production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "N+1 problems are diagnosed by looking at **query volume relative to request count**, not by reading code — the code often looks fine line by line. The telltale signature in APM tooling or database query logs: a single API request that should need a handful of queries instead issues dozens or hundreds, and those queries are structurally near-identical except for one changing parameter (`WHERE author_id = 7`, then `WHERE author_id = 12`, then `WHERE author_id = 34`, ...).\n\nPostgres's `pg_stat_statements` (grouping by normalized query text) or an APM tool's per-request query count are both effective at surfacing this — a query that appears with very high call counts but low individual cost is a strong N+1 signal, distinct from a genuinely slow single query, which shows up as high per-call cost instead. Recognizing which signature you're looking at determines whether the fix is batching (N+1) or query optimization (a single slow query), and conflating the two leads to fixing the wrong thing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "security-tuning-s11",
+      "order": 11,
+      "sectionTitle": "Connection pooling's own failure mode: pool exhaustion",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A connection pool prevents unbounded connections from overwhelming the database, but it introduces its own failure mode: **pool exhaustion**. If every connection is checked out and none are being returned quickly enough — because queries are slow, because a code path forgot to release a connection back to the pool, or because traffic genuinely exceeds the pool's configured size — new requests queue waiting for a connection, and the application appears to hang even though the database itself may be healthy and lightly loaded.\n\nThis is a distinct failure signature from database overload: check the pool's own metrics (checked-out count, wait queue depth, wait time) before assuming the database is the bottleneck. A pool sized too small for legitimate concurrent load, or a slow query holding a connection far longer than expected, both produce identical symptoms from the application's point of view — requests timing out waiting for a connection that never comes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "security-tuning-s11-q1"
+      ]
+    },
+    {
+      "id": "security-tuning-s12",
+      "order": 12,
+      "sectionTitle": "Security and performance are the same discipline: least surface area",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It's worth closing on the thread connecting everything in this topic: row-level security, least-privilege accounts, parameterized queries, connection pooling, and fixing N+1 are all instances of the same underlying discipline — **minimize what can go wrong by minimizing what's exposed or repeated**. A scoped-down account limits blast radius; a parameterized query limits what input can do; a connection pool limits how many raw connections exist; batching limits how many queries a single request can trigger.\n\nA staff-level engineer treats this as one coherent design habit applied everywhere, not a checklist of unrelated best practices — every one of these is answering the same question: \"what's the smallest amount of trust, exposure, or repeated work this code path actually needs?\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

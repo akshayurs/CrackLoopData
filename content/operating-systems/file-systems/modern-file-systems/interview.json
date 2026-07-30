@@ -1,0 +1,29 @@
+{
+  "topicId": "modern-file-systems",
+  "interviewQuestions": [
+    {
+      "id": "modern-file-systems-iq1",
+      "question": "Why can ZFS snapshots be nearly instant regardless of file size?",
+      "answerMarkdown": "I'd anchor the answer in ZFS's core design choice: it's a **copy-on-write** file system, meaning it never overwrites a block in place — every modification writes a new block elsewhere and atomically repoints the metadata tree above it to the new version. The old block is left exactly as it was, simply unreferenced by the live tree, until nothing needs it anymore.\n\nGiven that, a snapshot is trivial: save a copy of the current root pointer of the block tree and mark that generation as protected from reclamation. No data moves, nothing is copied — it's a handful of metadata writes, which is why it completes in milliseconds on a 10TB pool exactly as fast as on a 10GB one.\n\nThe cost doesn't vanish, it just moves: as the live file system continues writing new versions of blocks (its normal CoW behavior), any block still referenced by the snapshot can't be reclaimed, so keeping many old snapshots around means more \"before\" versions of changed data pinned on disk — snapshot-heavy ZFS pools need real free-space headroom for exactly this reason.\n\n**Testing:** whether you understand *why* the operation is cheap — the underlying CoW mechanism — not just that ZFS \"has fast snapshots.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "CoW as the mechanism behind cheap snapshots"
+    },
+    {
+      "id": "modern-file-systems-iq2",
+      "question": "When would you choose ext4 over ZFS or Btrfs for a new system, even knowing CoW file systems offer checksums and snapshots?",
+      "answerMarkdown": "I'd frame this as a genuine trade-off rather than assuming CoW is strictly better. ext4 wins when raw write throughput and low complexity matter more than integrity guarantees and point-in-time recovery — a workload doing lots of small random writes to the same regions (a busy transactional database's data files, a frequently-modified VM disk image) will progressively fragment on a CoW file system, since every change relocates rather than overwrites in place.\n\nOperationally, ext4 is also simpler: no separate pool-management layer to learn, lower baseline memory usage (ZFS's ARC cache in particular is notoriously memory-hungry, commonly configured for gigabytes just for cache), and it's the default, extremely mature choice on nearly every Linux distribution — meaning more tooling, more institutional knowledge, and fewer surprises.\n\nConcretely, I'd pick ext4 for a stateless web server's root volume or a database's transaction log volume where I want predictable low-latency writes, and reach for ZFS/Btrfs specifically for backup targets, NAS storage, or any volume where I explicitly want cheap point-in-time snapshots and corruption detection enough to accept the write-pattern cost.\n\n**Testing:** whether you can make and defend an actual engineering decision instead of assuming newer/fancier is always better.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Choosing ext4 over a CoW file system"
+    },
+    {
+      "id": "modern-file-systems-iq3",
+      "question": "How does ZFS detect and recover from silent data corruption that a traditional RAID array would miss entirely?",
+      "answerMarkdown": "I'd start with the failure mode itself: bit rot — a disk sector's data degrades just enough that the disk's own error correction doesn't catch it, so a read returns subtly wrong bytes without any error being reported. Traditional RAID, sitting below the file system with no visibility into which blocks are actually meaningful data, has no way to know a returned block is wrong; it just serves whatever the disk gives it.\n\nZFS closes this gap by checksumming every block and storing that checksum in the *parent* pointer, not next to the block itself — so a corrupted block can't also corrupt its own checksum in a way that would let it pass. Every read verifies the checksum; a mismatch means corruption was caught, not silently served to the application.\n\nIf the pool has redundancy — a mirror or RAID-Z — ZFS goes further: it fetches the block from a redundant copy, verifies *that* copy's checksum, and if it matches, transparently repairs the corrupted copy in place. This is something a traditional RAID controller genuinely cannot do on its own, because without a checksum, it has no way to know which of two disagreeing copies is the correct one — it would just report a mirror mismatch or silently pick one at random.\n\n**Testing:** whether you understand checksumming as an active detection-and-repair mechanism, not just \"ZFS is more reliable.\"",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Checksumming and self-healing in practice"
+    }
+  ]
+}

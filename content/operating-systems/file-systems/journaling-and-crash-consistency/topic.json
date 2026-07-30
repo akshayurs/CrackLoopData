@@ -1,0 +1,187 @@
+{
+  "id": "journaling-and-crash-consistency",
+  "title": "Journaling & Crash Consistency",
+  "area": "operating-systems",
+  "group": "file-systems",
+  "order": 6,
+  "slug": "journaling-and-crash-consistency",
+  "summary": "What happens when power dies mid-write, and how write-ahead logging (journaling) lets a file system recover in milliseconds instead of scanning the entire disk.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "journaling-and-crash-consistency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A single file operation — appending to a file, say — is really several separate disk writes: a data block, an updated inode, an updated free-space bitmap. If the power dies between writes 1 and 3, the disk is left in a state no single operation ever intended: **crash consistency** is the problem of recovering cleanly from exactly this.\n\n**Journaling** (write-ahead logging) is the modern answer: write your intentions to a log first, then apply them, so a crash mid-way can always be resolved by replaying or discarding the log — never by guessing. This is one of the most commonly asked file-systems interview topics because it's concrete, has real failure modes, and every engineer eventually hits `fsck` or an ext4 journal replay message on a real machine.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "journaling-and-crash-consistency-s02",
+      "order": 2,
+      "sectionTitle": "The crash consistency problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single logical file-system operation is usually several physical disk writes that must all happen for the operation to be \"done,\" but disks only guarantee one block write is atomic at a time — never a batch of them together. If the machine loses power, crashes, or the OS panics between two of those writes, the on-disk state reflects neither the old state nor the new one cleanly — it's a **partially applied update**.\n\nThis isn't a rare edge case: production systems crash, kernels panic, cloud VMs get forcibly terminated, and every one of those events can catch a file system mid-update. A file system that can't recover cleanly from this either loses data or, worse, silently corrupts unrelated files.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "journaling-and-crash-consistency-s02-q1"
+      ]
+    },
+    {
+      "id": "journaling-and-crash-consistency-s03",
+      "order": 3,
+      "sectionTitle": "Worked example: a crash during file append",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Appending 4KB to an existing file requires three writes: (1) write the new data to a freshly allocated block, (2) update the file's inode to point to that new block and reflect the new size, (3) update the free-space bitmap to mark that block as used.\n\nIf the crash happens after step 1 but before step 2, the data is safely on disk but nothing points to it — it's an orphaned block, invisible and eventually leaked. If it happens after step 2 but before step 3, the inode claims a block that the bitmap still shows as free — the next allocation can hand that same block to a *different* file, and now two files share one block, silently corrupting whichever is written second. Neither outcome is what the application asked for, and neither is detectable without deliberate design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "journaling-and-crash-consistency-s04",
+      "order": 4,
+      "sectionTitle": "Write-ahead logging (journaling): the core idea",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Write-ahead logging** flips the order: before touching any of the real on-disk structures, the file system writes a description of the intended changes — \"set inode 4021's size to X and block pointer to Y; clear bit 88213 in the bitmap\" — to a dedicated **journal** (a reserved, append-only region of disk). Only after that journal entry is safely committed does the file system apply the actual changes to the real structures.\n\nThe payoff: if a crash happens *before* the journal entry is fully committed, none of the real changes have happened yet — the file system is exactly as it was before the operation started, a clean and valid state. If a crash happens *after* commit but before all the real writes land, recovery just replays the already-committed journal entry — the outcome is well-defined either way, never a half-applied guess.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "journaling-and-crash-consistency-s04-q1"
+      ]
+    },
+    {
+      "id": "journaling-and-crash-consistency-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: journal transaction lifecycle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![journal commit timeline with crash point](assets/journal-commit-timeline.svg)\n\nThe critical marker is the commit record: once it's on disk, the transaction is durable even if none of the real structures have been touched yet — recovery just replays it. Before the commit record lands, a crash means the transaction never happened at all, which is equally safe, just different.\n\nWhat's never safe is a crash mid-write of the commit record itself — journaling formats solve this with a checksum or a two-phase commit-record write so a torn write is detectable and treated as \"never happened.\"",
+      "assets": [
+        {
+          "alt": "journal commit timeline with crash point",
+          "path": "assets/journal-commit-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "journaling-and-crash-consistency-s06",
+      "order": 6,
+      "sectionTitle": "Journaling modes: data vs ordered vs writeback",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Mode | What goes in the journal | Consistency | Performance |\n|---|---|---|---|\n| **Data journaling** | Metadata AND file data, written twice (journal, then real location) | Strongest — no corruption or stale data possible after a crash | Slowest — every byte written twice |\n| **Ordered** (ext4 default) | Metadata only, but data is guaranteed to hit disk before its metadata commits | Metadata always consistent; data is either fully old or fully new, never mixed | Middle ground — most production systems use this |\n| **Writeback** | Metadata only, with no ordering guarantee versus data | Metadata stays consistent; data can be stale or contain old garbage after a crash | Fastest |\n\n**How to decide:** ordered mode is the default for a reason — it gives \"no corrupted data\" guarantees without paying double the I/O of full data journaling. Choose data journaling only when you cannot tolerate even a single stale-but-not-corrupt data block (some database or financial-ledger use cases); writeback only when raw throughput matters more than any data guarantee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "journaling-and-crash-consistency-s06-q1"
+      ]
+    },
+    {
+      "id": "journaling-and-crash-consistency-s07",
+      "order": 7,
+      "sectionTitle": "Metadata-only journaling — why most file systems don't journal data",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Metadata (inodes, directory entries, bitmaps) is small and structurally fragile — a single corrupted pointer can make a whole file, or a whole directory subtree, unreachable. File data is comparatively huge and, if it's wrong, the damage is contained to that one file's bytes, not the file system's structural integrity.\n\nJournaling everything means writing every byte of file data twice — once to the journal, once to its final location — which can roughly halve write throughput. Metadata-only journaling (ordered mode) accepts the smaller risk (a crash might leave a file's data slightly stale, but never structurally broken — no dangling pointers, no shared blocks) in exchange for near-full write speed. This is the trade-off ext4 makes by default, and why `mount -o data=journal` exists as an opt-in for workloads that need the stronger guarantee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "journaling-and-crash-consistency-s08",
+      "order": 8,
+      "sectionTitle": "Replaying the journal after a crash",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "On mount, the file system checks the journal for **committed but not yet checkpointed** transactions — ones whose commit record landed but whose real-structure writes may not have fully completed. Each such transaction is **replayed**: its recorded changes are reapplied to the real structures, exactly as if the crash never interrupted anything.\n\nThis is fast precisely because it's targeted — the journal only ever holds a small, recent window of in-flight transactions (typically tens of megabytes, reused in a ring buffer), so replay touches a handful of blocks, not the whole disk. On a real system, journal replay after an unclean shutdown typically completes in well under a second, which is why modern systems boot cleanly after a power loss almost instantly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "journaling-and-crash-consistency-s08-q1"
+      ]
+    },
+    {
+      "id": "journaling-and-crash-consistency-s09",
+      "order": 9,
+      "sectionTitle": "fsck: the older, slower alternative",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before journaling was standard, crash recovery meant `fsck` (file system check): scan the *entire* file system, cross-checking every inode against every directory entry and every bitmap bit, looking for inconsistencies and fixing them heuristically. On a multi-terabyte disk with millions of inodes, this could take minutes to hours — an unacceptable boot delay for anything that needs to come back up fast.\n\n`fsck` isn't obsolete — it's still the tool of last resort when the journal itself is corrupted, or for file systems that don't journal at all — but journaling turned an O(disk size) recovery into an O(journal size) one, which is the single biggest practical reason journaling file systems replaced non-journaling ones industry-wide through the 2000s.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "journaling-and-crash-consistency-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming journaling means zero data loss ever",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"My file system journals, so a crash can never lose any data I've written.\"\n\n**Why it's wrong:** journaling guarantees **structural** consistency — the file system's metadata will never be left in a self-contradictory state — not that every byte your application thinks it wrote is durable. In ext4's default ordered mode, file *data* isn't journaled at all; if a crash happens before dirty data pages are flushed from the page cache to disk, that data is gone, even though the file system itself recovers cleanly.\n\n**Correct model:** journaling is a structural-integrity guarantee, not a data-durability guarantee. If an application needs to know specific bytes survived a crash, it must call `fsync()` (or `fdatasync()`) to force those bytes to disk — journaling protects the file system around that data, it doesn't substitute for the application asking for durability explicitly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "journaling-and-crash-consistency-s10-q1"
+      ]
+    },
+    {
+      "id": "journaling-and-crash-consistency-s11",
+      "order": 11,
+      "sectionTitle": "Real numbers: write() vs fsync() durability",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A `write()` call typically only copies data into the kernel's page cache — it returns in microseconds regardless of disk speed, because no disk I/O happened yet. `fsync()` blocks until that data (and, depending on the call, its metadata) is actually on stable storage, which costs whatever the underlying device's write latency is: roughly 1-10ms on an HDD (one rotation plus seek), and commonly 10-100 microseconds to a few milliseconds on an SSD, depending on whether it has a battery-backed write cache.\n\n```bash\n$ strace -T -e write,fsync myprogram\nwrite(3, \"...\", 4096)  = 4096 <0.000012>\nfsync(3)                = 0    <0.004891>\n```\n\nThat 400x latency gap is exactly why naive \"call fsync after every write\" designs are slow, and why databases batch writes into a WAL and fsync in groups rather than per-row.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "journaling-and-crash-consistency-s11-q1"
+      ]
+    },
+    {
+      "id": "journaling-and-crash-consistency-s12",
+      "order": 12,
+      "sectionTitle": "The senior nuance: journaling is the same idea as database WAL",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "File system journaling and a database's **write-ahead log** (Postgres's WAL, MySQL's InnoDB redo log) are the same mechanism solving the same problem one layer apart: record the intended change durably before applying it, so recovery is replay, not guesswork. A staff-level answer names this connection explicitly — it signals you understand crash consistency as a general pattern, not a file-system-specific trick.\n\nThe layering matters in practice: a database's WAL protects its own internal consistency, but the database still relies on the file system underneath to durably persist that WAL's bytes when it calls `fsync()`. A file system bug or a misconfigured write-back cache that lies about durability (claims data is on disk when it's only in a volatile cache) can silently defeat *both* layers of protection — a real, documented class of production incidents involving disk controllers with unsafe write caching.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

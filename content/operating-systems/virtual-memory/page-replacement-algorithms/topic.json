@@ -1,0 +1,187 @@
+{
+  "id": "page-replacement-algorithms",
+  "title": "Page Replacement Algorithms",
+  "area": "operating-systems",
+  "group": "virtual-memory",
+  "order": 5,
+  "slug": "page-replacement-algorithms",
+  "summary": "Choosing which page to evict when memory is full — FIFO, Belady's Anomaly, Optimal, LRU, and the clock algorithm real systems actually implement, traced by hand on a reference string.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "page-replacement-algorithms-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Once RAM is full and a page fault needs a free frame, the OS has to pick a victim — some resident page to evict. Which one you pick has a huge effect on fault rate, and the algorithms that answer this question are some of the most-tested material in OS interviews: **FIFO**, the theoretical **Optimal**, practical **LRU**, and the **clock algorithm** real kernels actually run.\n\nThis topic is heavy on worked traces deliberately — tracing a reference string by hand through each algorithm is the fastest way to internalize *why* LRU approximates optimal well, and why true LRU is expensive enough that nobody actually implements it exactly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "page-replacement-algorithms-s02",
+      "order": 2,
+      "sectionTitle": "Why we need page replacement — memory is smaller than all pages in use",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Demand paging assumes a fault can always be serviced by finding a free frame — but once enough processes are running with enough active pages, free frames run out entirely while pages *still needed* keep faulting in. At that point, servicing a new fault requires giving up a frame that's currently in use by evicting whatever page is in it.\n\n**Page replacement** is the policy question this creates: of all the currently-resident pages, which one should be evicted? Pick well, and the evicted page won't be needed again soon, so the fault rate stays low. Pick badly, and you might evict a page that's needed again immediately, creating another fault right away — the quality of this single decision, repeated constantly, is what separates a smoothly-running system from a thrashing one (next topic).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "page-replacement-algorithms-s03",
+      "order": 3,
+      "sectionTitle": "FIFO replacement",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**FIFO (First-In-First-Out)** is the simplest possible policy: evict whichever resident page has been in memory the *longest*, regardless of whether it's been used recently. Implementation is trivial — a queue of resident pages, push on load, pop from the front on eviction.\n\nIts weakness is exactly what its simplicity ignores: how long a page has been resident has no necessary relationship to whether it's still needed. A page loaded early and accessed constantly ever since is just as eligible for eviction as one loaded early and never touched again — FIFO can't tell the difference, which is why it tends to perform noticeably worse than usage-aware policies in practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "page-replacement-algorithms-s03-q1"
+      ]
+    },
+    {
+      "id": "page-replacement-algorithms-s04",
+      "order": 4,
+      "sectionTitle": "Code: FIFO on a reference string",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Reference string: `7 0 1 2 0 3 0 4`. Frames available: **3**.\n\n```text\nRef  Frames (queue order, oldest first)   Fault?\n7    [7]                                   FAULT (empty)\n0    [7, 0]                                FAULT\n1    [7, 0, 1]                             FAULT\n2    [0, 1, 2]   evict 7 (oldest)          FAULT\n0    [0, 1, 2]                             hit (0 present)\n3    [1, 2, 3]   evict 0 (oldest)          FAULT\n0    [2, 3, 0]   evict 1 (oldest)          FAULT\n4    [3, 0, 4]   evict 2 (oldest)          FAULT\n```\n\nResult: **6 faults out of 8 references**. Notice the fifth reference (0) is a hit only because it happened to still be in the queue — one step later, evicting page 0 right before it's needed again (the 6th and 7th references) is exactly the kind of decision FIFO can't avoid, since it never looks at recency of use.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "page-replacement-algorithms-s04-q1"
+      ]
+    },
+    {
+      "id": "page-replacement-algorithms-s05",
+      "order": 5,
+      "sectionTitle": "Belady's Anomaly — more frames, more faults?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Intuition says more physical frames should never make fault behavior *worse* — more room to keep pages resident should only ever help or do nothing. **Belady's Anomaly** is the counterintuitive discovery that under FIFO specifically, adding frames can actually *increase* the fault count for the same reference string.\n\nThe classic example: reference string `1 2 3 4 1 2 5 1 2 3 4 5` produces **9 faults with 3 frames** under FIFO, but **10 faults with 4 frames** — strictly worse, despite having more memory to work with. This happens because FIFO's eviction order depends only on load time, and adding a frame changes *which* pages get evicted *when* in a way that isn't guaranteed to be monotonically better. It's specific to FIFO and a small set of related algorithms — algorithms with the **stack property** (LRU and Optimal both have it) are mathematically guaranteed never to exhibit this anomaly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "page-replacement-algorithms-s05-q1"
+      ]
+    },
+    {
+      "id": "page-replacement-algorithms-s06",
+      "order": 6,
+      "sectionTitle": "Optimal (OPT/MIN) replacement — the theoretical best",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Optimal replacement** always evicts the page that won't be used for the **longest time in the future** — provably the choice that minimizes total fault count for a given reference string and frame count. It's a clean theoretical benchmark: no algorithm can ever produce fewer faults than Optimal on the same input.\n\nIt is also completely unimplementable in a real system, because it requires knowing the *future* reference sequence in advance — impossible in general for an OS that has no idea what a process will access next. Its real value is as a yardstick: every practical algorithm (FIFO, LRU, Clock) gets evaluated by how close it comes to Optimal's fault count on representative workloads, not by any absolute standard.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "page-replacement-algorithms-s07",
+      "order": 7,
+      "sectionTitle": "Least Recently Used (LRU) — approximating optimal with history",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Optimal needs the future; **LRU** substitutes the best available proxy — the past — on the principle of *locality*: a page that hasn't been used in a long time is a good bet to stay unused a while longer, and a page used recently is likely to be used again soon. Evict the page that was **least recently accessed**.\n\nLRU has the **stack property** (Belady's Anomaly never happens under it) and, on typical workloads with real locality, tracks Optimal's fault count closely. The catch is implementation cost: exact LRU needs to know the precise access-recency ordering of every resident page, updated on *every single memory reference* — timestamping or maintaining a linked list on every access is expensive enough that essentially no real system implements true LRU exactly for page replacement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "page-replacement-algorithms-s07-q1"
+      ]
+    },
+    {
+      "id": "page-replacement-algorithms-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: LRU stack update across a reference string",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![LRU stack reordering after each reference](assets/lru-stack-snapshots.svg)\n\nThe key visual: every reference — hit or fault — moves that page to the top of the stack; whatever's at the bottom is always the next eviction candidate.",
+      "assets": [
+        {
+          "alt": "LRU stack reordering after each reference",
+          "path": "assets/lru-stack-snapshots.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 27,
+      "mcqIds": []
+    },
+    {
+      "id": "page-replacement-algorithms-s09",
+      "order": 9,
+      "sectionTitle": "Implementing LRU cheaply: the clock (second-chance) algorithm",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **clock algorithm** (also called second-chance) approximates LRU using a single **reference bit** per page — set to 1 by hardware whenever the page is accessed — instead of maintaining exact recency ordering.\n\nResident pages are arranged in a circular list with a \"clock hand\" pointer. To evict, the hand examines the page it's pointing at: if its reference bit is 0, evict it. If the bit is 1, the page gets a \"second chance\" — clear its bit to 0 and advance the hand to the next page, repeating until a bit-0 page is found. Pages get evicted only after surviving one full sweep without being re-accessed, which is a cheap, hardware-friendly approximation of \"hasn't been used recently\" — no per-access bookkeeping required, just a bit the hardware sets for free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "page-replacement-algorithms-s09-q1"
+      ]
+    },
+    {
+      "id": "page-replacement-algorithms-s10",
+      "order": 10,
+      "sectionTitle": "Code: clock algorithm walkthrough",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Frames (circular, hand starts at leftmost): `A(ref=1) B(ref=0) C(ref=1) D(ref=0)`. A new page E needs a frame.\n\n```text\nHand at A: ref=1 -> give second chance, clear to 0, advance\n           [A=0, B=0, C=1, D=0]\nHand at B: ref=0 -> EVICT B, load E here\n\nResult: B evicted. Frames now: A(0) E(new) C(1) D(0), hand now past B\n```\n\nA is spared this round (its bit was cleared, but it survives to be re-examined next sweep) purely because B, right after it, already had ref=0 and became the immediate victim. If B had also had ref=1, the hand would have continued to C, cleared it too, and kept going — the algorithm degrades gracefully toward FIFO-like behavior when most pages are being actively used.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "page-replacement-algorithms-s10-q1"
+      ]
+    },
+    {
+      "id": "page-replacement-algorithms-s11",
+      "order": 11,
+      "sectionTitle": "Compare: FIFO vs LRU vs Clock — accuracy vs implementation cost",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | FIFO | True LRU | Clock (second-chance) |\n|---|---|---|---|\n| Decision basis | Load order only | Exact recency of access | Approximate recency via a reference bit |\n| Fault-rate quality | Noticeably worse than usage-aware policies | Close to Optimal on workloads with locality | Close to LRU in practice, slightly worse |\n| Per-access overhead | None | High — bookkeeping on every reference | Minimal — hardware sets one bit for free |\n| Belady's Anomaly possible? | Yes | No (has the stack property) | No, in practice behaves like LRU here |\n| Used in real systems today | Rarely, on its own | Essentially never implemented exactly | Yes — the basis for most real kernels' policy (Linux, BSD variants) |\n\nThe practical resolution to \"LRU is great but too expensive\": clock gets most of LRU's accuracy at a cost close to FIFO's, which is exactly why it — or refinements of it — is what production kernels actually run, not either textbook extreme.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "page-replacement-algorithms-s12",
+      "order": 12,
+      "sectionTitle": "The senior nuance: real kernels use multi-queue refinements, not textbook clock",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer stops at \"the clock algorithm.\" A staff-level answer knows production kernels layer more structure on top. Linux uses a **two-list (active/inactive) LRU approximation**: pages start in an inactive list and get promoted to an active list on re-reference, with periodic scanning moving pages between lists based on recent access — closer to a coarse two-tier LRU than a single clock hand.\n\nModern Linux also separates **file-backed** pages (easy to evict — just re-read from disk, or discard if unmodified) from **anonymous** pages (heap/stack memory with no backing file — must go to swap to be evicted at all), and weighs eviction pressure between the two differently. This distinction — knowing production systems are more nuanced than the textbook single-list algorithm — is exactly the kind of detail that separates a rehearsed answer from genuine systems experience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

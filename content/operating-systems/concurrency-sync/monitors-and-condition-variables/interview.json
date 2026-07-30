@@ -1,0 +1,37 @@
+{
+  "topicId": "monitors-and-condition-variables",
+  "interviewQuestions": [
+    {
+      "id": "monitors-and-condition-variables-iq1",
+      "question": "Why wrap wait() in a while loop instead of an if?",
+      "answerMarkdown": "I'd start from the guarantee wait() actually gives you: none, about the condition being true when you wake up — only that you're eligible to re-acquire the mutex and keep going. There are two independent reasons for this.\n\nFirst, spurious wakeups: POSIX explicitly permits a thread to wake from wait() with no signal at all, for implementation reasons like batching wakeups efficiently. If you used an if, a spurious wakeup would let the thread proceed as though the condition were true when it never was.\n\nSecond, and more subtle: almost every real system uses Mesa semantics, where a signaling thread keeps running instead of immediately handing off to the waiter. That means by the time a woken thread actually gets scheduled and re-acquires the mutex, some other thread might have already consumed whatever changed the condition — a real signal doesn't guarantee the condition is still true later.\n\nBoth point to the same fix: `while (!condition) wait(cv, mutex);` rechecks the actual condition every time the thread wakes, spurious or not, and only proceeds once it's genuinely satisfied. An if would be correct only under stricter Hoare semantics with an immediate handoff guarantee — which essentially nothing in production actually implements.\n\n**Testing:** whether you know this is a correctness requirement under real (Mesa) semantics, not defensive-programming paranoia.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The while vs if question"
+    },
+    {
+      "id": "monitors-and-condition-variables-iq2",
+      "question": "What's a lost wakeup, and how does a monitor's wait() prevent it?",
+      "answerMarkdown": "A lost wakeup happens when a thread checks a condition, finds it false, and then calls wait() — but between the check and the actual wait() call, another thread changes the condition and signals. Since a signal with nobody currently waiting is simply discarded, not remembered for later, the checking thread then blocks on a condition that already became true, and nothing will ever wake it.\n\nThe fix built into `wait(cv, mutex)` is that releasing the mutex and beginning to wait are one atomic operation. As long as the thread holds the mutex continuously from the moment it checks the condition through the call to wait(), no other thread can get the mutex to change the condition and signal in between — there's no gap for the race to happen in.\n\nI'd give the concrete failure pattern that causes this bug in practice: someone checks the condition outside the lock, or releases the lock and re-acquires it separately before calling wait(), thinking it's \"close enough\" to atomic. It isn't — any window, even a few instructions, is enough for another thread's signal to slip through unheard.\n\n**Testing:** whether you understand why the atomicity of check-then-wait matters, not just that it exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Lost wakeups"
+    },
+    {
+      "id": "monitors-and-condition-variables-iq3",
+      "question": "When would you call signal() versus broadcast(), and what goes wrong if you pick the wrong one?",
+      "answerMarkdown": "I'd choose based on how many waiters could possibly have their condition satisfied by the change. If only one waiter can proceed — a single slot freed in a bounded buffer, one connection returned to a pool — I'd call signal(), which wakes exactly one thread. If the change could satisfy many or all waiters at once — a shutdown flag being set, or every waiter sharing the identical predicate — I'd call broadcast().\n\nGetting it wrong in the broadcast direction causes a **thundering herd**: if 50 threads are waiting for one freed slot and the code calls broadcast() every time, all 50 wake up, contend for the same mutex, and 49 of them find the condition false again and go back to sleep — wasted context switches and lock contention on every single signal. I've seen this show up as an unexplained CPU or lock-contention spike on a queue-like structure that scales badly with waiter count.\n\nGetting it wrong in the other direction is worse: using signal() when multiple waiters actually need to wake — say, a shutdown condition that every waiter should react to — can leave some threads permanently blocked, since only one gets woken and the others never notice the state changed.\n\nAs a rule, broadcast() is always safe correctness-wise as long as every waiter rechecks its condition in a while loop; the real decision is a performance trade-off, and I'd default to signal() unless I can articulate why multiple waiters genuinely need to react to the same event.\n\n**Testing:** whether you see this as a performance decision with a real production failure mode, not just an API detail.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "signal() vs broadcast() and thundering herd"
+    },
+    {
+      "id": "monitors-and-condition-variables-iq4",
+      "question": "How is a monitor different from just using a semaphore for the same producer-consumer problem?",
+      "answerMarkdown": "The semaphore solution needs three separate objects — two counting semaphores for empty/full slots and a plain mutex for the buffer itself — and every call site has to get all three paired correctly. That's fine in a small example but gets error-prone across a large codebase: a missed signal on an error path, a semaphore reused for two logically different conditions, or an ordering mistake between locking the mutex and waiting on a semaphore that causes a deadlock.\n\nA monitor collapses this into one mutex plus condition variables that express the actual predicate directly — \"wait while the buffer is full,\" not \"wait while a counter is zero.\" The lock and the data it protects are bundled together (in Java, the object's own intrinsic lock; in Python, a Condition wrapping a lock), which makes it much harder to touch shared state without holding the lock, since the language or library enforces the pairing rather than relying on programmer discipline.\n\nThe trade-off is that condition variables are Mesa-semantics in almost every real implementation, so you still need the while-loop recheck discipline — a monitor removes the semaphore bookkeeping problem, not the need to reason carefully about when a wakeup actually means the condition holds.\n\n**Testing:** whether you can articulate monitors as an encapsulation improvement over semaphores, not just a different syntax for the same thing.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Monitors vs raw semaphores"
+    }
+  ]
+}

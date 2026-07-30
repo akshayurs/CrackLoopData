@@ -1,0 +1,29 @@
+{
+  "topicId": "inodes-and-unix-file-systems",
+  "interviewQuestions": [
+    {
+      "id": "inodes-and-unix-file-systems-iq1",
+      "question": "What's the difference between a hard link and a symbolic link, concretely?",
+      "answerMarkdown": "I'd give the mechanism first, then what breaks. A **hard link** (`ln target link`) is a second directory entry pointing at the exact same inode number as the original — the file system's link count on that inode goes up by one, and there's no sense in which one name is \"more real\" than the other. A **symbolic link** (`ln -s target link`) is a distinct small file with its own inode, whose content is literally the text of the target path.\n\nThe concrete consequence: deleting the original file's name — `rm target` — leaves a hard link fully working, because the data is still referenced by the surviving directory entry. The same `rm target` breaks a symlink instantly: the path it stores now resolves to nothing, and opening it gives `ENOENT`, even though the symlink file itself still exists and shows up in `ls`.\n\nA second concrete difference: `ln target.txt /mnt/other-disk/link.txt` fails for a hard link across file systems, because inode numbers are only meaningful within one file system — but the symlink version works fine, since it's just storing a string.\n\n**Testing:** whether you can explain the mechanism (shared inode vs stored path) rather than just reciting \"one is a copy and one is a shortcut,\" which is imprecise on both counts.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Hard link vs soft link, mechanism-first"
+    },
+    {
+      "id": "inodes-and-unix-file-systems-iq2",
+      "question": "You've deleted files but `df` still shows the disk full. How would you debug this?",
+      "answerMarkdown": "I'd split this into two hypotheses and check both. First: a process still has the deleted file open. `unlink()` (what `rm` does) only removes the directory entry; if a process holds a file descriptor to that inode, the blocks stay allocated. I'd run `lsof +L1` (or `lsof | grep deleted`) to find files with a link count of zero but an open handle — restarting or signaling that process to reopen its log file (or `truncate`-ing via `/proc/<pid>/fd/<n>`) reclaims the space.\n\nSecond, if that comes up empty, I'd check whether this is actually an inode exhaustion problem rather than a space problem — `df -i` versus `df -h` can disagree, especially on partitions with huge numbers of tiny files (mail queues, session caches). `ENOSPC` on file creation with plenty of block space free is the signature.\n\nI'd also sanity-check for a full separate mount — like `/var/log` on its own partition filling up while `/` looks fine — since `df` reports per-filesystem, not per-directory.\n\n**Testing:** whether you know the concrete tools (`lsof +L1`, `df -i`) and reference counting model well enough to debug this live, not just recognize it as a concept.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging phantom disk usage"
+    },
+    {
+      "id": "inodes-and-unix-file-systems-iq3",
+      "question": "Why does a classic Unix inode use direct pointers plus multiple levels of indirection instead of one flat array of block pointers?",
+      "answerMarkdown": "I'd frame it as a fixed-size-record problem: the inode table's per-inode size is set once at format time, so every inode — whether for a 10-byte file or a 10GB file — has to be the same size. A flat array big enough to address a 10GB file directly would need thousands of pointer slots, wasted on every small file, which is the overwhelming majority in real workloads.\n\nThe direct+indirect scheme instead reserves a handful of direct pointers (typically 12) for the common case — a small file resolves in one hop — and adds single-, double-, and triple-indirect pointers that only get populated once a file actually grows large enough to need them. Each indirection level multiplies addressable space by roughly the number of pointers that fit in one block (about 1024x with 4KB blocks and 4-byte pointers), at the cost of one extra disk read per level to resolve.\n\nA concrete number: with 12 direct blocks, a single-indirect pointer alone pushes the addressable range from ~48KB to ~4MB; adding double-indirect reaches ~4GB. The design deliberately taxes large files with extra lookups so the vastly more common small file stays cheap.\n\n**Testing:** whether you can reason about why a specific data structure choice exists, not just recite that indirect pointers exist.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Why the tiered pointer design exists"
+    }
+  ]
+}

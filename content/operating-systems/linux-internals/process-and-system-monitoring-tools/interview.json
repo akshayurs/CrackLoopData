@@ -1,0 +1,37 @@
+{
+  "topicId": "process-and-system-monitoring-tools",
+  "interviewQuestions": [
+    {
+      "id": "process-and-system-monitoring-tools-iq1",
+      "question": "Load average is 12 on a 4-core machine — is the system in trouble?",
+      "answerMarkdown": "My first move is to reject the premise that the raw number tells me anything by itself — load average only means something relative to core count, and here 12 against 4 cores is well above capacity, so something is queuing. That alone tells me to look further, not to panic or dismiss it.\n\nThe next question is what kind of queuing. I'd run `vmstat 1` and look at the CPU split: if `us`+`sy` are high and `id` is near zero, this is genuine CPU contention — too many processes competing for too few cores, and the fix is more cores, fewer concurrent jobs, or faster code. If instead `id` is high and `wa` is elevated, the CPUs are mostly idle and the load is coming from processes stuck in uninterruptible I/O wait — a slow disk, an overloaded database, or a hung network call, and adding CPU cores would do nothing.\n\nI'd also check the three load-average numbers together — 1-minute at 12 with 15-minute at 4 says this just started and is climbing; 12 across all three means it's been sustained, which changes urgency.\n\n**Testing:** whether you know load average alone is insufficient and can name the exact next command that disambiguates CPU-bound from I/O-bound.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Interpreting load average"
+    },
+    {
+      "id": "process-and-system-monitoring-tools-iq2",
+      "question": "What's the difference between ps and top, and when would you use each?",
+      "answerMarkdown": "`ps` takes a single snapshot and exits — it's the right tool when I need process state at one instant, especially inside a script, since its output is stable and pipeable (`ps -eo pid,cmd | grep ...`). `top` re-samples on an interval and redraws in place, which is what I want when I need to watch something change — is memory climbing, is a specific PID's CPU usage dropping after a fix, is a new process appearing.\n\nBoth read the exact same underlying data from /proc — neither has privileged access the other lacks — so the choice is purely about whether I need one point-in-time fact (`ps`) or a live trend (`top`). In an actual incident, I'd typically start with `top` to get oriented on what's currently consuming resources, then drop to a specific, scriptable `ps` invocation once I know which process or pattern I'm chasing, so I can pipe the result into something else like `kill` or a log-correlation script.\n\nI'd also mention `htop` as `top` with better UX (tree view, mouse, easier sort) for interactive work, though it adds nothing `top` can't already tell me.\n\n**Testing:** whether you understand these are the same data source with different presentation models, not two different information sources.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "ps vs top, when to reach for each"
+    },
+    {
+      "id": "process-and-system-monitoring-tools-iq3",
+      "question": "free -h shows 15GB used out of 16GB. Should you be worried, and what would you actually check?",
+      "answerMarkdown": "Not from that number alone — Linux deliberately uses spare RAM as page cache, caching recently-read files because unused memory is wasted memory, and that cache counts as \"used\" in the raw figures even though the kernel will reclaim it instantly if an application needs it. Treating 15/16GB used as a crisis without more information is exactly the false alarm that page cache is designed to cause if you don't know to look past it.\n\nWhat I'd actually check is the `available` column in the same `free -h` output — that's the kernel's own estimate of memory it could hand to a new process right now, after accounting for reclaimable cache. If `available` is comfortably large (say 10GB+), the box is healthy regardless of how full \"used\" looks. If `available` is small — under a few hundred MB — that's the real signal, and I'd then check `vmstat`'s `si`/`so` columns for actual swap activity, since swapping (not high \"used\" memory) is the concrete sign of real memory pressure.\n\nI'd close by noting this exact confusion is one of the most common false pages in on-call rotations, which is why knowing the difference matters beyond trivia.\n\n**Testing:** whether you know page cache exists and specifically which free column actually reflects pressure.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Reading memory usage correctly"
+    },
+    {
+      "id": "process-and-system-monitoring-tools-iq4",
+      "question": "Walk me through diagnosing a production box where API latency has suddenly doubled, using only these command-line tools.",
+      "answerMarkdown": "I'd move from broad system state to a specific root cause in stages, letting each result decide the next command rather than running everything at once. First, `uptime` and `top`'s header to check load average against core count and get the CPU-vs-idle split — this tells me in seconds whether there's contention at all and roughly what kind.\n\nIf load is elevated with high idle time, I'd run `vmstat 1` for a few seconds and look specifically at `wa` — a high wait-on-I/O percentage points me at storage or a downstream dependency rather than compute. From there, `ps aux` filtered for state `D` shows me exactly which processes are stuck in uninterruptible I/O, which usually names the culprit process directly. If it's a disk problem specifically, `iostat -x 1` per-device utilization and queue depth confirms which volume is saturated.\n\nIf instead load is elevated with low idle time (`us`/`sy` high), I'd pivot entirely — sort `ps` by %CPU to find which process is actually burning cycles, and check whether that's expected load growth or a runaway process (an infinite loop, a missing cache causing recomputation).\n\nThe point I'd make explicit to the interviewer: I'm not running ten tools blind, I'm running the minimum sequence where each result tells me which tool to run next.\n\n**Testing:** whether you can narrate an actual ordered diagnostic path under pressure, not just name tools.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "End-to-end slow-box diagnosis"
+    }
+  ]
+}

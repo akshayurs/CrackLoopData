@@ -1,0 +1,37 @@
+{
+  "topicId": "user-mode-vs-kernel-mode",
+  "interviewQuestions": [
+    {
+      "id": "user-mode-vs-kernel-mode-iq1",
+      "question": "What happens when a user program executes a privileged instruction?",
+      "answerMarkdown": "I'd walk through it as a hardware event, not a software one: the CPU checks the mode bit before executing the instruction, sees it's privileged and the process is in user mode, and raises a general protection fault instead of running it. This is enforced in silicon — there's no way for user code to trick its way past it.\n\nThat fault is itself a trap into the kernel: control transfers to a kernel-defined fault handler, which typically decides the process has done something illegal and delivers a signal — on Linux, `SIGSEGV` or `SIGILL` — which by default terminates the process and (depending on configuration) dumps core for postmortem debugging.\n\nI'd give the concrete example of `cli` (disable interrupts) on x86: totally legal in kernel mode, but a user-mode process attempting it faults immediately, because letting arbitrary programs disable interrupts would let one process starve every other process and the kernel itself.\n\n**Testing:** whether you know privilege enforcement is a hardware guarantee, not a polite software convention.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Privileged instruction in user mode"
+    },
+    {
+      "id": "user-mode-vs-kernel-mode-iq2",
+      "question": "Why does a system call cost more than a regular function call?",
+      "answerMarkdown": "I'd start with the direct costs: a syscall triggers a mode switch — flipping the CPU's privilege level, saving user-mode register state, jumping to a fixed kernel handler, and later restoring that state to resume — none of which a plain function call needs to do.\n\nThen the indirect costs, which are often bigger: the mode switch can disturb CPU caches and the TLB (translation lookaside buffer), and on modern hardware, mitigations for speculative-execution vulnerabilities like Meltdown specifically add overhead at the user/kernel boundary, since that boundary is exactly what those exploits target.\n\nI'd anchor it with real numbers: a function call is a few cycles, sub-nanosecond; a syscall round trip typically runs a few hundred nanoseconds to low microseconds — one to two orders of magnitude more. That's exactly why hot paths batch syscalls: `io_uring` submits many I/O operations per kernel entry instead of one syscall each, and standard library I/O buffers writes so `fwrite()` doesn't syscall on every byte.\n\n**Testing:** whether you understand syscall cost well enough to reason about it quantitatively, not just qualitatively.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Syscall overhead, quantified"
+    },
+    {
+      "id": "user-mode-vs-kernel-mode-iq3",
+      "question": "If privilege separation is so important, why do some systems run everything in one mode?",
+      "answerMarkdown": "I'd frame it as a trust-vs-isolation trade-off rather than a universal rule. Privilege separation exists to contain damage from bugs and malicious code you don't fully trust — but that containment isn't free, and if you fully control and trust every piece of code on the machine, you can skip paying for it.\n\nConcretely: unikernels compile a single application and a minimal OS layer into one address space with no mode switches at all, trading isolation for lower latency and smaller footprint — viable because a unikernel typically runs one purpose-built workload, not arbitrary untrusted code. Some real-time and embedded systems make the same trade for deterministic, predictable timing, since mode-switch overhead is also a source of jitter.\n\nI'd contrast this with why a general-purpose OS can't make the same trade: a browser tab, a downloaded PDF viewer, and a random npm script are all running code you didn't write and can't fully trust, so the hardware wall is what keeps one of them from taking down or reading everything else.\n\n**Testing:** whether you can reason about privilege separation as a deliberate trade-off rather than a rule that always applies.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "When to skip privilege separation"
+    },
+    {
+      "id": "user-mode-vs-kernel-mode-iq4",
+      "question": "You see a process using 90% CPU but almost all of it is %sys, not %usr. How would you investigate?",
+      "answerMarkdown": "I'd start from what %sys actually means: the process is spending its CPU time executing kernel code on its behalf, not running its own application logic — so the fix is almost never in the application's business logic itself, it's in how the app is interacting with the kernel.\n\nMy first move would be `strace -c` to get a syscall frequency and time breakdown — that usually points straight at the culprit, whether it's excessive small `read()`/`write()` calls, `mmap`/`munmap` churn from an allocator misbehaving, or heavy `futex` calls indicating lock contention that's spilling into kernel-mediated waits. I'd also check page fault counts — a process that's constantly touching newly-mapped or swapped memory shows up as %sys from page-fault handling, not from any syscall the code explicitly made.\n\nAs a concrete example: I've seen a service issuing one small `write()` per log line under load — `strace -c` immediately shows thousands of `write` calls dominating the time, and the fix (buffering into fewer, larger writes) drops %sys dramatically without touching business logic at all.\n\n**Testing:** whether you can turn an abstract OS concept (kernel vs user time) into a concrete production debugging workflow.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging high %sys in production"
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+{
+  "id": "dml-nulls",
+  "title": "Data Modification & NULL Semantics",
+  "area": "databases",
+  "group": "sql",
+  "order": 6,
+  "slug": "dml-nulls",
+  "summary": "Writing data safely — INSERT, UPDATE, DELETE, UPSERT — and the NULL-propagation rules that make three-valued logic show up in arithmetic, not just comparisons.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "dml-nulls-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Reading data is half of SQL — the other half is changing it, with `INSERT`, `UPDATE`, `DELETE`, and the upsert variants that combine them. Write statements are unforgiving in a way `SELECT` isn't: a wrong `WHERE` on a `SELECT` gives you a wrong answer; a wrong `WHERE` on an `UPDATE` or `DELETE` corrupts or destroys real data, and there's often no `SELECT`-style dry run before it's too late.\n\nThis topic also closes the loop on three-valued logic from earlier topics — `NULL` doesn't just break comparisons, it propagates through arithmetic and string concatenation too, in ways that quietly corrupt computed columns if you're not deliberate about it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "dml-nulls-s02",
+      "order": 2,
+      "sectionTitle": "INSERT, UPDATE, DELETE, and UPSERT/MERGE",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\nINSERT INTO users (email, plan) VALUES ('a@b.com', 'free');\n\nUPDATE users SET plan = 'pro' WHERE id = 42;\n\nDELETE FROM users WHERE id = 42;\n\n-- upsert: insert, or update if the row already exists (Postgres syntax)\nINSERT INTO users (email, plan) VALUES ('a@b.com', 'pro')\nON CONFLICT (email) DO UPDATE SET plan = EXCLUDED.plan;\n```\n\n`ON CONFLICT ... DO UPDATE` (Postgres) and `MERGE` (SQL Server, Oracle, and newer Postgres) express \"insert this row, but if a conflicting unique key already exists, update it instead\" as a single atomic statement — avoiding a separate check-then-insert-or-update round trip that's vulnerable to a race under concurrent writers.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "dml-nulls-s03",
+      "order": 3,
+      "sectionTitle": "NULL propagation in arithmetic and comparisons",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`NULL` isn't just a comparison problem — it propagates through **any** expression that touches it. `5 + NULL` is `NULL`, not `5`. `'a' || NULL` (string concatenation) is `NULL`, not `'a'`. This makes sense once you internalize `NULL` as \"unknown value,\" not \"zero\" or \"empty string\": you can't know the sum or concatenation of a known value and an unknown one.\n\nThis quietly corrupts computed columns: `SELECT price * quantity * (1 - discount) AS total` returns `NULL` for the *entire row's total* if `discount` is `NULL` for that row — not the pre-discount price, `NULL`. If a downstream `SUM(total)` runs over rows like this, those rows' contributions vanish from the sum entirely (aggregates skip `NULL`s), silently understating revenue.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "dml-nulls-s03-q1"
+      ]
+    },
+    {
+      "id": "dml-nulls-s04",
+      "order": 4,
+      "sectionTitle": "COALESCE, NULLIF, and IS DISTINCT FROM",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\n-- COALESCE: first non-NULL argument, left to right\nSELECT COALESCE(discount, 0) FROM orders;         -- treat a missing discount as 0\n\n-- NULLIF: NULL if the two arguments are equal, otherwise the first argument\nSELECT NULLIF(denominator, 0) FROM ratios;         -- turn 0 into NULL to avoid a division error\n\n-- IS DISTINCT FROM: NULL-safe equality — never returns UNKNOWN\nSELECT * FROM t WHERE a IS DISTINCT FROM b;        -- TRUE if a and b differ, treating NULL as a real value\n```\n\n`COALESCE` and `NULLIF` are the two most common tools for *deciding what NULL should mean* in a given expression — defaulting it away, or deliberately introducing it to guard against a bad value like a zero denominator. `IS DISTINCT FROM` is the fix for the one place three-valued logic gets in the way of a genuinely intended answer: \"are these two values different, including the case where one or both are NULL,\" which plain `<>` can never answer with a real `TRUE`/`FALSE`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "dml-nulls-s04-q1"
+      ]
+    },
+    {
+      "id": "dml-nulls-s05",
+      "order": 5,
+      "sectionTitle": "Pitfall: UPDATE or DELETE with no WHERE",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll run `UPDATE users SET plan = 'free'` real quick to reset one test account, then add the WHERE after.\"\n\n**Why it's wrong:** `UPDATE` and `DELETE` without a `WHERE` clause apply to **every row in the table** — there's no confirmation prompt, no dry run, and on most engines no automatic rollback once it's committed. This single mistake — forgetting or mistyping a `WHERE` — is one of the most common causes of real production incidents, made worse because the statement itself is syntactically completely valid.\n\n**Correct model:** write and verify the `WHERE` clause as a `SELECT` first (`SELECT * FROM users WHERE id = 42` — check the row count and content look right), then change only the verb from `SELECT *` to `UPDATE ... SET` or `DELETE`, never the other way around. Wrap risky writes in an explicit transaction (`BEGIN`) so you can `ROLLBACK` if the row count looks wrong before you `COMMIT`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "dml-nulls-s05-q1"
+      ]
+    },
+    {
+      "id": "dml-nulls-s06",
+      "order": 6,
+      "sectionTitle": "RETURNING to read back what changed",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\nUPDATE orders\nSET status = 'shipped', shipped_at = now()\nWHERE id = 501\nRETURNING id, status, shipped_at;\n```\n\n`RETURNING` (Postgres, and increasingly other engines) gives back the actual rows a write statement affected — including columns set by the database itself, like a `now()` timestamp or an auto-generated ID from an `INSERT` — in the same round trip as the write. Without it, you'd need a separate `SELECT` after the write to see the result, which is both an extra round trip and a race: another transaction could change the row between your `UPDATE` and your follow-up `SELECT`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "dml-nulls-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: aggregates silently skipping NULLs distorts write-time assumptions",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"After bulk-updating `discount` to `NULL` for orders where a promotion expired, my nightly `SUM(price * quantity * (1 - discount))` revenue job will just treat those as full-price orders.\"\n\n**Why it's wrong:** per NULL propagation, `1 - NULL` is `NULL`, so the entire per-row expression is `NULL` for every affected order — not the full, undiscounted price. `SUM()` then skips those `NULL` rows entirely, so the affected orders' revenue **vanishes from the total** rather than being counted at full price. The bulk `UPDATE` that seemed like an intentional \"clear the discount\" quietly broke a downstream report that nobody thought to re-check.\n\n**Correct model:** when a write sets a column to `NULL`, explicitly trace what every reader of that column does with it — here, the fix is either updating `discount` to `0` instead of `NULL` (if \"no discount\" should mean zero, not unknown) or wrapping the read side in `COALESCE(discount, 0)`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "dml-nulls-s07-q1"
+      ]
+    },
+    {
+      "id": "dml-nulls-s08",
+      "order": 8,
+      "sectionTitle": "Compare: soft delete vs hard delete",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Hard delete (`DELETE FROM ...`) | Soft delete (`UPDATE ... SET deleted_at = now()`) |\n|---|---|---|\n| Data recoverable after the fact? | No, unless restored from a backup | Yes — the row is still there |\n| Every reader must remember to filter it out | N/A — gone rows can't appear | Yes — every query needs `WHERE deleted_at IS NULL`, or a view/policy that enforces it |\n| Storage and index bloat over time | None from deleted rows | Grows — \"deleted\" rows still consume space and appear in scans |\n| Foreign key references to it | Must be handled at delete time (cascade, restrict, or null out) | Referencing rows remain valid, sometimes hiding a logically deleted parent |\n\n**How to decide:** soft delete when \"undo\" or an audit trail genuinely matters (most user-facing data); hard delete for data with a real retention/compliance requirement to actually remove it, or where the soft-delete filter's easy-to-forget nature is too risky (a forgotten `WHERE deleted_at IS NULL` leaking deleted data is a real, recurring production bug).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "dml-nulls-s09",
+      "order": 9,
+      "sectionTitle": "Transactions: making multi-statement writes atomic",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single `UPDATE` is atomic on its own, but a business operation is often several statements — debit one account, credit another — that must all succeed or all fail together. Wrapping them in `BEGIN ... COMMIT` (with a `ROLLBACK` on error) ensures no other connection ever sees the half-applied state, and a crash mid-transaction leaves neither change applied.\n\nThe senior-level nuance: transactions also interact with `NULL`-related bugs from this topic in a specific way — running a risky bulk `UPDATE` inside a transaction, checking `SELECT COUNT(*)` or spot-checking a few rows before `COMMIT`, and rolling back if the numbers look wrong is the single cheapest safety net against exactly the missing-`WHERE` and unexpected-`NULL`-propagation mistakes covered earlier in this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "dml-nulls-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: NULL propagating through a computed column",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![NULL propagating through an arithmetic expression](assets/null-propagation.svg)\n\nOne `NULL` anywhere in an arithmetic expression makes the entire expression `NULL`, no matter how many other operands have real values. This is why a single unexpectedly-`NULL` column can silently zero out an entire computed row rather than just that one field.",
+      "assets": [
+        {
+          "alt": "NULL propagating through an arithmetic expression",
+          "path": "assets/null-propagation.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "dml-nulls-s11",
+      "order": 11,
+      "sectionTitle": "NOT NULL constraints and defaults as a design-time fix",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Most `NULL`-propagation bugs in this topic are really schema-design bugs surfacing at query time. If `discount` should always logically be zero-or-more, not \"unknown,\" the fix isn't COALESCE-ing every read forever — it's `discount NUMERIC NOT NULL DEFAULT 0` at the column level, so the column simply can never hold a `NULL` in the first place, and every reader downstream is safe by construction.\n\nA staff-level answer to \"how would you prevent this class of bug\" leads with schema constraints (`NOT NULL`, `CHECK`, foreign keys) as the first line of defense — cheaper and more reliable than trusting every future query author to remember `COALESCE` — and reserves nullable columns for cases where \"unknown\" or \"not applicable\" is a genuinely distinct, meaningful state from any real value.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "dml-nulls-s11-q1"
+      ]
+    }
+  ]
+}

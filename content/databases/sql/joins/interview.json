@@ -1,0 +1,37 @@
+{
+  "topicId": "joins",
+  "interviewQuestions": [
+    {
+      "id": "joins-iq1",
+      "question": "What's the difference between an INNER JOIN and a LEFT JOIN, and when would you choose each?",
+      "answerMarkdown": "An INNER JOIN keeps only rows that have a match on both sides — join `orders` to `customers` and any order with no matching customer (or vice versa) disappears entirely. A LEFT JOIN keeps every row from the left table regardless of a match, filling unmatched right-side columns with `NULL`.\n\nI'd default to INNER JOIN unless the absence of a match is itself meaningful information. A concrete example: 'find all customers and their order counts, including customers who've never ordered' needs a LEFT JOIN from customers to orders — an INNER JOIN would silently drop every customer with zero orders, which is exactly the group the query is trying to surface.\n\nThe trap I'd mention proactively: once you write a LEFT JOIN specifically to preserve unmatched rows, any filter on the right table's columns has to go in the `ON` clause, not `WHERE` — a `WHERE` condition on a nullable right-side column evaluates to UNKNOWN for unmatched rows and silently drops them, turning your LEFT JOIN back into something that behaves like an INNER JOIN.\n\n**Testing:** whether you pick join type from the actual requirement (do unmatched rows matter?) rather than defaulting to whichever one compiles first.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "INNER vs LEFT JOIN"
+    },
+    {
+      "id": "joins-iq2",
+      "question": "You join orders to order_items to compute total revenue with SUM(orders.total), and the number comes out roughly 4x too high. Walk me through diagnosing this.",
+      "answerMarkdown": "I'd recognize this immediately as a fan-out bug from a one-to-many join. `orders` has one row per order; `order_items` has many rows per order. Joining them produces one output row per line item, not per order — an order with 4 items appears 4 times in the joined result, so `SUM(orders.total)` counts that order's total 4 times over.\n\nTo confirm, I'd compare row counts: `SELECT COUNT(*) FROM orders` versus `COUNT(*)` on the joined query. If the joined count is roughly 4x the base count, that ratio directly explains the inflated revenue number.\n\nThe fix depends on what's actually needed: if I don't need order_items columns in the final aggregate, I'd just drop the join and sum `orders.total` directly. If I do need item-level data too, I'd aggregate order_items down to one row per order first — in a CTE or subquery — before joining, so the join stays one-to-one and the sum isn't multiplied.\n\nMore broadly, I treat 'sanity-check row counts around any join used before an aggregate' as a standing habit, because this bug never errors — it just silently ships a wrong number that someone in finance eventually notices looks off.\n\n**Testing:** whether you can reason about cardinality, not just join syntax — this is the bug that separates people who've actually shipped SQL in production from people who've only practiced syntax.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing a fan-out bug"
+    },
+    {
+      "id": "joins-iq3",
+      "question": "How does a database physically execute a JOIN, and how would that inform debugging a slow one?",
+      "answerMarkdown": "SQL's `JOIN` describes intent, not execution — the planner picks one of a few physical strategies. A **nested loop join** iterates the outer table and, for each row, probes the inner table for a match; it's fast if the inner side has an index on the join key, and an accidental quadratic scan if it doesn't. A **hash join** builds an in-memory hash table on the smaller side and streams the larger side through it — a good default when there's no useful index. A **merge join** walks two inputs that are already sorted on the join key in lockstep, like a zipper.\n\nWhen a join is slow, I don't reach for a query hint first — I run `EXPLAIN` (or `EXPLAIN ANALYZE`) and look at which strategy was actually chosen and whether the join columns are indexed. A nested loop over an unindexed 10-million-row inner table is the classic case: it works fine in a demo with 100 rows and falls over in production, because the algorithmic complexity was hiding behind small test data the whole time.\n\nI'd also check whether the join key's data types match on both sides — a type mismatch (say, `varchar` joined to `int`) can force an implicit cast that, like a function wrapped around an indexed column, makes the predicate non-sargable and defeats an otherwise-present index.\n\n**Testing:** whether you can reason about a join's cost from execution strategy, not just treat `EXPLAIN` output as noise to skim past.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "How joins execute physically"
+    },
+    {
+      "id": "joins-iq4",
+      "question": "What's a self-join, and can you give a real example of when you'd need one?",
+      "answerMarkdown": "A self-join joins a table to itself, treated as two separate logical copies via aliases — it's useful whenever you need to compare rows within the same table to each other rather than to rows in a different table.\n\nThe standard example is an organizational hierarchy stored in one `employees` table with a `manager_id` column that points back to another row in the same table: `SELECT e.name AS employee, m.name AS manager FROM employees e JOIN employees m ON e.manager_id = m.id`. Without the self-join, you'd have no way to attach a readable manager name to each employee row — you'd just have a numeric ID pointing at another row in the same table.\n\nA second real example: finding duplicate records, like customers with the same email but different IDs — `SELECT a.id, b.id FROM customers a JOIN customers b ON a.email = b.email AND a.id < b.id`, where the `a.id < b.id` condition prevents matching a row to itself and prevents each pair from showing up twice in both orders.\n\nI'd flag that aliases aren't optional here — since both sides reference the same physical table, the database has no other way to know which occurrence a given column reference means.\n\n**Testing:** whether you recognize a self-join as a distinct pattern rather than assuming every join must involve two different tables.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Self-joins in practice"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "sql-select",
+  "interviewQuestions": [
+    {
+      "id": "sql-select-iq1",
+      "question": "What's the actual order SQL evaluates the clauses of a SELECT statement in, and why does it matter?",
+      "answerMarkdown": "The written order — `SELECT, FROM, WHERE, GROUP BY, HAVING, ORDER BY` — is not the evaluation order. Logically, the engine runs `FROM, WHERE, GROUP BY, HAVING, SELECT, DISTINCT, ORDER BY, LIMIT`. `FROM` builds the working row set first, `WHERE` filters raw rows, grouping and `HAVING` come next, and only then does `SELECT` decide which columns or expressions to project.\n\nThis matters because it explains two things people memorize as \"rules\" without understanding why: you can't filter on a `SELECT` alias in the same query's `WHERE` (the alias doesn't exist yet at that point), and `HAVING` filters aggregates while `WHERE` can't (aggregates don't exist until after `GROUP BY`). For example, `SELECT COUNT(*) AS n FROM orders WHERE n > 5` fails, but `HAVING COUNT(*) > 5` works.\n\nI'd also flag that this is the *logical* order, not the physical execution plan — a real optimizer can reorder or push down predicates for performance as long as the result matches the logical semantics.\n\n**Testing:** whether you understand SQL as a pipeline with real ordering rules, not a bag of syntax you've memorized by pattern-matching.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Logical evaluation order"
+    },
+    {
+      "id": "sql-select-iq2",
+      "question": "Why does `WHERE status = NULL` return no rows, and how would you actually write that filter?",
+      "answerMarkdown": "SQL uses three-valued logic — `TRUE`, `FALSE`, and `UNKNOWN` — and any comparison against `NULL` evaluates to `UNKNOWN`, including `NULL = NULL`. `WHERE` only keeps rows where the condition is `TRUE`; `UNKNOWN` is discarded exactly like `FALSE`, silently, with no error. So `WHERE status = NULL` always returns zero rows, even for rows where `status` genuinely has no value.\n\nThe fix is `WHERE status IS NULL` (or `IS NOT NULL`), which are dedicated predicates that return a real boolean rather than going through equality comparison. I've seen this bug ship to production as a silent no-op filter — a report that's supposed to flag unset records instead always comes back empty, and because there's no error, it can sit broken for weeks before someone notices the count looks suspiciously low.\n\nThe broader lesson I'd give: any time a `WHERE` clause touches a nullable column with `=`, `<>`, or an `IN` list, stop and ask what should happen when the value is `NULL` — SQL won't ask that question for you.\n\n**Testing:** whether you've internalized three-valued logic well enough to catch this in a code review, not just recite the `IS NULL` fix when prompted.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "NULL comparison trap"
+    },
+    {
+      "id": "sql-select-iq3",
+      "question": "You inherited a query that's slow despite an index on the column it filters on. How do you debug it?",
+      "answerMarkdown": "First I'd run `EXPLAIN` (or `EXPLAIN ANALYZE` on Postgres) rather than guess — the plan tells you whether the index is even being considered, and if not, why. A very common culprit is a non-sargable predicate: wrapping the indexed column in a function or implicit type cast, like `WHERE UPPER(email) = 'X'` or comparing a `varchar` column against an integer literal that forces a cast on every row. A standard B-tree index stores raw values, so it can't be used once the column is transformed before comparison — the planner falls back to a sequential scan.\n\nConcretely, on a 50-million-row table I've seen this turn a sub-millisecond lookup into a multi-second scan, and it's easy to miss because 'there's an index on that column' reads as true at a glance.\n\nThe fix depends on the case: normalize at write time (store a lowercase mirror column), build a matching expression index (`CREATE INDEX ON users (UPPER(email))`), or rewrite the predicate to avoid transforming the column, e.g. a range check instead of a function call where possible.\n\n**Testing:** whether you reach for the query plan instead of assuming 'there's an index, so it's fast' — a distinction that separates people who've actually debugged production slowness from people who haven't.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a slow indexed query"
+    },
+    {
+      "id": "sql-select-iq4",
+      "question": "What's the difference between filtering with WHERE and filtering with HAVING, and why can't they be swapped?",
+      "answerMarkdown": "`WHERE` filters individual rows before any grouping happens; `HAVING` filters *groups* after `GROUP BY` has produced aggregates. They aren't interchangeable because of what exists at each point in the logical pipeline: at the time `WHERE` runs, there's no `COUNT(*)` or `SUM(x)` to test yet — those only exist once `GROUP BY` has collapsed rows into groups.\n\nConcretely: `SELECT customer_id, COUNT(*) FROM orders WHERE status = 'paid' GROUP BY customer_id HAVING COUNT(*) > 5` first drops unpaid orders row-by-row with `WHERE`, then keeps only customers with more than 5 paid orders with `HAVING`. Writing `WHERE COUNT(*) > 5` instead throws an error — the aggregate doesn't exist at `WHERE`'s point in the pipeline.\n\nA performance note I'd add: put every filter you can on `WHERE` rather than `HAVING`, even ones that look aggregate-adjacent, because `WHERE` discards rows before the (often expensive) grouping work happens — `HAVING` only filters after the engine has already done the grouping.\n\n**Testing:** whether you can explain the *why* behind a rule most people memorize as 'HAVING is for aggregates,' and whether you think about filter placement as a performance lever.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "WHERE vs HAVING"
+    }
+  ]
+}

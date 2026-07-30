@@ -1,0 +1,29 @@
+{
+  "topicId": "denormalization",
+  "interviewQuestions": [
+    {
+      "id": "denormalization-iq1",
+      "question": "When would you deliberately denormalize a schema, and how do you decide it's worth it?",
+      "answerMarkdown": "I'd start from the read-to-write ratio for the specific data in question, not a general preference. If a piece of data is read thousands of times for every one time it's written — a product catalog page, a user's profile summary — the aggregate cost of a join on every read usually dwarfs the cost of keeping one duplicated value in sync on the rare write. That asymmetry is the actual justification, not \"joins are slow\" as a blanket statement.\n\nConcretely, I'd only denormalize after I can state three things: exactly what redundancy I'm introducing, exactly what mechanism keeps it in sync — a trigger, an application-level update in the same transaction, or a scheduled reconciliation job with an accepted staleness window — and whether this belongs on the transactional system of record or a separate read model fed by it. Skipping any of those three is how a performance optimization turns into a silent data-integrity bug six months later.\n\nI'd also flag that I try to keep the denormalization off the source of truth where possible — a separate materialized view or reporting table is safer than mutating the transactional schema directly.\n\n**Testing:** whether you treat denormalization as a deliberate, documented trade-off rather than an ad hoc shortcut.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Deciding when to denormalize"
+    },
+    {
+      "id": "denormalization-iq2",
+      "question": "You find a denormalized order_count column on the customers table that doesn't match the actual count of rows in orders. How do you debug and fix this?",
+      "answerMarkdown": "First, I'd figure out how order_count is supposed to stay in sync — is there a trigger, does application code update it inline with every order insert/delete, or is it refreshed by a scheduled job? If I can't find any of those, that's the root cause right there: a plain denormalized column with no maintenance mechanism will drift the moment any write path — a bulk import, a support script running a raw DELETE, a new service writing orders differently — bypasses whatever code was supposed to update it.\n\nFor the fix, I'd first run a one-off reconciliation query to recompute the true count and correct the drifted rows, then decide on a durable mechanism going forward. I generally prefer a database trigger over relying on every application code path remembering to update it — a trigger fires on the write itself, regardless of which code path caused it, the same principle as a foreign key constraint but applied to a denormalized value. If write volume is too high for a synchronous trigger, I'd fall back to a scheduled reconciliation job with a known, monitored staleness tolerance instead of hoping application code never misses a spot.\n\n**Testing:** whether you can trace a data-integrity bug back to a missing sync mechanism and choose a durable fix, not just patch the current bad values.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a drifted denormalized column"
+    },
+    {
+      "id": "denormalization-iq3",
+      "question": "What's the difference between denormalizing your main transactional table and building a separate materialized view or read model?",
+      "answerMarkdown": "Denormalizing the transactional table itself means every write to that table — the checkout flow inserting an order, say — now also has to maintain the extra denormalized columns, which couples a small, correctness-critical, latency-sensitive workload to a reporting concern that doesn't need that same latency guarantee. It also means a schema change made purely for reporting purposes now carries risk to the transactional path.\n\nA materialized view, or a separate denormalized reporting table fed by ETL or change-data-capture, keeps the two workloads isolated. The transactional schema stays normalized and fast for small writes; the read model is refreshed on its own schedule — on demand, nightly, or streamed — and can be as denormalized and wide as reporting needs, without any risk to checkout. The cost is staleness: the read model reflects the data as of its last refresh, not the current instant, which is usually an acceptable trade for a dashboard but would be unacceptable for the transactional path itself.\n\nMy default is: normalize the source of truth, denormalize a downstream copy, not the source.\n\n**Testing:** whether you understand denormalization can be applied at the wrong layer, and why that specifically endangers the transactional path.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Denormalizing source of truth vs a read model"
+    }
+  ]
+}

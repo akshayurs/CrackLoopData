@@ -1,0 +1,167 @@
+{
+  "id": "denormalization",
+  "title": "Denormalization and Trade-offs",
+  "area": "databases",
+  "group": "data-modeling-normalization",
+  "order": 4,
+  "slug": "denormalization",
+  "summary": "When and how to deliberately break normalization rules for read performance, and the update discipline you take on in exchange.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "denormalization-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Denormalization** is deliberately reintroducing redundancy that normalization removed — duplicating a column, precomputing an aggregate, flattening a join — to make reads faster, at the cost of taking on the update discipline the database used to handle for you.\n\nIt's not a mistake or a shortcut; it's a genuine engineering trade-off, made *after* understanding the normalized form, not instead of it. You can't make an informed denormalization decision without first knowing exactly which redundancy you're reintroducing and which anomaly you're choosing to accept.\n\nThis topic covers when the trade-off is worth it, the concrete techniques, and the operational discipline denormalized data demands.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "denormalization-s02",
+      "order": 2,
+      "sectionTitle": "Read performance vs write complexity",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core trade normalization vs denormalization makes is: normalized data is easy to write correctly (one place to update) but can be expensive to read (multiple joins to reassemble); denormalized data is fast to read (no joins, the answer is already sitting there) but harder to write correctly (every copy of the duplicated fact has to be updated together, or they drift apart).\n\nThis is why the decision should be driven by your actual **read-to-write ratio** for a specific query, not a general philosophy. A product catalog page viewed 100,000 times a day but updated a handful of times is a strong denormalization candidate — pay a small, infrequent write cost to save a join on every one of those 100,000 reads. A frequently-updated internal admin table read by three people is not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "denormalization-s02-q1"
+      ]
+    },
+    {
+      "id": "denormalization-s03",
+      "order": 3,
+      "sectionTitle": "Redundancy, precomputed aggregates, duplicated columns",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three common denormalization techniques. **Redundancy**: store the same fact in two tables — copying a `product_name` onto an `order_items` row so a historical order still shows the name the product had *at the time of purchase*, even if the product is later renamed (this is actually more correct than a live join, since it captures a point-in-time snapshot, not just a performance hack). **Precomputed aggregates**: store `order_count` on a `customers` row instead of running `COUNT(*)` over `orders` on every page load — trading a write-time increment for a read-time table scan avoided. **Duplicated columns**: copy a frequently-joined column (like `customer.region`) directly onto `orders` so region-based reporting queries skip the join entirely.\n\nEach technique reintroduces a specific update obligation: whoever changes the source of truth must also update (or explicitly choose not to update) every duplicate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "denormalization-s03-q1"
+      ]
+    },
+    {
+      "id": "denormalization-s04",
+      "order": 4,
+      "sectionTitle": "Compare: normalized OLTP vs denormalized analytics/read models",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Normalized OLTP schema | Denormalized analytics / read model |\n|---|---|---|\n| Optimized for | Correctness and fast, small writes (one order, one customer at a time) | Fast reads over large volumes (dashboards, reports, search) |\n| Typical shape | Many small tables, heavy use of joins | Fewer, wider tables — a \"star schema\" fact table with denormalized dimensions |\n| Update pattern | Single-row transactional updates | Often rebuilt in bulk (nightly ETL, materialized view refresh) rather than updated in place |\n| Consistency | Strong — one source of truth per fact | Eventually consistent — a snapshot as of the last refresh |\n\n**How to decide:** keep your transactional system of record (orders, inventory, payments) normalized — correctness matters most there and writes are small and frequent. Build a separate denormalized read model (a reporting database, a search index, a data warehouse table) fed by the normalized source, rather than denormalizing the source of truth itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "denormalization-s04-q1"
+      ]
+    },
+    {
+      "id": "denormalization-s05",
+      "order": 5,
+      "sectionTitle": "Pitfall: update anomalies you now own manually",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I denormalized `order_count` onto `customers` for speed — the database will keep it accurate automatically.\"\n\n**Why it's wrong:** a plain denormalized column is just a regular column — nothing keeps it in sync with reality unless you explicitly wire up the update. Every code path that inserts, cancels, or deletes an order now needs to remember to also adjust `customers.order_count` — miss one path (a bulk import, a manual `DELETE` in a support script, a new microservice that writes orders a different way), and the cached count silently drifts from the true value, with nothing flagging the discrepancy.\n\n**Correct model:** denormalized data needs an explicit maintenance mechanism — a database trigger, a transactional application-level update in the same transaction as the write, or an accepted eventual-consistency window with a scheduled reconciliation job that recomputes and corrects drift. Denormalizing without deciding this mechanism up front is how \"fast reads\" turns into \"reads of wrong data, fast.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "denormalization-s05-q1"
+      ]
+    },
+    {
+      "id": "denormalization-s06",
+      "order": 6,
+      "sectionTitle": "Materialized views as controlled denormalization",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **materialized view** is a query result physically stored as a table, refreshed either on a schedule or on demand — it's denormalization the database engine manages for you, rather than a manually duplicated column you have to remember to update yourself. `CREATE MATERIALIZED VIEW daily_revenue AS SELECT date, SUM(total) FROM orders GROUP BY date` computes the aggregate once and stores it; reads hit the stored result instantly instead of re-scanning and re-aggregating `orders` every time.\n\nThe trade-off shifts from \"did I remember to update every duplicate\" to \"how stale can this view be, and how expensive is a refresh.\" A `REFRESH MATERIALIZED VIEW` recomputes the whole thing (or, with `CONCURRENTLY` in Postgres, without blocking concurrent reads) — genuinely staler between refreshes than a live join, but far cheaper to query and with a single, well-understood mechanism for staying accurate, unlike ad hoc manually-duplicated columns.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "denormalization-s07",
+      "order": 7,
+      "sectionTitle": "Keeping a denormalized column in sync with a trigger",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\nCREATE OR REPLACE FUNCTION bump_order_count() RETURNS TRIGGER AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    UPDATE customers SET order_count = order_count + 1 WHERE id = NEW.customer_id;\n  ELSIF TG_OP = 'DELETE' THEN\n    UPDATE customers SET order_count = order_count - 1 WHERE id = OLD.customer_id;\n  END IF;\n  RETURN NULL;\nEND;\n$$ LANGUAGE plpgsql;\n\nCREATE TRIGGER orders_bump_count\n  AFTER INSERT OR DELETE ON orders\n  FOR EACH ROW EXECUTE FUNCTION bump_order_count();\n```\n\nThis moves the maintenance burden from \"every application code path must remember\" to \"the database enforces it on every write, regardless of code path\" — the same principle as a foreign key constraint, applied to a denormalized value instead of a reference. The trade-off: triggers add write-path latency and are easy to forget exist during a schema review months later.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "denormalization-s08",
+      "order": 8,
+      "sectionTitle": "Numbers: when denormalization actually pays off",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concretely: a product page joining `products`, `categories`, `brands`, and `reviews_summary` on every load, serving 500 requests/second, means 500 four-way joins per second hitting the database continuously. Denormalizing `category_name`, `brand_name`, and a precomputed `avg_rating` directly onto the `products` row turns that into a single-table lookup — often a 5-10x reduction in query latency and a proportional drop in database CPU, for a write cost that only matters on the much rarer product-edit or new-review path.\n\nThe asymmetry is the whole justification: if reads outnumber writes by 100:1 or more for a given piece of data, the aggregate cost of the join on every read usually dwarfs the cost of keeping one denormalized copy updated on the rare write — but this same asymmetry is exactly what makes it a bad trade for write-heavy tables, where you'd be paying the sync cost far more often than you'd save on reads.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "denormalization-s09",
+      "order": 9,
+      "sectionTitle": "In production: denormalization decisions need an owner",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A staff-level practice: every denormalized column in a schema should be documented with *why* it exists, *what* keeps it in sync (trigger, application code, scheduled job), and *how stale it's allowed to get*. Without this, a denormalized column becomes a trap for the next engineer — they see `customers.order_count`, assume it's authoritative, build a billing feature on top of it, and only discover months later that a bulk-import code path never updated it.\n\nSome teams enforce this with a lightweight convention: a comment on the column, a naming pattern (`_cached` or `_denormalized` suffix), or a scheduled reconciliation job whose sole purpose is detecting drift and alerting when the denormalized value and the recomputed true value disagree beyond some tolerance — turning a silent correctness bug into a visible, monitored one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "denormalization-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: denormalizing the system of record instead of a read replica",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Reports are slow because of joins, so let's denormalize the main `orders` table directly to speed up the dashboard.\"\n\n**Why it's wrong:** denormalizing the transactional system of record couples two very different workloads — small, frequent, correctness-critical writes (a customer placing an order) and large, read-heavy analytical queries (a dashboard aggregating a year of orders) — onto the same schema and the same physical table. Now every transactional write also has to maintain the denormalized reporting columns, slowing down the exact path that most needs to stay fast and simple, and a schema change for reporting needs can risk breaking the checkout flow.\n\n**Correct model:** keep the transactional source of record normalized, and build a separate denormalized read model — a reporting replica, a data warehouse table, a materialized view — fed by ETL or change-data-capture from the normalized source. This isolates the two workloads so a reporting query's cost (or a reporting schema change) never threatens transactional correctness or latency.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "denormalization-s10-q1"
+      ]
+    },
+    {
+      "id": "denormalization-s11",
+      "order": 11,
+      "sectionTitle": "A decision checklist before denormalizing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before denormalizing anything, a disciplined checklist: 1) measure the actual read-to-write ratio for this specific data, don't guess. 2) name exactly what redundancy you're introducing and where the duplicate lives. 3) decide the sync mechanism *before* shipping — trigger, application transaction, or scheduled reconciliation with an accepted staleness window. 4) decide whether this belongs on the system of record or on a separate read model. 5) document it so the next engineer doesn't mistake a cached value for a source of truth.\n\nThis is the answer that separates a considered performance optimization from a schema that's quietly accumulated inconsistency over years — interviewers specifically probe for this checklist because \"just denormalize it\" without any of these steps is the version that causes real production incidents.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,159 @@
+{
+  "id": "tlb-and-translation-caching",
+  "title": "TLB & Translation Caching",
+  "area": "operating-systems",
+  "group": "virtual-memory",
+  "order": 3,
+  "slug": "tlb-and-translation-caching",
+  "summary": "Why every paged system needs a hardware cache for address translations, what a TLB miss actually costs, and why context switches quietly tax performance long after the switch itself finishes.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "tlb-and-translation-caching-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A multi-level page table walk costs multiple memory accesses just to find where the *real* data is — doing that on every single memory reference would make paging several times slower than not having it. The **TLB (Translation Lookaside Buffer)** is the fix: a small, extremely fast on-chip cache of recent virtual-to-physical translations, checked before any page table walk is attempted.\n\nGet a hit, and translation is a single fast lookup. Miss, and you pay the full walk — plus a lookup that fails first. Because nearly every real workload has enough locality to keep the TLB hit rate above 95-99%, this single cache is what makes paging's memory cost per access, on average, almost invisible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "tlb-and-translation-caching-s02",
+      "order": 2,
+      "sectionTitle": "The TLB: caching recent virtual-to-physical translations",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **TLB** is a small, fully-associative (or highly set-associative) hardware cache built into the CPU core, holding recently-used `(virtual page number -> physical frame number, permissions)` entries — typically a few hundred to a couple thousand entries, far smaller than main memory or even the L1 cache.\n\nIt sits directly in the address-translation path: before the MMU walks the page table for a virtual address, it checks the TLB first. Because it's implemented in fast, parallel-search hardware right next to the CPU pipeline, a TLB lookup costs roughly as much as an L1 cache access — a few CPU cycles — versus the 100+ cycles per level a full page table walk costs when it has to go to memory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "tlb-and-translation-caching-s02-q1"
+      ]
+    },
+    {
+      "id": "tlb-and-translation-caching-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: address translation with a TLB hit vs a TLB miss",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![TLB hit versus TLB miss translation path](assets/tlb-hit-vs-miss.svg)\n\nThe hit path is a straight line; the miss path detours through the entire walk before rejoining it — and inserts the result into the TLB so the *next* access to that page is a hit.",
+      "assets": [
+        {
+          "alt": "TLB hit versus TLB miss translation path",
+          "path": "assets/tlb-hit-vs-miss.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 27,
+      "mcqIds": []
+    },
+    {
+      "id": "tlb-and-translation-caching-s04",
+      "order": 4,
+      "sectionTitle": "TLB hit ratio and why it dominates memory access performance",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Effective translation time** is a weighted average: `hit_ratio x TLB_time + miss_ratio x (TLB_time + walk_time)`. With a 99% hit ratio, 1-cycle TLB lookup, and a 4-level walk costing 400 cycles on a miss: `0.99 x 1 + 0.01 x (1 + 400) = 0.99 + 4.01 ≈ 5 cycles` average — dramatically better than paying 400 cycles every time.\n\nThis is why TLB hit ratio, not raw TLB size, is the number worth optimizing: dropping from 99% to 95% hit ratio in this example roughly quadruples the average translation cost (`0.95 x 1 + 0.05 x 401 ≈ 21 cycles`), even though \"95% hit rate\" still sounds good in isolation. Small drops in hit ratio compound because misses are so much more expensive than hits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "tlb-and-translation-caching-s04-q1"
+      ]
+    },
+    {
+      "id": "tlb-and-translation-caching-s05",
+      "order": 5,
+      "sectionTitle": "What happens on a TLB miss: hardware-walked vs software-walked page tables",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "There are two designs for handling a miss. **Hardware-walked** (x86, most mainstream CPUs): dedicated silicon in the MMU walks the page table automatically on a miss, without involving the OS at all — the OS's only job is to keep the page table in the format the hardware expects. **Software-walked** (classic MIPS, some RISC designs): a TLB miss raises a trap straight to the OS, and a short kernel handler does the walk in software, then explicitly inserts the result into the TLB.\n\nHardware-walked designs are faster per miss (no trap overhead) but lock the page table format to whatever the CPU vendor defines. Software-walked designs are slower per miss but let the OS use *any* page table structure it wants — including, notably, structures optimized differently than a rigid hardware-defined layout.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "tlb-and-translation-caching-s06",
+      "order": 6,
+      "sectionTitle": "TLB flushes on context switch — the cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "TLB entries are only valid for the address space they were cached for — process A's virtual page 5 maps somewhere completely different than process B's virtual page 5. Naively, switching from A to B means every one of A's cached entries is now wrong for B, so the simplest correct thing to do is **flush the entire TLB** on every context switch.\n\nThe cost isn't the flush operation itself (cheap) — it's what happens next: process B starts running with a completely empty TLB, so its first accesses to each page all miss and pay the full page-table-walk cost, until the TLB \"warms back up\" with B's translations. A process that gets switched out and back in frequently pays this re-warming cost repeatedly, which shows up as elevated memory latency with no obvious cause in a naive profile.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "tlb-and-translation-caching-s06-q1"
+      ]
+    },
+    {
+      "id": "tlb-and-translation-caching-s07",
+      "order": 7,
+      "sectionTitle": "Address Space IDs (ASID) — avoiding full flushes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**ASIDs** (also called PCIDs on x86) fix the flush problem by tagging every TLB entry with the ID of the address space it belongs to, instead of relying on \"the TLB only ever holds one process's entries.\" Multiple processes' translations can now coexist in the TLB simultaneously.\n\nOn a context switch, the OS just changes which ASID is \"current\" — no flush needed. If process A gets switched back in shortly after, and its entries are still present (tagged with A's ASID and not yet evicted by other traffic), those accesses hit immediately instead of starting cold. This turns \"switch away and back quickly\" from a guaranteed TLB-cold penalty into something that depends on TLB capacity and how much other work happened in between — a much better average case for workloads with frequent, short context switches.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "tlb-and-translation-caching-s07-q1"
+      ]
+    },
+    {
+      "id": "tlb-and-translation-caching-s08",
+      "order": 8,
+      "sectionTitle": "Compare: TLB miss cost vs cache miss cost",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | L1/L2 cache miss (data) | TLB miss (translation) |\n|---|---|---|\n| What's fetched on a miss | Data from a lower cache level or RAM | An address translation, via a page table walk (itself several memory accesses) |\n| Typical cost | Tens to a few hundred cycles depending on level | Can exceed a cache miss — a multi-level walk is multiple sequential memory accesses before the real data access even starts |\n| Frequency concern | Managed by cache-friendly data layout, prefetching | Managed by locality of *access pattern* across pages, huge pages, ASIDs |\n| Relationship to each other | Independent — a TLB miss's page-table-walk accesses can themselves hit or miss the data cache | A TLB miss effectively adds a chain of extra cache accesses in front of the original one |\n\nThe subtlety worth remembering: a TLB miss isn't just \"one extra step,\" it can trigger its *own* sequence of cache hits or misses while walking the page table — the two systems interact rather than sitting side by side.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "tlb-and-translation-caching-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: frequent context switches quietly degrading performance via TLB churn",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Context switches are cheap — a few hundred cycles to save/restore registers — so switching frequently shouldn't hurt much.\"\n\n**Why it's wrong:** the register save/restore is genuinely cheap, but it isn't the whole cost. Without ASID support (or when the ASID space is exhausted and entries get reused), the switch also cold-starts the TLB, and every process that gets scheduled back in pays a burst of page-table-walk-cost misses while it re-warms — invisible in a profiler that only measures the context-switch routine itself.\n\n**Correct model:** the true cost of a context switch includes this indirect \"re-warming tax\" paid over the following accesses, not just the direct save/restore. This is exactly why workloads with heavy, frequent context switching (many short-lived threads, aggressive time-slicing) can show degraded throughput that doesn't show up as time spent \"in\" the scheduler at all — it shows up as elevated average memory latency in the *next* process's execution.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "tlb-and-translation-caching-s09-q1"
+      ]
+    },
+    {
+      "id": "tlb-and-translation-caching-s10",
+      "order": 10,
+      "sectionTitle": "The senior nuance: multiple TLB levels, just like data caches",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer treats \"the TLB\" as one flat structure. Modern CPUs actually have an L1 TLB (small, very fast, often split into separate instruction and data TLBs) and an L2 TLB (larger, slightly slower, unified) — the same hierarchy idea as data caches, applied to translations. An L1 TLB miss that hits in L2 is much cheaper than a full page table walk, so the \"TLB miss\" a profiler reports usually still means *some* caching helped, just not at the fastest level.\n\nThis is also why huge pages help TLB pressure specifically at the L1 level most: L1 TLBs typically have far fewer entries than L2, so anything that reduces the number of distinct translations needed for a given working set (huge pages, better locality) has an outsized effect there.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

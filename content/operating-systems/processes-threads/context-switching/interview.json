@@ -1,0 +1,29 @@
+{
+  "topicId": "context-switching",
+  "interviewQuestions": [
+    {
+      "id": "context-switching-iq1",
+      "question": "Why is switching between threads of the same process cheaper than switching between processes?",
+      "answerMarkdown": "Both kinds of switch save and restore the same core execution state — the program counter, stack pointer, and general-purpose registers — so that part costs about the same either way. The difference is what happens to memory-address translation. Switching processes requires reloading the page table pointer (CR3 on x86), because each process has its own virtual-to-physical mappings; that reload commonly invalidates or re-tags TLB entries, so the next several memory accesses pay a full page-table walk instead of a cached translation. Threads within the same process share identical page tables, so there's nothing to reload — the TLB stays valid straight through the switch.\n\nOn top of that direct cost, there's an indirect one that applies to both but tends to hit process switches harder: cold caches. A different process's code and data are more likely to have zero overlap with what's currently in L1/L2 cache, so it pays more cache misses warming back up, whereas threads in the same process were often already sharing much of that cached data.\n\nI'd frame the takeaway concretely: this is exactly why a thread-pool design for handling many short-lived units of work outperforms a process-per-unit design at scale — it's not just about creation cost, the ongoing switching cost is lower too.\n\n**Testing:** whether you can name the actual mechanism (page tables, TLB) instead of just asserting threads are cheaper, since that mechanism is what a good follow-up question will probe next.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Why thread switches are cheaper"
+    },
+    {
+      "id": "context-switching-iq2",
+      "question": "What exactly triggers a context switch, and can the OS switch a thread out at any arbitrary moment?",
+      "answerMarkdown": "No — a switch only happens at specific trigger points, never at a truly arbitrary instant. The main triggers: a hardware timer interrupt firing when a thread's time slice expires; the running thread voluntarily blocking on I/O or a lock, since it can't make progress anyway; a hardware interrupt signaling something completed (disk, network) that may make a higher-priority thread ready; and a newly-ready thread outranking the currently running one, causing preemption.\n\nI'd point out the useful pattern here: every trigger is either the kernel being told something changed externally (a timer or hardware interrupt) or the current thread itself choosing to give up the CPU. There's no mechanism for the OS to interrupt a thread mid-instruction with zero cause — even preemptive scheduling relies on the timer interrupt as its actual trigger point.\n\nI'd connect this to a practical implication: a CPU-bound thread that never makes a blocking call and never yields will only get switched out by the timer interrupt at its next time-slice boundary — which is exactly why a truly runaway compute loop can still momentarily starve other work even under a preemptive scheduler, until that boundary arrives.\n\n**Testing:** whether you understand context switches as event-driven rather than magical, and can reason about what happens when none of the usual triggers fire.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "What triggers a switch"
+    },
+    {
+      "id": "context-switching-iq3",
+      "question": "Your server's CPU usage looks fine (not maxed out), but throughput has dropped and `vmstat` shows a huge spike in context switches per second. How would you investigate?",
+      "answerMarkdown": "I'd treat the context-switch spike as the primary lead, since CPU usage staying moderate while throughput drops is a classic sign that CPU cycles are going to switching overhead rather than useful work — the CPU can look 'busy' doing kernel-side switching without actually advancing the workload. I'd check the ratio of runnable threads to core count first: `ps -eLf | wc -l` for total threads versus `nproc` for cores, and look for the process(es) whose thread count exploded relative to before.\n\nCommon culprits I'd specifically look for: a recently deployed thread-per-request pattern with no pool cap that's now spawning threads under increased load, a lock that's causing frequent block/wake cycles (each unblock-then-reblock is itself a pair of switches), or a misconfigured thread pool sized far larger than the core count for CPU-bound work. `perf sched` or `strace -f` on a sample of the busiest process can show which threads are actually cycling through block/wake most rapidly.\n\nThe fix almost always comes back to reducing the number of competing runnable execution contexts — capping a thread pool, fixing lock contention causing needless wake-ups, or moving from thread-per-request to an event-driven or bounded-worker model.\n\n**Testing:** whether you can connect a system metric (context switches/sec) to a concrete root cause and remediation, rather than just knowing the metric exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a context-switch spike in production"
+    }
+  ]
+}

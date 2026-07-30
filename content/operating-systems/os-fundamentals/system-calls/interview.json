@@ -1,0 +1,37 @@
+{
+  "topicId": "system-calls",
+  "interviewQuestions": [
+    {
+      "id": "system-calls-iq1",
+      "question": "What happens between calling read() in C and getting your data?",
+      "answerMarkdown": "I'd trace it as a hand-off across three layers. Your code calls the glibc wrapper `read(fd, buf, n)`, which loads the syscall number for `read` and its arguments into specific CPU registers according to the calling convention, then executes the `syscall` trap instruction — this is the only step that actually leaves user mode.\n\nThe CPU flips its privilege bit to kernel mode and jumps to a fixed kernel entry point (never one glibc supplies). The kernel reads the syscall number out of the register, indexes straight into its syscall table, and runs `sys_read`, which looks up the file descriptor, finds the underlying file or socket, and copies data from a kernel buffer into the address `buf` points to in your process's memory.\n\nControl then returns: the mode bit flips back to user mode, your saved registers are restored, and `read()` returns the number of bytes copied (or a negative errno on failure) — from your code's perspective it looks like an ordinary function call, but two full privilege transitions happened underneath.\n\n**Testing:** whether you can narrate the full path instead of treating read() as a black box.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Tracing read() end to end"
+    },
+    {
+      "id": "system-calls-iq2",
+      "question": "What's the difference between a system call and a library function, and why does it matter?",
+      "answerMarkdown": "I'd separate them by what actually crosses the privilege boundary. A system call is the kernel's own interface — a fixed, numbered operation the kernel exposes, like `read` or `mmap` — and invoking it always requires a mode switch. A library function, like `fopen()` or `printf()`, is ordinary user-space code that may internally call one or more syscalls, or may not call the kernel at all if it can satisfy the request from data it already has.\n\nThe concrete example I'd use is `printf()` vs `write()`: `printf()` formats the string in user space and typically buffers it, only flushing to the kernel via a `write()` syscall when the buffer fills or the program exits — so a hundred `printf()` calls might trigger far fewer than a hundred syscalls.\n\nWhy it matters practically: when profiling shows unexpectedly high syscall counts, blaming \"the library\" is imprecise — you need to know which specific library calls actually cross into the kernel versus which just manipulate userspace buffers, because only the former carries real mode-switch cost.\n\n**Testing:** whether you understand the boundary precisely enough to reason about performance, not just definitions.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Syscall vs library call"
+    },
+    {
+      "id": "system-calls-iq3",
+      "question": "How would you figure out what syscalls a misbehaving production process is actually making?",
+      "answerMarkdown": "I'd reach for `strace` first since it directly answers the question — attach to the running process with `strace -p <pid>` (or launch fresh with `strace -f` to follow forked children), and optionally add `-c` for an aggregated count-and-time summary instead of a raw firehose of lines.\n\nI'd read the output for two signals: which syscalls dominate by count (often points to a hot loop doing unbuffered I/O) and which dominate by time (often points to blocking calls like `read` on a slow socket, or `futex` calls indicating lock contention). If the process is too latency-sensitive for strace's overhead in production, I'd fall back to `perf trace` or eBPF-based tools, which sample with far less intrusion.\n\nAs a concrete example: I've used exactly this to catch a service calling `stat()` on the same config file thousands of times per second — strace's count summary made it obvious in seconds, versus hours of guessing from application logs alone.\n\n**Testing:** whether you reach for the right systems tool instead of only debugging at the application-log level.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging with strace"
+    },
+    {
+      "id": "system-calls-iq4",
+      "question": "Why can't a sandboxed or containerized process just make any syscall it wants?",
+      "answerMarkdown": "I'd start from the shared-kernel reality: unlike a VM, a container shares the exact same kernel as the host and every other container on that machine, so any syscall the kernel implements is technically reachable — the isolation has to come from deliberately restricting which ones a container is allowed to invoke.\n\nThis is exactly what `seccomp` (secure computing mode) does: it filters directly on syscall number, and Docker's default profile blocks several dozen syscalls a typical containerized app never legitimately needs — things like `reboot`, raw `mount`, or loading kernel modules — because if a compromised container could call them, it could affect the whole host, not just itself.\n\nI'd add the trade-off: overly aggressive seccomp profiles break legitimate workloads that need an uncommon syscall, so tuning it is a real operational task, not a set-and-forget default — teams often build custom profiles per workload rather than trusting the generic one everywhere.\n\n**Testing:** whether you connect the syscall interface to real container security mechanisms instead of treating containers as fully isolated by default.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Syscall filtering and container security"
+    }
+  ]
+}

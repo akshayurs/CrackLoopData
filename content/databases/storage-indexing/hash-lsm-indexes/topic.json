@@ -1,0 +1,187 @@
+{
+  "id": "hash-lsm-indexes",
+  "title": "Hash & LSM Indexes",
+  "area": "databases",
+  "group": "storage-indexing",
+  "order": 3,
+  "slug": "hash-lsm-indexes",
+  "summary": "The write-optimized alternatives to B+Tree — hash indexes for O(1) equality lookups, and LSM trees, the structure behind Cassandra, RocksDB, and every write-heavy modern store.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "hash-lsm-indexes-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "B+Trees are a good all-rounder, but two workloads push past what they're best at: pure equality lookups with no need for ranges, and **write-heavy** ingestion where B+Tree's random-write pattern becomes the bottleneck. **Hash indexes** solve the first; **LSM trees** (Log-Structured Merge trees) solve the second.\n\nLSM trees power Cassandra, RocksDB, LevelDB, HBase, and are the write path inside many modern engines — understanding memtables, SSTables, and compaction is table stakes for any \"how does Cassandra handle writes\" question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "hash-lsm-indexes-s02",
+      "order": 2,
+      "sectionTitle": "Hash index: O(1) equality, no ranges",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hash index** runs the key through a hash function to compute a bucket, then stores (or looks up) the key-to-row pointer in that bucket. A lookup is one hash computation plus one bucket read — genuinely **O(1)**, and often faster in practice than a B+Tree's O(log n) descent, since there's no multi-level traversal.\n\nThe cost is that hashing destroys order: keys `5` and `6` can land in completely unrelated buckets, so there's no way to answer `WHERE id > 5` without scanning every bucket. Postgres supports hash indexes explicitly for equality-only columns; many key-value stores (early Bitcask, DynamoDB's partition-key routing) use hashing as their core lookup structure.\n\nThe rule of thumb: reach for a hash index only when you're certain the column will only ever be queried with `=`, never `<`, `>`, or `BETWEEN`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "hash-lsm-indexes-s02-q1"
+      ]
+    },
+    {
+      "id": "hash-lsm-indexes-s03",
+      "order": 3,
+      "sectionTitle": "LSM tree: memtable to SSTables to compaction",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **LSM tree** never updates data in place. A write first goes to an in-memory sorted structure, the **memtable** (often a skip list), plus a write-ahead log on disk for durability — both are sequential appends, so writes are extremely cheap, no random I/O at all.\n\nWhen the memtable fills (commonly 32-128 MB), it's flushed to disk as an immutable, sorted file — an **SSTable** (Sorted String Table). Over time this produces many SSTables, and a read has to check the memtable plus potentially every SSTable to find the latest value for a key. A background process called **compaction** periodically merges SSTables together, discarding overwritten and deleted values, keeping the number of files a read must check bounded.\n\nThis is the core trade: LSM trees make writes nearly free by deferring the cost — sorting and merging — to a background compaction process instead of doing it inline on every write like a B+Tree's in-place update does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "hash-lsm-indexes-s03-q1"
+      ]
+    },
+    {
+      "id": "hash-lsm-indexes-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: LSM write path and compaction levels",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![LSM write path through the memtable and WAL, with compaction merging SSTables across levels](assets/lsm-write-path-compaction.svg)\n\nMost LSM implementations (RocksDB, Cassandra) organize SSTables into **levels**, each roughly 10x larger than the one above it. New data enters at Level 0 and compaction periodically merges it downward, consolidating overlapping key ranges and dropping obsolete versions.\n\nA read for a given key has to check the memtable, then potentially Level 0 (where files can have overlapping key ranges), then binary-search within the single relevant file at each lower level — which is why LSM reads are inherently more work than LSM writes.",
+      "assets": [
+        {
+          "alt": "LSM write path through the memtable and WAL, with compaction merging SSTables across levels",
+          "path": "assets/lsm-write-path-compaction.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "hash-lsm-indexes-s05",
+      "order": 5,
+      "sectionTitle": "Compare: B-Tree (read-optimized) vs LSM (write-optimized)",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | B+Tree | LSM Tree |\n|---|---|---|\n| Write pattern | In-place update — random I/O per write | Append-only to memtable/log — sequential I/O |\n| Write cost | Higher — page splits, random disk seeks | Lower — writes are nearly free until compaction |\n| Read pattern | Single tree descent, ~3-4 page reads | May check memtable + multiple SSTables per level |\n| Read cost | Predictable, low | Higher and more variable, mitigated by bloom filters and caching |\n| Space overhead | Low — one copy of live data | Higher — old versions linger until compaction reclaims them |\n| Typical engines | Postgres, MySQL InnoDB, Oracle | Cassandra, RocksDB, LevelDB, HBase, BigTable |\n\n**How to decide:** if your workload is write-heavy with high ingest rate (metrics, logs, event streams) and reads can tolerate a bit more latency or use point lookups, LSM wins; if reads dominate and need consistent low latency with real-time range queries, B+Tree wins.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "hash-lsm-indexes-s05-q1"
+      ]
+    },
+    {
+      "id": "hash-lsm-indexes-s06",
+      "order": 6,
+      "sectionTitle": "Bloom filters cutting disk reads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The obvious weakness of LSM reads — checking many SSTables per key — is mitigated by a **bloom filter**: a small, in-memory probabilistic structure per SSTable that can say \"this key is **definitely not** in this file\" with zero false negatives, or \"this key is **probably** in this file\" with a small false-positive rate (commonly tuned to ~1%).\n\nBefore touching disk for an SSTable, the engine checks its bloom filter first. For a key that exists in only one of ten SSTables, this turns \"read ten files to find it\" into \"read one file, skip nine\" — the nine skips cost only a cheap in-memory bit-array check each.\n\nThe trade-off is memory: a bloom filter sized for 1% false-positive rate costs roughly **1.2 bytes per key** — for 100 million keys, about 120 MB of RAM per SSTable generation, which is why bloom filter sizing is a real tuning knob in RocksDB and Cassandra, not a fire-and-forget default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "hash-lsm-indexes-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: LSM read and space amplification",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"LSM trees are strictly better than B+Trees because writes are so much cheaper.\"\n\n**Why it's wrong:** LSM trees pay for cheap writes with **read amplification** — a single logical read can require checking the memtable plus several SSTables before finding (or ruling out) a key, each an extra disk seek if not cached or filtered. They also pay **space amplification** — overwritten and deleted values physically remain on disk, sometimes duplicated across levels, until compaction runs and reclaims them, meaning actual disk usage can run 1.5-3x the logical data size.\n\n**Correct model:** LSM trees don't eliminate cost, they **move and reshape** it — from synchronous random-write cost (B+Tree) to background compaction I/O plus higher read and space overhead (LSM). Compaction itself competes for disk bandwidth with live traffic, which is why \"compaction storms\" causing latency spikes are a real, named operational problem in Cassandra and RocksDB deployments.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "hash-lsm-indexes-s07-q1"
+      ]
+    },
+    {
+      "id": "hash-lsm-indexes-s08",
+      "order": 8,
+      "sectionTitle": "Write amplification: comparing the real cost per write",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Write amplification** measures how many bytes actually get written to disk per byte of logical data written by the application. A B+Tree writing a single row can trigger a whole-page rewrite (8-16 KB) for a tiny update — write amplification easily in the tens.\n\nAn LSM tree's write amplification comes from a different place: the same piece of data gets rewritten every time compaction merges it into the next level. With a common 10x-per-level growth factor and several levels, a key can be rewritten **10-30 times** over its lifetime before reaching the bottom level — RocksDB's own benchmarks commonly cite write amplification factors around **10-20x** for typical configurations, tunable via compaction strategy (leveled vs size-tiered).\n\nNeither number is small — the honest comparison isn't \"LSM has zero write cost,\" it's \"LSM defers and batches the cost so the application's write latency stays low, at the price of background I/O and, eventually, similar or higher total bytes written.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "hash-lsm-indexes-s09",
+      "order": 9,
+      "sectionTitle": "Tombstones: how LSM trees represent deletes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An LSM tree can't delete a key in place — the SSTable holding it is immutable. Instead, a `DELETE` writes a **tombstone**: a special marker record saying \"this key is deleted as of this timestamp,\" which flows through the memtable and gets flushed like any other write.\n\nReads must respect tombstones — if a tombstone is found for a key with a later timestamp than any value, the key reads as absent even though older SSTables still physically contain it. The tombstone (and the shadowed values) only get physically removed when compaction merges those files together.\n\nThis is why Cassandra explicitly warns about **tombstone accumulation**: a workload that deletes heavily without enough compaction can leave reads scanning past large numbers of tombstones before finding real data (or confirming absence) — a well-known Cassandra production pitfall (`gc_grace_seconds` tuning exists specifically for this).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "hash-lsm-indexes-s09-q1"
+      ]
+    },
+    {
+      "id": "hash-lsm-indexes-s10",
+      "order": 10,
+      "sectionTitle": "Compare: leveled vs size-tiered compaction",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Leveled compaction | Size-tiered compaction |\n|---|---|---|\n| Structure | Fixed levels, each ~10x the last, non-overlapping key ranges within a level | SSTables grouped by similar size, merged when enough accumulate |\n| Write amplification | Higher — a key gets rewritten at each level it passes through | Lower — fewer total rewrites |\n| Read amplification | Lower — at most one file per level to check | Higher — more files can hold a given key |\n| Space amplification | Lower and more predictable | Can spike — large files linger before merging |\n| Good for | Read-heavy or mixed workloads (RocksDB default) | Write-heavy, insert-only workloads (Cassandra's older default) |\n\n**How to decide:** this is a real production knob, not academic — Cassandra lets you choose per-table, and picking size-tiered for a table that's actually read-heavy is a common misconfiguration that shows up as slow point reads under load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "hash-lsm-indexes-s11",
+      "order": 11,
+      "sectionTitle": "Extendible and linear hashing: growing a hash index without a full rebuild",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A naive fixed-bucket hash index degrades badly as the table grows — buckets overflow and chain, turning O(1) lookups into O(chain length). **Extendible hashing** solves this by keeping a small directory of pointers to buckets, doubling only the directory (and splitting one overflowing bucket) when needed, rather than rehashing the entire table.\n\n**Linear hashing** takes a different approach: it splits one bucket at a time in a fixed round-robin order as the index grows, avoiding both a full rehash and a directory structure, at the cost of occasional lookups needing an extra probe during a split cycle.\n\nThe interview-relevant point isn't memorizing both algorithms in detail — it's knowing that production hash indexes have to solve \"how do we grow without rebuilding everything,\" the same problem resizing a language's hash map solves, just under disk-page constraints.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "hash-lsm-indexes-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: choosing LSM for a read-dominated, low-latency workload",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Cassandra/RocksDB are 'modern,' so they're a safe default choice for any new service.\"\n\n**Why it's wrong:** a service doing 95% point reads on hot keys with strict p99 latency requirements (say, a session lookup on every request) will see LSM's read amplification and occasional compaction-induced latency spikes directly on the critical path — exactly the workload B+Tree engines are tuned for. Choosing LSM here trades a real, measurable latency cost for write throughput headroom the service never needed.\n\n**Correct model:** pick the index structure from the actual read:write ratio and latency SLA, not from which technology feels newer. A good gut-check question: \"is this workload closer to ingesting a firehose of events, or serving latency-sensitive point reads on stable data?\" — the former favors LSM, the latter favors B+Tree.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "hash-lsm-indexes-s12-q1"
+      ]
+    }
+  ]
+}

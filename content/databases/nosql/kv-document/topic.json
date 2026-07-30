@@ -1,0 +1,184 @@
+{
+  "id": "kv-document",
+  "title": "Key-Value & Document Stores",
+  "area": "databases",
+  "group": "nosql",
+  "order": 2,
+  "slug": "kv-document",
+  "summary": "The two most widely used NoSQL families — key-value's pure get/put simplicity and document stores' nested JSON model — plus the single-table design pattern that ties both to real access patterns.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "kv-document-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Key-value** stores are the simplest NoSQL family — a giant dictionary, get/put by key, nothing else. **Document** stores are one layer richer — each value is structured JSON/BSON that the database can query and index *inside*, not just fetch opaquely.\n\nThese two families cover the overwhelming majority of NoSQL production usage — Redis and DynamoDB for key-value, MongoDB and Couchbase for document. Knowing exactly where the line between them sits, and how to model for each, is one of the most practically useful things in this whole area.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "kv-document-s02",
+      "order": 2,
+      "sectionTitle": "Key-value: access by key only",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A key-value store's entire interface is `GET key`, `PUT key value`, `DELETE key` — the value is an opaque blob the database doesn't look inside. This simplicity is exactly what makes it fast: **Redis** serves reads from RAM in well under a millisecond, and **DynamoDB** guarantees single-digit-millisecond latency at any scale because it never has to parse or index the value's internal structure.\n\nThe shape this fits: session storage (key = session ID, value = serialized session data), caching (key = cache key, value = the cached response), rate limiting (key = user+endpoint, value = a counter), feature flags (key = flag name, value = boolean/config). All of these share one trait: you always know the exact key you want, and you never need to query \"give me all values where X\" — that requires a different family.\n\nThe honest limitation: the moment you need to filter, sort, or query by anything other than the exact key, a pure key-value store can't help — that's the signal to reach for document or wide-column instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "kv-document-s02-q1"
+      ]
+    },
+    {
+      "id": "kv-document-s03",
+      "order": 3,
+      "sectionTitle": "Document: nested JSON, secondary indexes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A document store keeps values as structured JSON/BSON, and — unlike key-value — can index and query **fields inside** that structure. `db.products.find({\"category\": \"electronics\", \"price\": {\"$lt\": 500}})` filters on nested fields directly, something a pure key-value store simply can't express.\n\nMongoDB supports secondary indexes on any field, including nested and array fields, and compound indexes across multiple fields — conceptually similar to a relational composite index, same left-prefix reasoning applies. This is the real difference from key-value: the database understands the document's shape well enough to build indexes into it, not just index the outer key.\n\nThe trade for this flexibility: a document's schema can drift across records over time (the schema-on-read trade-off), and a query touching many nested fields across a huge collection without the right index degrades the same way an unindexed relational query does — a full collection scan.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "kv-document-s03-q1"
+      ]
+    },
+    {
+      "id": "kv-document-s04",
+      "order": 4,
+      "sectionTitle": "Code: a document query and partial update",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "MongoDB query and update syntax, worth recognizing on sight:\n\n```javascript\n// Query: nested field + array element match\ndb.orders.find({\n  \"customer.tier\": \"gold\",\n  \"items.sku\": \"SKU-4471\"\n});\n\n// Partial update: change one field without rewriting\n// the whole document, and increment a counter atomically\ndb.orders.updateOne(\n  { _id: orderId },\n  {\n    $set: { status: \"shipped\" },\n    $inc: { revisionCount: 1 }\n  }\n);\n```\n\n`$set` and `$inc` are **partial update operators** — they modify specific fields in place server-side rather than requiring the client to fetch, mutate, and rewrite the entire document, which matters a lot for large documents and avoids a read-modify-write race between concurrent updates to different fields.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "kv-document-s05",
+      "order": 5,
+      "sectionTitle": "Compare: embedding vs referencing documents",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Embedding | Referencing |\n|---|---|---|\n| Read cost | One fetch — everything is in one document | Multiple fetches or app-level joins |\n| Write cost when shared data changes | Must update every document embedding it | Update once, referenced everywhere |\n| Document size | Grows with embedded content — risk of hitting size limits | Stays small and bounded |\n| Best for | Data that's read together and rarely changes independently (an order's line items) | Data that's shared across many documents and changes independently (a product catalog entry referenced by thousands of orders) |\n\n**How to decide:** embed when the child data is only ever meaningful in the context of its parent and won't be updated independently after creation (line items frozen at order time); reference when the same entity is looked up or updated from many places (a product referenced by thousands of orders shouldn't have its price update fail to \"stick\" everywhere).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "kv-document-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: unbounded document growth",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Embedding is always better since it avoids joins — let's embed every comment directly into its blog post document.\"\n\n**Why it's wrong:** MongoDB caps a single document at **16 MB**, and long before hitting that hard limit, a post with tens of thousands of embedded comments becomes slow to read (the whole array loads even if you only want the newest 20 comments) and slow to write (appending one comment rewrites — or at least touches — an increasingly large document). This is the classic **unbounded array** anti-pattern: embedding a collection that has no natural cap.\n\n**Correct model:** embed collections that are naturally small and bounded (an order's line items, rarely more than a few dozen); reference — store comments in their own collection keyed by `postId` — when a child collection can grow without bound. The rule of thumb: if you can't state a reasonable maximum size for the embedded array, don't embed it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "kv-document-s06-q1"
+      ]
+    },
+    {
+      "id": "kv-document-s07",
+      "order": 7,
+      "sectionTitle": "Single-table design for access patterns",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "DynamoDB (and wide-column stores generally) push aggregate-oriented modeling to its extreme with **single-table design**: instead of one table per entity type (users, orders, products), you store every entity type in one table, using generic `PK`/`SK` (partition key/sort key) attributes whose meaning depends on the item — `PK=USER#123` / `SK=PROFILE` for a user, `PK=USER#123` / `SK=ORDER#456` for that user's order.\n\nThis looks strange coming from relational modeling, but it's driven by DynamoDB's cost model: cross-table joins don't exist, and every query needs to be servable by a single partition-key lookup or a sort-key range within one partition. Single-table design front-loads all your known access patterns into the key design, so \"get a user and all their orders in one query\" becomes a single `SK` range query instead of a join.\n\nThe real cost: you must know your access patterns **before** designing the table, which is the opposite of relational modeling's \"model the data first, query however you need later\" — a genuinely new access pattern discovered after launch can require a redesign, not just a new query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "kv-document-s07-q1"
+      ]
+    },
+    {
+      "id": "kv-document-s08",
+      "order": 8,
+      "sectionTitle": "Numbers: Redis latency and why it's used for hot paths",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete numbers worth having ready: a single `GET` from Redis, an in-memory key-value store, typically completes in **under 1 millisecond**, versus a few to tens of milliseconds for an equivalent query against a disk-backed relational database (more if it's not cached, involves a join, or contends with other load).\n\nThat gap is exactly why session lookups, feature-flag checks, and rate-limit counters — all things checked on nearly every request — live in Redis rather than the primary database: shaving 5-10ms off a request that happens millions of times a day is a real, cumulative latency win, and it also removes that load from the primary database entirely.\n\nThe caveat: Redis's speed comes from being in-memory, so data size is bounded by available RAM (a Redis instance holding 50 GB of hot data needs at least that much RAM, plus headroom), and durability is weaker by default — a crash can lose recent writes unless you've configured AOF (append-only file) persistence, itself a latency-vs-durability trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "kv-document-s08-q1"
+      ]
+    },
+    {
+      "id": "kv-document-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: single-table design layout",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A PK/SK/Attributes table with three USER#123 rows bracketed together, labelled one partition, one query returns user plus all orders](assets/single-table-design.svg)\n\nAll three rows share the same partition key, `USER#123`, so a single DynamoDB query for that partition key returns the user's profile and every order in one round trip, sorted by the sort key.\n\nThis is the payoff single-table design is built around: what would be a join across two relational tables becomes one partition read here — but only because the access pattern was designed into the keys in advance.",
+      "assets": [
+        {"alt": "A PK/SK/Attributes table with three USER#123 rows bracketed together, labelled one partition, one query returns user plus all orders", "path": "assets/single-table-design.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "kv-document-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: modeling a document store like a relational one",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll keep my relational schema, just store each table as a MongoDB collection and join in application code when I need to.\"\n\n**Why it's wrong:** this gives up the actual benefit of a document store — reading an aggregate in one fetch — while keeping all of the relational model's join complexity, except now the joins run slower, in application code, without a query planner optimizing them, and without foreign-key constraints enforcing integrity. You end up paying document-store costs (no native joins, no multi-document transactions by default) without document-store benefits (single-fetch reads).\n\n**Correct model:** if you're using a document store, actually model around your read patterns — embed what's read together, reference what's shared and independently updated. If your data and access patterns are genuinely relational and you're not getting single-fetch reads out of the switch, that's a strong signal you should have stayed relational.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "kv-document-s10-q1"
+      ]
+    },
+    {
+      "id": "kv-document-s11",
+      "order": 11,
+      "sectionTitle": "Hot keys and partition skew",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Both families can suffer from a **hot key**: one key (or partition) receiving disproportionate traffic. In Redis, a single extremely popular cache key (a viral post's like count) can saturate the single core handling that key even though the cluster overall has capacity — Redis is largely single-threaded per key operation. In DynamoDB, a partition key with too much traffic relative to others (e.g. `PK=TENANT#big-customer` when one tenant is 100x the size of others) can throttle that specific partition even while the table's overall provisioned capacity is fine.\n\nMitigations differ by store but share a pattern: **spread the hot key artificially** — Redis can shard a hot counter across N sub-keys and sum them on read; DynamoDB single-table designs often add a random suffix to a hot partition key and fan out reads across the suffixes.\n\nThe interview signal: recognizing that \"the database has capacity\" and \"this specific key has capacity\" are different questions, and NoSQL stores make that distinction sharply visible in a way a well-cached relational table often doesn't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "kv-document-s12",
+      "order": 12,
+      "sectionTitle": "Compare: Redis vs DynamoDB vs MongoDB at a glance",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Redis | DynamoDB | MongoDB |\n|---|---|---|---|\n| Family | Key-value (in-memory) | Key-value / wide-column hybrid | Document |\n| Durability | Optional, weaker by default | Strong — durable, managed | Strong — durable, replicated |\n| Query flexibility | None beyond the key (plus some data-type ops) | Key/sort-key queries; secondary indexes for more | Rich queries on any field, secondary indexes |\n| Scaling model | Vertical + clustering (Redis Cluster) | Fully managed horizontal, pay-per-request | Manual or Atlas-managed sharding |\n| Typical role | Cache, session store, hot-path counters | Serverless app backend, single-table design | General-purpose document workloads, catalogs |\n\n**How to decide:** these three usually aren't competing for the same job — Redis in front of a primary store as a cache, DynamoDB or MongoDB as the primary store itself, chosen by whether you want DynamoDB's fully-managed scaling and key-only query discipline, or MongoDB's flexible query language.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

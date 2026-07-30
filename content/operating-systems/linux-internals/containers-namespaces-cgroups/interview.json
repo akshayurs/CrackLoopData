@@ -1,0 +1,37 @@
+{
+  "topicId": "containers-namespaces-cgroups",
+  "interviewQuestions": [
+    {
+      "id": "containers-namespaces-cgroups-iq1",
+      "question": "How is a Docker container different from a lightweight VM, mechanically?",
+      "answerMarkdown": "The core distinction is that a container has no second kernel at all — it's a process created with `clone()`/`unshare()` flags that place it into new PID, network, mount, UTS, IPC, and user namespaces, assigned to a cgroup enforcing CPU/memory/IO limits, and given its own root filesystem via overlayfs layers plus `pivot_root`. All of that runs directly on the host's one, shared, already-running kernel.\n\nA lightweight VM — Firecracker or Kata Containers are the concrete names I'd cite — still boots an actual, separate guest kernel, just a minimal one with a stripped-down virtual device model chosen for fast boot. That guest kernel is real and independent of the host's, which is what gives it a genuine hypervisor-backed security boundary a container can't claim, no matter how minimal the container's setup is.\n\nThe practical consequence: a kernel exploit is a much bigger deal for containers, since every container on the host shares the vulnerable kernel, while a VM contains that blast radius to the one guest. I'd close by naming gVisor and Kata as the real-world tools built specifically to close this gap when container speed is needed with stronger isolation guarantees.\n\n**Testing:** whether you can say precisely what is and isn't shared, instead of the vague answer \"containers are like lightweight VMs.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Containers vs lightweight VMs, mechanically"
+    },
+    {
+      "id": "containers-namespaces-cgroups-iq2",
+      "question": "What's the difference between what namespaces do and what cgroups do for a container?",
+      "answerMarkdown": "They solve two completely different problems, and conflating them is a common gap in an otherwise-decent answer. Namespaces control **what a process can see** — its own PID numbering, its own network stack, its own mount table — by wrapping a global kernel resource so the process gets a private view of it. Two processes in different PID namespaces can both be \"PID 1\" because each namespace maps its own local numbering onto the real, shared PIDs the host tracks underneath.\n\ncgroups control **how much of the real, shared hardware a process can use** — CPU time, memory, I/O bandwidth — regardless of what it can or can't see. A process can be fully namespace-isolated and still starve every other process on the box for CPU if nothing caps it; cgroups are what closes that gap.\n\nA container in the everyday sense is specifically the combination of both, plus a filesystem (overlayfs image layers): isolated view, capped resource usage, and its own root filesystem. I'd point out you can use either mechanism completely independently — `unshare --pid` alone demonstrates namespace isolation with zero cgroup involvement.\n\n**Testing:** whether you know these are two independent, composable primitives rather than one \"container isolation\" black box.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Namespaces vs cgroups"
+    },
+    {
+      "id": "containers-namespaces-cgroups-iq3",
+      "question": "A container keeps getting OOM-killed even though your monitoring shows the host has plenty of free memory. What's going on, and how would you confirm it?",
+      "answerMarkdown": "This is almost certainly a cgroup memory limit, not host memory pressure — the two are entirely separate ceilings, and it's a very common point of confusion. Docker/Kubernetes set a per-container memory limit via cgroups; exceeding that limit triggers the kernel's OOM killer to target a process inside that specific cgroup, completely independent of how much memory is free on the host as a whole. A container can be OOM-killed on a host with 200GB of headroom if its own limit is set to, say, 512MB and it tries to exceed that.\n\nTo confirm, I'd check the container's actual configured limit — `docker inspect` or the pod spec's `resources.limits.memory` in Kubernetes — against its observed memory usage right before the kill, which I'd pull from `docker stats`, cgroup files directly (`memory.current` / `memory.max` under `/sys/fs/cgroup/`), or the orchestrator's own event log (Kubernetes records an `OOMKilled` reason on the container status specifically for this).\n\nThe fix is either raising the limit if the workload's real memory need was under-provisioned, or, if the container is genuinely leaking, treating this OOM-kill pattern as the diagnostic signal itself rather than something to just paper over by raising the limit.\n\n**Testing:** whether you immediately separate 'host memory' from 'cgroup memory limit' instead of being confused by seemingly-contradictory monitoring data.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a cgroup memory limit"
+    },
+    {
+      "id": "containers-namespaces-cgroups-iq4",
+      "question": "Why is it risky to run a container as root even though it's namespaced away from the host?",
+      "answerMarkdown": "Namespace isolation restricts *view*, but by itself it doesn't reduce *privilege* — without further hardening, root inside a container is close to the same broad set of kernel-level capabilities as root on the host, because it's still the same underlying kernel handling every syscall. If an attacker escapes the container's restricted view through a kernel bug or a container-runtime misconfiguration, landing as root gives them far more to work with than landing as an unprivileged user would.\n\nThis is exactly why Docker drops most Linux capabilities by default even for a container's root user, and why a hardened setup goes further: running as a non-root user inside the container image itself, applying a seccomp profile to block dangerous syscalls outright, and using a user namespace to map \"root\" inside the container to an unprivileged UID on the host — so even a full container-root compromise doesn't translate into host-root.\n\nI'd frame the overall principle: container isolation is a set of independently-configurable layers (namespaces, cgroups, capabilities, seccomp), and skipping any one of them — like leaving default capabilities and running as root inside the image — measurably weakens the whole stack, not just that one layer.\n\n**Testing:** whether you understand namespace isolation and privilege reduction are separate concerns that both need to be addressed, not just one general 'isolation' concept.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Root inside a container vs root on the host"
+    }
+  ]
+}

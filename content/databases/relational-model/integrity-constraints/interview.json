@@ -1,0 +1,29 @@
+{
+  "topicId": "integrity-constraints",
+  "interviewQuestions": [
+    {
+      "id": "integrity-constraints-iq1",
+      "question": "Why would you add a database constraint if your application already validates the same rule in code?",
+      "answerMarkdown": "Because application validation only protects the one code path that calls it, and production systems almost never have exactly one write path forever. A bulk import script, a one-off migration, a second service added later, or a bug in a rarely-hit branch can all write to the table without going through the validation you trust — and a database constraint is the only guarantee that survives all of those.\n\nI'd frame it as two layers doing different jobs: application validation exists for a fast, friendly user-facing error (\"price must be positive\") before a request even hits the database. The constraint is the backstop that makes bad data structurally impossible, regardless of which path wrote it. I've seen a real case where a \"we already validate in the service layer\" assumption let a batch job insert negative refund amounts for months before a `CHECK (amount >= 0)` constraint would have caught it in microseconds.\n\nThe two aren't redundant — cutting either one leaves a real gap.\n\n**Testing:** whether you understand constraints as defense in depth, not duplicate work.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Constraints vs application validation"
+    },
+    {
+      "id": "integrity-constraints-iq2",
+      "question": "What's the difference between ON DELETE CASCADE, SET NULL, and RESTRICT, and how do you decide which to use?",
+      "answerMarkdown": "All three answer the same question — what happens to child rows when the parent they reference is deleted — but they encode different business rules, not just technical preferences. CASCADE deletes the children along with the parent; SET NULL keeps the children but clears the foreign key column (only valid if it's nullable); RESTRICT blocks the delete entirely while children still exist.\n\nI pick based on ownership semantics: if the child data has no meaning without the parent — comments on a deleted post, line items on a deleted draft order — CASCADE is right, because keeping them around orphaned serves no purpose. If the relationship is more like a soft reference — an employee's `manager_id` when the manager leaves — SET NULL preserves the employee record while acknowledging the link is gone. RESTRICT is my default for anything financially or legally significant, like a customer with existing orders: deleting the customer and cascading away the order history would destroy an audit trail, so I'd rather force an explicit decision.\n\n**Testing:** whether you think about referential actions as business decisions with real consequences, not boilerplate you copy from a tutorial.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Choosing a referential action"
+    },
+    {
+      "id": "integrity-constraints-iq3",
+      "question": "How would you safely add a NOT NULL or CHECK constraint to a large, live production table that might already have violating rows?",
+      "answerMarkdown": "I would never just run `ALTER TABLE ... ADD CONSTRAINT` directly on a hot table, because the engine validates every existing row as part of that statement, which can hold a heavy lock for the duration and also fails outright if any row already violates it.\n\nMy sequence: first, find the violating rows with a plain `SELECT` and either fix or explicitly exclude them — that's a data problem to solve before it's a schema problem. Then, on engines that support it, add the constraint as `NOT VALID`, which enforces it on all new writes immediately but skips scanning existing rows, so the lock is brief. Finally, run `VALIDATE CONSTRAINT` as a separate step, which checks historical rows using a lighter lock that doesn't block concurrent reads and writes the way the initial add would.\n\nI'd schedule that validation step for low-traffic hours regardless, since scanning a huge table is still I/O work even with a lighter lock.\n\n**Testing:** whether you've actually operated a schema change on a live table, not just written CREATE TABLE statements in a sandbox.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Safely adding a constraint to a live table"
+    }
+  ]
+}

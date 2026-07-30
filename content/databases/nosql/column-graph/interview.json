@@ -1,0 +1,45 @@
+{
+  "topicId": "column-graph",
+  "interviewQuestions": [
+    {
+      "id": "column-graph-iq1",
+      "question": "How would you design a Cassandra schema for a time-series metrics system ingesting millions of data points per second?",
+      "answerMarkdown": "I'd start from the write and read patterns, since Cassandra modeling is query-first. Writes are per-device readings arriving continuously; the dominant read is \"give me device X's readings over some recent time window.\" That points to a partition key on the device identifier and a clustering key on timestamp, so all of one device's data lands on the same nodes, physically sorted by time — a range read becomes a fast sequential scan within one partition.\n\nThe catch I'd flag immediately: partitioning only by device ID means a long-running device's partition grows unbounded, which Cassandra's own guidance says to keep under roughly 100 MB for compaction and repair health. So I'd bucket the partition key by device plus a time window — device-and-day, say — capping each partition's size regardless of how long the device has been reporting.\n\nIf I also need to query \"give me all readings above a threshold across all devices,\" that's a different table entirely — I'd build a second, denormalized table for that access pattern rather than adding a secondary index or `ALLOW FILTERING` to the first one.\n\n**Testing:** whether you apply query-first modeling and partition-sizing discipline together, not just name Cassandra as \"good for time-series.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Designing a Cassandra time-series schema"
+    },
+    {
+      "id": "column-graph-iq2",
+      "question": "Why would a fraud detection team choose a graph database over adding more joins to their relational schema?",
+      "answerMarkdown": "I'd frame it around what the actual query looks like: fraud rings are found by asking \"are these accounts connected through shared devices, IPs, or payment methods, possibly several hops apart\" — and that connectivity depth is exactly where relational joins stop scaling gracefully. Each additional join re-searches a growing intermediate result, so a 4-5 hop relational query against a large accounts table gets progressively slower and often needs manual query rewriting or denormalization to stay usable.\n\nA graph database's index-free adjacency means each hop is a direct pointer follow from one node to its connected edges, so traversal cost tracks the size of the neighborhood actually visited, not the size of the whole accounts table — a 5-hop fraud-ring query stays comparably cheap to a 2-hop one.\n\nI'd be equally clear about the trade: if the team also needs to run large aggregate reports (`SUM` across millions of transactions), that stays on the relational or analytical side — I wouldn't propose replacing the whole data platform, just routing the specific relationship-heavy fraud queries to a purpose-built graph store.\n\n**Testing:** whether you can justify a graph database from the query shape, not just because \"connections\" sound graph-like.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Justifying a graph database for fraud detection"
+    },
+    {
+      "id": "column-graph-iq3",
+      "question": "A Cassandra table is showing extremely slow reads and writes on rows for one particular customer, while everyone else is fine. How would you investigate?",
+      "answerMarkdown": "I'd suspect a hot or oversized partition first, since Cassandra's per-partition behavior can degrade independently of overall cluster health. I'd check whether the partition key includes the customer ID directly with no bucketing — if this customer is much larger or more active than others, all of their data could be piling into a single partition well past the roughly 100 MB guideline, making it slow to compact, repair, and even read as a unit.\n\nI'd confirm with `nodetool tablehistograms` or similar tooling to look at partition size distribution, rather than guessing from symptoms alone. If that confirms an oversized partition, the fix is adding a bucket to the partition key — commonly a time window like month or day — so no single partition grows unbounded regardless of how active that one customer becomes.\n\nI'd also rule out the query-side mistake: if the app added a filter on a non-partition column for this customer specifically, that could be silently triggering `ALLOW FILTERING` and a full cluster scan rather than a fast partition read — worth checking the actual query alongside the schema.\n\n**Testing:** whether you diagnose from Cassandra-specific mechanisms (partition sizing, ALLOW FILTERING) rather than generic \"add an index\" instincts.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a hot Cassandra partition"
+    },
+    {
+      "id": "column-graph-iq4",
+      "question": "Explain Cassandra's tunable consistency with QUORUM reads and writes at replication factor 3 — why does it guarantee reading your own write?",
+      "answerMarkdown": "With replication factor 3, each row is stored on 3 replica nodes. Writing at `QUORUM` requires acknowledgment from 2 of those 3 before the write is considered successful; reading at `QUORUM` similarly requires 2 of 3 replicas to respond and agree.\n\nThe guarantee comes from simple overlap math: the write touched at least 2 of 3 replicas, and the read checks at least 2 of 3 replicas — with only 3 total, those two sets of 2 must share at least one replica in common. That shared replica is guaranteed to have the latest write, so the read is guaranteed to see it, even though Cassandra as a whole is often described as \"eventually consistent.\"\n\nI'd name the trade-off directly: `QUORUM`/`QUORUM` costs more latency than `ONE`/`ONE` since you wait on 2 replicas instead of 1, and it costs some availability, since the operation now needs 2 of 3 nodes reachable instead of just 1 — this is the CAP trade-off made concrete and tunable per query rather than baked into the whole system's design.\n\n**Testing:** whether you can derive the overlap guarantee from the numbers rather than reciting \"QUORUM is strongly consistent\" as a fact without the mechanism.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Deriving quorum consistency"
+    },
+    {
+      "id": "column-graph-iq5",
+      "question": "A junior engineer wants to add a secondary index to a Cassandra table so they can filter by a non-partition column, the way you'd add an index in Postgres. What would you tell them?",
+      "answerMarkdown": "I'd explain that Cassandra secondary indexes don't behave like a relational index — they're built locally per node, so a query using one still has to fan out and check every node in the cluster for matches, rather than routing directly to the owning partition the way a partition-key query does. At any real scale, this often performs worse than the team expects, especially on high-cardinality columns, and Cassandra's own documentation discourages them for anything beyond low-cardinality, small-cluster cases.\n\nThe idiomatic fix in Cassandra is query-first modeling: if you need to filter by a different column, build a second table denormalized specifically for that query — say `orders_by_status` alongside `orders_by_customer` — and write to both tables when an order is created or updated. It means duplicating data and accepting eventual consistency between the two tables briefly, but each table serves its query as a fast, single-partition read.\n\nI'd frame this as the core mental shift from relational modeling: instead of one normalized table plus indexes for flexibility, Cassandra wants one purpose-built table per query pattern.\n\n**Testing:** whether you can explain why a familiar relational tool (secondary indexes) doesn't transfer cleanly, and what the idiomatic alternative actually is.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Secondary indexes vs query-first tables"
+    }
+  ]
+}

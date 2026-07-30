@@ -1,0 +1,164 @@
+{
+  "id": "file-allocation-methods",
+  "title": "File Allocation Methods",
+  "area": "operating-systems",
+  "group": "file-systems",
+  "order": 2,
+  "slug": "file-allocation-methods",
+  "summary": "How a file system decides which disk blocks belong to a file — contiguous, linked, and indexed allocation, and why almost everything in production uses a variant of the third.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "file-allocation-methods-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A file rarely fits in one disk block, so the file system needs a scheme for tracking **which blocks, in what order, belong to which file**. Get this wrong and you either waste space (fragmentation) or make random access painfully slow.\n\nThree classic approaches exist — contiguous, linked, and indexed — and nearly every real file system (ext4, NTFS, APFS) is a variant of indexed allocation with extents layered on top. This topic builds the mechanism so the [Inodes](inodes-and-unix-file-systems) topic makes sense as \"indexed allocation, concretely.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "file-allocation-methods-s02",
+      "order": 2,
+      "sectionTitle": "The allocation problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A 40KB file on a file system with 4KB blocks needs 10 blocks. Which 10? They might be contiguous, scattered, or somewhere in between — and the file system has to record the mapping durably, update it correctly as the file grows or shrinks, and let you seek to any byte offset without scanning the whole file.\n\nThe design tension is the same one that shows up everywhere in systems: **allocation speed and simplicity** vs **fragmentation and random-access performance**. Every allocation method below is a different trade-off point on that line.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "file-allocation-methods-s03",
+      "order": 3,
+      "sectionTitle": "Contiguous allocation: simple but fragmentation-prone",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Contiguous allocation** stores a file as one unbroken run of blocks — the directory entry just needs a starting block and a length. This makes sequential access as fast as physically possible (the disk arm barely moves) and random access trivial (`start + offset/blocksize` gives you the block directly, no lookups).\n\nThe catch: as files are created and deleted, free space fragments into scattered small gaps, and a new file might not find a big-enough contiguous run even though total free space is plenty — the classic **external fragmentation** problem. Growing a file in place can be impossible if the next block is already taken. This is why contiguous allocation mostly survives today only for read-only, write-once media (optical discs, some boot partitions).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "file-allocation-methods-s03-q1"
+      ]
+    },
+    {
+      "id": "file-allocation-methods-s04",
+      "order": 4,
+      "sectionTitle": "Linked allocation: each block points to the next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Linked allocation** stores each file as a chain: every block reserves a few bytes at its end for a pointer to the next block, and the directory entry just needs the first block's address. Growing a file is trivial — grab any free block and link it on — and there's no external fragmentation, since blocks never need to be contiguous.\n\nThe cost shows up immediately for random access: to reach block 500 of a file, you must read blocks 1 through 499 first, following pointers one at a time. It's also fragile — a single corrupted pointer breaks the chain for every block after it, silently losing the rest of the file.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "file-allocation-methods-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: linked allocation with block pointers",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![linked allocation block chain](assets/linked-allocation-chain.svg)\n\nThe directory only ever stores the first block's address. Every other block's location is discoverable only by walking the chain from the start — there's no way to jump directly to the file's 5th block without first visiting blocks 1 through 4.\n\nThis single detail explains most of linked allocation's weaknesses: no random access, and reliability that depends on every pointer in the chain staying intact.",
+      "assets": [
+        {
+          "alt": "linked allocation block chain",
+          "path": "assets/linked-allocation-chain.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "file-allocation-methods-s05-q1"
+      ]
+    },
+    {
+      "id": "file-allocation-methods-s06",
+      "order": 6,
+      "sectionTitle": "The problem with linked allocation for random access",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Seeking to byte offset 2,000,000 in a linked-allocation file with 4KB blocks means computing you need block ~488, then physically reading and discarding blocks 1 through 487 just to find where block 488 lives on disk — an O(n) walk for what should be an O(1) lookup.\n\nA common real fix, used by old FAT file systems, is to pull the pointers **out** of the data blocks and into a separate table held in memory — the **File Allocation Table** (FAT) itself, one entry per block, each pointing to the next block of its file. This keeps the chain-following logic but makes it fast because the whole table can be cached in RAM rather than requiring a disk read per hop — though it still doesn't give true O(1) random access, since you still walk table entries, just in memory instead of on disk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "file-allocation-methods-s06-q1"
+      ]
+    },
+    {
+      "id": "file-allocation-methods-s07",
+      "order": 7,
+      "sectionTitle": "Indexed allocation: an index block listing all data blocks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Indexed allocation** gives each file one dedicated **index block** holding an array of pointers to all of that file's data blocks. The directory entry points to the index block; to find block N of the file, read the index block once, then jump directly to `pointers[N]` — true O(1) random access, and no external fragmentation since data blocks can scatter freely.\n\nThe cost is the index block itself: even a tiny 1-byte file needs a full index block allocated, and a fixed-size index block caps how many pointers — and therefore how large a file — it can address, which is the problem the next slide solves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "file-allocation-methods-s08",
+      "order": 8,
+      "sectionTitle": "Multilevel and combined indexing for large files",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A single index block with, say, 1024 4-byte pointers to 4KB blocks tops out at 4MB per file — nowhere near enough. Two fixes compose: **multilevel indexing** turns some pointers in the index block into pointers to *other* index blocks (a two-level or three-level tree of indexes), and **combined indexing** — what Unix inodes actually use — keeps a handful of **direct pointers** for small files (fast, no extra indirection) and reserves just one or two pointers for single/double/triple-indirect blocks that only get touched once a file grows large.\n\nThis combined scheme is deliberately biased toward the common case: most files are small, so most files never pay the cost of indirection at all — only the rare large file walks two or three levels of index blocks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "file-allocation-methods-s08-q1"
+      ]
+    },
+    {
+      "id": "file-allocation-methods-s09",
+      "order": 9,
+      "sectionTitle": "Diagram: indexed allocation with a single index block",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![indexed allocation index block fan-out](assets/indexed-allocation-fanout.svg)\n\nUnlike linked allocation, every arrow originates from the same index block — reaching data block 6 doesn't require visiting data blocks 0 through 5 first. The index block is read once, then any entry in it resolves in a single hop.\n\nThis is the structural reason indexed allocation supports fast seeks: the fan-out happens at one point, not as a chain.",
+      "assets": [
+        {
+          "alt": "indexed allocation index block fan-out",
+          "path": "assets/indexed-allocation-fanout.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "file-allocation-methods-s10",
+      "order": 10,
+      "sectionTitle": "Compare: contiguous vs linked vs indexed",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Contiguous | Linked | Indexed |\n|---|---|---|---|\n| Random access | O(1), fastest | O(n), must walk chain | O(1) via index block |\n| External fragmentation | Yes — the core weakness | None | None |\n| Growing a file in place | Often impossible | Trivial | Trivial (add to index) |\n| Space overhead | None | A pointer per block | One+ index blocks per file |\n| Real-world use | Read-only media, boot sectors | Old FAT (with in-memory table) | ext4, NTFS, APFS (all combined/multilevel) |\n\n**How to decide:** if you're choosing for a new system, indexed (combined with direct + indirect pointers) dominates on general-purpose workloads — it's why every mainstream file system converged on it, differing mainly in how they optimize the index for large sequential files (extents, covered later in this group).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "file-allocation-methods-s10-q1"
+      ]
+    }
+  ]
+}

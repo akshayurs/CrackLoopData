@@ -1,0 +1,184 @@
+{
+  "id": "sharding",
+  "title": "Partitioning & Sharding",
+  "area": "databases",
+  "group": "distributed-databases",
+  "order": 2,
+  "slug": "sharding",
+  "summary": "Splitting data across machines to scale writes and storage beyond one node — how to pick a shard key, why hashing beats naive ranges, and the cross-shard operations that get expensive.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "sharding-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Sharding** (partitioning across machines) splits a dataset so no single machine has to hold or serve all of it. Where [replication](replication) copies the same data to many nodes for availability, sharding does the opposite — it spreads *different* data across nodes so writes and storage scale past what one machine can hold.\n\nThe entire discipline reduces to one hard decision: **how do you pick which shard a given row lives on** (the shard key and partitioning scheme), because that choice determines whether your queries stay fast, whether load stays even, and whether you can ever change your mind later without a painful migration.\n\nThis topic covers range vs hash partitioning, consistent hashing, hot partitions, and the two pitfalls that hurt the most in production: cross-shard operations and picking a shard key you can't undo.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "sharding-s02",
+      "order": 2,
+      "sectionTitle": "Range partitioning",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Range partitioning** assigns contiguous ranges of the key space to each shard — user IDs 1–1M on shard 1, 1M–2M on shard 2, and so on. Its big advantage is **range queries stay cheap**: \"give me all orders from user 500 to 600\" hits one shard, not all of them.\n\nIts big weakness is **skew**: if keys aren't uniformly distributed over time or value, some ranges get far more traffic than others. The classic failure case is a monotonically increasing key like a timestamp or auto-incrementing ID — all new writes land on whichever shard holds the newest range, so one shard becomes a hot write bottleneck while older shards sit idle.\n\nRange partitioning fits data genuinely queried by range (time-series, sorted logs); it fights you when the access pattern is closer to random point lookups.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "sharding-s02-q1"
+      ]
+    },
+    {
+      "id": "sharding-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: rows distributed across shards",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Hash sharding routes users table rows across three shards by hash(user_id) mod 3](assets/hash-sharding.svg)\n\nA hash function maps each row's shard key to a number, and a routing rule (like `hash(key) mod N`) turns that number into a shard assignment. Because a good hash function scatters similar keys unpredictably, rows that are adjacent in the original key space (user 100, 101, 102) end up on different shards — the opposite of range partitioning.\n\nThat scattering is exactly what fixes the hot-range problem, and exactly why range queries now have to fan out to every shard instead of hitting one.",
+      "assets": [
+        {"alt": "Hash sharding routes users table rows across three shards by hash(user_id) mod 3", "path": "assets/hash-sharding.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "sharding-s04",
+      "order": 4,
+      "sectionTitle": "Hash partitioning",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Hash partitioning** runs the shard key through a hash function and uses the result to pick a shard — typically `hash(key) mod N`. Because a good hash spreads keys uniformly regardless of their original distribution, this eliminates the hot-range problem from monotonic keys almost by construction.\n\nThe cost: you lose range queries. \"All orders from user 500 to 600\" now has to hit every shard and merge results, because consecutive keys are scattered across the cluster on purpose. You also lose ordering — if the application relied on keys being roughly sorted across shards, hash partitioning removes that entirely.\n\nMost systems default to hash partitioning for anything without a genuine range-query need, precisely because even load is usually worth more than range-query locality.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "sharding-s05",
+      "order": 5,
+      "sectionTitle": "Compare: range vs hash partitioning",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Range partitioning | Hash partitioning |\n|---|---|---|\n| Range queries | Fast — hit one (or few) contiguous shards | Slow — fan out to every shard, merge results |\n| Load distribution | Skews easily with monotonic or non-uniform keys | Even, by construction of a good hash |\n| Ordering across shards | Preserved | Destroyed |\n| Typical fit | Time-series, sorted logs, genuinely range-queried data | Point lookups by ID — the common case |\n\n**How to decide:** ask whether the dominant query pattern is \"give me a range\" or \"give me one record by key.\" Most OLTP workloads are point lookups, which is why hash partitioning (or a hybrid — hash the high-order bits, range within them) is the more common default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "sharding-s05-q1"
+      ]
+    },
+    {
+      "id": "sharding-s06",
+      "order": 6,
+      "sectionTitle": "Consistent hashing and rebalancing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Plain `hash(key) mod N` has a brutal problem: adding or removing one shard changes `N`, which changes the `mod` result for **almost every key**, forcing a near-total data reshuffle just to add capacity.\n\n**Consistent hashing** fixes this by mapping both shards and keys onto a conceptual ring (a fixed hash space, say 0 to 2^32-1). Each key is owned by the next shard clockwise on the ring. Adding a shard only affects keys between it and its counter-clockwise neighbor — roughly `1/N` of the data moves, not nearly all of it.\n\nIn practice, systems add **virtual nodes** — each physical shard owns many small ranges scattered around the ring — so that adding or removing a shard spreads its share of moved data evenly across all remaining shards instead of dumping it all on one neighbor.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "sharding-s06-q1"
+      ]
+    },
+    {
+      "id": "sharding-s07",
+      "order": 7,
+      "sectionTitle": "Hot partitions and shard keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **hot partition** (or hot shard) is one receiving disproportionately more traffic than the rest, regardless of the partitioning scheme — hashing fixes skew from key *distribution*, but not skew from real-world *access patterns*. A celebrity's account on a social app, a viral product ID on an e-commerce shard, a single tenant that's 100x bigger than the rest on a multi-tenant system — these all overload one shard no matter how uniformly keys hashed.\n\nThe shard key choice is what determines whether this can even happen. Sharding by `tenant_id` is natural for isolation but guarantees your biggest tenant is a hot shard forever. Sharding by a higher-cardinality key (like a composite of `tenant_id` + `user_id`) spreads that tenant's own data across many shards, trading simpler per-tenant queries for better balance.\n\nThere's no shard key that's hot-partition-proof for every workload — the choice is about which access pattern you're willing to make slightly harder in exchange for avoiding the specific hot-spot you can predict will hurt.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "sharding-s07-q1"
+      ]
+    },
+    {
+      "id": "sharding-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: cross-shard joins and transactions",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Sharding is just splitting one big table across machines — the application logic stays basically the same.\"\n\n**Why it's wrong:** a `JOIN` across two tables that live on different shards can't run as one query anymore — the database has to fetch rows from each shard separately and join them in application code or a scatter-gather layer, which is slower and loses the query planner's optimizations. Worse, a transaction that needs to atomically update rows on two different shards (debit shard A, credit shard B) can't use a normal single-node transaction — it needs a distributed transaction protocol (two-phase commit) or a redesign to avoid needing cross-shard atomicity at all.\n\n**Correct model:** design the shard key so the operations that need to be atomic or joined together land on the *same* shard whenever possible (co-locate related data), and treat any remaining cross-shard operation as a deliberate, expensive exception — not something you'll do casually at query time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "sharding-s08-q1"
+      ]
+    },
+    {
+      "id": "sharding-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a shard key you can't change later",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll ship with `user_id` as the shard key and revisit the choice once we understand our traffic better.\"\n\n**Why it's wrong:** changing a shard key after launch means re-partitioning **every row in the system** — recomputing which shard each row belongs to and physically moving it, usually while the system stays live. This is one of the most expensive migrations a data platform can run: it needs dual-writes or a change-data-capture pipeline to keep both the old and new layout in sync during the cutover, careful backfill, and a rollback plan if the new layout turns out wrong too.\n\n**Correct model:** treat the shard key decision with the weight of a decision you can't cheaply reverse. Model your top 3-5 real query and write patterns against candidate shard keys *before* launch — including patterns you expect at 10x scale, not just today's — because the cost of getting this wrong is measured in weeks of migration work, not a config change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "sharding-s10",
+      "order": 10,
+      "sectionTitle": "Numbers: when does sharding actually pay off?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sharding has real operational cost — more moving parts, cross-shard complexity, harder backups — so it's worth naming when it actually earns that cost. A single well-tuned Postgres instance on modern hardware can comfortably handle **write throughput in the low tens of thousands of TPS** and datasets into the **multiple-terabyte** range with good indexing. Below that, sharding is usually solving a problem you don't have yet.\n\nThe more common trigger in practice isn't raw throughput — it's **working-set size versus available memory**. Once your hot dataset (the rows actually touched by live traffic) no longer fits in RAM, every cache miss becomes a disk read, and latency degrades sharply; that's often the real signal to shard, well before you hit theoretical TPS ceilings.\n\nInterview signal: naming a rough single-node ceiling (tens of thousands of TPS, single-digit terabytes) before proposing sharding shows you're scaling because you measured a real bottleneck, not on reflex.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "sharding-s11",
+      "order": 11,
+      "sectionTitle": "Staff-level nuance: resharding without downtime",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer describes picking a shard key up front. A staff-level answer plans for the fact that **every long-lived sharded system eventually reshards** — traffic growth, an acquired dataset, or a shard key that turns out wrong all force it.\n\nThe production pattern is **live resharding via dual-write and backfill**: start writing new data to both the old and new shard layout, backfill historical data in the background using change-data-capture to catch anything written mid-backfill, verify the new layout matches the old one on a sample, then cut reads over and only then stop writing to the old layout. Systems like Vitess (used at YouTube, Slack) and DynamoDB's on-demand splitting automate large parts of this so it doesn't require a maintenance window.\n\nThe nuance worth stating out loud in an interview: resharding safety is really a **migration and consistency-verification problem**, not a partitioning-algorithm problem — the hashing scheme is the easy 10%.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "sharding-s11-q1"
+      ]
+    },
+    {
+      "id": "sharding-s12",
+      "order": 12,
+      "sectionTitle": "Recap: choosing a partitioning strategy",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Bringing it together, here's the decision path an interviewer wants to see, not just the vocabulary:\n\n| Question | If yes | If no |\n|---|---|---|\n| Do queries genuinely need ranges (time-series, sorted scans)? | Lean range partitioning | Lean hash partitioning |\n| Will the cluster grow/shrink over its lifetime? | Use consistent hashing, not plain mod-N | Plain mod-N is survivable, but rare in practice |\n| Do specific keys (tenants, celebrities) predictably dominate traffic? | Pick a shard key that splits them further | Simpler shard key is fine |\n| Do related rows need atomic updates or joins together? | Co-locate them on the same shard by design | Cross-shard is acceptable if rare |\n\nThe throughline: sharding strategy isn't one decision, it's four, and getting one right while missing another (e.g. right hash scheme, wrong shard key for your hottest tenant) still leaves you with a production incident.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

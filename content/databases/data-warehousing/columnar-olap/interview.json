@@ -1,0 +1,29 @@
+{
+  "topicId": "columnar-olap",
+  "interviewQuestions": [
+    {
+      "id": "columnar-olap-iq1",
+      "question": "A dashboard query that sums revenue over 10 billion rows returns in under 2 seconds on your warehouse. Explain what's actually making that possible.",
+      "answerMarkdown": "I'd break it into the three things stacking together, because no single one explains a 10-billion-row query finishing in 2 seconds on its own. First, **columnar layout**: if the query only needs `revenue` and maybe `order_date`, the engine reads only those columns' bytes, not the other 40+ columns in the table — that alone can cut I/O by 10-20x on a wide table. Second, **partition pruning and predicate pushdown**: if the query has any date filter and the table is partitioned by date, most of those 10 billion rows are never even opened — pruning happens before a single byte of the excluded partitions is read, and within the partitions that remain, chunk-level min/max metadata can skip further chunks that can't match.\n\nThird, for whatever data actually gets read, **compression** (often 4-10x for a real table) reduces the bytes moved off disk, and **vectorized execution** processes the remaining decompressed values in tight, SIMD-accelerated batches rather than row by row — modern engines can push through low single-digit billions of rows per second per core under good conditions.\n\nThe honest caveat I'd add: this fast path depends on the physical design — partition key and any clustering matching the query's filters — being chosen well ahead of time. The same query against a table partitioned on the wrong column would scan far more data and be dramatically slower, even with identical compression and vectorization underneath.\n\n**Testing:** whether you can name all the contributing mechanisms and recognize that fast columnar performance is conditional on matching physical design, not automatic.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Why a huge aggregation runs in seconds"
+    },
+    {
+      "id": "columnar-olap-iq2",
+      "question": "Your team notices a specific analytical query is much slower than expected, even though the warehouse is a modern columnar engine. How would you investigate?",
+      "answerMarkdown": "I'd start by checking whether the query's filter matches the table's physical organization, since that's the single biggest lever and the one most likely to silently fail without an error. I'd look at the table's partition key — if the query filters on a column that isn't the partition key (say, filtering by `region` on a table partitioned by `order_date`), partition pruning does nothing and the engine scans every partition regardless of how well each one compresses.\n\nNext I'd check for a clustering or sort key mismatch within partitions — even with the right partition key, if the filtered column isn't also clustered or sorted, predicate pushdown's min/max-per-chunk trick won't skip much, since values the query cares about are scattered across most chunks rather than concentrated in a few.\n\nI'd also check whether the query is touching more columns than it needs — a `SELECT *` or an overly broad join defeats columnar layout's main advantage even before pruning enters the picture — and whether an expensive aggregation is being recomputed on every run when a materialized view, incrementally refreshed, could serve it from pre-computed results instead.\n\nI'd present the fix as a physical design change (partition/cluster key, or a materialized view), not a query rewrite alone, since the query itself is often already reasonable SQL — the mismatch is almost always upstream in how the data is organized.\n\n**Testing:** whether you diagnose a columnar performance problem as a physical-design issue rather than immediately reaching for query-level tuning.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging an unexpectedly slow analytical query"
+    },
+    {
+      "id": "columnar-olap-iq3",
+      "question": "Why can't you just use the same columnar warehouse for your application's live transactional traffic and skip maintaining a separate OLTP database?",
+      "answerMarkdown": "I'd point to the structural mismatch between what column-stores optimize for and what live application traffic needs. A point lookup like \"fetch order #48213 with all its fields\" needs one row's worth of data across every column — but in a column-store, each column lives in a separate physical location, so reconstructing one row means touching many places instead of one contiguous read, the opposite of what a row-store gives for free.\n\nUpdates are worse: many columnar formats rely on large, often immutable chunks to get their compression benefits, so a single-row update commonly can't happen in place — it's recorded as a delta or tombstone and merged in later during compaction. An application doing thousands of small writes per second against that model would either be slow or force constant, expensive compaction cycles.\n\nSo the honest answer is: column-stores are built for the OLAP access pattern (scan many rows, few columns, infrequent large writes), not the OLTP pattern (touch one row, many columns, frequent small writes) — using one for the other reproduces the exact mismatch this whole area studies, just with the slow and fast paths swapped. I'd keep the OLTP database for live traffic and feed the warehouse from it via ETL/ELT, which is the standard architecture for exactly this reason.\n\n**Testing:** whether you can explain the mismatch mechanically (chunked storage, compaction) rather than just asserting \"column-stores are for analytics.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why not use a column-store for OLTP too"
+    }
+  ]
+}

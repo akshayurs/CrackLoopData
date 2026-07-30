@@ -1,0 +1,156 @@
+{
+  "id": "stored-programs-triggers",
+  "title": "Stored Programs & Triggers",
+  "area": "databases",
+  "group": "advanced-sql",
+  "order": 4,
+  "slug": "stored-programs-triggers",
+  "summary": "Logic that lives inside the database instead of the application — procedures, functions, and triggers — and why most teams now use it sparingly on purpose.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "stored-programs-triggers-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Stored procedures**, **functions**, and **triggers** let you put business logic inside the database itself instead of the application layer. A procedure runs when called explicitly; a trigger runs automatically in reaction to a data change — an `INSERT`, `UPDATE`, or `DELETE`.\n\nThis topic is as much about *judgment* as syntax: the industry swung hard toward \"logic in the database\" in the 2000s, then swung back toward \"keep the database dumb, put logic in application code\" — and a senior engineer can explain why, with real trade-offs, not just a fashion preference.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "stored-programs-triggers-s02",
+      "order": 2,
+      "sectionTitle": "Stored procedures vs functions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **function** takes inputs, returns a value, and (in most engines) can be called inside a `SELECT` statement — it's meant to be a pure-ish computation you can compose into queries. A **stored procedure** is invoked directly (`CALL my_proc(...)`), can perform multiple statements including transactions, and in many engines can return multiple result sets or have `OUT` parameters, but generally can't be embedded inside a `SELECT`.\n\nThe practical rule of thumb: reach for a function when you want to compute and reuse a value inside queries; reach for a procedure when you want to encapsulate a multi-step operation — validate, insert into three tables, log an audit row — as one callable unit with its own transaction control.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "stored-programs-triggers-s02-q1"
+      ]
+    },
+    {
+      "id": "stored-programs-triggers-s03",
+      "order": 3,
+      "sectionTitle": "A procedure with parameters and control flow",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Stored procedures support real control flow — conditionals, loops, error handling — inside the database engine.\n\n```sql\nCREATE PROCEDURE transfer_funds(sender INT, receiver INT, amount NUMERIC)\nLANGUAGE plpgsql AS $$\nBEGIN\n  IF (SELECT balance FROM accounts WHERE id = sender) < amount THEN\n    RAISE EXCEPTION 'insufficient funds';\n  END IF;\n\n  UPDATE accounts SET balance = balance - amount WHERE id = sender;\n  UPDATE accounts SET balance = balance + amount WHERE id = receiver;\n  INSERT INTO audit_log(action, detail) VALUES ('transfer', sender || '->' || receiver);\nEND;\n$$;\n\nCALL transfer_funds(101, 202, 50.00);\n```\n\nAll three statements run in one implicit transaction — if the exception fires, nothing commits. This atomicity across multiple statements, without the client needing to manage a transaction itself, is the core reason procedures existed before application frameworks made client-side transaction handling easy.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "stored-programs-triggers-s04",
+      "order": 4,
+      "sectionTitle": "Triggers: BEFORE/AFTER, row vs statement",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **trigger** fires automatically around a data-changing statement, defined along two independent axes. **Timing**: `BEFORE` runs before the change is applied (can inspect and even modify the incoming row, or block it entirely by raising an error), `AFTER` runs once the change has happened (can't alter it, but can safely act on the final state — logging, cascading updates). **Granularity**: a **row-level** trigger fires once per affected row; a **statement-level** trigger fires once total, regardless of how many rows the statement touched.\n\n```sql\nCREATE TRIGGER set_updated_at\nBEFORE UPDATE ON orders\nFOR EACH ROW\nEXECUTE FUNCTION update_timestamp();\n```\n\nA `BEFORE ... FOR EACH ROW` trigger like this one is the standard way to auto-maintain an `updated_at` column without every application code path remembering to set it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "stored-programs-triggers-s04-q1"
+      ]
+    },
+    {
+      "id": "stored-programs-triggers-s05",
+      "order": 5,
+      "sectionTitle": "Pitfall: hidden side effects and trigger cascades",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Triggers are a clean way to keep related tables in sync automatically.\"\n\n**Why it's wrong:** a trigger's whole nature is invisible from the query that fires it — an engineer running a simple `UPDATE orders SET status = 'shipped'` has no way to see, from that statement alone, that it also fires a trigger that updates `inventory`, which fires another trigger that updates `analytics_events`, which fires a webhook queue insert. Debugging \"why did this row change\" or \"why is this update slow\" becomes an archaeology exercise across trigger definitions scattered around the schema, not a straight read of application code.\n\n**Correct model:** treat triggers as a last resort for cross-cutting concerns that must never be skipped (auditing, `updated_at` maintenance) — not as a general-purpose way to keep tables in sync. For real business logic, prefer application code or a stored procedure that's explicitly called, so the chain of effects is visible in one place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "stored-programs-triggers-s05-q1"
+      ]
+    },
+    {
+      "id": "stored-programs-triggers-s06",
+      "order": 6,
+      "sectionTitle": "Compare: business logic in the database vs the application layer",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Logic in the database | Logic in the application |\n|---|---|---|\n| Enforcement | Guaranteed for every writer (any client, any tool) | Only enforced if every code path calls it |\n| Version control | Often lives outside normal app repo/CI | Lives in the app repo, code-reviewed like anything else |\n| Testability | Harder — needs a real DB, engine-specific tooling | Easier — standard unit-test tooling |\n| Portability | Tied to one database engine's dialect | Portable across databases |\n| Visibility | Invisible to someone reading only application code | Visible in the code a new engineer actually reads first |\n\n**How to decide:** put logic in the database only when it must hold regardless of the caller — a `CHECK` constraint, a uniqueness rule, an audit trail no client can bypass. Default business logic to the application layer, where it's testable, reviewable, and visible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "stored-programs-triggers-s06-q1"
+      ]
+    },
+    {
+      "id": "stored-programs-triggers-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: triggers that tank write throughput",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A trigger just runs a little extra logic — it won't meaningfully affect performance.\"\n\n**Why it's wrong:** a row-level trigger runs **once per affected row**, synchronously, inside the same transaction as the original write. A bulk `UPDATE` touching 500,000 rows with a row-level trigger that does its own lookup query doesn't run that lookup once — it runs it 500,000 times, serially, and the whole original statement's duration now includes all of them. What looked like a fast bulk update in isolation can turn into a multi-minute lock-holding transaction once the trigger is attached.\n\n**Correct model:** for bulk-write-heavy tables, prefer statement-level triggers where the logic allows it, move expensive trigger logic to an async job queued instead of run inline, or reconsider whether the logic belongs in a trigger at all. Always load-test a trigger against a realistic bulk-write pattern, not just a single-row insert in a dev environment.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "stored-programs-triggers-s07-q1"
+      ]
+    },
+    {
+      "id": "stored-programs-triggers-s08",
+      "order": 8,
+      "sectionTitle": "Senior nuance: where stored logic still genuinely wins",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The \"keep logic out of the database\" default has real exceptions a staff engineer names precisely instead of treating as absolute. **Data-integrity rules that must hold no matter which client writes** — a `CHECK` constraint, a uniqueness constraint, a foreign key — belong in the database, because an application-layer rule can always be bypassed by a script, a migration, or a second application nobody remembered to update. **Auditing that must be tamper-evident from any writer**, including a DBA running raw SQL, is a legitimate trigger use case for exactly the same reason.\n\nThe line to draw: constraints and audit trails are about *guaranteeing something regardless of caller*; everything else — validation that could plausibly change, workflow logic, notifications — belongs where it's testable and visible, which is almost always the application layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "stored-programs-triggers-s09",
+      "order": 9,
+      "sectionTitle": "Error handling and transactions inside stored procedures",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because a stored procedure can run multiple statements as one unit, it needs its own error-handling model. Most engines let you catch exceptions inside the procedure body (`EXCEPTION WHEN ... THEN` in PL/pgSQL, `TRY...CATCH` in T-SQL) to roll back cleanly, log the failure, or retry a sub-step, rather than letting the whole procedure abort with a generic error the caller has to parse.\n\nThe trade-off to flag: this error-handling logic now lives in a language and toolchain most application engineers don't debug daily — stepping through a `plpgsql` exception handler is a different skill set than stepping through application code in a familiar debugger, which raises the bar for who on the team can safely maintain it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "stored-programs-triggers-s10",
+      "order": 10,
+      "sectionTitle": "Interview signal: recognizing a trigger-caused bug",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A classic senior-level debugging scenario: a table is being updated with values nobody's application code appears to write, or a simple insert is mysteriously slow. The instinct that separates experience levels is checking for triggers *before* assuming application-code or ORM misbehavior — `\\d+ tablename` in `psql`, or querying `information_schema.triggers`, shows every trigger attached to a table in seconds.\n\nBeing able to say \"before I dig into the ORM, let me check if there's a trigger doing this\" as a first debugging step — rather than a last resort after hours of confused application-side investigation — is exactly the kind of pattern recognition an interviewer is listening for in a live debugging question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "stored-programs-triggers-s10-q1"
+      ]
+    }
+  ]
+}

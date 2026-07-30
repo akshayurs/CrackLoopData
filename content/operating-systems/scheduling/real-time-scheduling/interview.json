@@ -1,0 +1,37 @@
+{
+  "topicId": "real-time-scheduling",
+  "interviewQuestions": [
+    {
+      "id": "real-time-scheduling-iq1",
+      "question": "Why can't you just use Linux's default scheduler for a pacemaker?",
+      "answerMarkdown": "I'd start from what CFS is actually designed to optimize: fairness and good average-case latency across arbitrary, mixed workloads — it has no concept of a hard deadline, and it offers no formal proof that any particular task's worst-case latency stays under a bound. A pacemaker doesn't need \"usually fast\" — it needs a provable guarantee that a pacing pulse fires within its required window, every single time, with zero exceptions.\n\nEven boosting a task's priority under CFS doesn't fix this: the kernel can still delay that task inside non-preemptible sections, interrupt handling, or driver code that has nothing to do with scheduler priority at all — there's no end-to-end bound on the whole path, just relative ordering among ready tasks.\n\nA pacemaker instead needs a system built for exactly this: a certified RTOS (or a formally verified microkernel like seL4) running an algorithm like Rate Monotonic or EDF, paired with a schedulability analysis proving, mathematically, that every task's deadline is met given its worst-case execution time — before the device is ever manufactured, not discovered empirically in production.\n\n**Testing:** whether you understand the difference between \"usually fast\" and \"provably always on time,\" and why only the second is acceptable when a missed deadline can hurt someone.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Why general-purpose schedulers can't guarantee real-time"
+    },
+    {
+      "id": "real-time-scheduling-iq2",
+      "question": "Walk me through checking whether a set of periodic real-time tasks can be scheduled at all.",
+      "answerMarkdown": "I'd start by computing total CPU utilization: for each task, divide its worst-case execution time by its period (`Cᵢ/Tᵢ`), and sum across all tasks to get `U`. Say I have two tasks: one needing 5ms every 20ms period, another needing 15ms every 50ms — that's 5/20 + 15/50 = 0.25 + 0.30 = 0.55.\n\nFor EDF, the test is exact and simple: schedulable if and only if `U ≤ 1.0`. Here 0.55 is well under, so EDF guarantees it works. For Rate Monotonic specifically, I'd use the more conservative Liu & Layland bound, `U ≤ n(2^(1/n) − 1)` — for two tasks that's `2(√2 − 1) ≈ 0.828`. Since 0.55 is also under that stricter bound, RM is guaranteed schedulable here too.\n\nI'd flag the asymmetry clearly: if utilization had come out, say, at 0.75 — above RM's ~0.828 bound isn't even the issue here, but if it were between 0.828 and 1.0, RM's bound wouldn't guarantee schedulability (though the task set might still happen to work in that specific case), while EDF's exact test would still say yes. That gap is exactly why EDF is theoretically stronger, and why I'd reach for it when squeezing out maximum guaranteed utilization matters.\n\n**Testing:** whether you can execute the actual math correctly and explain what a bound does and doesn't guarantee, rather than reciting the formulas without applying them.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Worked schedulability analysis"
+    },
+    {
+      "id": "real-time-scheduling-iq3",
+      "question": "If EDF is provably optimal and RM is only optimal among fixed-priority algorithms, why would anyone still choose RM in practice?",
+      "answerMarkdown": "I'd point to predictability and implementation simplicity as the real reasons, not a gap in understanding EDF's advantage. RM's priorities never change at runtime — they're computed once from each task's period and stay fixed forever, making the system's behavior easy to analyze, test, and reason about statically, and easy to implement correctly with minimal runtime bookkeeping.\n\nEDF has to continuously track and compare each ready task's absolute next deadline, which is real runtime overhead on every scheduling decision — more code paths, more state, more surface area for a subtle implementation bug in a domain where bugs are unusually costly. In many safety-critical certification processes (aviation, medical devices), simpler, more statically-analyzable code is itself a certification asset, sometimes valued above squeezing out the last few percent of guaranteed utilization.\n\nThere's also a real-world failure mode specific to EDF worth mentioning: under transient overload (utilization briefly exceeding 1.0), EDF can degrade unpredictably — many tasks miss deadlines somewhat unpredictably — whereas RM's fixed priority means overload failures are more predictable: lower-priority tasks miss first, higher-priority ones keep meeting deadlines, which some systems specifically prefer as a known, controlled failure mode.\n\n**Testing:** whether you can go beyond \"EDF is better\" to a genuine engineering trade-off analysis, since theoretical optimality isn't the only axis that matters in a real certified system.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Why RM is still chosen despite EDF's optimality"
+    },
+    {
+      "id": "real-time-scheduling-iq4",
+      "question": "Explain priority inversion and how the Mars Pathfinder incident relates to it.",
+      "answerMarkdown": "I'd define priority inversion precisely: a high-priority task blocks on a lock held by a low-priority task, and while it waits, a completely unrelated *medium*-priority task preempts the low-priority lock-holder — the high-priority task ends up effectively waiting on the medium-priority task, even though that medium task has nothing to do with the resource it actually needs.\n\nThe Mars Pathfinder in 1997 hit exactly this: a high-priority data-bus management task would occasionally block waiting for a mutex held by a low-priority meteorological data thread, and a set of medium-priority communications tasks would preempt that low-priority thread in the meantime — leaving the high-priority task blocked long enough that a system watchdog, seeing it hadn't run, concluded the system had hung and triggered a full reset, over and over, on the actual surface of Mars.\n\nEngineers on Earth diagnosed it from telemetry and fixed it with a software patch enabling **priority inheritance** on the mutex: when a high-priority task blocks on a lock, the lock-holder temporarily inherits that high priority for as long as it holds the lock, so no unrelated medium-priority task can cut in during the wait — uploaded and applied remotely to a spacecraft already on Mars.\n\n**Testing:** whether you know this failure mode specifically enough to explain the mechanism and cite the concrete historical case, since this is one of the most commonly referenced real-world scheduling bugs in senior interviews.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Priority inversion and Mars Pathfinder"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "strace-and-debugging-tools",
+  "interviewQuestions": [
+    {
+      "id": "strace-and-debugging-tools-iq1",
+      "question": "A process is hung and you don't have its source — how do you start diagnosing it?",
+      "answerMarkdown": "I'd start by attaching strace to the running process — `strace -f -p <pid>` — since it shows exactly which syscall the process is currently blocked in, with zero need for source code. If the last line is an unfinished `read()`, `connect()`, or `futex()` call, that already tells me the category of problem: I/O, network, or a lock, respectively.\n\nFrom there I follow whatever that syscall points at. If it's `read()` on a specific file descriptor, I'd check `/proc/<pid>/fd/<n>` to see exactly what that fd is — a local file, an NFS mount, a socket — and investigate that resource directly rather than guessing. If it looks like a network issue, `lsof -p <pid>` or `lsof -i` shows me the actual connection details. If strace shows nothing obviously wrong at the syscall level, I'd escalate to `ltrace` to check whether the hang is actually happening inside library-level logic that never crosses into the kernel at all.\n\nOne thing I'd flag proactively: if the process's state in `ps` shows `D` (uninterruptible sleep), that's a strong hint before I even attach strace that this is I/O-bound and likely unkillable until whatever it's blocked on resolves or times out.\n\n**Testing:** whether you can go from zero information to a specific, falsifiable hypothesis using tools alone, without needing to read a single line of the process's code.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Diagnosing a hang with no source"
+    },
+    {
+      "id": "strace-and-debugging-tools-iq2",
+      "question": "What's the difference between strace and ltrace, and when would each one actually change your answer?",
+      "answerMarkdown": "strace watches system calls — the boundary where a process asks the kernel to do something, like open a file or read from a socket. ltrace watches shared-library function calls — `malloc()`, `strlen()`, anything resolved through the dynamic linker — which is a layer above syscalls, since application code calls library functions and library functions eventually (sometimes) call syscalls.\n\nThe distinction matters concretely: if a process is stuck because a `connect()` never completes, strace shows it directly and ltrace adds nothing. If a process is churning memory in a tight allocation loop with no I/O involved at all, strace's trace can look completely unremarkable — no syscalls of note — while ltrace shows a suspicious flood of `malloc()` calls, because the allocator was reusing already-obtained memory without needing a fresh syscall each time.\n\nIn practice I'd reach for strace first, since most real production hangs live at the I/O/network/lock layer that strace directly observes; I'd only escalate to ltrace once strace shows the syscall layer looking healthy but the process is still behaving wrong, which points the problem up into application logic instead.\n\n**Testing:** whether you know these operate at genuinely different layers, not just \"two similar tracing tools,\" and can pick the right one from a symptom.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "strace vs ltrace"
+    },
+    {
+      "id": "strace-and-debugging-tools-iq3",
+      "question": "Why would you hesitate to run strace against a high-throughput production service, and what would you do instead?",
+      "answerMarkdown": "strace is built on `ptrace()`, which pauses the target process at every single syscall boundary to record it. For a syscall-light process that's a negligible cost, but a high-throughput service doing tens of thousands of syscalls per second can slow down by 2-10x or more under strace, since every syscall now costs an extra context switch into the tracer. Applying that overhead broadly, or for an extended window, risks causing the exact cascading timeouts I'm trying to diagnose — I could take down the service by observing it.\n\nMy approach would be to scope the blast radius tightly: trace one instance behind a load balancer, not the whole fleet; limit the time window to a few seconds, not an open-ended session; and filter to a specific syscall category with `-e trace=network` or similar rather than tracing everything. That turns a risky fleet-wide action into a contained, recoverable one.\n\nIf I needed continuous or fleet-wide visibility rather than a one-off look, I'd reach for a fundamentally lower-overhead tool instead — `perf trace` or an eBPF-based tracer like `bpftrace`, which instrument inside the kernel without pausing the traced process at every syscall, and are specifically designed to be safe to run broadly and continuously.\n\n**Testing:** whether you understand strace's overhead is a real production risk with a name and a magnitude, not just a vague caveat, and know the concrete lower-overhead alternative.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Production safety of strace"
+    },
+    {
+      "id": "strace-and-debugging-tools-iq4",
+      "question": "How would you find out what's using a specific file, or why a port bind is failing because it's already in use?",
+      "answerMarkdown": "Both are exactly what `lsof` is built for — it lists currently open files and sockets across the system and lets me search by resource instead of needing a PID upfront. For a specific file, `lsof /path/to/file` shows every process that currently has it open, which answers \"why can't I delete/unmount this\" directly. For a port conflict, `lsof -i :<port>` shows every process bound to or connected on that port, immediately naming whichever process is already holding it.\n\nI'd reach for `lsof` rather than `strace` here specifically because this is a \"what's true right now\" question, not a \"what is this process doing over time\" question — lsof gives a fast, low-overhead snapshot, while strace would mean guessing which PID to trace and watching a live stream for something that's really just static, current state.\n\nIf I didn't have `lsof` installed, I'd fall back to the manual equivalent: walking `/proc/<pid>/fd/` for candidate PIDs and reading where each symlink points — the exact same underlying data, just without lsof's convenient search-by-port/search-by-file interface on top.\n\n**Testing:** whether you pick the tool that matches the question's shape — snapshot vs live trace — rather than defaulting to strace for everything.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Finding what's using a file or port"
+    }
+  ]
+}

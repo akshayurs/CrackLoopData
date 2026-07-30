@@ -1,0 +1,191 @@
+{
+  "id": "strace-and-debugging-tools",
+  "title": "strace & Debugging Tools",
+  "area": "operating-systems",
+  "group": "linux-internals",
+  "order": 7,
+  "slug": "strace-and-debugging-tools",
+  "summary": "Diagnosing a running or misbehaving process with strace, ltrace, and lsof — and knowing which of the three actually answers your question.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "strace-and-debugging-tools-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"It's hung and you don't have the source\" is one of the most common senior-level debugging prompts, and the answer is almost always some combination of **strace**, **ltrace**, and **lsof** — three tools that watch a process from the outside instead of requiring you to read or recompile its code.\n\nThis topic covers what each one actually watches, how to read their output, and — critically — the observer effect: the fact that watching a process this closely can itself change its behavior.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "strace-and-debugging-tools-s02",
+      "order": 2,
+      "sectionTitle": "strace: watching every syscall a process makes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`strace` intercepts and prints every **system call** a process makes — every `open`, `read`, `write`, `connect`, `mmap` — along with its arguments and return value, in real time. Under the hood it uses `ptrace()`, the same kernel facility debuggers use, to pause the target at each syscall boundary, record it, and let it continue.\n\nThis matters because a system call is the boundary where a process asks the kernel to do something on its behalf — open a file, read from a socket, allocate memory — so tracing them shows you exactly what a process is *actually doing* against the outside world, independent of what its internal application logic claims to be doing. A process claiming to be \"connecting to the database\" that strace shows stuck in a single `connect()` call for 30 seconds tells you precisely where the hang lives, without needing a single line of that process's source.\n\nThe cost: `ptrace`-based interception adds real overhead per syscall, which is exactly why strace changes timing (the pitfall two slides from now).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "strace-and-debugging-tools-s02-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s03",
+      "order": 3,
+      "sectionTitle": "Code: strace output on a simple program, reading the trace",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```bash\n$ strace -f -e trace=network,file ./client\nopenat(AT_FDCWD, \"/etc/resolv.conf\", O_RDONLY) = 3\nread(3, \"nameserver 8.8.8.8\\n\", 4096)    = 20\nclose(3)                                = 0\nsocket(AF_INET, SOCK_STREAM, 0)         = 4\nconnect(4, {sa_family=AF_INET, sin_port=htons(5432), sin_addr=inet_addr(\"10.0.4.12\")}, 16) = -1 EINPROGRESS (Operation now in progress)\npoll([{fd=4, events=POLLOUT}], 1, 30000) = 0 (Timeout)\n```\n\nRead right to left on each line: the syscall name, its arguments, then `=` and the return value (or `-1 ERRNO` on failure). Here the trace tells the whole story without any source code: the process resolved DNS fine, opened a socket, called `connect()` to `10.0.4.12:5432` (Postgres's default port), got `EINPROGRESS` (normal for a non-blocking connect), then `poll()`'d for up to 30 seconds and **timed out** — the database host is unreachable or not listening, not a bug in this client's code.\n\n`-e trace=network,file` filters to just those syscall categories — essential on a real process, which can emit thousands of irrelevant syscalls per second.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "strace-and-debugging-tools-s03-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s04",
+      "order": 4,
+      "sectionTitle": "Attaching strace to an already-running process",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "You don't need to start a process under strace from the beginning — `strace -p <pid>` attaches to an already-running process and starts tracing from that moment forward, which is the realistic scenario in production: the process has been hung or misbehaving for a while before anyone notices.\n\n`strace -f -p <pid>` additionally follows child processes/threads the target spawns — necessary for anything multi-threaded or that forks workers, since without `-f` you'd only see the parent's syscalls and miss where the actual work (and the actual hang) is happening. `strace -c -p <pid>` switches to a different mode entirely: instead of a live line-by-line trace, it accumulates a summary table of syscall counts and total time spent in each, printed on exit (Ctrl+C) — useful for \"what is this process spending its time on\" rather than \"show me exactly what's happening right now.\"\n\nAttaching does briefly pause the target process at the moment of attachment, and detaching (Ctrl+C, or `strace -p <pid>` exiting) resumes it — a small, usually-negligible blip, but worth knowing before attaching to something latency-sensitive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "strace-and-debugging-tools-s05",
+      "order": 5,
+      "sectionTitle": "ltrace: tracing library calls instead of syscalls",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`ltrace` traces calls into **shared libraries** — `malloc()`, `strlen()`, `printf()`, any function resolved through the dynamic linker — rather than kernel syscalls. It's the layer *above* strace: application code calls library functions, and library functions eventually call syscalls, but a lot of interesting behavior (a string being built, a hash map being probed, memory being allocated in a tight loop) happens entirely in library code and never shows up in an strace trace at all.\n\nThe two tools answer different questions and are often used together: ltrace shows *what the application logic is doing* (calling `malloc()` a suspicious number of times in a loop, suggesting a memory-churn bug), while strace shows *what actually crossed into the kernel* (whether that memory pressure eventually triggered swapping, visible as syscalls hitting swap-backed pages).\n\nA caveat worth knowing: `ltrace` has fallen out of maintenance on some distributions and can be unreliable with statically-linked or heavily-optimized binaries, where function calls may be inlined and never appear as a traceable library call at all — strace, tracing at the syscall boundary, doesn't have this problem since syscalls can't be inlined away.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "strace-and-debugging-tools-s05-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s06",
+      "order": 6,
+      "sectionTitle": "lsof: listing open files (and sockets) held by processes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`lsof` (list open files) answers a different question entirely from strace/ltrace: not \"what is this process doing right now\" but \"what does it currently have **open**\" — regular files, directories, shared libraries, and, since Unix treats them as files too, network sockets and pipes.\n\n```bash\n$ lsof -p 1234              # everything PID 1234 has open\n$ lsof -i :5432             # every process with something bound to or connected on port 5432\n$ lsof /var/log/app.log     # every process with this specific file open\n```\n\nThis is exactly the automated version of manually reading `/proc/<pid>/fd/` (covered in the /proc topic) — `lsof` walks that same data across every process on the system and resolves the symlinks for you, adding the ability to search by port, filename, or process in either direction. `lsof -i :5432` in particular is the fast answer to \"what's actually listening on this port\" or \"why can't I bind to it — who's already using it.\"",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "strace-and-debugging-tools-s06-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: choosing the right tool — syscalls vs library calls vs open resources",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![strace, ltrace, and lsof watching different layers](assets/strace-ltrace-lsof-layers.svg)\n\nstrace and ltrace are both *live traces of activity over time* — they show you a stream of events as they happen. lsof is a *snapshot of current state* — it tells you what's open right now, with no notion of what just happened or is about to happen.\n\nThe fast decision rule: \"what is it doing\" (an active hang, unexpected behavior) → strace, optionally paired with ltrace for library-level detail. \"What does it have open right now\" (fd exhaustion, a mystery port binding) → lsof.",
+      "assets": [
+        {
+          "alt": "strace, ltrace, and lsof watching different layers",
+          "path": "assets/strace-ltrace-lsof-layers.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "strace-and-debugging-tools-s08",
+      "order": 8,
+      "sectionTitle": "Code: a worked diagnosis — using strace to find why a process hangs on a file read",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A process is unresponsive; here's the actual sequence, not just the tool names:\n\n```bash\n$ strace -f -p 5521\n[pid  5521] read(7,  <unfinished ...>\n```\n\nOne syscall, no return yet, and it's just sitting there — this alone already narrows the problem to \"something about fd 7.\" Next:\n\n```bash\n$ ls -l /proc/5521/fd/7\nlrwx------ 1 web web 64 Jul 30 10:02 7 -> /mnt/nfs-share/data.csv\n```\n\nfd 7 is a file on an NFS mount, not a local disk or a socket. Cross-checking `df -h /mnt/nfs-share` or `mount | grep nfs` and finding the NFS server unresponsive confirms it: the process isn't buggy at all — it's blocked in an uninterruptible `read()` against a dead network filesystem, which is also why the process shows up as unkillable state `D` in `ps` (the /proc topic's pitfall slide, applied here concretely).\n\nThis three-command sequence — `strace -p` to see *where* it's stuck, `/proc/<pid>/fd` to see *what* it's stuck on, then check that resource directly — is the general pattern for \"hung process, no source code\" regardless of what the specific resource turns out to be.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "strace-and-debugging-tools-s08-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s09",
+      "order": 9,
+      "sectionTitle": "Compare: strace vs ltrace vs lsof, at a glance",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | strace | ltrace | lsof |\n|---|---|---|---|\n| Watches | Kernel syscalls | Shared library function calls | Currently-open files/sockets (snapshot) |\n| Answers | \"What is this process asking the kernel to do, right now?\" | \"What application-level functions is this process calling?\" | \"What does this process currently have open?\" |\n| Live trace or snapshot | Live | Live | Snapshot |\n| Typical use | Diagnosing a hang or unexpected I/O behavior | Diagnosing application-logic-level issues (excess allocation, string ops) | Finding fd leaks, port conflicts, what's using a file |\n| Overhead | Moderate–high (ptrace per syscall) | Moderate (interception per library call) | Negligible (single point-in-time read) |\n\n**Combining them:** a real investigation often uses lsof first (what does it have open), strace to watch what it's doing with those resources right now, and ltrace only if strace shows the process healthy at the syscall level but still behaving wrong — pointing at application logic instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "strace-and-debugging-tools-s09-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: strace's overhead changing timing-sensitive bugs — the observer effect",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll just strace the process to see the race condition happen.\"\n\n**Why it's wrong:** `ptrace`-based tracing pauses the target at every single syscall boundary to record it — this can slow syscall-heavy code down by anywhere from noticeably to dramatically, depending on syscall volume. A race condition or timing-sensitive bug that depends on two threads or processes reaching a particular point within microseconds of each other can simply stop reproducing under strace, because the added latency changes which one gets there first — this is a real, named phenomenon (the **observer effect** or **Heisenbug**), not a hypothetical edge case.\n\n**Correct model:** treat strace as excellent for *deterministic* hangs and clear-cut I/O behavior (a syscall that never returns, a connect that times out) but be skeptical of using it to catch an intermittent, timing-dependent bug — it can make the bug disappear precisely while you're watching for it. For genuinely timing-sensitive issues, lower-overhead approaches (targeted logging with timestamps, sampling profilers, or kernel tracing tools like `perf`/`eBPF` that add far less per-event overhead than `ptrace`) are usually the better fit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "strace-and-debugging-tools-s10-q1"
+      ]
+    },
+    {
+      "id": "strace-and-debugging-tools-s11",
+      "order": 11,
+      "sectionTitle": "Numbers: strace overhead and when it's safe to use live",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete figures worth knowing rather than vague \"it has overhead\": a syscall-light process (a few hundred syscalls/second) sees strace overhead in the low single-digit percent range and is generally safe to trace live in production for a quick look. A syscall-heavy process — a high-throughput network service doing tens of thousands of syscalls/second — can see strace slow it down by **2-10x or more**, since every syscall now costs an extra context switch into the tracer and back.\n\nThis is why production runbooks often say \"strace for at most a few seconds, on one instance, never the whole fleet\" — a few seconds of 5x latency on one node behind a load balancer is a tolerable, recoverable cost; the same overhead applied broadly or for an extended window can cause cascading timeouts and take down the exact system you were trying to diagnose.\n\nThe practical move for latency-sensitive production systems: narrow the trace to a syscall category (`-e trace=network`) and a short time window, or use a lower-overhead tool (`perf trace`, eBPF-based tracers) that instruments at a level closer to the kernel's own event stream instead of pausing the process at every boundary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "strace-and-debugging-tools-s12",
+      "order": 12,
+      "sectionTitle": "Beyond ptrace: perf and eBPF as lower-overhead alternatives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`strace`'s core limitation — pausing the target at every syscall boundary via `ptrace` — is exactly what newer tooling was built to avoid. **eBPF** (extended Berkeley Packet Filter) lets you attach small, kernel-verified programs directly to syscall entry/exit points, scheduler events, or almost any kernel function, running *inside* the kernel without stopping the traced process at all. `perf trace` and eBPF-based tools like `bpftrace` can watch the same syscalls strace does, but at overhead low enough to safely run continuously across a full production fleet — the exact scenario the earlier numbers slide said to avoid with strace.\n\nThe trade-off is expressiveness and setup cost: a one-off `strace -p <pid>` needs no prior setup and works everywhere immediately, while eBPF tooling needs kernel support (widely available on modern kernels) and slightly more upfront tool knowledge to write or find the right script for your specific question.\n\nThe practical rule: reach for `strace`/`lsof` first for a quick, one-off, \"what's this one process doing right now\" look — they're zero-setup and immediately available on essentially any Linux box. Reach for `perf`/eBPF when you need continuous, low-overhead, fleet-wide observability, or when strace's overhead is itself unacceptable for the workload you're investigating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "strace-and-debugging-tools-s12-q1"
+      ]
+    }
+  ]
+}

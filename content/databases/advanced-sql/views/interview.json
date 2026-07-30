@@ -1,0 +1,37 @@
+{
+  "topicId": "views",
+  "interviewQuestions": [
+    {
+      "id": "views-iq1",
+      "question": "What's the difference between a view and a materialized view, and how would you decide which to use?",
+      "answerMarkdown": "A view is a saved query with no storage of its own — every read re-runs the underlying query live, so it's always current but pays the full query cost every time. A materialized view stores the computed result, so reads are fast, but the data is frozen at whatever it was during the last refresh.\n\nI'd pick based on two questions: how expensive is the underlying query, and how stale can the answer be before it's wrong for the consumer? A view over a cheap single-table filter should just be a view — there's no performance to gain and freshness is free. An expensive multi-table aggregation feeding a dashboard that people check once an hour is a strong materialized-view candidate — refresh it every 15 minutes and nobody notices the staleness.\n\nThe trap I'd flag: creating a materialized view and forgetting to wire up a refresh job. It silently freezes and nobody notices until someone questions why the numbers look wrong.\n\n**Testing:** whether you frame this as a real trade-off (freshness vs speed) rather than \"materialized views are just faster views.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "View vs materialized view"
+    },
+    {
+      "id": "views-iq2",
+      "question": "Why can't you always write through a view with an UPDATE or INSERT statement?",
+      "answerMarkdown": "Writability depends on whether the view maps unambiguously back to rows in one base table. A simple view — `SELECT * FROM orders WHERE status = 'open'` — clearly identifies which base-table row any given view row corresponds to, so an `UPDATE` through it is well-defined.\n\nThe moment the view involves a join, a `GROUP BY`, `DISTINCT`, or a computed column, that mapping breaks down. If a view joins `orders` and `customers`, an `UPDATE` on a view row could logically mean changing either table, or both — the engine has no way to know which was intended, so most engines refuse the write entirely or restrict it to columns that unambiguously belong to one base table.\n\nI'd mention `INSTEAD OF` triggers as the escape hatch some engines offer — you can define exactly what an insert/update/delete on a complex view should do to the base tables, at the cost of writing and maintaining that logic yourself.\n\n**Testing:** whether you understand this is a fundamental ambiguity problem, not an arbitrary engine restriction.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Updatable view limits"
+    },
+    {
+      "id": "views-iq3",
+      "question": "A production dashboard built on a materialized view is showing numbers that are clearly wrong — how do you debug it?",
+      "answerMarkdown": "My first check is always staleness, since it's the single most common cause: I'd query the materialized view's last-refresh metadata (or compare a known recent record's presence) to see how long ago it was actually refreshed. If the refresh job silently failed or was never scheduled, the view can be frozen for days while looking perfectly normal — no error, just old numbers.\n\nIf it's genuinely fresh and still wrong, I'd check whether the refresh is a full recompute or incremental — an incremental refresh that doesn't correctly handle deletes or updates (only appends) is a classic source of subtly wrong aggregates that a full refresh would fix.\n\nOnly after ruling those out would I suspect the underlying query logic itself, since a logic bug would usually show up immediately after creation rather than \"used to be right, now looks wrong.\"\n\n**Testing:** whether you reach for the freshness/refresh-job explanation first, since that's the far more common real-world cause than a logic bug.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a stale materialized view"
+    },
+    {
+      "id": "views-iq4",
+      "question": "How would you use views to give an analytics team access to customer data without exposing PII?",
+      "answerMarkdown": "I'd create a view over the `customers` table that excludes columns like SSN, email, and phone number, and — if the requirement includes row-level restriction — filters to only the columns and rows the analytics role should see. Then I'd grant the analytics role `SELECT` on the view and explicitly revoke or never grant direct access to the underlying table.\n\nThis is stronger than relying on application-level filtering or asking analysts to \"just not select those columns,\" because it's enforced at the database layer regardless of what tool or query the analyst uses — a new BI tool connecting directly to Postgres still can't see the restricted columns, since it only has grants on the view.\n\nI'd also mention this scales to row-level security for multi-tenant cases — a view with `WHERE tenant_id = current_setting('app.tenant_id')` — as the same underlying pattern applied to rows instead of columns.\n\n**Testing:** whether you think of views as an access-control primitive, not just a readability convenience.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Views for access control"
+    }
+  ]
+}

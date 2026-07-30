@@ -1,0 +1,174 @@
+{
+  "id": "btree-indexes",
+  "title": "B-Tree & B+Tree Indexes",
+  "area": "databases",
+  "group": "storage-indexing",
+  "order": 2,
+  "slug": "btree-indexes",
+  "summary": "The default index in every relational database — how a balanced multi-way tree turns a table scan into a handful of page reads, and why B+Tree beat B-Tree for disk-backed storage.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "btree-indexes-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "When you run `CREATE INDEX` in Postgres, MySQL, or SQL Server without saying otherwise, you get a **B+Tree** — the default index structure almost everywhere. It's a balanced, multi-way tree tuned specifically for disk: shallow enough that a lookup on a billion-row table costs **3-4 page reads**, and it supports both exact-match and range queries from the same structure.\n\nUnderstanding why it's shaped the way it is — wide and shallow, not narrow and deep like a binary tree — explains why indexes are fast, why some don't get used, and what \"index height\" means when a DBA talks about it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "btree-indexes-s02",
+      "order": 2,
+      "sectionTitle": "Balanced multi-way tree: height vs fanout",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A B+Tree is **balanced** — every leaf sits at the same depth — and **multi-way**, meaning each internal node holds many keys and many child pointers, not just two like a binary tree. That branching factor is the **fanout**.\n\nWith an 8 KB page, a 16-byte key (say a bigint id plus overhead), and an 8-byte child pointer, one node can hold roughly **8192 / 24 ≈ 340 entries** — a fanout in the hundreds. A tree with fanout 340 needs only **height 4** to index over **340^4 ≈ 13 billion** keys.\n\nThat's the whole trick: high fanout keeps height tiny, and height is what determines how many page reads a lookup costs. A binary tree indexing 13 billion keys would need height ~34 — 34 disk reads instead of 4.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "btree-indexes-s02-q1"
+      ]
+    },
+    {
+      "id": "btree-indexes-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: a B+Tree with a leaf-level linked list",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A three-level B+Tree with leaf nodes linked left to right](assets/btree-leaf-linked-list.svg)\n\nInternal nodes exist only to route a search — they hold separator keys and child pointers, no row data. **Leaf nodes** hold the actual keys and pointers to rows (or the rows themselves, in a clustered index), and are additionally linked to each other in sorted order.\n\nThat leaf-level linked list is what makes range scans cheap: after descending once to find the start of a range, the engine just walks the linked list forward — no need to re-descend the tree for each subsequent key.",
+      "assets": [
+        {
+          "alt": "A three-level B+Tree with leaf nodes linked left to right",
+          "path": "assets/btree-leaf-linked-list.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "btree-indexes-s04",
+      "order": 4,
+      "sectionTitle": "Range scans via leaf traversal",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For `WHERE age BETWEEN 25 AND 35`, the engine descends the tree once — height 3-4 reads — to find the leaf containing `25`, then walks the leaf-linked-list rightward, collecting matching keys until it passes `35`. Each subsequent leaf is one sequential-ish page read, not a fresh root-to-leaf descent.\n\nThis is precisely why B+Trees dominate over structures like plain hash indexes for range predicates: a hash index can find `age = 25` in O(1), but has no concept of \"next key,\" so it cannot answer a range query at all without scanning everything.\n\nThe cost of a range scan is roughly: tree height (one-time) + number of matching leaf pages (proportional to result size) — which is why a highly selective range is cheap and a range matching half the table often isn't worth using the index over.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "btree-indexes-s05",
+      "order": 5,
+      "sectionTitle": "Compare: B-Tree vs B+Tree",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "The names get used loosely, but the distinction is precise and matters for disk-backed engines.\n\n| | B-Tree | B+Tree |\n|---|---|---|\n| Data location | Every node (internal + leaf) can hold row data | Only leaf nodes hold row data; internal nodes hold only keys for routing |\n| Leaf links | No inherent leaf linked list | Leaves linked in sorted order |\n| Range scans | Requires in-order traversal, can revisit internal nodes | Sequential leaf walk — simple and fast |\n| Fanout per page | Lower — internal nodes \"waste\" space on data | Higher — internal nodes are pure keys, packing more per page |\n| Real-world use | Rare in disk databases today | Postgres, MySQL InnoDB, Oracle, SQL Server default |\n\n**How to decide:** you rarely choose this yourself — virtually every relational database ships B+Tree as `CREATE INDEX`'s default — but knowing *why* (higher fanout, cheap ordered range scans) is the actual interview signal, not the name.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "btree-indexes-s05-q1"
+      ]
+    },
+    {
+      "id": "btree-indexes-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: an index on a low-selectivity column",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I added an index on `status`, so queries filtering on it will be fast.\"\n\n**Why it's wrong:** if `status` only has 3 distinct values across 10 million rows (`active`, `pending`, `closed`), each value matches roughly 3.3 million rows — over 30% of the table. The planner estimates that using the index means jumping between the index and the heap for millions of scattered row lookups, which costs more total I/O than just reading the table sequentially — so it correctly **ignores the index** and does a full scan.\n\n**Correct model:** an index pays off when it's **selective** — filtering down to a small fraction of rows. Low-cardinality columns like booleans or status enums are usually bad standalone index candidates; they work better as part of a composite index led by a more selective column, or filtered with a partial index for just the rare value you actually query (e.g. `WHERE status = 'pending'`).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "btree-indexes-s06-q1"
+      ]
+    },
+    {
+      "id": "btree-indexes-s07",
+      "order": 7,
+      "sectionTitle": "Composite indexes and the left-prefix rule",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **composite index** on `(last_name, first_name)` sorts rows first by `last_name`, then by `first_name` within each `last_name`. It's really one B+Tree over a concatenated key, not two separate indexes.\n\nThe **left-prefix rule** follows directly from that ordering: the index can serve `WHERE last_name = 'Kim'` and `WHERE last_name = 'Kim' AND first_name = 'Ana'` efficiently, because both start by narrowing on the leading column. But `WHERE first_name = 'Ana'` alone can't use this index efficiently — knowing only `first_name` gives you no useful position in a tree sorted by `last_name` first, so it degrades to a full scan.\n\nThe practical rule of thumb: order composite index columns by putting equality-filtered, most-selective columns first, and any range-filtered column last (since a range on a middle column breaks the tree's usefulness for columns after it).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "btree-indexes-s07-q1"
+      ]
+    },
+    {
+      "id": "btree-indexes-s08",
+      "order": 8,
+      "sectionTitle": "Numbers: why height 4 handles billions of rows",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Worth being able to derive live: with fanout ~340 (from an 8 KB page and ~24-byte entries), height 1 indexes 340 keys, height 2 indexes 340² ≈ 115,600, height 3 indexes 340³ ≈ 39 million, and height 4 indexes 340⁴ ≈ 13.4 billion.\n\nThis is why interviewers ask \"how many disk reads does an index lookup cost on a 100-million-row table\" and expect \"3, maybe 4\" rather than \"it depends on the data.\" It's also why the root and often the first internal level of a large index stay permanently cached in the buffer pool — a few hundred KB of root/near-root pages get reused by every single lookup, so in practice a warm index lookup often costs only **1 real disk read** for the leaf page.\n\nThe number that matters in an interview isn't the formula — it's knowing index lookups are near-constant-time in practice, dominated by whether the leaf page is cached.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "btree-indexes-s08-q1"
+      ]
+    },
+    {
+      "id": "btree-indexes-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: index maintenance cost on writes",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Indexes only help; there's no downside to adding more of them.\"\n\n**Why it's wrong:** every `INSERT`, `UPDATE` of an indexed column, or `DELETE` has to update **every** index on that table, not just the heap. A table with 6 indexes means a single insert does 7 writes (1 heap + 6 index entries) instead of 1. Worse, an insert with a random key (like a UUID primary key) causes scattered writes across the tree rather than appending at the rightward edge, and can trigger a **page split** — a full page divides into two half-full pages, temporarily doubling space and generating extra I/O.\n\n**Correct model:** every index is a standing tax on writes, paid on every mutation forever, in exchange for faster reads on that specific query pattern — which is why over-indexing a write-heavy table is a real and common production mistake, not just a theoretical concern.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "btree-indexes-s10",
+      "order": 10,
+      "sectionTitle": "Compare: B+Tree lookup vs full table scan cost",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | B+Tree index lookup | Full table scan |\n|---|---|---|\n| Cost shape | O(log_fanout n) — height of tree, ~3-4 page reads | O(n) — every page in the table |\n| Best for | Selective filters, point lookups, small ranges | Filters matching a large fraction of rows |\n| I/O pattern | Mostly random (tree descent), sequential on leaf walk | Fully sequential — cheap per page |\n| Crossover | Planner picks the index below roughly 5-15% selectivity, workload dependent | Planner picks a scan above that threshold |\n\n**How to decide:** this crossover is exactly why the query planner sometimes \"ignores\" a perfectly good index — for a query matching 40% of a table, sequential full-table I/O genuinely beats millions of random index-then-heap lookups, even though the index exists and is healthy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "btree-indexes-s10-q1"
+      ]
+    },
+    {
+      "id": "btree-indexes-s11",
+      "order": 11,
+      "sectionTitle": "Snapshot recap: what \"index height\" tells you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Most engines expose index height directly — Postgres via `pg_stat_user_indexes` plan output, MySQL via `SHOW INDEX` cardinality stats feeding the optimizer. A healthy B+Tree on a large table sits at **height 3-5**; if you see height climbing well beyond what the row count predicts, it's a signal of bloat — often from many deletes leaving under-full pages that never got merged back together.\n\nThe senior-level move is treating index height as a health metric you can reason about from first principles (fanout and row count), not just a number a tool reports — so when it drifts, you know whether it's expected growth or a sign the index needs a rebuild (`REINDEX` in Postgres, `OPTIMIZE TABLE` in MySQL).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

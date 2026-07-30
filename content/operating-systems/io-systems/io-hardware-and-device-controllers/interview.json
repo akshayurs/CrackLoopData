@@ -1,0 +1,29 @@
+{
+  "topicId": "io-hardware-and-device-controllers",
+  "interviewQuestions": [
+    {
+      "id": "io-hardware-and-device-controllers-iq1",
+      "question": "What's the difference between memory-mapped I/O and port-mapped I/O?",
+      "answerMarkdown": "I'd define both by what address space they use and what instructions access them. **Memory-mapped I/O** places device registers directly in the CPU's regular memory address space — a specific range of addresses is reserved by firmware for a device, and any ordinary load/store instruction (a C pointer dereference, effectively) reads or writes it exactly like RAM. **Port-mapped I/O** keeps a completely separate address space for devices, accessible only through dedicated instructions — `in`/`out` on x86.\n\nThe practical consequence: MMIO needs no special CPU support beyond normal memory instructions, which is why ARM has no port-mapped I/O at all — everything is MMIO. x86 historically used PMIO for many devices but has moved most modern hardware to MMIO too, keeping PMIO mostly for legacy compatibility.\n\nOne subtlety worth raising: because MMIO addresses look like ordinary memory to the compiler, driver code has to mark those pointers `volatile` to stop the compiler from caching values in a register or eliminating what looks like a \"redundant\" repeated read — a real bug class in driver code that doesn't apply to PMIO's dedicated instructions.\n\n**Testing:** whether you understand this as an address-space and instruction-set distinction, not just two arbitrary named techniques.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "MMIO vs PMIO, mechanism and consequence"
+    },
+    {
+      "id": "io-hardware-and-device-controllers-iq2",
+      "question": "Why does a device controller exist at all — why doesn't the CPU just talk to the physical device directly?",
+      "answerMarkdown": "I'd frame this as an abstraction boundary that saves both the OS and the hardware ecosystem enormous complexity. A physical device — spinning disk platters, NAND flash cells, a network transceiver — speaks a protocol that's messy, timing-sensitive, and often analog in nature. If the CPU had to manage that directly, every OS would need device-specific, often vendor-specific code for every single hardware variant, and any change to the physical medium (say, HDD to SSD) would ripple all the way up.\n\nThe controller absorbs all of that: it presents a small, standard set of registers (status, control, data) and handles the actual physical protocol on the other side. The CPU only ever needs to know \"write a command, poll or wait for ready, read the data register\" — the same interaction shape for wildly different underlying hardware.\n\nConcretely, this is why swapping a SATA hard drive for a SATA SSD in the same machine usually needs no driver changes: the controller-facing interface (SATA commands) stayed the same even though what's happening physically inside the device changed completely.\n\n**Testing:** whether you understand controllers as an abstraction layer with a real engineering payoff, not just a hardware trivia fact.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Why the controller abstraction exists"
+    },
+    {
+      "id": "io-hardware-and-device-controllers-iq3",
+      "question": "You're writing a driver and you read a device's status register in a loop, but the value never seems to change even though the device should have finished. What's a likely culprit?",
+      "answerMarkdown": "My first hypothesis would be a missing `volatile` qualifier on the register pointer. With memory-mapped I/O, a device register looks like an ordinary memory address to the compiler — and compilers aggressively optimize memory accesses they believe are redundant. If the compiler decides your loop reads the same address repeatedly without any visible write to it, it may hoist that read out of the loop entirely and reuse a cached value in a CPU register, so your code polls a stale, compile-time-cached copy forever instead of the live hardware value.\n\nMarking the pointer `volatile` tells the compiler this memory can change for reasons outside the program's own control flow — an external device, not just another thread — forcing a genuine memory access on every read in the loop.\n\nI'd also check a second possibility: a memory-ordering issue on a multi-core or DMA-capable system, where the CPU's own out-of-order execution or caching (not just the compiler) could similarly serve a stale value without a proper memory barrier — though `volatile` alone doesn't guarantee ordering across cores, only against compiler reordering, which is why real driver code often pairs it with explicit barrier instructions.\n\n**Testing:** whether you understand a real, common driver bug rather than treating MMIO as just \"a pointer that works.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a stuck polling loop"
+    }
+  ]
+}

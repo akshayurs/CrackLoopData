@@ -1,0 +1,172 @@
+{
+  "id": "subqueries",
+  "title": "Subqueries",
+  "area": "databases",
+  "group": "sql",
+  "order": 5,
+  "slug": "subqueries",
+  "summary": "Queries nested inside queries, how correlated ones actually execute, and the NOT IN + NULL trap that silently empties a result set.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "subqueries-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **subquery** is a `SELECT` nested inside another query — used to compute a value, test membership, or build a temporary table on the fly. They let you express \"customers whose total spend is above average\" or \"products that have never been ordered\" without a separate step.\n\nThe interview traps live in two places: understanding *when* a subquery re-runs (correlated vs not), and one specific NULL interaction — `NOT IN` against a subquery containing a single `NULL` — that silently returns zero rows with no error.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "subqueries-s02",
+      "order": 2,
+      "sectionTitle": "Scalar, row, and table subqueries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Subqueries come in three shapes, matched to where they're used. A **scalar subquery** returns exactly one column, one row — usable anywhere a single value is expected: `SELECT name, (SELECT AVG(total) FROM orders) AS avg_order FROM customers`. A **row subquery** returns one row with multiple columns, for comparisons like `WHERE (a, b) = (SELECT x, y FROM t WHERE id = 1)`. A **table subquery** (a **derived table**) returns multiple rows and columns, used in `FROM` as if it were a real table.\n\nUsing the wrong shape where the engine expects another is a common runtime error — a scalar subquery that unexpectedly returns 2 rows fails at execution time, not at parse time, which is why it's worth being deliberate about which shape a subquery is meant to be.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "subqueries-s02-q1"
+      ]
+    },
+    {
+      "id": "subqueries-s03",
+      "order": 3,
+      "sectionTitle": "Compare: correlated vs non-correlated subqueries",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Non-correlated | Correlated |\n|---|---|---|\n| References the outer query? | No — stands alone | Yes — uses a column from the outer row |\n| Conceptually runs | Once, producing a fixed value/set | Once per outer row (conceptually) |\n| Example | `WHERE total > (SELECT AVG(total) FROM orders)` | `WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)` |\n| Typical performance concern | Usually cheap — computed once | Can be expensive if the planner literally re-executes it per row instead of rewriting it into a join |\n\n**How to decide:** a correlated subquery is often *semantically* the clearest way to express \"related to the current outer row\" — write it that way for readability, then check `EXPLAIN` to confirm the planner rewrote it efficiently rather than assuming it did.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "subqueries-s03-q1"
+      ]
+    },
+    {
+      "id": "subqueries-s04",
+      "order": 4,
+      "sectionTitle": "IN, EXISTS, and derived tables",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\n-- IN: customer_id is in this set of values\nSELECT * FROM customers\nWHERE id IN (SELECT customer_id FROM orders WHERE status = 'completed');\n\n-- EXISTS: at least one matching row exists — never inspects the subquery's columns\nSELECT * FROM customers c\nWHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = 'completed');\n\n-- derived table: subquery used as a FROM source\nSELECT region, AVG(monthly_total)\nFROM (SELECT customer_id, region, SUM(total) AS monthly_total\n      FROM orders GROUP BY customer_id, region) t\nGROUP BY region;\n```\n\n`EXISTS` only checks *whether a row exists*, so `SELECT 1` (or `SELECT *`) inside it is idiomatic — the columns are never used, only the existence of a match.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "subqueries-s05",
+      "order": 5,
+      "sectionTitle": "Pitfall: NOT IN with a NULL in the subquery returns nothing",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"`WHERE customer_id NOT IN (SELECT customer_id FROM blocked_customers)` finds every customer not on the blocked list.\"\n\n**Why it's wrong:** if even **one row** in `blocked_customers.customer_id` is `NULL`, the entire `NOT IN` comparison degrades to `UNKNOWN` for **every row**, because `NOT IN (a, b, NULL)` expands to `<> a AND <> b AND <> NULL`, and `<> NULL` is always `UNKNOWN` — one `UNKNOWN` in an `AND` chain makes the whole chain `UNKNOWN` (never `TRUE`) regardless of the other comparisons. The query silently returns **zero rows**, with no error, even though most customers clearly aren't blocked.\n\n**Correct model:** use `NOT EXISTS` instead — it's immune to this because it never compares individual values against `NULL`:\n\n```sql\nWHERE NOT EXISTS (\n  SELECT 1 FROM blocked_customers b WHERE b.customer_id = customers.id\n);\n```",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "subqueries-s05-q1"
+      ]
+    },
+    {
+      "id": "subqueries-s06",
+      "order": 6,
+      "sectionTitle": "Compare: EXISTS vs IN — when each is faster",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | IN | EXISTS |\n|---|---|---|\n| What it checks | Whether the outer value matches any value in the subquery's result set | Whether the subquery produces at least one row at all |\n| NULL safety | Unsafe with NOT IN if the subquery can return NULL (previous slide) | Safe — never compares against individual NULL values |\n| Typical planner behavior | Often materializes the full subquery result first, then checks membership | Often short-circuits — stops at the first matching row found |\n| Best fit | Small, NULL-free subquery results (e.g. a fixed list of statuses) | Correlated existence checks, especially where NOT applies |\n\n**How to decide:** for a `NOT`-negated existence check, default to `NOT EXISTS` over `NOT IN` — it's both NULL-safe and usually at least as fast. For a plain positive membership check against a small, guaranteed-non-NULL set, `IN` is perfectly fine and often reads more clearly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "subqueries-s06-q1"
+      ]
+    },
+    {
+      "id": "subqueries-s07",
+      "order": 7,
+      "sectionTitle": "When a subquery is really a join in disguise",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Many subqueries that only *check for a match* — `WHERE EXISTS (...)`, `WHERE id IN (SELECT ...)` — express exactly the same logic as an `INNER JOIN` plus `DISTINCT`, but without the fan-out risk: since you never select columns from the subquery, there's no row multiplication to worry about, unlike joining and then remembering to deduplicate.\n\nThe deciding question: do you need columns *from* the related table in your output? If yes, a join is usually the natural (and often faster) tool. If you only need to know *whether a relationship exists*, `EXISTS`/`IN` communicates that intent directly and sidesteps fan-out entirely — this is the cleaner alternative flagged back in the Joins topic's existence-vs-columns comparison.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "subqueries-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: how a correlated subquery conceptually executes",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Correlated subquery re-evaluating per row vs a non-correlated subquery computed once](assets/correlated-vs-noncorrelated.svg)\n\nConceptually, a correlated subquery re-evaluates per outer row because it depends on that row's values. In practice, a good planner recognizes the pattern and rewrites it into a single join-like operation — the diagram shows the mental model, not necessarily the literal execution plan.",
+      "assets": [
+        {
+          "alt": "Correlated subquery re-evaluating per row vs a non-correlated subquery computed once",
+          "path": "assets/correlated-vs-noncorrelated.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "subqueries-s09",
+      "order": 9,
+      "sectionTitle": "Common table expressions: naming a subquery",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A **CTE** (`WITH` clause) names a subquery so it can be referenced by that name, once or several times, later in the statement:\n\n```sql\nWITH high_value_customers AS (\n  SELECT customer_id, SUM(total) AS lifetime_value\n  FROM orders\n  GROUP BY customer_id\n  HAVING SUM(total) > 10000\n)\nSELECT c.name, hvc.lifetime_value\nFROM customers c\nJOIN high_value_customers hvc ON hvc.customer_id = c.id\nORDER BY hvc.lifetime_value DESC;\n```\n\nA CTE is logically equivalent to a derived table in `FROM` — the main reason to reach for it is readability, breaking a complex query into named, sequential steps rather than nesting parentheses several levels deep.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "subqueries-s10",
+      "order": 10,
+      "sectionTitle": "Materialization: does the CTE actually run once or many times?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Historically (Postgres before version 12), a CTE was an **optimization fence** — it always ran once and materialized its full result, even if referenced only once and even if inlining would've been faster. Modern Postgres (12+) instead inlines a CTE referenced exactly once, same as a derived table, and only materializes automatically when it's referenced multiple times or explicitly marked `MATERIALIZED`.\n\nThis is a real \"it depends on the engine version\" interview nuance — the safe, version-proof answer is to check `EXPLAIN` rather than assume either behavior, and to know that `WITH ... AS MATERIALIZED (...)` exists specifically to force materialization when you need a CTE evaluated exactly once regardless of engine defaults (useful for a CTE with side effects, like a data-modifying `WITH` in Postgres).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "subqueries-s10-q1"
+      ]
+    },
+    {
+      "id": "subqueries-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: a subquery that silently returns more than one row",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"`WHERE customer_id = (SELECT customer_id FROM orders WHERE product_id = 42)` works fine in testing, so it's safe to ship.\"\n\n**Why it's wrong:** a scalar subquery is a promise to return exactly one row. It works today because `product_id = 42` happens to match one order right now — but the moment a second order matches, the engine throws a runtime error (\"more than one row returned by a subquery used as an expression\"), and that failure mode is invisible in code review and in a small test dataset.\n\n**Correct model:** if multiple matches are logically possible, either aggregate down to a single value (`MIN`, `MAX`) or switch to `IN`/`EXISTS`, which are built to handle multiple rows correctly instead of failing on them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

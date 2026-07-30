@@ -1,0 +1,45 @@
+{
+  "topicId": "btree-indexes",
+  "interviewQuestions": [
+    {
+      "id": "btree-indexes-iq1",
+      "question": "Why is a B+Tree, not a binary search tree, the standard index structure in relational databases?",
+      "answerMarkdown": "I'd frame it around what's expensive: disk reads, not comparisons. A binary tree minimizes comparisons but needs one node per comparison, so indexing a billion rows means roughly 30 levels — 30 potential disk reads for one lookup. A B+Tree instead maximizes **fanout**: each node is sized to a disk page and holds hundreds of keys, so the same billion rows fit in a tree only 3-4 levels deep.\n\nConcretely, with an 8 KB page and roughly 24-byte entries, fanout is around 340, and 340^4 is over 13 billion — height 4 covers it. Each level is one page read, so a lookup costs 3-4 reads worst case, often just 1 in practice because the root and upper levels stay cached in the buffer pool.\n\nB+Trees add one more thing binary trees don't give for free: leaf nodes are linked in sorted order, so a range scan is a cheap sequential walk after one descent, instead of repeated tree traversals.\n\n**Testing:** whether you connect the data structure choice to the actual cost model — disk I/O — rather than reciting Big-O in the abstract.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Why B+Tree over binary trees"
+    },
+    {
+      "id": "btree-indexes-iq2",
+      "question": "You added an index on a `status` column but the query planner isn't using it. Why might that be correct behavior?",
+      "answerMarkdown": "I wouldn't assume it's a bug. The first thing I'd check is **selectivity** — how many distinct values `status` has and how the rows split across them. If it's a boolean-ish column with 3 values across 10 million rows, each value matches roughly a third of the table.\n\nAt that match rate, using the index means jumping between the index and the heap for millions of scattered rows — random I/O for each one — while a sequential full-table scan reads every page once, contiguously. Past a certain selectivity threshold, usually somewhere around 10-15% of the table, sequential scan cost beats random index-lookup cost, and a cost-based planner correctly picks the scan.\n\nI'd confirm this with `EXPLAIN ANALYZE` in Postgres to see the estimated vs actual row counts, and if selectivity really is the issue, I'd reach for a composite index led by a more selective column, or a partial index scoped to just the rare status value I actually query for.\n\n**Testing:** whether you understand index usage is a cost decision, not a guarantee, and can name the concrete fix.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Planner ignoring an index"
+    },
+    {
+      "id": "btree-indexes-iq3",
+      "question": "How would you design a composite index for a query that filters on `country = 'US'` and `signup_date > '2024-01-01'`?",
+      "answerMarkdown": "I'd put the equality filter first: an index on `(country, signup_date)`. Because a composite index is one B+Tree sorted first by the leading column, `country = 'US'` narrows the tree to a contiguous range immediately, and within that range the rows are already sorted by `signup_date`, so the date range becomes a cheap sequential walk over that slice.\n\nThe reverse order, `(signup_date, country)`, works worse here: the date range would need to scan broadly across dates first, then filter each hit by country — losing the tight narrowing the equality predicate gives you. As a rule I follow: equality columns before range columns, and the most selective equality column first among ties.\n\nI'd validate the choice with `EXPLAIN` to confirm the planner picks an index-range-scan on this composite rather than a bitmap-and of two separate indexes, which would signal the ordering isn't helping as expected.\n\n**Testing:** whether you can apply the left-prefix and equality-before-range rules to a concrete query, not just recite them.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Ordering composite index columns"
+    },
+    {
+      "id": "btree-indexes-iq4",
+      "question": "What's the cost of adding an index that a team doesn't actually need?",
+      "answerMarkdown": "The read side looks free, but every index is a standing write cost. Each `INSERT`, and every `UPDATE` touching an indexed column, has to update that index's B+Tree in addition to the heap — a table with 6 indexes turns one logical write into 7 physical writes.\n\nIt gets worse with certain key shapes: a randomly-distributed key like a UUID primary key causes inserts to land at scattered points across the tree instead of appending at the right edge, which can trigger **page splits** — a full page divides into two half-full ones, doubling space temporarily and generating extra I/O and WAL traffic.\n\nSo before adding an index, I'd check whether the query pattern it's meant to speed up is actually common and selective enough to matter, and whether the table is write-heavy enough that the standing tax outweighs the read win — this is exactly the trade-off that index design as a discipline is built around.\n\n**Testing:** whether you see indexing as a cost-benefit trade-off across the whole workload, not a free performance lever.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Write cost of over-indexing"
+    },
+    {
+      "id": "btree-indexes-iq5",
+      "question": "How would you estimate the number of disk reads for a point lookup on a table with 500 million rows?",
+      "answerMarkdown": "I'd work it from fanout, not memorize a number. With an 8 KB page and roughly 24-byte index entries, fanout is around 340. Height 3 covers 340^3, about 39 million keys; height 4 covers 340^4, about 13 billion — so 500 million rows needs height 4, meaning a worst-case cold lookup costs about 4 page reads: one per tree level down to the leaf.\n\nIn practice I'd expect fewer real disk reads than that, because the root and the level just below it are shared by every lookup and stay resident in the buffer pool — only the leaf page, which varies per query, is likely to actually miss and hit disk. So I'd answer \"up to 4 logical page reads, but typically 1 physical disk read once the tree is warm.\"\n\nI'd also flag the caveat: this assumes the index fits the workload's selectivity — if the query isn't selective, the planner may skip the index entirely regardless of how cheap the lookup would be.\n\n**Testing:** whether you can derive an I/O estimate from first principles instead of quoting \"O(log n)\" without numbers.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Estimating index lookup cost"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "security-tuning",
+  "interviewQuestions": [
+    {
+      "id": "security-tuning-iq1",
+      "question": "How would you prevent SQL injection in a codebase, and why isn't input sanitization enough on its own?",
+      "answerMarkdown": "I'd make parameterized queries the only way the codebase talks to the database — the query structure and the user-supplied values are sent to the database separately, so a value can never be interpreted as SQL syntax no matter what characters it contains. Every mainstream driver and ORM supports this, and it removes the vulnerability class structurally rather than relying on getting a defensive check right every time.\n\nSanitization or manual escaping can reduce risk, but it's fragile in a way parameterization isn't: it's easy to miss one code path that builds a query differently, easy to get an edge case wrong (a character encoding quirk, a database-specific escaping rule), and it has to be applied correctly at every single call site forever. Parameterized queries don't have that failure mode — there's no 'forgot to escape this one' bug possible if the value is never in the query string in the first place.\n\nIn practice I'd also add a linting rule or code-review check that flags any raw string concatenation into a query as a blocker, since the goal is making the unsafe pattern hard to write by accident, not just documented as forbidden.\n\n**Testing:** whether you understand parameterization removes the bug class structurally, versus sanitization which just reduces the odds of it.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Preventing SQL injection"
+    },
+    {
+      "id": "security-tuning-iq2",
+      "question": "You're building a multi-tenant SaaS product where every table has a tenant_id column. What would you do to make sure an application bug can never leak one tenant's data to another?",
+      "answerMarkdown": "Relying purely on application code remembering `WHERE tenant_id = ?` on every single query is a real risk — one missed filter in one code path, in a codebase with hundreds of queries, causes a cross-tenant leak, and that kind of bug is easy to introduce and easy to miss in review because the query still looks syntactically fine.\n\nI'd add row-level security as defense-in-depth: a Postgres `CREATE POLICY` on each tenant-scoped table that filters rows based on the current session's tenant context, enforced by the database itself regardless of what the application query does or doesn't include. That way, even if a query genuinely forgets the tenant filter, the database still won't return or modify another tenant's rows — the leak becomes structurally impossible rather than dependent on every developer never making a mistake.\n\nI'd pair this with least-privilege database accounts scoped per service, and I'd still keep the application-level filtering as the first line of defense for performance reasons (RLS filtering happens after the query plan, so an explicit WHERE clause still helps the planner use the right index) — RLS is the safety net, not a replacement for writing correct queries.\n\n**Testing:** whether you'd reach for a database-enforced control instead of trusting application code alone for something this consequential.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Preventing cross-tenant data leaks"
+    },
+    {
+      "id": "security-tuning-iq3",
+      "question": "Requests to your service are timing out, but the database's own dashboards show low CPU, low query latency, and no lock contention. How do you figure out what's actually wrong?",
+      "answerMarkdown": "Healthy database metrics alongside application-side timeouts is a strong signal the problem is between the application and the database, not inside the database itself — which points me straight at the connection pool. I'd check the pool's own metrics first: how many connections are currently checked out versus the pool's configured max, how deep the wait queue is, and how long requests are waiting for a connection before giving up.\n\nIf the pool is consistently maxed out, there are two distinct root causes that look identical from the outside: either legitimate concurrent load has grown past what the pool was sized for, or something is holding connections far longer than it should — a slow query, a forgotten `connection.close()` on an error path, or a long-running transaction that never commits. I'd distinguish these by checking whether checked-out connections correlate with actual query activity (real load) or sit idle while checked out (a leak or a stuck transaction).\n\nThe fix follows directly from the cause: resize the pool and/or add read replicas if it's genuine load, or fix the specific code path leaking connections if it's a leak — sizing up the pool without fixing a leak just delays the same failure at a higher connection count.\n\n**Testing:** whether you know to look at the pool as its own subsystem with its own failure mode, rather than assuming healthy database metrics rule out a database-adjacent problem.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing timeouts with a healthy database"
+    },
+    {
+      "id": "security-tuning-iq4",
+      "question": "A page that used to load in 200ms is now taking 4 seconds after a recent feature added related-data display. How would you determine if this is an N+1 problem, and how would you fix it?",
+      "answerMarkdown": "I'd look at query volume relative to request count rather than reading the code first, since N+1 code often looks completely reasonable line by line. In an APM tool or `pg_stat_statements`, I'd check whether this one request now issues dramatically more queries than before, and specifically whether those queries are structurally identical except for one changing parameter — `WHERE author_id = 7`, then `= 12`, then `= 34` — which is the exact signature of a loop firing one query per item instead of one query for all items.\n\nIf that's what I find, I'd confirm the feature added a related-data lookup (like fetching each post's author or each order's line items) inside a loop over the parent records, likely via an ORM's lazy-loading default. The fix is to replace the per-item query with one batched query — either a `JOIN` if the shapes are simple, or a single `WHERE id IN (...)` covering every ID from the loop at once — cutting query count from roughly N+1 down to 1 or 2.\n\nI'd also check whether this is a call-count problem (many cheap queries — N+1) versus a single genuinely slow query (a missing index, say), since the two look different in the metrics (high call count vs. high per-call latency) and need entirely different fixes — treating one as the other wastes the investigation.\n\n**Testing:** whether you'd diagnose from query-count evidence rather than guessing, and whether you know N+1's fix is batching, not just 'add caching' or 'add an index.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing and fixing N+1"
+    }
+  ]
+}

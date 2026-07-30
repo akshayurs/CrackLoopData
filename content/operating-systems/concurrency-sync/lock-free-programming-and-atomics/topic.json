@@ -1,0 +1,187 @@
+{
+  "id": "lock-free-programming-and-atomics",
+  "title": "Lock-Free Programming & Atomics",
+  "area": "operating-systems",
+  "group": "concurrency-sync",
+  "order": 6,
+  "slug": "lock-free-programming-and-atomics",
+  "summary": "Atomic operations and compare-and-swap as an alternative to locking, why they're harder to get right than they look, and where memory ordering fits in.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "lock-free-programming-and-atomics-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Lock-free programming** uses hardware-level atomic instructions instead of [locks](locks-and-mutexes) to coordinate shared data — no thread ever blocks waiting for another to release something. The appeal is real: no lock contention, no priority inversion, no deadlock from lock ordering. The cost is also real: lock-free code is genuinely harder to reason about and get right than lock-based code, despite looking simpler.\n\nThis topic covers the building block (compare-and-swap), its most famous gotcha (the ABA problem), and the memory-ordering subtleties that make \"just use atomics\" a much bigger claim than it sounds.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s02",
+      "order": 2,
+      "sectionTitle": "Why go lock-free — contention and priority-inversion costs of locks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Locks have real costs beyond the obvious \"threads wait.\" Under high contention, threads spend more time fighting over the lock than doing work, and every acquisition can involve a context switch if the mutex blocks rather than spins. Locks also introduce **priority inversion** — a low-priority thread holding a lock can block a high-priority thread that needs it, effectively giving the low-priority thread priority it doesn't deserve (covered in depth in the concurrency-hazards topic). And a thread that holds a lock and then crashes, hangs, or gets killed can leave every other thread waiting on that lock stuck forever.\n\nLock-free algorithms sidestep all of this: since no thread ever waits for another to release something, one thread being slow, descheduled, or even killed can't block progress for the others (a stronger guarantee called **lock-freedom**: at least one thread always makes progress system-wide, even if others stall).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s03",
+      "order": 3,
+      "sectionTitle": "Atomic operations: what the hardware actually guarantees",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **atomic operation** executes as a single, indivisible step from every other thread's point of view — no other thread can observe it half-done. Modern CPUs provide a small set of these directly in hardware: atomic load, atomic store, atomic add/increment, and the most powerful one, **compare-and-swap (CAS)**.\n\nThis is different from a lock, which doesn't make an operation atomic by itself — it makes a *region of code* execute as if it were atomic, by preventing other threads from entering that region concurrently. A hardware atomic instruction needs no such coordination: the CPU itself guarantees indivisibility for that one instruction, using a bus lock or cache-coherence protocol (like `LOCK` prefix instructions on x86), with no OS or scheduler involvement at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "lock-free-programming-and-atomics-s03-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s04",
+      "order": 4,
+      "sectionTitle": "Compare-and-swap (CAS): the building block",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Compare-and-swap** takes a memory location, an expected value, and a new value: it atomically checks whether the location still holds the expected value, and if so, writes the new value and reports success; if the location has changed, it does nothing and reports failure — all as one indivisible hardware operation.\n\n```\nbool CAS(location, expected, new_value):\n    if *location == expected:\n        *location = new_value\n        return true\n    return false\n```\n\nThe pattern this enables: read the current value, compute what you want the new value to be, then CAS it in — if CAS fails, someone else changed it first, so retry from the read. This **read-compute-CAS-retry loop** is the skeleton of nearly every lock-free algorithm, and it's why CAS, not atomic add alone, is the primitive that makes general-purpose lock-free data structures possible.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s05",
+      "order": 5,
+      "sectionTitle": "Code: a lock-free counter with CAS",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\n_Atomic int counter = 0;\n\nvoid increment() {\n    int old_val, new_val;\n    do {\n        old_val = counter;\n        new_val = old_val + 1;\n    } while (!atomic_compare_exchange_weak(&counter, &old_val, new_val));\n}\n```\n\nRead the current value, compute the increment, try to CAS it in. If another thread updated `counter` between the read and the CAS, `atomic_compare_exchange_weak` fails, `old_val` is refreshed to the actual current value by the call itself, and the loop retries with the new value — no thread ever blocks; a failed CAS just means \"try again with fresher data.\" Under heavy contention this can retry many times, which is the lock-free trade-off: no waiting, but potentially wasted work redoing the read-compute step.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "lock-free-programming-and-atomics-s05-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s06",
+      "order": 6,
+      "sectionTitle": "The ABA problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "CAS only checks that a location's **value** matches what you expected — it can't tell if that value changed and changed back in between. Concretely: thread 1 reads a pointer `P` pointing to node `A`. Before thread 1's CAS runs, thread 2 pops `A` off a lock-free stack, frees it, and happens to allocate a new node at the **same memory address**, pushing it back as the new top — so the pointer's value is `A` again, but it's now a completely different node with different contents.\n\nThread 1's CAS sees the pointer still equals `A` and succeeds — but the data structure has silently changed underneath it in a way CAS was blind to, because \"the address looks the same\" isn't the same as \"nothing happened.\" This is the **ABA problem**: value went A → B → A, and a naive CAS can't distinguish that from nothing having changed at all, potentially corrupting the structure (in this example, a lock-free stack could end up with a node linked incorrectly, or a use-after-free).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "lock-free-programming-and-atomics-s06-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: CAS retry loop for a lock-free stack push",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Lock-free stack push flowchart with CAS retry](assets/lock-free-push-flowchart.svg)\n\nThe loop-back edge is the entire lock-free contract in one arrow: instead of blocking on a lock when another thread interferes, the thread just retries the whole read-compute-CAS sequence with fresh data.",
+      "assets": [
+        {
+          "alt": "Lock-free stack push flowchart with CAS retry",
+          "path": "assets/lock-free-push-flowchart.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s08",
+      "order": 8,
+      "sectionTitle": "Fixing the ABA problem in practice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The standard fix is to make it impossible for the same bit pattern to mean two different things: attach a **version counter (tag)** alongside the pointer, packed into a wider atomic value (commonly a 128-bit CAS on x86-64, `CMPXCHG16B`, holding a 64-bit pointer plus a 64-bit counter). Every successful modification increments the tag, so even if the pointer value returns to a previous address, the combined (pointer, tag) pair never repeats — CAS on the pair will correctly fail.\n\nAn alternative used by garbage-collected languages or systems with hazard pointers/epoch-based reclamation: never actually reuse or free memory while another thread might still hold a stale reference to it, which removes the \"reallocated at the same address\" precondition entirely. This is a real engineering trade-off — tagged pointers cost extra bits and a wider atomic instruction; safe memory reclamation schemes cost implementation complexity and sometimes memory (garbage that can't be reused yet). Neither is free, which is part of why lock-free code has a reputation for being harder than it looks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s09",
+      "order": 9,
+      "sectionTitle": "Memory ordering — why atomics alone aren't always enough",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Atomicity guarantees a single operation isn't observed half-done. It does **not** by itself guarantee that operations on *different* variables become visible to other threads in the order your source code wrote them — both the compiler and the CPU are allowed to reorder instructions for performance, as long as a single thread can't tell the difference on its own.\n\nConcrete failure: thread A writes `data = 42` then atomically sets `ready = true`. Thread B spins until it sees `ready == true`, then reads `data`. If the hardware or compiler reorders A's two writes, thread B could see `ready == true` while `data` still holds its old value — even though `ready` itself was set with a proper atomic store. This is why languages expose explicit **memory ordering** modes (C++'s `memory_order_relaxed/acquire/release/seq_cst`): `release` on the write to `ready` and `acquire` on the read of `ready` together create a happens-before edge that forces `data`'s write to be visible before `ready`'s. Getting this wrong produces a bug that's a genuine race despite every individual operation being \"atomic.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "lock-free-programming-and-atomics-s09-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s10",
+      "order": 10,
+      "sectionTitle": "Compare: lock-based vs lock-free — throughput, complexity, correctness risk",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Lock-based | Lock-free |\n|---|---|---|\n| Waiting behavior | Threads block or spin on contention | No thread ever blocks on another |\n| Resilience to a stuck/killed thread | One thread holding a lock can block everyone | Other threads keep progressing regardless |\n| Reasoning difficulty | Moderate — critical sections are explicit and bounded | High — must reason about every possible interleaving of every instruction |\n| Common bug class | Deadlock, priority inversion, forgetting to unlock | ABA, subtle memory-ordering bugs, hard-to-test rare interleavings |\n| Throughput under low contention | Comparable, lock overhead is small | Comparable, sometimes marginally better |\n| Throughput under high contention | Degrades — threads queue | Can degrade differently — many wasted CAS retries, but no blocking |\n\n**How to decide:** default to locks; they're easier to get right and to review. Reach for lock-free only for a proven hot path (a specific data structure under measured heavy contention) where you can invest the extra verification effort — and even then, prefer a well-tested existing lock-free library over hand-rolling one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: assuming lock-free means simpler (it's usually harder to get right)",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Locks are for people who don't know atomics — lock-free code is cleaner and avoids all that deadlock nonsense.\"\n\n**Why it's wrong:** lock-free code trades one set of bugs (deadlock, priority inversion) for a different, often harder-to-find set (ABA, memory-ordering violations, use-after-free in manual memory reclamation schemes). A lock-based critical section gives you a bounded region to reason about; a lock-free algorithm requires reasoning about every possible interleaving of every individual instruction across every thread, including ones the compiler or CPU might reorder. These bugs are also notoriously hard to reproduce in tests, since they often depend on exact hardware timing.\n\n**Correct model:** lock-free programming is a specialized tool for a specific, measured bottleneck, not a general upgrade from locks. Reach for it only when profiling shows lock contention is the actual problem, and prefer battle-tested lock-free libraries (a language's standard `atomic` types, a vetted concurrent-collections library) over hand-rolling a CAS loop — the ABA problem alone has caused real production data corruption in more than one widely-used system before it was found.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "lock-free-programming-and-atomics-s11-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-atomics-s12",
+      "order": 12,
+      "sectionTitle": "Debugging a suspected lock-free bug in production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Lock-free bugs tend to surface as rare, unreproducible data corruption or crashes — a linked list with a cycle that shouldn't exist, a counter that's occasionally off by a small amount, a crash inside code that \"can't\" run concurrently with itself. Standard debuggers are of limited help since stepping through code changes the timing enough to hide the bug (a **Heisenbug**).\n\nThe practical toolkit: **ThreadSanitizer** does detect many lock-free bugs, since it tracks happens-before relationships across atomics, not just locks — run the suspected code path under TSan with a stress test that maximizes contention (many threads hammering the same structure). For ABA specifically, adding assertions that check a version tag or using a debug allocator that never reuses freed addresses (poisoning freed memory instead) can turn a silent ABA corruption into an immediate, loud crash — trading a subtle bug for an obvious one that's actually debuggable. The staff-level move, though, is usually to replace the hand-rolled lock-free structure with a well-tested library implementation once the bug is found, rather than patching the specific interleaving and hoping no other one exists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "lock-free-programming-and-atomics-s12-q1"
+      ]
+    }
+  ]
+}

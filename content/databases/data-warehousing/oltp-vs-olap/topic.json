@@ -1,0 +1,156 @@
+{
+  "id": "oltp-vs-olap",
+  "title": "OLTP vs OLAP",
+  "area": "databases",
+  "group": "data-warehousing",
+  "order": 1,
+  "slug": "oltp-vs-olap",
+  "summary": "Two workloads that pull database design in opposite directions — why the system that runs your app can't also run your analytics well, and what to reach for instead.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "oltp-vs-olap-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Ask a database to do two very different jobs and it does neither well: serve thousands of small, fast transactions per second for your live application (**OLTP**), and crunch millions of rows for a business report (**OLAP**). They pull storage design, indexing, and hardware in opposite directions.\n\nThis topic explains why that tension is structural, not a tuning problem — row-store vs column-store, why a heavy analytics query can bring your production app down, and where a data warehouse (and its cousins, the data lake and lakehouse) fit as the answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s02",
+      "order": 2,
+      "sectionTitle": "Compare: transactional vs analytical access patterns",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | OLTP (transactional) | OLAP (analytical) |\n|---|---|---|\n| Typical query | \"Get order #48213\" — one row, by key | \"Total revenue by region, last 90 days\" — millions of rows, aggregated |\n| Query shape | Point lookups, small updates | Full-table or large-range scans, aggregations |\n| Concurrency | Thousands of short transactions/sec | A handful of long-running queries at once |\n| Data freshness | Must be current to the second | Often fine as of last night's load |\n| Example systems | Postgres, MySQL, DynamoDB serving an app | Snowflake, BigQuery, Redshift, ClickHouse |\n\n**The core tension:** OLTP wants to touch a few rows as fast as possible; OLAP wants to touch millions of rows and aggregate them. Optimizing storage for one pattern actively hurts the other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "oltp-vs-olap-s02-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s03",
+      "order": 3,
+      "sectionTitle": "Why row-store suits OLTP, column-store suits OLAP",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **row-store** physically stores all of a row's columns together on disk — fetching order #48213 means one disk read gets its ID, customer, amount, and status all at once. That's exactly what an OLTP point lookup needs, and it's why Postgres and MySQL default to row storage.\n\nA **column-store** instead stores each column's values together, across all rows. \"Total revenue, last 90 days\" only needs the `amount` and `date` columns — a column-store reads just those two columns' data, skipping every other column entirely, while a row-store would have to read every full row and discard most of it. On a table with 50 columns, that's roughly a 25x reduction in bytes read for a two-column aggregation.\n\nNeither layout is \"better\" — they're optimized for opposite access patterns, which is precisely why production systems that need both usually run two different databases, not one tuned for both.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "oltp-vs-olap-s03-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: the path from OLTP sources into a warehouse",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![OLTP databases feeding an ETL pipeline into a data warehouse queried by BI and notebooks](assets/etl-oltp-to-warehouse.svg)\n\nData is born in OLTP systems — that's where a user's action first gets written — then periodically extracted, transformed, and loaded (or loaded then transformed) into a warehouse purpose-built for analytics. Reports and dashboards query the warehouse, never the live OLTP databases directly.\n\nThat separation is the whole point: it protects the OLTP systems from analytical query load, and it lets the warehouse combine data from many OLTP sources into one place a report can join across.",
+      "assets": [{"alt": "OLTP databases feeding an ETL pipeline into a data warehouse queried by BI and notebooks", "path": "assets/etl-oltp-to-warehouse.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s05",
+      "order": 5,
+      "sectionTitle": "Data warehouse vs data lake vs lakehouse",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **data warehouse** (Snowflake, Redshift, BigQuery) stores structured, schema-defined data optimized for SQL analytics — you model it before loading it in (schema-on-write). A **data lake** (raw files in S3 or similar object storage, often Parquet/ORC) stores data in whatever format it arrived in, structured or not, and you apply schema when you read it (schema-on-read) — cheaper storage, more flexible, but slower and more error-prone to query without discipline.\n\nA **lakehouse** (Databricks' Delta Lake, Apache Iceberg, Apache Hudi) tries to get both: data sits in cheap object storage like a lake, but a metadata/transaction layer on top adds warehouse-like features — ACID transactions, schema enforcement, time travel — without needing to also run a separate warehouse and duplicate the data.\n\nThe practical trend: many teams now land raw data in a lake first (cheap, flexible), then either load a curated subset into a warehouse for fast BI queries, or adopt a lakehouse to avoid maintaining both systems and copying data between them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "oltp-vs-olap-s05-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: running heavy analytics on the OLTP primary",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We already have the data in Postgres — let's just run the monthly revenue report as a query against production.\"\n\n**Why it's wrong:** an aggregation query scanning millions of rows competes for the same CPU, memory, and I/O as the live application's point lookups — on a row-store, that scan also has to read and discard the columns the report doesn't need, multiplying the wasted I/O. Under real load, this doesn't just make the report slow; it can starve the application's transactions of resources, causing real user-facing latency spikes or timeouts during the exact query that was meant to be a harmless report.\n\n**Correct model:** route analytical queries to a replica dedicated to reads (at minimum) or, better, to a proper warehouse fed by ETL/ELT — never the OLTP primary serving live traffic. If a warehouse is overkill for now, even a read replica with a resource limit isolates the blast radius so a bad analytics query can't take down checkout.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "oltp-vs-olap-s06-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s07",
+      "order": 7,
+      "sectionTitle": "Numbers: how much slower is OLTP-on-analytics, really?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete numbers make the row-store/column-store gap less abstract. A row-store scanning a 50-column, 100-million-row table to sum one numeric column typically has to read the **full row width** for every row — if each row is roughly 500 bytes, that's about 50GB of I/O for a query that only cares about 8 of those bytes per row.\n\nA column-store running the same aggregation reads only the target column's data, often compressed 5-10x on top of that (numeric columns compress especially well) — the same query might scan under **1GB**. That's routinely a 20-50x difference in I/O for exactly the kind of query OLAP workloads run constantly.\n\nThis is why \"just add an index\" doesn't rescue a row-store for broad analytical scans — an index helps find specific rows fast, but a full aggregation over most of the table still has to touch most of the data, and the physical layout is what determines how much of it that actually means.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s08",
+      "order": 8,
+      "sectionTitle": "HTAP: blurring the line",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**HTAP** (Hybrid Transactional/Analytical Processing) systems — TiDB, SingleStore, and Postgres extensions like Citus with columnar storage — try to serve both workloads from one system, usually by storing data in both a row format (for OLTP) and a column format (for OLAP) simultaneously, kept in sync internally, and routing each query to whichever layout suits it.\n\nThis removes the ETL lag between \"data lands in OLTP\" and \"data is queryable for analytics\" — reports can reflect data that's seconds old instead of a day old. The cost is real engineering complexity inside the database (maintaining two physical layouts consistently) and, in most current HTAP systems, some ceiling on how large or complex the analytical side can get compared to a purpose-built warehouse.\n\nInterview signal: HTAP is a reasonable answer to \"how would you get near-real-time analytics without a full warehouse pipeline\" — but naming its scale ceiling versus a dedicated warehouse shows you're not treating it as a free lunch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "oltp-vs-olap-s08-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s09",
+      "order": 9,
+      "sectionTitle": "Staff-level nuance: choosing the boundary, not just the tools",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer picks \"Postgres for OLTP, Snowflake for OLAP\" and stops there. A staff-level answer designs the **boundary and the freshness contract** between them, because that's where real production incidents happen: how often does ETL run, what happens if a load fails partway, and which stakeholders can tolerate which staleness.\n\nConcretely, that means deciding: does finance need revenue numbers accurate to the hour (favoring more frequent incremental loads or an HTAP/streaming approach) or is nightly batch fine (favoring simpler, cheaper batch ETL)? What's the alerting story if a nightly load fails silently and a dashboard quietly shows three-day-old data as if it were current? Is there a reconciliation check comparing warehouse totals against the OLTP source periodically, to catch pipeline bugs before a business decision gets made on wrong numbers?\n\nThe differentiator: naming the operational contract (freshness SLA, failure handling, reconciliation) around the OLTP/OLAP boundary, not just the two systems that sit on either side of it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "oltp-vs-olap-s09-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s10",
+      "order": 10,
+      "sectionTitle": "Recap: reading the workload before picking the system",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Question | OLTP answer | OLAP answer |\n|---|---|---|\n| How many rows does a typical query touch? | A handful | Thousands to billions |\n| How fresh must results be? | Now | Minutes to a day is often fine |\n| What's the concurrency shape? | Many small concurrent transactions | Few large concurrent queries |\n| What storage layout wins? | Row-store | Column-store |\n\nThe throughline for this whole topic: the right system follows from naming the workload's actual shape — row count touched, freshness requirement, concurrency pattern — not from picking a popular technology first and hoping it fits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

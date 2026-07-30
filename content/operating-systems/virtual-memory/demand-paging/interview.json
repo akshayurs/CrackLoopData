@@ -1,0 +1,37 @@
+{
+  "topicId": "demand-paging",
+  "interviewQuestions": [
+    {
+      "id": "demand-paging-iq1",
+      "question": "What actually happens, hardware and OS, in the moment a page fault occurs?",
+      "answerMarkdown": "On the hardware side: the CPU issues a normal memory access, the MMU checks the relevant page table entry, finds its valid bit is off, and instead of completing the access it raises a trap — handing control to the OS along with the faulting virtual address and what kind of access (read, write, execute) was attempted.\n\nOn the OS side: the fault handler first has to classify the fault, since the hardware itself has no idea what an invalid bit *means* here — it checks whether the address falls within a region the process legitimately owns (backed by the executable file, a copy-on-write mapping, or an mmap'd file) or is genuinely outside anything the process should be touching. For a legitimate fault, it finds a free physical frame (evicting a page via the replacement policy if none is free), issues the I/O to bring the actual data in, updates the page table entry to mark it valid with the correct frame number, and returns control so the CPU re-executes the exact instruction that faulted — which now succeeds, invisibly to the program.\n\nFor an illegitimate access, the handler instead delivers SIGSEGV and the process typically terminates. I'd close by noting the same fault path — just with a different \"how do I get this page's data\" step — is what powers demand paging, copy-on-write, and mmap'd files.\n\n**Testing:** whether you can narrate both the hardware trap and the OS-side classification logic, not just \"the OS loads the page.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "The page fault path end to end"
+    },
+    {
+      "id": "demand-paging-iq2",
+      "question": "A batch job's monitoring shows a page fault rate that went from 0.005% to 0.05% — ten times higher, but still under a tenth of a percent. Should you be worried?",
+      "answerMarkdown": "Yes, and the reason is the effective-access-time math, not intuition — a 10x rate increase directly translates to roughly a 10x increase in the fault-driven portion of average access time, because that portion dominates the formula once fault service time (milliseconds, disk-bound) vastly outweighs a normal memory access (nanoseconds). \"Still under a tenth of a percent\" sounds reassuring, but percentages only tell you something meaningful when you weight them by cost — here the cost ratio is on the order of a million to one.\n\nConcretely, at 100 ns memory access and 8 ms fault service time, going from p=0.00005 to p=0.0005 moves effective access time from roughly 500 ns to roughly 4,100 ns — an 8x real slowdown in average memory access, which absolutely shows up as user-visible latency or reduced throughput, even though the raw percentage still looks small on a dashboard.\n\nI'd follow up by asking what changed — more concurrent processes competing for frames, a working set that grew past available RAM, or a specific bad deploy — since the fault-rate number alone tells you something's wrong but not why.\n\n**Testing:** whether you'll actually run the weighted-average math instead of eyeballing a percentage and calling it fine.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Interpreting a small-looking fault-rate change"
+    },
+    {
+      "id": "demand-paging-iq3",
+      "question": "How does copy-on-write make fork() cheap, and where does the cost actually show up?",
+      "answerMarkdown": "fork() creates a new process that's a logical copy of the parent, but copy-on-write means the OS doesn't actually duplicate any memory at fork time — it makes the child's page table point at the exact same physical frames as the parent's, with every one of those shared pages marked read-only regardless of their original permissions. The 'copy' is just a fast page-table setup operation, independent of how much memory the parent actually has mapped.\n\nThe cost shows up later, and only where it's needed: the instant either process tries to write to one of those shared pages, the write faults because the page is read-only, and the fault handler copies just that single page privately for the writer, then lets the write proceed. A process with a 2 GB heap that forks and only ever reads afterward pays essentially nothing extra; a process that immediately writes to a thousand pages pays a thousand small on-demand copies, spread out over time, instead of one enormous upfront copy.\n\nI'd point out why this matters in practice: the extremely common fork()-then-exec() pattern (a shell launching a new program) barely touches any inherited pages before exec() replaces the address space entirely, so COW makes that pattern nearly free — which is exactly the case fork()'s design was optimized for.\n\n**Testing:** whether you understand COW as deferring cost to the actual write, not eliminating it, and can connect it to why fork()+exec() is cheap in practice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Copy-on-write and fork() cost"
+    },
+    {
+      "id": "demand-paging-iq4",
+      "question": "Your service just got a process killed with no error logs, no crash, no OOM message in its own output — just gone. How do you figure out what happened?",
+      "answerMarkdown": "The first place I'd check is the kernel log — `dmesg` or `journalctl -k` — for an OOM killer entry, since the killed process itself never gets a chance to log anything: `SIGKILL` gives no opportunity to run a handler or write a final message, which is exactly the signature described (no crash trace, no graceful log line, just gone).\n\nIf I find an OOM kill, I'd look at what else was running on the box and why memory pressure got severe enough that the kernel had no frame to service a fault with and no swap space left either — a memory leak in this or another process, an unexpected spike in concurrent load, or a container/cgroup memory limit that's tighter than expected are the usual suspects. The `oom_score` and `oom_score_adj` for the killed process (and its neighbors) tell you whether it was picked because it was the biggest consumer or because of an explicit priority setting.\n\nI'd close the loop with a fix appropriate to the cause: right-size the process's or container's memory limit, address a leak if one's found, or add swap/adjust `oom_score_adj` if this process genuinely shouldn't be a kill target — but never just restart it and hope, since the underlying pressure will recur.\n\n**Testing:** whether you know a silent kill with no application-level trace is the OOM killer's signature, and know where to actually look for confirmation.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a silent OOM kill"
+    }
+  ]
+}

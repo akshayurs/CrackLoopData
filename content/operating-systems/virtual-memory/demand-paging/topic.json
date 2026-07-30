@@ -1,0 +1,174 @@
+{
+  "id": "demand-paging",
+  "title": "Demand Paging",
+  "area": "operating-systems",
+  "group": "virtual-memory",
+  "order": 4,
+  "slug": "demand-paging",
+  "summary": "Loading pages only when they're actually touched, the mechanics of a page fault end to end, and the math for how much a nonzero fault rate really costs.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "demand-paging-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Loading an entire program into RAM before it runs a single instruction is wasteful — most programs never touch large parts of their own code (error handlers, rarely-used features) during any given run. **Demand paging** fixes this: load a page only the first time something actually tries to access it, and let a **page fault** — an exception the hardware raises on the attempt — trigger that load on demand.\n\nThis single idea is what makes processes start almost instantly regardless of their total size, and it's the same machinery — page faults, the valid bit, on-demand loading — that underlies memory-mapped files, copy-on-write, and ultimately swapping pages back out under memory pressure.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "demand-paging-s02",
+      "order": 2,
+      "sectionTitle": "Demand paging: loading pages only when touched",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Under demand paging, starting a process doesn't load its memory image into RAM up front. Instead, the OS sets up the process's page table with entries that describe *where* each page's data would come from (usually the executable file on disk) but doesn't actually load any of it — the pages aren't in RAM yet.\n\nThe first time the CPU tries to access a page that isn't resident, the hardware detects it and raises a fault instead of completing the access; the OS's fault handler then loads that one page from disk, updates the page table, and lets the instruction retry — successfully this time. A process that only ever touches 20% of its code during a given run only ever pays the loading cost for that 20%.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "demand-paging-s03",
+      "order": 3,
+      "sectionTitle": "The valid/invalid bit in a page table entry",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every PTE carries a **valid bit** (sometimes called present) that tells the MMU whether the frame number in that entry is currently meaningful. **Valid** means the page is resident in RAM right now — the frame number is real, translate normally. **Invalid** means the page isn't resident — it might not exist at all (an unmapped address, a real error), or it might be perfectly legitimate but simply not loaded yet (the demand-paging case) or swapped out to disk.\n\nThe MMU doesn't distinguish these cases in hardware — it just traps to the OS on any invalid entry. It's entirely the *OS's* job, in the fault handler, to look at auxiliary information (not the hardware-checked PTE bits alone) and decide which of \"load this page,\" \"this address was never valid, kill the process,\" or \"this page is swapped out, fetch it from swap\" actually applies.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "demand-paging-s03-q1"
+      ]
+    },
+    {
+      "id": "demand-paging-s04",
+      "order": 4,
+      "sectionTitle": "Page fault: what happens on a first touch",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **page fault** is a hardware exception, not an error in the everyday sense — most page faults are entirely expected and successfully resolved. The CPU attempts an access, the MMU sees the invalid bit, and instead of completing the access it traps into the OS's page fault handler with information about which address faulted and why (read, write, or execute attempt).\n\nThis is fundamentally different from a segmentation fault: a page fault is recoverable and routine (the OS fixes it up and the faulting instruction re-executes successfully), while a true invalid-access fault (accessing memory that was genuinely never mapped) is what actually becomes a `SIGSEGV` delivered to the process. The full handling sequence — the part interviewers usually want in detail — is the next diagram.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "demand-paging-s04-q1"
+      ]
+    },
+    {
+      "id": "demand-paging-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: full page-fault handling sequence, step by step",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![page fault handling flowchart from access to resume](assets/page-fault-flow.svg)\n\nStep 5 is the expensive one — an actual disk read, milliseconds, versus every other step being fast in-memory bookkeeping.",
+      "assets": [
+        {
+          "alt": "page fault handling flowchart from access to resume",
+          "path": "assets/page-fault-flow.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "demand-paging-s06",
+      "order": 6,
+      "sectionTitle": "Effective access time with page faults — the math",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The same weighted-average idea from TLB hit ratios applies to page faults, just at a much more extreme scale because the miss cost (a disk access) is enormous relative to the hit cost (a memory access):\n\n`Effective Access Time = (1 - p) x memory_access_time + p x page_fault_service_time`\n\nwhere `p` is the page fault rate. Because `page_fault_service_time` is typically measured in **milliseconds** (disk I/O) while `memory_access_time` is in **nanoseconds**, even a tiny fault rate dominates the average. This is the single number that makes \"keep the fault rate low\" one of the most consequential tuning goals in a memory-constrained system — the next slide makes the scale of that concrete.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "demand-paging-s07",
+      "order": 7,
+      "sectionTitle": "Code: computing effective access time given a fault rate",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Memory access time = 100 ns. Page fault service time = 8 ms (8,000,000 ns) — a typical disk-backed fault.\n\n```text\nFault rate p = 0.001 (1 in 1000 accesses faults)\n\nEAT = (1 - p) * 100ns + p * 8,000,000ns\n    = 0.999 * 100 + 0.001 * 8,000,000\n    = 99.9 + 8,000\n    = 8,099.9 ns  (~81x slower than no faults at all)\n\nNow drop the fault rate to p = 0.0001 (1 in 10,000):\n\nEAT = 0.9999 * 100 + 0.0001 * 8,000,000\n    = 99.99 + 800\n    = 899.99 ns  (~9x slower than no faults)\n```\n\nA 10x reduction in fault rate (0.001 -> 0.0001) cut effective access time by roughly 9x — because the fault term dominates the equation almost completely at these magnitudes. This is why system designers obsess over even fractional-percent fault rate changes.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "demand-paging-s07-q1"
+      ]
+    },
+    {
+      "id": "demand-paging-s08",
+      "order": 8,
+      "sectionTitle": "Copy-on-write as an application of demand paging",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Copy-on-write (COW)** reuses the exact same fault mechanism for a different purpose: sharing, not first-load. When a process calls `fork()`, the child doesn't get a real copy of the parent's memory — instead, both processes' page tables point at the *same* physical frames, all marked read-only, regardless of whether they were originally writable.\n\nThe moment either process tries to *write* to one of those shared pages, the write attempt faults (the page is marked read-only) — but instead of loading anything from disk, the OS's fault handler makes a private copy of just that one page for the writing process, updates its page table entry to point at the new copy (now genuinely writable), and lets the write retry. Most `fork()`+`exec()` pairs (the shell launching a program) never write to more than a handful of pages before `exec` discards the copy entirely — so COW turns what looks like copying an entire process's memory into copying almost nothing, on demand, exactly when it's actually needed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "demand-paging-s08-q1"
+      ]
+    },
+    {
+      "id": "demand-paging-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a high page-fault rate silently tanking performance",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"A 1% page fault rate is fine — 99% of accesses are still fast.\"\n\n**Why it's wrong:** the effective-access-time math shows the fault cost is so lopsided (milliseconds vs. nanoseconds) that a 1% fault rate can make average access time hundreds of times slower than a 0.01% rate, even though \"99% still hit fast\" sounds reassuring on its own. The intuition that a small percentage implies a small impact only holds when the two outcomes cost roughly the same — here they don't, by six orders of magnitude.\n\n**Correct model:** always weight a rate by the *cost* of each outcome, not just the rate itself. This is exactly why a system showing a modest-looking fault-rate increase in monitoring can correspond to a severe, user-visible latency regression — the percentage understates the impact unless you do the actual weighted math.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "demand-paging-s09-q1"
+      ]
+    },
+    {
+      "id": "demand-paging-s10",
+      "order": 10,
+      "sectionTitle": "mmap and memory-mapped files: demand paging beyond fork",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`mmap()` extends demand paging to files directly: mapping a file into memory doesn't read any of it up front — it sets up page table entries marked invalid, exactly like a fresh process's unloaded code pages. Accessing any part of the mapped region for the first time faults, and the fault handler reads that specific page's worth of data from the file, not the whole file.\n\nThis is why `mmap`-based file access can be dramatically faster than `read()` for large files accessed sparsely (a database reading a few random records from a multi-GB file): only the touched pages ever get loaded, and the OS's normal page cache handles keeping hot pages resident and evicting cold ones — the exact same machinery process code pages use, applied to arbitrary file data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "demand-paging-s11",
+      "order": 11,
+      "sectionTitle": "When there's nowhere left to swap to: the OOM killer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Demand paging assumes a fault can always be serviced — either the data exists on disk (first load) or can be moved there (swap out something else to make room). That assumption breaks when physical memory *and* swap space are both nearly exhausted: there's no free frame, and evicting something else isn't possible either because there's nowhere to put it.\n\nOn Linux, this triggers the **OOM (Out-Of-Memory) killer**: rather than let the whole system deadlock or grind to a halt, the kernel picks a process — using a heuristic score (`oom_score`, weighted by memory usage and configurable priority) — and forcibly terminates it to free memory for everyone else. This is why a memory-hungry but otherwise healthy process can be killed by the kernel with no warning: from the OS's perspective, it's a last-resort safety valve, not a bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "demand-paging-s11-q1"
+      ]
+    }
+  ]
+}

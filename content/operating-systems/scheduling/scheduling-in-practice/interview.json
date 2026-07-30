@@ -1,0 +1,37 @@
+{
+  "topicId": "scheduling-in-practice",
+  "interviewQuestions": [
+    {
+      "id": "scheduling-in-practice-iq1",
+      "question": "How does Linux decide which process to run next?",
+      "answerMarkdown": "I'd describe the core mechanism first, then place it in context. For ordinary processes, Linux (via CFS, or EEVDF as of kernel 6.6) tracks each runnable task's **vruntime** — virtual runtime, roughly its CPU consumption so far, scaled by weight — and always schedules whichever runnable task has the smallest vruntime, keeping them in a red-black tree so finding the minimum is O(1) and reinserting after a run is O(log n).\n\nWeight comes from the task's `nice` value: a lower nice value means higher weight, so vruntime accumulates more slowly and the task gets scheduled more often and for a larger proportional share — it's a proportional preference, never a strict override, so a low-priority task still gets *some* CPU, it just gets less.\n\nI'd close by placing this correctly in the full hierarchy: CFS/EEVDF only handles the \"normal\" scheduling class. Above it, in strict precedence, sit `SCHED_DEADLINE` (EDF-based) and `SCHED_FIFO`/`SCHED_RR` for real-time work — those run first whenever any task in those classes is ready, and normal-class tasks only get CPU time once none of them need it.\n\n**Testing:** whether you know the actual, current production mechanism, not just the textbook algorithms it replaced.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "CFS end to end"
+    },
+    {
+      "id": "scheduling-in-practice-iq2",
+      "question": "How does CFS achieve MLFQ's goal of favoring interactive processes without implementing anything like MLFQ's queues?",
+      "answerMarkdown": "I'd walk through why the same outcome falls out of one simple rule instead of needing MLFQ's machinery. An I/O-bound, interactive process spends most of its time blocked/sleeping, so its vruntime barely increases while it's not running. The moment it wakes up, its vruntime is far below the currently-running tasks' — which means, under CFS's \"run the smallest vruntime\" rule, it's immediately the next thing scheduled, with no separate \"is this interactive\" classification step at all.\n\nA CPU-bound task, meanwhile, runs continuously and keeps accumulating vruntime the whole time, so it naturally drifts to the back of the ordering relative to anything that's been sleeping — again, purely as a side effect of the same rule, with no explicit demotion logic anywhere.\n\nThe elegance I'd highlight explicitly: MLFQ needed multiple queues, a demotion rule, a promotion rule, a periodic boost to prevent starvation, and extra logic to prevent gaming the demotion rule — CFS gets the same behavioral outcome from one invariant that's also inherently starvation-resistant and much harder to game, since vruntime tracks actual consumption rather than self-reported yield timing.\n\n**Testing:** whether you can explain *why* a simpler mechanism achieves an equivalent goal, which is a stronger signal than just knowing both algorithms exist.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "CFS reproduces MLFQ's goal without its machinery"
+    },
+    {
+      "id": "scheduling-in-practice-iq3",
+      "question": "A teammate sets nice -20 on a critical background job, expecting it to behave like a real-time task. What would you tell them?",
+      "answerMarkdown": "I'd explain that nice -20 is a strong signal within CFS's proportional-fairness model, not a move into a real-time guarantee. It gives the task a much higher weight, so its vruntime grows more slowly and it gets scheduled more often and for a larger share of the CPU relative to other CFS-class tasks — but it's still one task among many in the *same* scheduling class, still subject to the fairness invariant, and still has no formal bound on worst-case latency.\n\nConcretely, the failure mode I'd point out: if the system also runs `SCHED_FIFO` or `SCHED_DEADLINE` tasks (used by some system daemons or specialized workloads), those preempt the nice -20 task without hesitation regardless of its nice value, because they sit in a strictly higher-precedence scheduling class entirely outside nice's reach.\n\nIf what they actually need is a bounded-latency guarantee, I'd point them toward `chrt` to inspect and set a real scheduling class (`SCHED_FIFO`/`SCHED_RR`), while flagging that real-time classes come with their own risk — a runaway `SCHED_FIFO` task with no yielding can genuinely starve everything in the normal class, including root's own shell, which is exactly why that class requires care nice values don't.\n\n**Testing:** whether you understand the difference between strong preference and formal guarantee well enough to correct a common, plausible-sounding misconception.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Correcting a nice-value misconception"
+    },
+    {
+      "id": "scheduling-in-practice-iq4",
+      "question": "Why did Linux move from CFS to EEVDF as the default scheduler, and what does that tell you about how scheduling research evolves?",
+      "answerMarkdown": "I'd explain the specific gap EEVDF closes: pure vruntime ordering (CFS) is fair *over time*, but a task that's been sleeping for a while can wake up with a vruntime so far behind everyone else's that it effectively \"jumps the line\" and gets to run for an extended stretch before its vruntime catches back up — technically consistent with long-run fairness, but a real, measured source of latency spikes for other tasks in the short term.\n\nEEVDF (Earliest Eligible Virtual Deadline First, merged as the default in Linux 6.6) adds an explicit eligibility time and virtual deadline per task, borrowing directly from EDF's deadline-based reasoning, giving tighter and more predictable short-term latency bounds without giving up CFS's core fairness guarantee.\n\nThe broader pattern I'd name: this is the third real production iteration in under two decades — heuristic MLFQ-style (pre-2007) to fairness-based CFS (2007) to deadline-aware EEVDF (2023) — and each transition was driven by a specific, *measured* latency problem in the previous design, not academic fashion. That's a good model for how to talk about any \"why did X replace Y\" question: name the concrete failure Y had, not just that X is newer.\n\n**Testing:** whether you track that production systems keep evolving past the commonly-cited textbook answer, and can explain a transition by its actual motivating failure.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "CFS to EEVDF, and the pattern behind it"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "mvcc-deadlocks",
+  "interviewQuestions": [
+    {
+      "id": "mvcc-deadlocks-iq1",
+      "question": "What is MVCC, and why don't readers and writers block each other under it?",
+      "answerMarkdown": "MVCC — multi-version concurrency control — is how Postgres, InnoDB, and Oracle deliver isolation without making readers and writers wait on each other. Instead of overwriting a row in place, an `UPDATE` creates a new version of the row and leaves the old version intact; each row is really a small chain of versions, each tagged with when it was created and, once superseded, when it stopped being current.\n\nA reader gets a **snapshot** the moment its transaction (or statement, depending on isolation level) starts — a cutoff of which transactions count as already committed — and always reads the newest version that was committed before that cutoff, ignoring anything newer. So a writer creating version 4 of a row doesn't block a reader still looking at version 3; the reader just never sees version 4 until it takes a new snapshot.\n\nThe trade-off is that old versions have to be cleaned up eventually — Postgres's `VACUUM`, InnoDB's purge thread — once no live snapshot could possibly still need them, which is a real operational job, not a free lunch.\n\n**Testing:** whether you understand MVCC as a mechanism (versions plus snapshots), not just a marketing term for 'no blocking.'",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "How MVCC works"
+    },
+    {
+      "id": "mvcc-deadlocks-iq2",
+      "question": "Walk me through how a database detects and resolves a deadlock.",
+      "answerMarkdown": "The engine maintains a **wait-for graph**: a node per active transaction, and an edge from transaction A to transaction B whenever A is blocked waiting for a lock that B currently holds. Periodically — Postgres checks every `deadlock_timeout`, one second by default — it scans this graph for a cycle.\n\nNo cycle means every waiting transaction will eventually get to run once the ones ahead of it finish, so nothing needs to happen. A cycle — A waiting on B, B waiting on A, in the simplest case — means none of the transactions in it can ever proceed on their own, since each is waiting for something held by another transaction in the same stuck group. The engine picks a **victim**, typically the transaction that's done the least work or holds the fewest locks, kills it with a specific error, and releases its locks — which breaks the cycle and lets the survivors proceed.\n\nThe part people miss: this is fully automatic and usually resolves within about a second, so a deadlock error in the logs means the database already fixed itself — the actual work is fixing the application's lock-ordering bug so the deadlock, and the wasted transaction it kills each time, stops recurring.\n\n**Testing:** whether you can describe detection concretely (graph, cycle, victim selection) rather than just saying 'the database handles it.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Deadlock detection mechanics"
+    },
+    {
+      "id": "mvcc-deadlocks-iq3",
+      "question": "Your payments service deadlocks a few times an hour in production. How do you find the root cause and fix it for good?",
+      "answerMarkdown": "I'd start with the engine's own record of the deadlock rather than guessing — Postgres logs the full cycle in `DETAIL` (which processes were waiting on which locks, and the actual statements involved) when `log_min_error_statement` is set appropriately; InnoDB keeps the same information in `SHOW ENGINE INNODB STATUS` under 'LATEST DETECTED DEADLOCK.' That log tells me exactly which two rows, and which two statements, were involved.\n\nThe near-universal root cause is two code paths locking the same two rows in opposite orders — a transfer function that locks source-then-destination, invoked with the source and destination flipped depending on which account initiated it, is the textbook case. Once I've confirmed that shape, the fix is to sort the row identifiers into a canonical order (e.g., always lock the lower account ID first) before taking any locks, everywhere that code path exists — not just in the function I found, since the same bug often exists in more than one place.\n\nI'd pair that with retry logic that catches the specific deadlock error code and retries with jitter, as a safety net — but I'd be explicit that retry logic treats the symptom; fixing the lock order is what actually stops the deadlocks from happening.\n\n**Testing:** whether you'd go to the actual deadlock log for evidence instead of guessing, and whether your fix addresses lock ordering rather than only adding retries.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Root-causing a production deadlock"
+    },
+    {
+      "id": "mvcc-deadlocks-iq4",
+      "question": "What's the operational cost of MVCC that a lot of engineers don't realize until it bites them?",
+      "answerMarkdown": "MVCC's benefit — readers never block writers — comes from keeping multiple versions of every changed row, and someone has to clean those up. In Postgres that's `autovacuum`; if it's misconfigured, undersized for the write rate, or held back by a long-running transaction pinning the cleanup horizon, dead row versions accumulate faster than they're reclaimed. That shows up first as table and index bloat — queries get slower and disk usage grows for no visible reason in the schema.\n\nThe sharper version of this, and a genuinely staff-level fact: Postgres's transaction ID is a 32-bit counter, and if it were allowed to wrap around, old committed rows could appear to be from the future and become invisible. Postgres protects against this by forcing an aggressive `VACUUM FREEZE` as IDs approach the wraparound threshold, and — if vacuum has been effectively disabled for long enough — it will eventually refuse to accept new writes at all rather than risk data corruption. This has caused real production outages when autovacuum was disabled 'temporarily' during a migration and never re-enabled.\n\nThe fix is boring but essential: monitor autovacuum lag and long-running transactions as first-class metrics, not just query latency.\n\n**Testing:** whether you know MVCC has a real operational cost, not just a performance benefit, and can name the specific failure mode (wraparound) rather than a vague 'bloat happens.'",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "MVCC's hidden operational cost"
+    }
+  ]
+}

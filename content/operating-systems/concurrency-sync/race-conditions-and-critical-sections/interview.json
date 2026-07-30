@@ -1,0 +1,37 @@
+{
+  "topicId": "race-conditions-and-critical-sections",
+  "interviewQuestions": [
+    {
+      "id": "race-conditions-and-critical-sections-iq1",
+      "question": "Two threads each increment a shared counter 1,000,000 times — why isn't the result 2,000,000?",
+      "answerMarkdown": "The result isn't 2,000,000 because `counter++` isn't a single atomic operation — it's a load, an add, and a store, and the two threads can interleave those three steps.\n\nConcretely: thread A loads the counter's current value into a register, then before it stores its incremented value back, thread B loads the *same* stale value and increments it too. Both threads write back essentially the same result, and one of the two increments is silently overwritten — a lost update. This can happen thousands of times across a million iterations, so the final count lands somewhere below 2,000,000, and the exact number varies run to run based on how the scheduler happened to interleave the two threads.\n\nI'd point out this is a **data race**: two threads accessing the same memory concurrently with at least one write and no synchronization, which most languages define as undefined behavior, not just \"wrong but predictable.\" The fix is to make the read-modify-write atomic — a mutex around the increment, or a hardware atomic-add instruction if the language exposes one, like C++'s `std::atomic<int>` or Go's `sync/atomic`.\n\n**Testing:** whether you can explain the mechanism (interleaved load/add/store) rather than just saying \"race condition\" as a buzzword.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "The classic counter race"
+    },
+    {
+      "id": "race-conditions-and-critical-sections-iq2",
+      "question": "What is a critical section, and what three properties must any correct solution to protecting it satisfy?",
+      "answerMarkdown": "A critical section is the piece of code that touches shared, mutable state — the part of the program where an incorrect interleaving with another thread would produce a wrong result. Everything outside it, the \"remainder section,\" can safely run concurrently with anything.\n\nA correct solution needs three properties, and I'd walk through why each one is necessary rather than just naming them. **Mutual exclusion**: at most one thread executes its critical section at a time — the headline property everyone remembers. **Progress**: if no one's currently in the critical section and multiple threads want in, the choice of who goes next can't be deferred forever by threads that aren't even trying to enter — the system has to actually decide. **Bounded waiting**: there's a limit on how many times other threads can cut ahead of a thread that's already requested entry, which rules out starvation.\n\nA lock that satisfies mutual exclusion but always favors the same thread over a slower one technically \"works\" but still fails the full problem — that's the gap between a naive lock and a fair one. I'd mention ticket locks or FIFO queuing as one way real implementations guarantee bounded waiting.\n\n**Testing:** whether you know mutual exclusion is necessary but not sufficient — that's the detail most candidates skip.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "The three requirements"
+    },
+    {
+      "id": "race-conditions-and-critical-sections-iq3",
+      "question": "What's the difference between a data race and a race condition — can you have one without the other?",
+      "answerMarkdown": "A data race is a specific, mechanical condition: two threads access the same memory location concurrently, at least one access is a write, and there's no synchronization ordering the two. It's defined precisely enough that tools can detect it automatically.\n\nA race condition is broader — it's any situation where the program's observable behavior depends on the timing of concurrent events, whether or not memory is directly shared unsafely. So every data race is a race condition, but not every race condition is a data race.\n\nThe example I'd give is a time-of-check-to-time-of-use bug: a program checks `if (file exists)` then later deletes it, and another process deletes the file in between. Neither the check nor the delete is individually undefined — each syscall is well-defined — but the *sequence* has a timing dependency, so it's a real race condition that a data-race detector like ThreadSanitizer would never flag, because there's no shared memory access in question at all.\n\nThis distinction matters in interviews because it shows you're not just pattern-matching \"concurrent bug\" to \"add a lock\" — some races need a different fix, like an atomic check-and-delete syscall or a distributed lock, not a mutex.\n\n**Testing:** whether you can name a race condition that a memory-level race detector wouldn't catch.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Data race vs race condition"
+    },
+    {
+      "id": "race-conditions-and-critical-sections-iq4",
+      "question": "You suspect a production service has an intermittent race condition — it fails maybe once every few thousand requests with no clear pattern. How would you go about finding it?",
+      "answerMarkdown": "I'd start by resisting the urge to add locks speculatively — that can mask the symptom without fixing the cause, or introduce a deadlock. First I'd try to characterize the failure: does it correlate with load, with a specific code path, with restarts or deploys? Intermittent-under-load is the classic race signature, since the timing window only opens up with enough concurrent traffic.\n\nNext I'd reach for a **dynamic race detector** in a staging environment under realistic concurrent load — ThreadSanitizer for C/C++/Go, or the equivalent for the language in use. TSan instruments every memory access and lock operation and flags racy access pairs even on runs where they didn't actually corrupt data, which is far more reliable than trying to reproduce the exact interleaving manually. I'd accept the 5–15x slowdown as a staging-only cost, not something to run against live traffic.\n\nIf I can't reproduce it even under TSan, I'd add targeted logging or assertions around the suspected shared state, and look for check-then-act patterns (TOCTOU) that a memory-race detector wouldn't catch, since those are logic-level races rather than data races.\n\nOnce found, I'd fix at the smallest correct scope — protecting just the shared state, not wrapping large sections in a coarse lock that reintroduces contention — and add a regression test that exercises concurrent access, even though I know intermittent bugs are hard to pin down in a deterministic test.\n\n**Testing:** whether you have a real debugging process for a bug that won't reproduce on demand, not just \"I'd add a mutex.\"",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging an intermittent race in production"
+    }
+  ]
+}

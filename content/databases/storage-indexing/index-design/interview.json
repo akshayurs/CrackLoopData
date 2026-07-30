@@ -1,0 +1,45 @@
+{
+  "topicId": "index-design",
+  "interviewQuestions": [
+    {
+      "id": "index-design-iq1",
+      "question": "How do you decide whether a column is worth indexing?",
+      "answerMarkdown": "I'd start with selectivity, not intuition: distinct values divided by row count. A column where a typical equality filter matches under roughly 5-10% of rows is a strong index candidate; a boolean or a 3-value status column matching a third of the table usually isn't worth indexing standalone, because the planner will likely prefer a sequential scan anyway.\n\nThe second question is access pattern frequency — I'd check query logs or `pg_stat_statements` for how often this filter actually runs, since even a selective column doesn't earn an index if the query is rare. Third, I'd weigh the write cost: this table's insert/update rate, since every index is a write-time tax paid on every mutation forever.\n\nConcretely: for a `users` table filtered by `email` on every login, that's high-frequency and high-selectivity — an easy yes. For an `is_archived` boolean checked once a month in an admin report, I'd skip the index and eat the occasional slow scan.\n\n**Testing:** whether you have a repeatable framework — selectivity, frequency, write cost — instead of \"index whatever's in the WHERE clause.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Deciding what to index"
+    },
+    {
+      "id": "index-design-iq2",
+      "question": "A dashboard query got slower over time even though you added an index on the filtered column months ago. How would you investigate?",
+      "answerMarkdown": "I wouldn't assume the index stopped working — I'd run `EXPLAIN ANALYZE` first and compare the planner's row estimate to the actual row count. A big gap there usually means table statistics are stale, and the planner is making a bad scan-vs-index decision based on outdated cardinality — the fix is `ANALYZE`, not touching the index at all.\n\nIf the plan shows a sequential scan and the estimate is accurate, I'd check whether the query itself changed shape — a new `LOWER()` or `DATE()` wrapper around the indexed column silently disables a plain B+Tree index, a very common regression when someone \"fixes\" a case-sensitivity bug without realizing the index cost.\n\nIf the index is being used but is still slow, I'd check for heap fetches under what should be an index-only scan — a rising heap-fetch count points at a stale visibility map, meaning a vacuum problem, not an indexing problem — or growing table size simply outpacing the original design's selectivity assumptions.\n\n**Testing:** whether you diagnose systematically from the actual plan rather than guessing at a schema fix.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging index regression"
+    },
+    {
+      "id": "index-design-iq3",
+      "question": "What's a covering index, and when is it worth the extra storage?",
+      "answerMarkdown": "A covering index includes every column a query needs, either as key columns or via `INCLUDE` in Postgres, so the engine can answer entirely from the index without a second trip to the heap for each matching row — an index-only scan. For a query like `SELECT status, total FROM orders WHERE user_id = 42` returning thousands of rows, skipping that per-row heap fetch can meaningfully cut I/O, sometimes by half or more if the heap isn't well cached.\n\nI'd reach for one on hot, high-row-count queries where the same small set of extra columns is always selected alongside the filter — a covering index turns a query that scales with heap I/O into one that scales with index size alone.\n\nThe cost is real: it's a wider index, so more disk and more write overhead per insert, and in Postgres it only delivers the full benefit when the table's visibility map is current, meaning it depends on healthy autovacuum. I wouldn't add `INCLUDE` columns speculatively — only for columns the hot query actually selects.\n\n**Testing:** whether you understand covering indexes as a targeted optimization with a real cost, not a free upgrade to apply everywhere.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Covering indexes trade-off"
+    },
+    {
+      "id": "index-design-iq4",
+      "question": "How would you order the columns in a composite index for `WHERE tenant_id = ? AND status = ? AND created_at > ?`?",
+      "answerMarkdown": "I'd lead with the equality columns before the range column, since a range predicate anywhere before the last position breaks the tree's ordering usefulness for anything after it — so `created_at` goes last regardless of anything else.\n\nBetween `tenant_id` and `status`, I'd pick the more selective one to lead. On a multi-tenant table, `tenant_id` almost always wins — filtering to one tenant's rows is a far smaller slice than filtering to one of a handful of statuses across every tenant. So my order would be `(tenant_id, status, created_at)`.\n\nI'd validate this isn't just theoretical by checking `EXPLAIN` for an index range scan using all three columns rather than a bitmap-and of separate indexes, which would tell me the ordering isn't giving the planner what it expects.\n\n**Testing:** whether you can apply both the equality-before-range and most-selective-first rules together on a realistic multi-column filter, not just recite them separately.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Ordering a composite index"
+    },
+    {
+      "id": "index-design-iq5",
+      "question": "How would you find and remove indexes that are quietly hurting write performance without helping any query?",
+      "answerMarkdown": "I'd start from usage statistics rather than guessing: Postgres exposes `pg_stat_user_indexes`, showing scan counts per index since the last stats reset; MySQL and SQL Server have equivalents (`sys.schema_unused_indexes`, `sys.dm_db_index_usage_stats`). An index with near-zero scans over a representative time window — long enough to cover weekly/monthly jobs — is a strong candidate for removal.\n\nBefore dropping one, I'd check two things: whether it's silently backing a uniqueness or foreign-key constraint rather than a query, and whether the observation window actually covered infrequent-but-important jobs, like a monthly billing report, that would show as \"unused\" in a short window but matter.\n\nOnce confirmed unused, dropping it is close to free performance: every write to that table stops paying its maintenance cost, and the buffer pool has more room for indexes that are actually earning their keep.\n\n**Testing:** whether you'd use real usage data to justify removing an index rather than either hoarding every index or cutting them on a hunch.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Finding and removing dead indexes"
+    }
+  ]
+}

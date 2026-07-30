@@ -1,0 +1,37 @@
+{
+  "topicId": "sharding",
+  "interviewQuestions": [
+    {
+      "id": "sharding-iq1",
+      "question": "How would you choose a shard key for a new multi-tenant SaaS product's primary orders table?",
+      "answerMarkdown": "I'd start from the queries, not the schema: list the actual access patterns the product needs at launch and at roughly 10x scale — per-tenant dashboards, cross-tenant admin reports, individual order lookups — because the shard key has to serve the *dominant* pattern well, everything else is secondary.\n\nFor a SaaS product, `tenant_id` is the obvious first candidate: it naturally co-locates all of one customer's data, which makes almost every product query — \"show tenant X's orders\" — a single-shard operation, and it gives clean isolation for backups and compliance per tenant.\n\nThe risk I'd flag immediately: if any tenant is likely to be dramatically larger than the rest (an enterprise customer doing 200x the volume of a typical one), plain `tenant_id` sharding creates a permanent hot shard for that tenant no matter how the rest of the data hashes. I'd handle that with a composite key — `tenant_id` plus a sub-partition like `order_id` — so a single oversized tenant's data still spreads across multiple shards, at the cost of making \"all of tenant X's data\" a scatter-gather instead of one lookup.\n\nGiven that changing this later means a full resharding migration, I'd rather over-invest in this analysis up front than optimize for the common case and get surprised by the first big customer.\n\n**Testing:** whether you reason about the shard key from real query patterns and known risk (tenant skew) rather than picking the most obvious column.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Choosing a shard key"
+    },
+    {
+      "id": "sharding-iq2",
+      "question": "Your team hash-partitioned a table by user_id, and now product wants a query that lists all orders placed in the last hour across all users. How would you serve that?",
+      "answerMarkdown": "I'd name the tension directly: hash partitioning by `user_id` was the right call for the dominant pattern (per-user point lookups), but this new query is a range query over time, which is exactly what hash partitioning makes expensive — it has to fan out to every shard.\n\nFor a genuinely rare, non-latency-sensitive query like an internal report, I'd just accept the scatter-gather: query every shard for orders in the window, merge results in the application layer, and cache the result if it's requested often. That's the honest, no-new-infrastructure answer.\n\nIf this becomes a first-class, latency-sensitive product feature — not a one-off report — I'd instead maintain a **secondary index or a separate materialized view** keyed by time (e.g. write orders into a time-partitioned table or a search index like Elasticsearch alongside the primary sharded store) so the read path doesn't have to fan out at query time. That's more moving parts and eventual consistency to manage, so I'd only take it on once the fan-out approach actually shows up as a bottleneck.\n\nWhat I wouldn't do is reshard the whole table by time to serve one query — that would break the user-lookup pattern the system depends on for everything else.\n\n**Testing:** whether you can propose a proportionate fix (accept the fan-out vs. build a secondary index) instead of reflexively resharding.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Serving a query the shard key doesn't fit"
+    },
+    {
+      "id": "sharding-iq3",
+      "question": "Explain consistent hashing to someone who only knows plain hash(key) mod N — why does it matter in practice?",
+      "answerMarkdown": "I'd open with the problem plain mod-N has: it works fine as long as the number of shards, `N`, never changes. The moment you add or remove a shard, `N` changes, and `hash(key) mod N` gives a completely different answer for almost every key — so scaling a cluster from, say, 4 to 5 shards would force nearly all your data to move, which is unacceptable for a live system.\n\nConsistent hashing fixes this by giving up on `mod` entirely. Instead, it maps shards and keys onto positions on a fixed, large ring (say, a 32-bit hash space), and each key belongs to whichever shard is next going clockwise. Adding a new shard only takes over the keys between it and its counter-clockwise neighbor on the ring — roughly `1/N` of the data — leaving everyone else's keys untouched.\n\nIn practice, systems like Cassandra and DynamoDB add **virtual nodes**: each physical machine claims many small, scattered positions on the ring rather than one big arc, so that when a shard is added or removed, the data movement is spread evenly across all remaining shards instead of dumping it entirely on one unlucky neighbor.\n\nThe practical payoff: you can grow or shrink a cluster without a full data reshuffle, which is what makes elastic scaling of a sharded system actually feasible.\n\n**Testing:** whether you can explain not just what consistent hashing is, but why the naive alternative fails at scale.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Consistent hashing"
+    },
+    {
+      "id": "sharding-iq4",
+      "question": "How would you migrate a production table from 4 shards to 16 shards with zero downtime?",
+      "answerMarkdown": "I'd frame this as a data-consistency migration problem first, a hashing-scheme problem second — the algorithm to redistribute keys is the easy part; keeping the system correct and available while it happens is the hard part.\n\nConcretely, I'd run it in phases. First, **dual-write**: every new write goes to both the old 4-shard layout and the new 16-shard layout, so the new layout starts staying current from this point forward. Second, **backfill**: copy historical data from the old layout into the new one in the background, using a change-data-capture stream to catch any row that changes again mid-backfill so nothing gets lost or overwritten with stale data. Third, **verify**: run a consistency check — row counts, checksums, or a sampled diff — comparing old and new before trusting the new layout for reads. Fourth, **cutover reads**, ideally gradually (a percentage of traffic at a time) so I can roll back fast if something's off. Only after reads have run clean on the new layout for a safety window would I stop dual-writing and decommission the old one.\n\nI'd also plan the shard count itself around future headroom — going straight to 16 (rather than 8, then 16 later) if the growth trajectory supports it, since each resharding round costs real engineering weeks.\n\n**Testing:** whether you can describe a real, safe live-migration sequence instead of hand-waving \"we reshard it.\"",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Live resharding"
+    }
+  ]
+}

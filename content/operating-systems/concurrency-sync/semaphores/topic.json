@@ -1,0 +1,159 @@
+{
+  "id": "semaphores",
+  "title": "Semaphores",
+  "area": "operating-systems",
+  "group": "concurrency-sync",
+  "order": 3,
+  "slug": "semaphores",
+  "summary": "The counting-semaphore abstraction, how it differs from a mutex, and how it's used for both resource pools and signaling between threads.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "semaphores-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **semaphore** is an integer counter with two atomic operations, traditionally called `wait()` (decrement) and `signal()` (increment), where `wait()` blocks if the counter would go negative. [Locks and mutexes](locks-and-mutexes) solve mutual exclusion; semaphores generalize the idea to counting — how many of a resource are available — and to signaling between threads that don't share ownership the way a mutex pair does.\n\nThis is the primitive behind bounded queues, connection pools, and thread-pool throttling, and it's the tool the classic producer-consumer problem is usually first solved with.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "semaphores-s02",
+      "order": 2,
+      "sectionTitle": "The semaphore abstraction: a counter with atomic wait/signal",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A semaphore wraps an integer `value` and guarantees `wait()` and `signal()` are each atomic:\n\n- `wait()` (also called `P()` or `acquire()`): decrement `value`; if the result is negative, block the calling thread.\n- `signal()` (also called `V()` or `release()`): increment `value`; if there are blocked threads, wake one.\n\nThe atomicity is the whole point — without it, `wait()` would have the same interleaving bug from [race conditions](race-conditions-and-critical-sections) that a plain shared counter has. The OS or runtime implements the semaphore's internals (usually a lock plus a wait queue) so callers never see a torn check-and-decrement.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "semaphores-s03",
+      "order": 3,
+      "sectionTitle": "Binary semaphore vs mutex — the subtle difference",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A **binary semaphore** (value restricted to 0 or 1) looks identical to a mutex on the surface — both seem to allow only one thread \"in\" at a time. The difference is ownership and intent.\n\n| | Mutex | Binary semaphore |\n|---|---|---|\n| Ownership | The locking thread must be the one to unlock | Any thread can call `signal()`, regardless of who called `wait()` |\n| Intended use | Protecting a critical section | Mutual exclusion *or* signaling between threads |\n| Misuse detection | Many implementations error on unlock-by-non-owner | No such check — it's just a counter |\n| Typical priority handling | Can support priority inheritance (fixes priority inversion) | Generally does not |\n\nThe practical consequence: a semaphore used for mutual exclusion is a strictly weaker tool than a mutex, because nothing stops a bug where the wrong thread calls `signal()` twice, silently letting two threads into a section meant to be exclusive. Use a mutex when the property you want is \"the thread that entered is the thread that leaves\"; use a semaphore when you actually want signaling across threads or a count greater than one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "semaphores-s03-q1"
+      ]
+    },
+    {
+      "id": "semaphores-s04",
+      "order": 4,
+      "sectionTitle": "Counting semaphores for resource pools",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **counting semaphore** starts at some value `N > 1` and represents `N` interchangeable units of a resource — connections in a database pool, slots in a rate limiter, permits in a thread pool. A thread calls `wait()` to take a unit (blocking if none are free) and `signal()` to return it.\n\nConcrete example: a database connection pool capped at 20 connections initializes a semaphore to 20. Every request calls `wait()` before checking out a connection and `signal()` after returning it. If 25 requests arrive at once, 20 proceed immediately and 5 block until a connection is returned — the semaphore enforces the cap without any thread needing to know how many others are currently using the pool.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "semaphores-s05",
+      "order": 5,
+      "sectionTitle": "Code: bounded-buffer producer-consumer with semaphores",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\nsem_t empty, full;      // counting semaphores\npthread_mutex_t mutex;  // protects the buffer itself\nint buffer[N];\n\nvoid init() {\n    sem_init(&empty, 0, N);   // N slots free\n    sem_init(&full, 0, 0);    // 0 slots filled\n}\n\nvoid producer(int item) {\n    sem_wait(&empty);            // wait for a free slot\n    pthread_mutex_lock(&mutex);\n    buffer_put(item);\n    pthread_mutex_unlock(&mutex);\n    sem_post(&full);             // signal a filled slot\n}\n\nvoid consumer() {\n    sem_wait(&full);              // wait for a filled slot\n    pthread_mutex_lock(&mutex);\n    int item = buffer_get();\n    pthread_mutex_unlock(&mutex);\n    sem_post(&empty);             // signal a free slot\n}\n```\n\nThree synchronization objects, three jobs: `empty` and `full` count available slots in each direction (this is signaling), while `mutex` protects the buffer's internal pointers from a torn read/write (this is mutual exclusion). Mixing these roles up — using one semaphore for both — is a common source of subtle bugs.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "semaphores-s05-q1"
+      ]
+    },
+    {
+      "id": "semaphores-s06",
+      "order": 6,
+      "sectionTitle": "Diagram: semaphore value over time as producers/consumers run",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Empty and full semaphore counts over time](assets/producer-consumer-semaphores.svg)\n\nThe two counters move in lockstep opposite directions and their sum is always the buffer size — a useful invariant to state out loud in an interview to show you understand why two semaphores, not one, are needed here.",
+      "assets": [
+        {
+          "alt": "Empty and full semaphore counts over time",
+          "path": "assets/producer-consumer-semaphores.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 35,
+      "mcqIds": []
+    },
+    {
+      "id": "semaphores-s07",
+      "order": 7,
+      "sectionTitle": "Using semaphores for signaling/ordering, not just exclusion",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Semaphores don't have to protect shared data at all — they can purely enforce ordering between threads that never touch the same memory. Initialize a semaphore to 0, have thread A call `signal()` when some event happens, and have thread B's `wait()` block until it does — that's a one-shot \"A happened before B continues\" gate.\n\nThis is exactly the shape used to make a main thread wait for worker threads to finish (a simplified join), or to hand off a completed unit of work between pipeline stages. It's a fundamentally different use from mutual exclusion: no critical section, no shared data being protected — just ordering. Recognizing this dual role (exclusion vs signaling) from a single primitive is a common \"do you actually understand this\" interview check.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "semaphores-s07-q1"
+      ]
+    },
+    {
+      "id": "semaphores-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: semaphores have no ownership — anyone can signal",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I'll use a semaphore like a lock — whichever thread finishes will call `signal()` and it'll work out.\"\n\n**Why it's wrong:** because any thread can call `signal()` regardless of whether it ever called `wait()`, a bug — a duplicate signal, a signal on the wrong code path, an exception that skips a matching `wait()` — silently changes the semaphore's count without anyone noticing. Unlike a mutex, there's no runtime check that says \"you never held this, you can't release it.\" The failure mode is quiet: the count drifts, and later, more threads than intended get through a section meant to be capacity-limited.\n\n**Correct model:** when you actually want \"the thread that entered is the thread that leaves,\" use a mutex, which enforces that property. Reserve semaphores for genuine counting (resource pools) or genuine cross-thread signaling, where \"anyone can signal\" is a feature, not a bug — and code the wait/signal pairing carefully enough (via a wrapper, RAII-style guard, or code review) that a mismatched pair can't slip through.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "semaphores-s08-q1"
+      ]
+    },
+    {
+      "id": "semaphores-s09",
+      "order": 9,
+      "sectionTitle": "Real numbers: sizing a semaphore-backed connection pool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Picking the semaphore's initial count for a resource pool is a real production decision, not an arbitrary number. Set it too high and you can overwhelm the backing resource — a database with a max of 100 connections gets pounded by 500 app instances each holding a 20-connection pool, hitting 10,000 potential connections against a server that falls over past a few hundred. Set it too low and requests queue on `wait()` even though the backend has headroom, adding latency for no reason.\n\nA common rule of thumb: size the pool per instance so that `instances × pool_size` stays comfortably under the backend's real connection ceiling (often itself capped well below the OS file-descriptor limit for other stability reasons — Postgres defaults to 100 total connections, for example). Teams frequently discover the right number only after an incident where either the pool starved under load (semaphore too small) or the database refused connections under a traffic spike (semaphore too large, no reservation for other instances) — worth stating explicitly as the trade-off if asked how you'd size one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "semaphores-s09-q1"
+      ]
+    },
+    {
+      "id": "semaphores-s10",
+      "order": 10,
+      "sectionTitle": "Compare: semaphore vs monitor/condition variable for the same job",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Semaphore | Monitor + condition variable |\n|---|---|---|\n| State it tracks | Just an integer count | Arbitrary program state, checked in a while-loop |\n| Condition expressiveness | Limited to \"count is nonzero\" | Any predicate (\"queue is non-empty AND flag is set\") |\n| Error-proneness | Easy to mismatch wait/signal pairs across a large codebase | Encapsulated with the data it protects, harder to misuse |\n| Common today in | Lower-level code, OS/kernel primitives, resource pools | Higher-level languages (`java.util.concurrent`, Python's `Condition`) |\n\nThe next topic covers monitors and condition variables directly — the short version is that most production application code has moved toward monitors because bundling the lock with the data and expressing arbitrary conditions is less error-prone at scale than juggling raw semaphore counts across a large codebase.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    }
+  ]
+}

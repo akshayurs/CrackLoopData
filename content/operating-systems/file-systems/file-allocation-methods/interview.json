@@ -1,0 +1,29 @@
+{
+  "topicId": "file-allocation-methods",
+  "interviewQuestions": [
+    {
+      "id": "file-allocation-methods-iq1",
+      "question": "Why can seeking to the middle of a file be slow on some file systems and not others?",
+      "answerMarkdown": "I'd tie this directly to how the file system tracks block locations. With **linked allocation**, the only stored pointer is to the first block — every subsequent block's address lives inside the previous block, so reaching block 500 means reading blocks 1 through 499 first just to follow the chain. That's an O(n) walk disguised as a \"seek.\"\n\nWith **indexed allocation** — what ext4, NTFS, and APFS actually use — a file has an index structure (an inode's direct/indirect pointers, or an extent tree) that maps any offset directly to a block address in one or two lookups, regardless of file size. Seeking to byte 2,000,000 costs roughly the same as seeking to byte 200.\n\nConcretely, this is why FAT-formatted USB drives can feel sluggish with large fragmented files, while ext4 or NTFS stays fast: FAT is a refinement of linked allocation with the pointers cached in a table, but you're still logically walking a chain, just faster than reading it block-by-block from disk.\n\n**Testing:** whether you connect an abstract performance complaint to the concrete on-disk data structure causing it.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Connecting allocation scheme to seek performance"
+    },
+    {
+      "id": "file-allocation-methods-iq2",
+      "question": "Why did file systems move away from contiguous allocation for general-purpose use?",
+      "answerMarkdown": "I'd start from what contiguous allocation is genuinely good at — it's the fastest possible layout for both sequential and random access, since the directory entry needs only a start block and a length, and any offset is `start + offset/blocksize`. The problem is what happens over the file system's lifetime, not on day one.\n\nAs files are created, resized, and deleted, free space fragments into a scatter of small gaps. Eventually you can have gigabytes of total free space but no single run long enough for a new file, or long enough for an existing file to grow in place — you'd have to relocate the whole file to a bigger free run, which is expensive and disruptive to any process with it open.\n\nThis is exactly the trade-off indexed allocation was built to break: it gives up the pure-contiguous best case in exchange for never needing a single unbroken run, at the cost of one extra lookup through an index block. Contiguous allocation survives today mainly on read-only or write-once media — CDs, boot partitions — where files are written once and never resized.\n\n**Testing:** whether you understand fragmentation as a lifecycle problem, not a static one, and can explain why the fix costs something.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why contiguous allocation lost"
+    },
+    {
+      "id": "file-allocation-methods-iq3",
+      "question": "How would you design the block-pointer structure for a file system that needs to handle mostly tiny files but occasionally a multi-gigabyte one?",
+      "answerMarkdown": "I'd reach for exactly the combined scheme Unix inodes use, and explain why each piece exists. Reserve a small number of **direct pointers** — say 12 — right in the inode, pointing straight at data blocks. Every file under roughly 12 blocks resolves in a single lookup: read the inode, follow a pointer, done.\n\nFor the rare large file, add one **single-indirect** pointer (to a block full of more pointers), one **double-indirect** (a block of pointers to single-indirect blocks), and optionally a **triple-indirect**. Each level multiplies the addressable range by roughly the number of pointers that fit in a block — with 4KB blocks and 4-byte pointers, that's about 1024x per level, so triple-indirect alone reaches into the terabytes.\n\nThe design bet is deliberate: instrument for the common case (small files, one hop) and let the rare case (huge files) pay for extra indirection, rather than making every file pay a fixed multilevel-index cost regardless of size. I'd flag the known weakness too — this scheme is worse for huge files with heavy random writes than an extent-based layout, which is why modern file systems like ext4 layer extents on top of essentially the same inode structure.\n\n**Testing:** whether you can reconstruct a real design (not just recite it) and reason about its cost trade-off.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Designing the combined indexing scheme"
+    }
+  ]
+}

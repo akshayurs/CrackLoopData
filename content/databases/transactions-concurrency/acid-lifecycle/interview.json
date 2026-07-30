@@ -1,0 +1,37 @@
+{
+  "topicId": "acid-lifecycle",
+  "interviewQuestions": [
+    {
+      "id": "acid-lifecycle-iq1",
+      "question": "What does ACID actually guarantee, and can you give an example of each property?",
+      "answerMarkdown": "I'd anchor each letter to a failure mode it prevents, using a $100 transfer from account A to B as the running example. **Atomicity** means the debit and credit happen together or not at all — a crash between them never leaves money missing. **Consistency** means the transaction moves the database from one valid state to another: total balance across A and B is unchanged, and every declared constraint still holds. **Isolation** means a concurrent read of A and B never observes the moment where A is debited but B hasn't been credited yet. **Durability** means once the bank shows a confirmation, that fact survives a crash a second later — the commit record was fsync'd, not sitting only in memory.\n\nI'd also flag that consistency is the odd one out: the engine only enforces constraints you actually declare, so \"consistency\" is a shared contract between the database and the application, not something the engine gives you for free like the other three.\n\n**Testing:** whether you can explain each property in terms of a concrete failure it prevents, not just recite the acronym.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "ACID fundamentals"
+    },
+    {
+      "id": "acid-lifecycle-iq2",
+      "question": "What actually happens under the hood when a transaction commits?",
+      "answerMarkdown": "I'd walk through it as a sequence rather than a black box. While the transaction runs, its writes go into in-memory structures — dirty pages in the buffer pool, plus a write-ahead log record for each change. On `COMMIT`, the engine writes a commit record to the log and, critically, calls `fsync` to force that log record onto durable storage before it tells the client the commit succeeded. The actual data pages can be flushed to disk later, asynchronously — that's safe because the log has enough information to redo the change on recovery if the page write hasn't happened yet.\n\nConcretely: Postgres and InnoDB both use this write-ahead-log-first approach, and both let you trade durability for throughput — `synchronous_commit=off` in Postgres, or `innodb_flush_log_at_trx_commit=2` in MySQL — by skipping or delaying that fsync, at the cost of losing the last window of commits (often under a second) on a crash.\n\n**Testing:** whether you know commit means \"log record is durable,\" not \"data pages are on disk,\" and that this distinction is a real, commonly tuned trade-off.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Commit internals"
+    },
+    {
+      "id": "acid-lifecycle-iq3",
+      "question": "You find a transaction that's been open for 20 minutes in production, and writes to that table are backing up. How do you diagnose and fix it?",
+      "answerMarkdown": "I'd start by identifying the actual session: in Postgres, `SELECT * FROM pg_stat_activity WHERE state != 'idle' ORDER BY xact_start` surfaces long-running transactions and their `wait_event`; in MySQL, `information_schema.innodb_trx` plus `SHOW ENGINE INNODB STATUS` shows the same. I'd check whether it's actively running a query, idle-in-transaction waiting on the application, or blocked waiting on a lock itself.\n\nThe common root cause is application code that opened a transaction, then made a slow external call (an API, a queue publish) or forgot to commit on an error path — the database side has been idle the whole time, just holding locks and, in Postgres, pinning the vacuum horizon. I'd kill the offending session (`pg_terminate_backend`) to unblock production immediately, then fix the code to move external calls outside the transaction boundary and add a statement/idle-in-transaction timeout (`idle_in_transaction_session_timeout` in Postgres) so this can't recur silently.\n\n**Testing:** whether you can name the actual diagnostic queries, not just \"look at logs,\" and whether your fix addresses the root cause instead of only the symptom.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging a stuck transaction"
+    },
+    {
+      "id": "acid-lifecycle-iq4",
+      "question": "Your service needs to update two different microservices' databases as part of one business operation. Is that still an ACID transaction, and how would you approach it?",
+      "answerMarkdown": "No — ACID as classically defined is a single-node guarantee about one database's own data; it doesn't automatically extend across two separate databases owned by two services. I'd say that plainly, because reaching for \"just make it a distributed transaction\" without acknowledging the cost is a common mistake.\n\nThe two real options are **two-phase commit**, where a coordinator asks both databases to prepare, then commits both only if both agreed — but this blocks on the slowest participant and a coordinator crash mid-protocol can leave participants stuck holding locks — or a **saga**: a sequence of local transactions, each with a compensating action to undo it if a later step fails. Sagas give up true atomicity in favor of eventual consistency, so I'd design the operation to be safe if it's observed mid-flight, and make every compensating action idempotent since retries are inevitable.\n\nFor most microservice architectures I'd default to a saga with clear compensations over 2PC, since 2PC's blocking behavior and operational fragility rarely justify its stronger guarantee at that scale.\n\n**Testing:** whether you recognize ACID doesn't cross a service boundary for free, and can reason concretely about the 2PC-vs-saga trade-off rather than naming both without a recommendation.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "ACID across service boundaries"
+    }
+  ]
+}

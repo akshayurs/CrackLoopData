@@ -1,0 +1,37 @@
+{
+  "topicId": "isolation-levels",
+  "interviewQuestions": [
+    {
+      "id": "isolation-levels-iq1",
+      "question": "What's the difference between a dirty read, a non-repeatable read, and a phantom read?",
+      "answerMarkdown": "I'd define each around what changes between two reads in the same transaction. A **dirty read** is reading data another transaction wrote but hasn't committed — if that transaction rolls back, you read something that never officially existed. A **non-repeatable read** is reading the *same row* twice and getting a different value, because another transaction updated and committed it in between. A **phantom read** is running the *same range query* twice and getting a different set of matching rows, because another transaction inserted or deleted a row that now satisfies the condition.\n\nThe key distinction between the last two: non-repeatable read is about one row's value changing; phantom is about the *set* of rows changing. That distinction matters practically — preventing a non-repeatable read needs a lock or snapshot on a specific row, while preventing a phantom needs a lock or snapshot over a *range*, which is why databases implement gap locks or predicate locks specifically for phantoms.\n\n**Testing:** whether you can tell these apart precisely enough to reason about which locking mechanism prevents which one.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "The three classic anomalies"
+    },
+    {
+      "id": "isolation-levels-iq2",
+      "question": "What isolation level does your production database default to, and have you ever been bitten by it?",
+      "answerMarkdown": "I'd answer with the actual default for whatever engine is in play — Postgres and Oracle default to Read Committed, MySQL/InnoDB defaults to Repeatable Read — because assuming a database is 'safe by default' is exactly the trap this question probes.\n\nA concrete story carries more weight than the definition: a background job read an inventory count, computed a new value in application code, and wrote it back, while a concurrent purchase did the same — both read the same starting count, so one decrement was lost and the on-hand count drifted from reality over weeks. Read Committed didn't catch it because there was no lock held between the read and the write; the fix was to move the arithmetic into the database as a single atomic `UPDATE inventory SET qty = qty - 1 WHERE qty >= 1`, so the read-modify-write became one statement instead of two.\n\nI'd close by noting the general lesson: any read-then-write-in-app-code pattern is a lost-update risk regardless of isolation level, unless you either lock the row explicitly or push the arithmetic into the database.\n\n**Testing:** whether you actually know your production default and have internalized it as an operational fact, not just a definition to recite.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Defaults and lost updates in production"
+    },
+    {
+      "id": "isolation-levels-iq3",
+      "question": "Explain write skew and why Serializable is the only level that catches it.",
+      "answerMarkdown": "I'd use the on-call doctors example: a hospital rule requires at least one doctor on call, two doctors are on call, each independently checks 'is someone else still on call?', both see yes, both remove themselves — now nobody's on call, and the invariant silently breaks with no error from the database.\n\nThe mechanism that misses it: snapshot isolation (what Postgres calls Repeatable Read) only tracks conflicts between transactions that **write** the same row. Here, each transaction reads the *other* doctor's row but only writes its *own* row — no write-write conflict exists, so nothing looks wrong to a conflict detector that only watches writes.\n\nTrue Serializable — Postgres's actual `SERIALIZABLE` level, implemented via serializable snapshot isolation — tracks read-write dependencies as well, so it can detect that transaction A's write invalidated an assumption transaction B's write depended on, and aborts one of them with a serialization failure the application must retry.\n\nI'd flag the practical cost: catching write skew this way means your application needs retry logic for serialization failures, which many codebases don't have — so this anomaly often lives silently in production until someone notices the invariant it protects has quietly broken.\n\n**Testing:** whether you understand that isolation-level naming across vendors is inconsistent, and that 'looks serializable' and 'is serializable' are different claims.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Write skew deep dive"
+    },
+    {
+      "id": "isolation-levels-iq4",
+      "question": "How would you decide which isolation level to use for a given piece of code, rather than defaulting to Serializable everywhere?",
+      "answerMarkdown": "I'd start from the specific anomaly the operation is actually exposed to, not from a blanket preference. For a simple single-row read or write with no cross-row invariant, Read Committed is fine and cheapest — most of an application's queries live here. For a report or analytics job that needs one consistent view across many rows read over time, Repeatable Read gives a stable snapshot without extra locking cost. Serializable is reserved for the narrow case where a multi-row business invariant is enforced by concurrent writers who each only touch their own row — the write-skew shape — and only when I've also built retry logic for the resulting serialization failures.\n\nFor high-contention counters or inventory, I'd avoid Serializable entirely and instead use an atomic single statement (`UPDATE inventory SET qty = qty - 1 WHERE qty >= 1`) or `SELECT ... FOR UPDATE`, because Serializable under heavy contention on the same few rows produces an abort storm that's worse than just locking directly.\n\nI'd close by naming the failure mode I'm actually trying to avoid for the code in front of me — that's what distinguishes a real decision from picking a level because it sounds safest.\n\n**Testing:** whether you can map a concrete scenario to a specific anomaly and a specific, load-aware mitigation, instead of reflexively reaching for the strictest level.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Choosing an isolation level"
+    }
+  ]
+}

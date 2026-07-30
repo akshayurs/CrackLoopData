@@ -1,0 +1,161 @@
+{
+  "id": "serializability",
+  "title": "Serializability & Recoverability",
+  "area": "databases",
+  "group": "transactions-concurrency",
+  "order": 5,
+  "slug": "serializability",
+  "summary": "The formal correctness targets behind every isolation level: what makes a schedule serializable, and what makes it safe to recover from an abort.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "serializability-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every isolation level and locking protocol in this group exists to approximate one formal goal: run transactions concurrently, but produce a result **equivalent to running them one at a time in some order**. That property is **serializability**.\n\nThis topic gives the formal vocabulary — schedules, conflict serializability, precedence graphs, and recoverability — that lets you *prove* a concurrency control scheme is correct instead of just trusting it. It's the theory underneath [2PL](locking) and [MVCC](mvcc-deadlocks), and it's where staff-level interviews go when they want to check you understand the *why*, not just the tool names.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "serializability-s02",
+      "order": 2,
+      "sectionTitle": "Serial vs serializable schedules",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **schedule** is the actual interleaved order in which operations from multiple transactions execute. A **serial schedule** runs transactions one after another with zero overlap — T1 fully completes, then T2 starts. Serial schedules are trivially correct (nothing can interleave badly) but give up all concurrency.\n\nA **serializable schedule** is an interleaved schedule whose *result* — the final database state and everything each transaction read — is identical to some serial schedule's result. The whole point of concurrency control is producing serializable schedules without paying the throughput cost of actually running everything serially. \"Serializable\" describes the *outcome*; it says nothing about how much the operations actually overlapped in time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "serializability-s02-q1"
+      ]
+    },
+    {
+      "id": "serializability-s03",
+      "order": 3,
+      "sectionTitle": "Conflict serializability and the precedence graph",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Checking every possible serial ordering for equivalence is impractical, so databases use a computable proxy: **conflict serializability**. Two operations *conflict* if they're from different transactions, touch the same data item, and at least one is a write (read-read pairs never conflict). A schedule is conflict-serializable if you can reorder its non-conflicting operations to turn it into some serial schedule without changing the relative order of any conflicting pair.\n\nThe practical test: build a **precedence graph** — one node per transaction, an edge from Ti to Tj if any operation of Ti conflicts with, and comes before, an operation of Tj. **The schedule is conflict-serializable if and only if this graph has no cycle.** This is exactly the same graph-cycle idea as the deadlock wait-for graph, applied to conflicts instead of lock waits — and it's precisely what 2PL is designed to guarantee never has a cycle.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "serializability-s03-q1"
+      ]
+    },
+    {
+      "id": "serializability-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: precedence graph with and without a cycle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Two precedence graphs: one acyclic and conflict-serializable, one with a cycle and not conflict-serializable](assets/precedence-graphs.svg)\n\nThe left graph can be topologically sorted into T1, T2, T3 — an equivalent serial order exists, so the interleaved schedule that produced it was safe. The right graph's cycle means no such ordering exists: T1 must come before T2 which must come before T3 which must come before T1, which is impossible — this schedule is not conflict-serializable and, if it happened, represents a real correctness bug.",
+      "assets": [
+        {
+          "alt": "Two precedence graphs: one acyclic and conflict-serializable, one with a cycle and not conflict-serializable",
+          "path": "assets/precedence-graphs.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "serializability-s05",
+      "order": 5,
+      "sectionTitle": "Recoverable, cascadeless, and strict schedules",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Serializability is about the *final result* being correct; **recoverability** is a separate, narrower question: can the database always correctly handle an abort? A schedule is **recoverable** if, whenever transaction Tj reads a value written by Ti, Tj doesn't commit until Ti does — otherwise, if Ti later aborts, Tj has already committed based on data that officially never existed, and there's no way to undo that.\n\nA **cascadeless** schedule goes further: Tj isn't even allowed to *read* a value from Ti until Ti has committed — this avoids **cascading aborts**, where Ti's abort forces Tj to abort too (because it read Ti's now-invalid write), which can force Tk to abort because it read from Tj, and so on. A **strict** schedule is the strongest of the three: Tj can't even read *or write* a data item Ti has touched until Ti commits or aborts — this is exactly what strict 2PL and MVCC's snapshot mechanism both deliver, which is why cascading aborts essentially never happen in practice on modern engines.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "serializability-s05-q1"
+      ]
+    },
+    {
+      "id": "serializability-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: cascading aborts from reading uncommitted data",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If T1 aborts, only T1's work is lost — everything else is unaffected.\"\n\n**Why it's wrong:** in a schedule that isn't cascadeless, any transaction that read a value T1 wrote before T1 aborted must *also* abort, since it built on data that turned out to be invalid — and any transaction that read from *that* transaction must abort too. In the worst case, one abort ripples through a long chain of transactions, undoing far more committed-looking work than the original failure warranted, and by the time you're debugging it, the chain can be hard to reconstruct.\n\n**Correct model:** this is precisely why every production engine enforces strict schedules by default (via strict 2PL or MVCC) rather than merely recoverable ones — cascading aborts are a theoretical possibility you should be able to explain, but in practice a symptom of a misconfigured or custom concurrency scheme, not something you should ever observe on Postgres or InnoDB running with default settings.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "serializability-s06-q1"
+      ]
+    },
+    {
+      "id": "serializability-s07",
+      "order": 7,
+      "sectionTitle": "Compare: conflict serializability vs view serializability",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Conflict serializability | View serializability |\n|---|---|---|\n| Definition | Reorderable into a serial schedule without swapping any conflicting pair | Produces the same reads and final writes as some serial schedule, even if operations were reordered |\n| Checkable how | Precedence graph acyclicity — fast, mechanical | No efficient general algorithm — NP-hard in general |\n| Relationship | Every conflict-serializable schedule is view-serializable | Some view-serializable schedules are *not* conflict-serializable (they involve \"blind writes\" no one ever reads) |\n| What databases actually use | This — it's what 2PL and precedence-graph checking implement | Essentially never — too expensive to check in practice |\n\n**How to decide:** you won't choose between these in practice — real systems only implement conflict serializability — but knowing view serializability exists (and is strictly more permissive but computationally impractical) is what separates \"I read a textbook chapter\" from \"I understand why 2PL is conservative.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "serializability-s07-q1"
+      ]
+    },
+    {
+      "id": "serializability-s08",
+      "order": 8,
+      "sectionTitle": "How this connects back to isolation levels",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It's worth being explicit about the layering across this whole group: **serializability** is the formal correctness goal. **The isolation levels** are named points on a spectrum of how much of that goal an engine actually enforces by default, each defined by which anomalies (dirty read, non-repeatable read, phantom, write skew) it still permits. **2PL and MVCC** are the two real mechanisms engines use to actually deliver a given isolation level's guarantee.\n\nSo \"Serializable isolation\" isn't a fourth, separate concept — it's the isolation level that actually achieves true serializability, implemented via either rigorous 2PL (locking-based) or serializable snapshot isolation (Postgres's MVCC-based approach, which adds read-write conflict tracking on top of plain snapshot isolation specifically to catch write skew). Every weaker level is a deliberate, named relaxation of this same target for more throughput.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "serializability-s09",
+      "order": 9,
+      "sectionTitle": "Why theory matters when debugging a production anomaly",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The payoff of this formal vocabulary shows up during an actual incident. Given a confusing sequence of reads and writes from a production bug report, a precedence graph lets you *prove* whether the observed behavior was even possible under the isolation level in use, rather than guessing. If the graph you construct from the observed reads/writes has a cycle, and the transactions were supposedly running under a level that guarantees no cycles, you've just proven either a bug in the engine (exceedingly rare) or — far more likely — a misunderstanding of what that isolation level actually promises (very common, and usually the real answer).\n\nThis is the difference between a senior engineer who says \"that shouldn't be possible\" and one who can actually construct the argument for *why* it shouldn't be possible, and therefore knows exactly where to look when it happens anyway.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "serializability-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming recoverable means safe to use",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The schedule is recoverable, so we're fine — commits will always be consistent.\"\n\n**Why it's wrong:** recoverable only guarantees commit *order* respects dependency order (Tj can't commit before Ti if it read Ti's write) — it says nothing about preventing cascading aborts before that point, and nothing at all about whether the schedule is even conflict-serializable in the first place. A schedule can be recoverable, avoid crashing on abort, and *still* produce a result no serial execution could ever produce — recoverability and serializability are answering two entirely different questions.\n\n**Correct model:** treat these as independent axes to check: is it serializable (is the *result* correct), and separately, is it at least recoverable, ideally strict (is it *safe to abort* without cascading)? A system needs both, and satisfying one says nothing about the other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "serializability-s10-q1"
+      ]
+    }
+  ]
+}

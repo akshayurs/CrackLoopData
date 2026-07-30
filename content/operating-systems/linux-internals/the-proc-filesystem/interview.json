@@ -1,0 +1,37 @@
+{
+  "topicId": "the-proc-filesystem",
+  "interviewQuestions": [
+    {
+      "id": "the-proc-filesystem-iq1",
+      "question": "How would you find which files a running process has open, without stopping it?",
+      "answerMarkdown": "I'd go straight to `/proc/<pid>/fd/` — it's a directory with one symlink per open file descriptor, and each symlink points at exactly what that descriptor refers to. Running `ls -l /proc/<pid>/fd` shows regular files by their real path, sockets as `socket:[inode]`, and pipes as `pipe:[inode]`. None of this requires pausing the process, attaching a debugger, or having its source — it's a plain file read against a live kernel data structure.\n\nIf I need more than just the list — like which remote host a socket is connected to — I'd cross-reference the inode number from `socket:[inode]` against `/proc/net/tcp` (or `/proc/net/tcp6`), which lists active connections keyed by the same inode. In practice, though, I'd usually just run `lsof -p <pid>`, since that's exactly what lsof automates on top of these same files — I'd only drop to raw /proc if lsof wasn't installed or I wanted to script something lightweight without an external dependency.\n\nA leaking connection pool shows up here concretely: the fd count under that directory climbing steadily over a few `ls | wc -l` samples confirms the leak before I've touched the running service at all.\n\n**Testing:** whether you know the underlying mechanism, not just the lsof command name — interviewers often follow up asking what lsof is doing internally.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Inspecting open files live"
+    },
+    {
+      "id": "the-proc-filesystem-iq2",
+      "question": "What is /proc, and why does the kernel expose state as files instead of just a set of system calls?",
+      "answerMarkdown": "/proc is a pseudo-filesystem — mounted like any other filesystem, but with no backing storage. Every read against a file under it triggers the kernel to generate that content on the spot from live internal state, so nothing is actually stored on disk.\n\nExposing it as files rather than a bespoke set of system calls is a deliberate design choice: `open`/`read`/`close` is the single most universal interface in Unix, so any language, any shell script, any tool that can read a file can now introspect kernel and process state with zero new API to learn. It's also why `/proc` composes so well with existing tools — `grep`, `awk`, `watch -n 1 cat /proc/...` all just work, for free, on data that would otherwise need a dedicated client library.\n\nThe cost is that some of this is more expensive than a plain file read looks like — a few /proc files (like `smaps`) require real kernel computation on every read — but for the vast majority of use cases, the simplicity wins decisively over a purpose-built syscall interface.\n\n**Testing:** whether you can explain the design trade-off (universality of the file interface vs. the cost of the info being computed live), not just recite the definition.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "What /proc is and why it exists"
+    },
+    {
+      "id": "the-proc-filesystem-iq3",
+      "question": "A process's memory usage keeps climbing and you suspect a leak. How would you use /proc to confirm it before restarting the service?",
+      "answerMarkdown": "I'd start with `/proc/<pid>/status` and watch `VmRSS` — the actual resident memory — over a few samples a minute or two apart, rather than relying on a single snapshot, since a genuine leak shows monotonic growth while normal usage fluctuates and plateaus. I'd cross-check against `/proc/meminfo`'s `MemAvailable` to know how much runway is actually left before the box hits memory pressure or the OOM killer gets involved.\n\nIf RSS is climbing, the next question is what's growing: I'd check `/proc/<pid>/maps` for a ballooning number of anonymous `[heap]`-backed regions (native memory leak) versus one specific mapped file growing (a memory-mapped file being appended without bound). I'd also check `/proc/<pid>/fd | wc -l` in the same pass, since an unbounded file-descriptor leak often accompanies a memory leak in the same buggy code path — a connection pool that never releases sockets tends to leak both together.\n\nOnly once I have this evidence would I decide: restart now to relieve pressure if the box is close to OOM, or, if there's runway, attach `strace`/a heap profiler for root cause first, since restarting destroys the exact state I'd need to diagnose it.\n\n**Testing:** whether you build a diagnosis from cheap, non-invasive evidence before reaching for invasive tools or a restart.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing a memory leak via /proc"
+    },
+    {
+      "id": "the-proc-filesystem-iq4",
+      "question": "Why can polling /proc heavily across many processes become a real performance problem, and how would you design a monitoring agent to avoid it?",
+      "answerMarkdown": "The mistake is treating every /proc read as free because it looks like a file read. Most /proc content isn't stored — the kernel computes it fresh on each read — and some files are genuinely expensive to generate, `smaps` (detailed per-mapping memory breakdown) being the classic example. An agent that polls `smaps` for every process on the box once a second is asking the kernel to do that expensive computation, for every process, every second — that's real, measurable CPU, and at scale it can itself become the thing paging on-call about.\n\nI'd design the agent around a few rules: use the cheapest file that answers the question — `status`'s `VmRSS` instead of `smaps` unless you need the per-mapping detail; poll at an interval matched to how fast the metric actually needs to be (once every 10–15 seconds is usually enough for capacity dashboards, not once a second); and batch or stagger reads across processes rather than hammering all of them in the same tick, to smooth the CPU cost over time instead of spiking it.\n\nI'd also budget for scale explicitly: a box running a few processes can get away with anything, but the same polling pattern against thousands of containers is a different cost profile entirely.\n\n**Testing:** whether you think about /proc reads as having real, variable cost at scale, not just as syntactic file access.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Cost-aware monitoring design"
+    }
+  ]
+}

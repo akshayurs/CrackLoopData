@@ -1,0 +1,169 @@
+{
+  "id": "dimensional-modeling",
+  "title": "Dimensional Modeling",
+  "area": "databases",
+  "group": "data-warehousing",
+  "order": 2,
+  "slug": "dimensional-modeling",
+  "summary": "The warehouse modeling technique interviewers actually ask about — facts, dimensions, grain, star vs snowflake schemas, and how to handle a dimension that changes over time.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "dimensional-modeling-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[OLTP databases](oltp-vs-olap) model data to make writes safe and consistent — normalized tables, minimal duplication. Warehouses model data for the opposite goal: make read-heavy aggregation **fast and intuitive** for analysts writing SQL. That different goal needs a different modeling technique — **dimensional modeling**.\n\nThe core idea is deceptively simple: separate **facts** (the numbers you're measuring — a sale, a click, a shipment) from **dimensions** (the context you slice those numbers by — which customer, which product, which date). This topic covers that split, the star and snowflake schema shapes it produces, and the single most common mistake — getting the fact table's grain wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "dimensional-modeling-s02",
+      "order": 2,
+      "sectionTitle": "Facts vs dimensions; grain",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **fact table** holds the measurable events you want to analyze — each row is one occurrence, with numeric measures (amount, quantity, duration) and foreign keys pointing to the dimensions that give it context. A **dimension table** holds the descriptive attributes you slice and filter facts by — a `customers` dimension has name, signup date, region; a `products` dimension has category, price, brand.\n\nThe **grain** of a fact table is the precise definition of what one row represents — \"one line item on one order,\" not \"one order\" (which would bundle multiple products into one row and make per-product analysis impossible). Grain is the single most important decision in dimensional modeling: every measure and every dimension key in the fact table must be true at that exact grain, or the numbers silently become wrong when someone aggregates them.\n\nGet the grain right first, before adding a single column — it's far harder to fix after the warehouse is in production and dashboards are built on top of it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "dimensional-modeling-s02-q1"
+      ]
+    },
+    {
+      "id": "dimensional-modeling-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: star schema vs snowflake schema",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Star schema with flat dimensions vs snowflake schema with dim_product normalized further](assets/star-vs-snowflake.svg)\n\nA **star schema** keeps every dimension as one flat, denormalized table directly joined to the fact table — simple joins, fast queries, some redundant data (category name repeated on every product row). A **snowflake schema** normalizes dimensions further into sub-tables, trading query simplicity for storage efficiency and stricter data integrity.\n\nMost analytics engines and BI tools are optimized for the star shape's simple joins, which is why star schema is the default recommendation unless there's a specific reason to normalize further.",
+      "assets": [{"alt": "Star schema with flat dimensions vs snowflake schema with dim_product normalized further", "path": "assets/star-vs-snowflake.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "dimensional-modeling-s04",
+      "order": 4,
+      "sectionTitle": "Slowly changing dimensions (Type 1/2/3)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Dimension attributes change over time — a customer moves cities, a product gets recategorized — and a **slowly changing dimension (SCD)** strategy decides what the warehouse does about it. **Type 1**: overwrite the old value, keeping no history — simplest, but you lose the ability to ask \"what region was this sale attributed to at the time it happened.\" **Type 2**: insert a new row for the changed dimension record, with effective-date columns marking which row was \"current\" during which period — preserves full history, but the dimension table grows and every fact needs to reference the *version* of the dimension row valid when the fact occurred, not just the current one.\n\n**Type 3**: add a new column to track the previous value alongside the current one (e.g. `current_region` and `previous_region`) — a middle ground, but only tracks one change back, and gets awkward with attributes that change more than once.\n\nType 2 is the one interviewers ask about most, because it's the one that actually makes historical reporting correct — and it's also the one most commonly implemented wrong (see the numbers slide below).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "dimensional-modeling-s04-q1"
+      ]
+    },
+    {
+      "id": "dimensional-modeling-s05",
+      "order": 5,
+      "sectionTitle": "Compare: star (denormalized) vs snowflake (normalized)",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Star schema | Snowflake schema |\n|---|---|---|\n| Dimension structure | Flat, denormalized | Further normalized into sub-tables |\n| Joins per query | Fewer — fact joins directly to each dimension | More — some dimensions need multi-hop joins |\n| Storage | More redundancy (e.g. category name repeated per product) | Less redundancy |\n| Query performance | Generally faster, simpler for BI tools to generate | Can be slower due to extra joins |\n| Data integrity | Update anomalies possible (fix a category name in many places) | Cleaner — one place to update |\n\n**How to decide:** default to star unless a dimension is large and changes often enough that update anomalies from denormalization become a real operational problem — most modern column-store warehouses are cheap enough on storage that snowflaking purely to save space rarely pays for the extra join complexity.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "dimensional-modeling-s05-q1"
+      ]
+    },
+    {
+      "id": "dimensional-modeling-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: wrong or ambiguous fact-table grain",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"We'll build the fact table at the order level — one row per order — since that matches how the business talks about sales.\"\n\n**Why it's wrong:** an order can contain multiple line items, each a different product, quantity, and price. If the grain is \"one order\" but the fact table also tries to store a `product_id` foreign key, that key is ambiguous — which of the order's several products does it refer to? Analysts either get wrong numbers (silently picking one product per order) or the schema forces awkward workarounds like comma-separated product lists, which breaks every dimensional join.\n\n**Correct model:** the grain must be the *finest* level any required analysis needs — here, one row per order line item, with the order itself becoming a degenerate dimension (an order ID stored directly on the fact table with no separate dimension table, since it has no other descriptive attributes). You can always aggregate line items up to the order level in a query; you can never disaggregate an order-level row back down to individual products once the detail is gone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "dimensional-modeling-s06-q1"
+      ]
+    },
+    {
+      "id": "dimensional-modeling-s07",
+      "order": 7,
+      "sectionTitle": "Surrogate keys and why fact tables don't use natural keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Dimension tables in a warehouse almost always use a **surrogate key** — a warehouse-generated integer, unrelated to any business identifier — as their primary key, rather than the natural key from the source system (like a `customer_id` from the OLTP database). Fact tables then reference dimensions by surrogate key, not natural key.\n\nThis matters directly for Type 2 SCDs: a single natural-key customer can have multiple dimension rows over time (one per historical version), each needing its own surrogate key, so a fact can point to the *exact version* of the customer record that was true when the fact occurred — something a natural key alone can't express, since it's the same value across all versions.\n\nSurrogate keys also insulate the warehouse from source-system changes (a merger changing customer ID formats) and let you cleanly represent a fact with an unknown or not-yet-arrived dimension value using a reserved surrogate key like -1, rather than a null that breaks joins.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "dimensional-modeling-s08",
+      "order": 8,
+      "sectionTitle": "Numbers: how big does an SCD Type 2 dimension actually get?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "SCD Type 2 growth is easy to underestimate. Consider a `dim_customer` table for 10 million customers, where the average customer's address, tier, or contact info changes **twice a year**. After 3 years, that's roughly 10 million x (1 original + 6 changes) = **70 million rows** — a 7x blow-up from the naive \"one row per customer\" assumption, all to preserve accurate historical attribution.\n\nThis is exactly why production Type 2 implementations use **effective-date ranges** (`valid_from`, `valid_to`, and a `is_current` flag) rather than, say, one column per historical value — it keeps each version as a normal row that ordinary SQL can filter and join against, and lets an index on `is_current` make \"give me the current version of every customer\" a fast, common-case query even as the table grows.\n\nInterview signal: naming that SCD Type 2 has a real storage and query-pattern cost, and that the effective-date-range design is what keeps that cost manageable, shows deeper understanding than just \"Type 2 keeps history.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "dimensional-modeling-s08-q1"
+      ]
+    },
+    {
+      "id": "dimensional-modeling-s09",
+      "order": 9,
+      "sectionTitle": "Junk dimensions and factless fact tables",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two patterns experienced warehouse designers reach for that a fresher rarely knows. A **junk dimension** bundles several small, low-cardinality flags (`is_gift_wrapped`, `payment_method`, `shipping_speed`) into one combined dimension table instead of adding a separate foreign key column per flag to the fact table — it keeps the fact table narrower and avoids a proliferation of tiny one-off dimensions.\n\nA **factless fact table** records that an event happened, with no numeric measure at all — just foreign keys to the relevant dimensions. \"Which students attended which class on which day\" has no natural number to measure; the fact *is* the combination of student, class, and date occurring together. You still count rows to answer \"how many students attended,\" you just don't need a measure column to do it.\n\nBoth patterns solve the same underlying problem: not every real-world fact fits the \"numeric measure plus a few dimension keys\" template cleanly, and forcing it to often produces an awkward or misleading schema.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "dimensional-modeling-s10",
+      "order": 10,
+      "sectionTitle": "Staff-level nuance: modeling for the questions you don't have yet",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer models the warehouse for the dashboard that's been requested. A staff-level answer models the grain fine enough to answer questions **nobody has asked yet**, because re-grain-ing a production fact table after dashboards depend on it is one of the most expensive mistakes in warehouse design — every downstream query, dashboard, and scheduled report has to be rewritten.\n\nConcretely, this means asking during design: \"if the business later wants to analyze by hour instead of by day, does today's grain support that, or did we already aggregate the hour away?\" Choosing the line-item grain from the pitfall slide even when today's only request is order-level totals is a real example of this — it costs a bit more storage and a `GROUP BY` at query time, in exchange for never having to re-ingest history when someone eventually asks a more granular question.\n\nThe interview-differentiating move: explicitly reasoning about grain against plausible *future* questions, not just the current dashboard's requirements, and naming that re-grain-ing later usually means reprocessing all historical source data, not just changing a query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "dimensional-modeling-s10-q1"
+      ]
+    },
+    {
+      "id": "dimensional-modeling-s11",
+      "order": 11,
+      "sectionTitle": "Recap: the dimensional modeling checklist",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Decision | Default | Deviate when |\n|---|---|---|\n| Grain | The finest level any known or plausible future question needs | Storage cost is genuinely prohibitive and coarser grain is defensible long-term |\n| Schema shape | Star (denormalized dimensions) | A dimension is large, changes often, and update anomalies are a real operational cost |\n| Dimension history | SCD Type 2 for anything historically reported on | Type 1 for attributes where history genuinely doesn't matter (e.g. a display preference) |\n| Keys | Surrogate keys on dimensions, referenced by fact tables | Rarely — natural keys mostly used only as an attribute, not the join key |\n\nEvery row in this table is a real decision with a real cost either way — the skill isn't memorizing the defaults, it's knowing which specific project constraint should make you deviate from them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

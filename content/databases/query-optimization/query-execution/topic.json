@@ -1,0 +1,161 @@
+{
+  "id": "query-execution",
+  "title": "Query Execution Pipeline",
+  "area": "databases",
+  "group": "query-optimization",
+  "order": 1,
+  "slug": "query-execution",
+  "summary": "What actually happens between typing a SQL statement and getting rows back — parse, rewrite, optimize, execute — and how to read the plan that results.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "query-execution-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "SQL is **declarative** — you say *what* you want, not *how* to get it. Between your text and the rows you get back, the database runs a four-stage pipeline: **parse** the text into a structure, **rewrite** it into a normalized logical form, **optimize** by choosing a concrete execution strategy, then **execute** that strategy.\n\nUnderstanding this pipeline is what turns `EXPLAIN` output from mysterious noise into a readable story — every line in a plan corresponds to a decision this pipeline made, and query tuning is really the art of understanding and occasionally overriding those decisions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "query-execution-s02",
+      "order": 2,
+      "sectionTitle": "Diagram: parse to rewrite to optimize to execute",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Pipeline from SQL text through parser, rewriter, optimizer, to executor](assets/query-execution-pipeline.svg)\n\nEach box's output is the next box's input: the parser only checks grammar, the rewriter only restructures logic (it doesn't yet know costs), and only the optimizer consults statistics to pick concrete algorithms — that ordering is why a syntactically perfect, logically correct query can still get a terrible physical plan if statistics are stale.",
+      "assets": [
+        {
+          "alt": "Pipeline from SQL text through parser, rewriter, optimizer, to executor",
+          "path": "assets/query-execution-pipeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": [
+        "query-execution-s02-q1"
+      ]
+    },
+    {
+      "id": "query-execution-s03",
+      "order": 3,
+      "sectionTitle": "Parsing: syntax and semantic checks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **parser** checks that your SQL is grammatically valid and turns it into a syntax tree, then a semantic-analysis pass resolves every table and column name against the schema (catalog), checks types, and expands `SELECT *` into the actual column list. If a table doesn't exist or a column is ambiguous across a join, this is the stage that errors out — before any thought is given to *how* to run the query.\n\nThis stage produces no notion of cost or strategy at all; it only answers \"is this a legal, meaningful request against this schema.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "query-execution-s04",
+      "order": 4,
+      "sectionTitle": "Logical vs physical plan",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **logical plan** describes *what* operations the query needs — \"join orders and customers, filter to active customers, aggregate by region\" — without saying how. A **physical plan** picks concrete algorithms and an order for those operations — \"hash-join orders and customers using an index scan on customers, filter with a sequential scan, aggregate with a hash aggregate.\"\n\nThe same logical plan can map to many different physical plans that all return identical results but at wildly different costs — this many-to-one relationship (many physical plans, one correct logical plan) is exactly what the optimizer searches over. This split is also why the same query can run fast on one table's data distribution and slow on another's: the logical plan doesn't change, but the best physical plan does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "query-execution-s04-q1"
+      ]
+    },
+    {
+      "id": "query-execution-s05",
+      "order": 5,
+      "sectionTitle": "The iterator (Volcano) execution model",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Most engines execute a physical plan as a tree of **operators**, each implementing a uniform `next()` interface — this is the classic **Volcano** or **iterator** model. Every operator pulls rows from its children by calling `next()` on them, does its work on each row, and returns one row upward at a time. A `HashJoin` operator calls `next()` on its two child scans, a `Filter` operator calls `next()` on its child and only returns rows that pass, and so on up to the root, which is what actually hands rows back to the client.\n\nThe elegance of this model is composability: any operator can sit above any other operator that produces rows, because they all speak the same `next()` interface — you can stack a `Sort` on top of a `HashJoin` on top of two `IndexScan`s without any operator needing to know what's beneath it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "query-execution-s05-q1"
+      ]
+    },
+    {
+      "id": "query-execution-s06",
+      "order": 6,
+      "sectionTitle": "Pipelining vs materialization of intermediate results",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Some operators can **pipeline** — pass a row upward the instant they produce it, never holding a full intermediate result in memory. A `Filter` or a `NestedLoopJoin`'s outer side can typically pipeline. Others must **materialize** — consume their entire input and build a full intermediate structure before producing even one output row. A `HashJoin`'s build side must see every row of the smaller input before it can start probing; a `Sort` must see every input row before it can emit the first (smallest) one; a blocking aggregate like `SUM` over an entire table must wait for the last row.\n\nMaterializing operators are why a query can appear to \"hang\" with zero output for a while and then stream results quickly — the wait is the build/sort phase; the burst is the pipelined phase after it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "query-execution-s06-q1"
+      ]
+    },
+    {
+      "id": "query-execution-s07",
+      "order": 7,
+      "sectionTitle": "Reading an EXPLAIN plan as a tree",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A plan prints as indented text, but it represents a tree — leaves are table scans, and each node's children are indented further right or shown below it.\n\n```\nHash Join  (cost=45.50..1250.75 rows=5000 width=64)\n  Hash Cond: (o.customer_id = c.customer_id)\n  ->  Seq Scan on orders o  (cost=0.00..980.00 rows=50000 width=32)\n  ->  Hash  (cost=30.00..30.00 rows=1200 width=32)\n        ->  Seq Scan on customers c  (cost=0.00..30.00 rows=1200 width=32)\n```\n\nThe `Hash Join` at the top is the root operator — it's what runs *last*, combining results its children already produced. Its two children (`Seq Scan on orders`, and `Hash` wrapping `Seq Scan on customers`) run *before* it can do any work, since a join needs both its inputs available.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "query-execution-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: reading a plan bottom-up, not top-down",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"The plan is printed top to bottom, so I should read it top to bottom to understand execution order.\"\n\n**Why it's wrong:** the *printing* order is top-down, but *execution* order is bottom-up — the deepest, most-indented nodes (the table scans) run first, and their output flows upward into their parent operators, ending at the root, which is the very first line printed. Reading top to bottom and assuming that's the execution sequence leads people to misdiagnose which part of the query is actually slow — they'll blame the top-line join when the real cost is buried three levels down in a sequential scan.\n\n**Correct model:** find the leaves first (innermost, most-indented lines — usually scans), understand what they cost and return, then trace upward through each parent to see how those results get combined. The single most useful number to hunt for at each level is estimated vs actual row count (next topic covers this signal in depth).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "query-execution-s08-q1"
+      ]
+    },
+    {
+      "id": "query-execution-s09",
+      "order": 9,
+      "sectionTitle": "Where the rewrite stage changes your query before you see it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **rewrite** stage applies logical, cost-independent transformations that are always correct regardless of data — before the optimizer ever thinks about cost. Common rewrites: expanding a view reference into its underlying query (inlining), unnesting a correlated subquery into a join where semantically equivalent, simplifying `WHERE 1=1 AND x > 5` down to `WHERE x > 5`, and pushing a predicate down through a join when it only references one side.\n\nThis matters practically because `EXPLAIN` shows you the plan *after* rewriting — the query you wrote and the query the optimizer actually reasons about can look structurally different, which is why a view-based query's plan can look nothing like the view's own definition when inspected on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "query-execution-s10",
+      "order": 10,
+      "sectionTitle": "Senior nuance: why the pipeline explains query hints and plan stability",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Understanding the pipeline explains why some databases offer **query hints** (`/*+ USE_INDEX(...) */`, `pg_hint_plan`) and why others deliberately don't: a hint is a way to override the optimizer's choice at the physical-plan stage when its cost model gets it wrong — usually due to stale or hard-to-estimate statistics. PostgreSQL's maintainers have historically resisted adding hints, arguing it's better to fix the statistics or the cost model than to let applications freeze in a plan that becomes wrong as data changes; other engines (Oracle, SQL Server) embrace hints as a pragmatic escape hatch.\n\nKnowing which stage a fix belongs to — is this a statistics problem (fix with `ANALYZE`), a rewrite problem (restructure the SQL), or a genuine optimizer cost-model gap (reach for a hint or plan-freezing mechanism) — is what separates \"I added a hint and it got faster\" from actually understanding why.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "query-execution-s10-q1"
+      ]
+    }
+  ]
+}

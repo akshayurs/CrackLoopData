@@ -1,0 +1,185 @@
+{
+  "id": "consensus-transactions",
+  "title": "Consensus & Distributed Transactions",
+  "area": "databases",
+  "group": "distributed-databases",
+  "order": 4,
+  "slug": "consensus-transactions",
+  "summary": "How independent nodes agree on a single value and commit a transaction across machines — quorums, Raft/Paxos-style leader election, two-phase commit, and why sagas exist as its escape hatch.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "consensus-transactions-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every distributed system eventually needs several independent nodes to **agree on one thing** — who the leader is, whether a transaction committed, what the next value in a log is — even though messages can be delayed, dropped, or nodes can crash mid-conversation. That agreement problem is **consensus**, and getting it wrong silently is how you end up with split-brain or a transaction that's committed on one machine and rolled back on another.\n\nThis topic covers the quorum math that underlies consensus (`R + W > N`), how Raft and Paxos actually achieve agreement despite failures, and the two ways to commit a transaction spanning multiple nodes: the classic (and blocking) two-phase commit, and the saga pattern that trades atomicity for availability.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "consensus-transactions-s02",
+      "order": 2,
+      "sectionTitle": "Quorums: R + W > N",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **quorum** is the minimum number of nodes that must agree before an operation counts as successful. In a cluster of `N` nodes, if a write requires `W` acknowledgments and a read queries `R` nodes, setting `R + W > N` guarantees that any read's set of `R` nodes overlaps with any prior write's set of `W` nodes on at least one node — so a read can never completely miss the latest acknowledged write.\n\nThis single inequality is the mathematical backbone behind [leaderless replication](replication), consensus protocols electing a leader, and any \"majority wins\" decision in distributed systems — a **majority quorum** (`W = R = ⌊N/2⌋ + 1`) is the most common choice because it also guarantees at most one majority can exist at a time, which is exactly what prevents two conflicting decisions both being \"approved.\"\n\nThe number to internalize: with 5 nodes, a majority is 3 — the system tolerates 2 node failures and still makes progress, which is why consensus clusters are so often sized at 3 or 5, not 4 or 6.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "consensus-transactions-s02-q1"
+      ]
+    },
+    {
+      "id": "consensus-transactions-s03",
+      "order": 3,
+      "sectionTitle": "Consensus (Paxos/Raft) at a high level",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Consensus algorithms** let a cluster of nodes agree on a value — typically \"who is the leader\" or \"what is the next entry in a replicated log\" — even when some nodes crash or messages are delayed, as long as a majority of nodes stay reachable. **Paxos** was the original (famously correct but notoriously hard to understand and implement); **Raft** was designed later specifically to be **understandable** while providing the same guarantees, and is what most modern systems (etcd, Consul, CockroachDB) actually implement.\n\nThe core idea both share: nothing is considered decided until a **majority** of nodes have durably recorded it — that's the same quorum principle from the previous slide, applied to \"what value did we agree on\" instead of \"what did we read/write.\" A minority partition can keep proposing values all it wants; without a majority, nothing it decides is binding.\n\nThis is the mechanism that actually solves the split-brain problem from Replication — a proper consensus protocol guarantees only one leader can ever be elected for a given term, because electing one requires a majority vote.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "consensus-transactions-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: Raft leader election + log replication",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Raft leader election: a candidate requests votes from four peers and wins with 3 of 5 votes for term 7](assets/raft-leader-election.svg)\n\n![Raft log replication: the leader streams an entry to followers and commits it once 3 of 5 nodes have durably stored it](assets/raft-log-replication.svg)\n\nElection and replication both reduce to the same rule: nothing is final until a majority agrees. A candidate becomes leader only with majority votes; a log entry becomes committed only once a majority of nodes have durably written it — not when the leader itself writes it.\n\nThat second point trips people up: a leader can crash right after appending an entry to its own log but before a majority replicated it — that entry is *not* committed and can be safely discarded by whichever node the next election picks as leader.",
+      "assets": [
+        {"alt": "Raft leader election: a candidate requests votes from four peers and wins with 3 of 5 votes for term 7", "path": "assets/raft-leader-election.svg"},
+        {"alt": "Raft log replication: the leader streams an entry to followers and commits it once 3 of 5 nodes have durably stored it", "path": "assets/raft-log-replication.svg"}
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": [
+        "consensus-transactions-s04-q1"
+      ]
+    },
+    {
+      "id": "consensus-transactions-s05",
+      "order": 5,
+      "sectionTitle": "Two-phase commit and its blocking problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Two-phase commit (2PC)** lets a transaction spanning multiple nodes commit atomically — all participants apply it, or none do. A **coordinator** runs it in two phases: **prepare** — ask every participant \"can you commit this?\" and each replies yes (having locked the relevant rows and written the change to its own log, but not yet applied it) or no; **commit** — if everyone said yes, tell everyone to commit for real; if anyone said no, tell everyone to abort.\n\nThe fatal weakness: once a participant votes \"yes\" in the prepare phase, it's **obligated to commit** if told to — it can't unilaterally back out, because the coordinator might be about to tell other participants to commit too. If the coordinator crashes after collecting votes but before sending the final decision, every participant that voted yes is stuck **holding its locks indefinitely**, unable to commit or abort on its own, waiting for a coordinator that may never come back.\n\nThis blocking behavior — one crashed coordinator can freeze an entire transaction's worth of locks across every participant — is 2PC's defining flaw and the reason it's used carefully, if at all, across unreliable networks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "consensus-transactions-s05-q1"
+      ]
+    },
+    {
+      "id": "consensus-transactions-s06",
+      "order": 6,
+      "sectionTitle": "Compare: 2PC vs saga for cross-service transactions",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Two-phase commit | Saga |\n|---|---|---|\n| Atomicity | True — all-or-nothing | No — a sequence of local transactions, each committed independently |\n| Failure handling | Coordinator recovery; can block indefinitely | Compensating transactions undo completed steps |\n| Locks held | Across the whole transaction, all participants | None held across services — each step commits and releases immediately |\n| Availability | Lower — blocking risk under coordinator/network failure | Higher — no cross-service lock held |\n| Typical fit | Tightly coupled systems, same trust domain, short transactions | Microservices, long-running business processes |\n\n**How to decide:** 2PC gives real atomicity but at an availability cost that gets worse as you add more services and more network hops between them; sagas give up atomicity (there's a window where the system is in a partial, \"in progress\" state) in exchange for never blocking a service on another service's coordinator.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "consensus-transactions-s06-q1"
+      ]
+    },
+    {
+      "id": "consensus-transactions-s07",
+      "order": 7,
+      "sectionTitle": "How a saga actually recovers from a failed step",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **saga** breaks a cross-service transaction into a sequence of local transactions, each committed on its own, with a **compensating transaction** defined for each step to undo it if a later step fails. Book a flight, then a hotel, then a rental car — if the car booking fails, the saga runs compensations in reverse: cancel the hotel, cancel the flight.\n\nThis works because each individual step is genuinely committed the moment it succeeds — no cross-service lock is ever held waiting on another service. The cost is that compensations must be designed as real operations, not a rollback the database gives you for free: \"cancel the hotel\" might mean issuing a refund, not just deleting a row, and if a compensation itself fails, you need a retry or manual-intervention path.\n\nSagas are typically implemented one of two ways: **choreography** (each service publishes an event, the next service reacts — no central coordinator, more decoupled, harder to trace) or **orchestration** (a central saga coordinator explicitly calls each step and its compensation — easier to reason about, but the coordinator becomes a piece of shared infrastructure everyone depends on).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "consensus-transactions-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: coordinator failure stalling 2PC",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"2PC guarantees atomicity, so it's the safe default for any multi-node transaction.\"\n\n**Why it's wrong:** 2PC's atomicity guarantee comes with a hidden dependency on the coordinator staying alive and reachable through both phases. If the coordinator dies after participants vote yes but before it broadcasts the final commit/abort decision, every participant is left holding locks it cannot release on its own — it genuinely doesn't know whether to commit or abort, because either the coordinator is about to tell it, or it never will. In practice this can freeze rows, connections, and downstream requests for as long as the coordinator (or a human) takes to recover.\n\n**Correct model:** treat 2PC as appropriate for transactions within a small, tightly-controlled, reliable environment (rarely spanning more than a handful of nodes, ideally on the same network) — and reach for a coordinator with its own fault-tolerant recovery log (or avoid distributed transactions entirely via sagas or careful data modeling) for anything crossing service or network boundaries where coordinator failure is a realistic event, not an edge case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "consensus-transactions-s08-q1"
+      ]
+    },
+    {
+      "id": "consensus-transactions-s09",
+      "order": 9,
+      "sectionTitle": "Consensus in numbers: election and commit latency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete numbers matter here. Raft leader election in a healthy same-datacenter cluster typically completes in **tens to a few hundred milliseconds** (bounded by the election timeout, commonly randomized in a 150-300ms range specifically to avoid repeated split votes). A committed log entry in etcd or Consul under normal load adds roughly **1-10ms** of majority-round-trip latency on top of a local write.\n\nAcross regions, both numbers grow with real network latency: a 5-node Raft cluster spanning three continents can see election and commit latency climb into the **hundreds of milliseconds**, because a majority (3 of 5) must include at least one cross-region round trip.\n\nThis is exactly why systems that need consensus (leader election, distributed locks, config stores like etcd/ZooKeeper) are usually deployed as a small, latency-conscious cluster near where decisions are made, rather than one giant global consensus group — the coordination cost scales with geography, not just node count.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "consensus-transactions-s10",
+      "order": 10,
+      "sectionTitle": "Where consensus actually shows up in a production stack",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Consensus rarely appears as something you implement yourself — it appears as infrastructure you depend on. **etcd** (built on Raft) backs Kubernetes' entire cluster state — every pod, deployment, and config change is a consensus-agreed write. **ZooKeeper** (its own Paxos-derived protocol, Zab) has historically backed Kafka's controller election and HDFS's NameNode failover. **CockroachDB and TiDB** run Raft per data range to replicate and fail over each shard's leader independently, which is what lets them survive a node loss without a human touching anything.\n\nThe pattern worth naming in an interview: whenever you see \"leader election,\" \"distributed lock,\" or \"strongly consistent config store\" in a system's design, there's a consensus protocol underneath it, even if the product name never says Raft or Paxos.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "consensus-transactions-s11",
+      "order": 11,
+      "sectionTitle": "Staff-level nuance: avoiding the need for distributed transactions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer reaches for 2PC or a saga whenever a change touches more than one service. A staff-level answer asks first whether the need for a cross-node atomic transaction can be **designed away** — because both 2PC and sagas exist to manage a cost that's cheaper to avoid than to pay well.\n\nCommon avoidance strategies: **co-locate data that changes together** on the same node or shard (revisit the shard-key discussion from Partitioning & Sharding) so the transaction is local, not distributed. **Use an outbox pattern** — write your local state change and an \"event to publish\" in the same local transaction, then a separate process reliably publishes that event — so you get atomicity for the state change and eventual delivery for the cross-service effect, without needing 2PC across services at all. **Accept idempotent retries** instead of exactly-once distributed commits where the business logic tolerates it (e.g. \"charge the card\" designed to be safely retried with an idempotency key).\n\nThe interview signal: naming that the real skill is minimizing how often you need distributed transactions in the first place, since every mechanism that provides them (2PC's blocking risk, a saga's compensation complexity) is a cost worth avoiding when the data model can dodge it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "consensus-transactions-s11-q1"
+      ]
+    },
+    {
+      "id": "consensus-transactions-s12",
+      "order": 12,
+      "sectionTitle": "Recap: consensus vs transactions, two related but different problems",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "It's easy to blur consensus and distributed transactions together since both involve \"getting multiple nodes to agree\" — worth separating cleanly before an interview.\n\n| | Consensus (Raft/Paxos) | Distributed transaction (2PC/saga) |\n|---|---|---|\n| Agreeing on | A single value or log entry (who's leader, what's next) | Whether a multi-step business operation commits or rolls back |\n| Scope | Usually within one replicated group/shard | Usually across services or shards |\n| Failure model | Tolerates a minority of node failures via majority quorum | 2PC can block on coordinator failure; sagas trade atomicity for availability |\n| Where you meet it | etcd, ZooKeeper, Raft-based databases' internals | Cross-service business transactions (orders, payments, bookings) |\n\nConsensus is usually the *mechanism* underneath a reliable coordinator; distributed transactions are the *higher-level problem* of committing business logic across nodes — 2PC's coordinator, if made fault-tolerant, is often itself built on a consensus protocol.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

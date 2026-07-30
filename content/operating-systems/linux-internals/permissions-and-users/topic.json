@@ -1,0 +1,159 @@
+{
+  "id": "permissions-and-users",
+  "title": "Permissions & Users",
+  "area": "operating-systems",
+  "group": "linux-internals",
+  "order": 4,
+  "slug": "permissions-and-users",
+  "summary": "The Unix permission model, real vs effective uid, and setuid — the foundational mechanism behind both everyday file access and a whole class of security bugs.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "permissions-and-users-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every file access on a Unix system is decided by a surprisingly small model: three permission bits, checked against three identity classes. That's it — and yet it correctly governs everything from `ls -l` output to why `passwd` can update a file it doesn't technically own.\n\nThis topic covers reading permissions correctly, the uid/gid identity model behind them, and setuid — the mechanism that lets an ordinary user briefly run as another user, and a classic source of privilege-escalation bugs when it's misused.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "permissions-and-users-s02",
+      "order": 2,
+      "sectionTitle": "The Unix permission model: owner, group, other × read, write, execute",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every file and directory has an **owner** (a user) and a **group**, and permissions are checked against three separate classes: the **owner**, the **group**, and **other** (everyone else). For each class, three independent bits control **read**, **write**, and **execute**.\n\nThe kernel checks these in a fixed order the moment a process tries to access a file: if the process's uid matches the owner, the owner bits apply — full stop, even if the group or other bits would have been more permissive. Only if it doesn't match the owner does the kernel check group membership, and only failing that does it fall through to \"other.\" This ordering occasionally surprises people: an owner can lock themselves out of their own file by clearing owner-read while leaving group-read set, and still be denied, because the owner class is checked first and short-circuits the rest.\n\nOn what read/write/execute actually mean differs for directories versus regular files — covered two slides ahead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "permissions-and-users-s02-q1"
+      ]
+    },
+    {
+      "id": "permissions-and-users-s03",
+      "order": 3,
+      "sectionTitle": "Reading permission bits: rwxr-xr-- and what it means",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`ls -l` shows permissions as a 10-character string, e.g. `-rwxr-xr--`:\n\n- Position 1: file type (`-` regular file, `d` directory, `l` symlink).\n- Positions 2–4: **owner** permissions — here `rwx` (read, write, execute).\n- Positions 5–7: **group** permissions — here `r-x` (read, execute, no write).\n- Positions 8–10: **other** permissions — here `r--` (read only).\n\nThe same thing is expressed as three octal digits, one per class, by summing read=4, write=2, execute=1: `rwx` = 7, `r-x` = 5, `r--` = 4, giving `754` — the form `chmod 754 file` expects. Getting comfortable converting between the letter form and the octal form in your head is worth the ten minutes it takes; both appear constantly in real configs and interview whiteboarding.\n\n`chmod u+x file` (symbolic form) and `chmod 754 file` (octal form) are two notations for the same operation — neither is more \"correct,\" but octal is far more common in scripts because it's unambiguous and terse.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "permissions-and-users-s04",
+      "order": 4,
+      "sectionTitle": "uid/gid: real vs effective vs saved IDs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every process actually carries **three** user IDs, not one:\n\n- **Real UID (ruid)** — who actually launched the process; identifies \"whose process is this\" for accounting and signal-sending permission.\n- **Effective UID (euid)** — the identity actually used for permission checks *right now*. Almost always equal to the real UID — except when a setuid binary is running, where euid becomes the file owner's UID while ruid stays the original caller.\n- **Saved UID (suid)** — a stashed copy of what euid was right after exec, letting a process temporarily drop privileges (switch euid to the real UID for normal operation) and later switch back to the saved value, without needing to be root again to do so.\n\nThe permission checks covered so far all use **euid**, not ruid — this distinction is what makes setuid work at all, and it's the exact mechanism the next few slides build on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "permissions-and-users-s04-q1"
+      ]
+    },
+    {
+      "id": "permissions-and-users-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: how effective UID changes across a setuid execution",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![setuid binary exec changing effective UID](assets/setuid-exec-before-after.svg)\n\nThe kernel makes this switch automatically at `exec()` time, purely by noticing the setuid bit on the file being executed — no cooperation from the calling process is required or possible to prevent it. The process's real UID never changes, which is exactly how the system still knows, and can log, which actual user triggered the privileged action.\n\nThis is the whole mechanism behind `passwd` letting an ordinary user update `/etc/shadow` (root-only writable) — `passwd` itself is a setuid-root binary, so it briefly runs as root only for the specific, narrow operation the program itself chooses to perform.",
+      "assets": [
+        {
+          "alt": "setuid binary exec changing effective UID",
+          "path": "assets/setuid-exec-before-after.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "permissions-and-users-s06",
+      "order": 6,
+      "sectionTitle": "The setuid bit: running as the file owner, not the caller",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Setting the **setuid bit** on an executable (`chmod u+s file`, shown as an `s` in place of the owner's execute bit: `rwsr-xr-x`) tells the kernel: whenever anyone executes this file, set the process's effective UID to the file's **owner**, not the caller's UID.\n\nThis exists to solve a real problem: ordinary users need to perform specific, narrow privileged operations — changing their own password, pinging a host (which needs a raw socket, historically root-only) — without being handed general root access. A setuid-root binary is a controlled, single-purpose door into root privilege: the *binary's own code* decides exactly what privileged thing happens, and the calling user gets nothing beyond that.\n\nThe security of the whole mechanism rests entirely on the binary's code being correct and narrow — which is precisely why the next slide is a warning, not a footnote.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "permissions-and-users-s07",
+      "order": 7,
+      "sectionTitle": "Why setuid root binaries are a classic security concern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A setuid-root binary runs with full root privilege for its entire execution, not just for the one operation it was written to perform — so any bug in it (a buffer overflow, an unsanitized environment variable, a path it trusts that a user can redirect) is a potential path to full root access for anyone who can execute the file.\n\nThe classic historical exploit pattern: a setuid-root program calls another program or reads a file using a relative path or an inherited environment variable (like `PATH` or `IFS`) the calling user fully controls. If the attacker can make that lookup resolve to their own malicious binary instead of the intended one, their code now runs as root. This is exactly why secure setuid programs are written to drop privileges immediately after the one operation that needs them, sanitize or ignore the inherited environment entirely, and use absolute paths for anything they invoke.\n\nThis is also why modern systems try to shrink the setuid attack surface — Linux **capabilities** let a binary get one specific privileged ability (like binding to a port under 1024) without full root, precisely to avoid needing setuid-root for narrow jobs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "permissions-and-users-s07-q1"
+      ]
+    },
+    {
+      "id": "permissions-and-users-s08",
+      "order": 8,
+      "sectionTitle": "umask: how default permissions on new files are computed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "New files don't start with whatever permissions you'd expect from nothing — they start from a base (typically `666` for files, `777` for directories) and the **umask** subtracts bits from that base. `umask 022` (the common default) removes write permission for group and other, so a new file created by `touch` ends up `644` (`666 & ~022`) and a new directory ends up `755` (`777 & ~022`).\n\numask is a per-shell/per-process setting, not a file attribute — it only affects files created *while it's in effect*, and has zero retroactive effect on existing files. `umask 077` (only the owner gets any access at all) is the tighter, security-conscious default many hardened systems and personal `~/.bashrc` setups use.\n\nA quick sanity check that trips people up: umask *subtracts* permissions from the base, it doesn't *set* them directly — `umask 777` doesn't mean \"give everyone all permissions,\" it means \"remove all permissions from everyone,\" producing `000` files.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "permissions-and-users-s08-q1"
+      ]
+    },
+    {
+      "id": "permissions-and-users-s09",
+      "order": 9,
+      "sectionTitle": "Directory execute permission — the 'search' bit that trips people up",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "On a **directory**, the three permission bits mean something different than on a regular file. **Read** on a directory lets you *list* its contents (`ls` works). **Execute** — often called the \"search\" bit for directories — lets you `cd` into it and access entries *inside* it by name, even without listing permission. **Write** lets you create, rename, or delete entries within it.\n\nThe combination that trips people up: a directory with execute-but-not-read (`--x------`) lets someone traverse *through* it to a file they already know the exact name of, but they can't `ls` it to discover what's there. This is a real and sometimes deliberately used pattern — a directory of user home directories might be world-execute (so web servers can reach `~/public_html/index.html` by path) but not world-read (so users can't casually browse each other's usernames).\n\nMissing execute on any directory in a path blocks access to everything beneath it, regardless of the permissions on the file itself deeper in the tree.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "permissions-and-users-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming no read permission on a directory blocks access to files inside it by path",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I removed read permission on this directory, so nobody can get to the files inside it.\"\n\n**Why it's wrong:** read and execute control two different things on a directory. Removing read only stops someone from *listing* the directory's contents (`ls` fails) — it does nothing to stop access to a file inside it if the caller already knows (or can guess) its exact name and the directory still has execute (search) permission. `cat /home/alice/secret-notes.txt` can succeed even if `/home/alice/` is `--x------`, because execute alone lets the path be traversed.\n\n**Correct model:** to actually block access to a directory's contents, you need to remove **execute**, not just read — and if you want to hide filenames from listing while still allowing traversal to known paths, read-off/execute-on is a deliberate, different configuration, not a security bug. Confusing which bit does which is a genuinely common misconfiguration, not just a trivia gotcha.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "permissions-and-users-s10-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "topicId": "consensus-transactions",
+  "interviewQuestions": [
+    {
+      "id": "consensus-transactions-iq1",
+      "question": "How does a Raft-based cluster elect a leader and guarantee only one leader exists at a time?",
+      "answerMarkdown": "I'd frame it around the same quorum principle that underlies replication and quorum reads/writes: nothing is decided in Raft until a **majority** of nodes agree.\n\nMechanically: every node starts as a follower and expects periodic heartbeats from a leader. If a follower doesn't hear from a leader within a randomized election timeout — commonly 150-300ms, randomized specifically so nodes don't all time out simultaneously — it becomes a **candidate**, increments a term number, and requests votes from every other node. Each node votes for at most one candidate per term, on a first-come basis. The candidate that collects votes from a **majority** of the cluster becomes leader for that term.\n\nThe randomized timeout is the detail that actually prevents split votes in practice: if every node timed out at exactly the same moment, they'd all become candidates simultaneously and repeatedly split the vote, never reaching a majority. Randomization means one node almost always times out first and wins cleanly.\n\nBecause winning requires a strict majority, and any two majorities out of the same cluster must overlap by at least one node, it's mathematically impossible for two different candidates to both win a majority in the same term — that's what guarantees exactly one leader per term, and is the actual mechanism that prevents the split-brain problem from Replication.\n\n**Testing:** whether you can explain the majority-overlap argument, not just recite that Raft \"elects a leader.\"",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Raft leader election"
+    },
+    {
+      "id": "consensus-transactions-iq2",
+      "question": "Why is two-phase commit considered risky across service or network boundaries, and what would you use instead for a microservices checkout flow?",
+      "answerMarkdown": "I'd lead with the specific failure mode: 2PC's atomicity depends on the coordinator surviving both phases. If it crashes after participants vote yes but before broadcasting the final decision, every participant is stuck holding its locks — it can't commit (the coordinator might have told others to abort) and can't abort (the coordinator might have told others to commit). Across a real network, with more hops and more independent failure domains than a single machine, this isn't a rare edge case — it's a realistic operational risk.\n\nFor a checkout flow spanning an orders, payments, and inventory service, I'd reach for a **saga** instead: each service commits its own local transaction (reserve inventory, charge the card, create the order) independently, with a **compensating transaction** defined for each step — refund the payment, release the inventory hold — that runs if a later step fails. No service ever holds a lock waiting on another service's coordinator, which keeps each service independently available.\n\nThe cost I'd be upfront about: there's a window where the system is in a partial, in-progress state (payment charged, order not yet confirmed), and I have to design the UI and monitoring around that instead of pretending it's instantaneous and atomic. I'd pick orchestration over choreography for anything business-critical like this, since a central saga coordinator is much easier to trace and debug than events bouncing between services.\n\n**Testing:** whether you can name the concrete blocking failure mode and propose the standard alternative with its real trade-off, not just \"sagas are better.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "2PC risk and the saga alternative"
+    },
+    {
+      "id": "consensus-transactions-iq3",
+      "question": "What's the difference between consensus and a distributed transaction, and where does each actually show up in a system you've worked on or studied?",
+      "answerMarkdown": "I'd separate them by what they're agreeing on. **Consensus** (Raft, Paxos) gets a group of nodes to agree on a single value or the next entry in a log — most commonly, who the leader is, or what the next committed operation is. **Distributed transactions** (2PC, sagas) solve a higher-level, different problem: making a multi-step business operation — often spanning multiple services or shards — commit or roll back as a unit.\n\nWhere I'd point to consensus in practice: etcd, which backs every piece of Kubernetes' cluster state, runs Raft under the hood — every deployment and config change is a consensus-agreed write. ZooKeeper historically did the same job for Kafka's controller election. Whenever a system needs a strongly consistent, always-agreed-upon source of truth despite node failures, there's a consensus protocol underneath, even if the product doesn't advertise it by name.\n\nWhere distributed transactions show up: a payments platform moving money between two accounts on different shards, or a travel booking flow spanning flight, hotel, and car services — both need some mechanism (2PC or, more commonly today, a saga) to make a multi-step, multi-node change behave atomically or recoverably.\n\nThe connection between them: a fault-tolerant 2PC coordinator is often itself built on a consensus protocol to survive its own crashes — so in a mature system, consensus is frequently the reliability mechanism underneath the higher-level transaction pattern.\n\n**Testing:** whether you can cleanly separate two commonly conflated concepts and ground each in a real system, not just define them abstractly.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Consensus vs distributed transactions"
+    }
+  ]
+}

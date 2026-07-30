@@ -1,0 +1,29 @@
+{
+  "topicId": "oltp-vs-olap",
+  "interviewQuestions": [
+    {
+      "id": "oltp-vs-olap-iq1",
+      "question": "Why can't you just run your analytics reports against your production OLTP database?",
+      "answerMarkdown": "I'd start from the physical storage mismatch: OLTP databases like Postgres default to row-store layout, which is great for a point lookup like \"get order #48213\" — one disk read gets the full row. But an analytics query like \"total revenue by region\" only needs 2 of the table's 50 columns across every row, and a row-store still has to read the full width of every row and discard the rest — often 20-50x more I/O than a column-store doing the same aggregation.\n\nThat extra I/O doesn't just make the report slow — it competes directly with the live application's transactions for CPU, memory, and disk bandwidth. Under real load, a heavy report can measurably raise checkout latency or even cause timeouts, which is a much worse outcome than the report itself running slowly.\n\nThe fix is architectural, not a tuning trick: route analytical queries to a dedicated read replica at minimum, or better, into a proper data warehouse fed by an ETL/ELT pipeline, so the OLTP primary only ever sees the transactional workload it's built for.\n\n**Testing:** whether you understand this as a structural storage-layout mismatch, not just \"the report is slow, add an index.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Why not query production directly"
+    },
+    {
+      "id": "oltp-vs-olap-iq2",
+      "question": "Walk me through how you'd design the OLTP-to-warehouse pipeline for a company that just outgrew running reports off its production database.",
+      "answerMarkdown": "I'd start by asking about the freshness requirement, since that decides most of the downstream design: does the business need near-real-time numbers, or is next-morning data fine? For most reporting use cases, nightly batch ETL is the simpler, cheaper default, so I'd start there unless there's a concrete reason for tighter freshness.\n\nMechanically, I'd extract from each OLTP source (orders DB, users DB, payments DB), transform into a consistent schema — this is usually where dimensional modeling decisions happen — and load into a warehouse like Snowflake or BigQuery. I'd choose incremental loads (only new/changed rows since the last run) over full reloads once the data volume makes full reloads too slow, tracking a watermark like `updated_at` per source table.\n\nThe part I'd insist on, because it's where real incidents happen: alerting on load failures and staleness, and a reconciliation check comparing warehouse totals against a source-of-truth query in the OLTP system periodically — otherwise a silently failed load just shows old data as if it were current, and someone makes a business decision on it before anyone notices.\n\nIf the freshness bar turns out to be much tighter than nightly, I'd revisit toward a streaming ETL approach or even an HTAP system, but I'd only pay that complexity cost once batch genuinely can't meet the requirement.\n\n**Testing:** whether you design the pipeline around a stated freshness requirement and build in failure detection, rather than just naming ETL tools.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Designing the OLTP-to-warehouse pipeline"
+    },
+    {
+      "id": "oltp-vs-olap-iq3",
+      "question": "When would you reach for an HTAP system instead of a traditional OLTP-plus-warehouse setup?",
+      "answerMarkdown": "I'd reach for HTAP when the business genuinely needs analytics on data that's seconds or minutes old, not the hours-to-a-day staleness a batch ETL pipeline typically provides — a fraud-detection dashboard reacting to transactions as they happen is a good example, versus a monthly revenue report that's fine overnight.\n\nHTAP systems like TiDB or SingleStore maintain both a row layout for transactional writes and a column layout for analytical reads internally, kept in sync automatically, so a report can reflect data the moment it's committed rather than waiting for the next ETL run.\n\nThe trade-off I'd flag before committing to it: this is real internal complexity the database is managing on your behalf, and most current HTAP systems have a lower ceiling on analytical scale and query complexity than a purpose-built warehouse handling petabytes with a mature optimizer. I'd also weigh operational maturity — HTAP is a newer category with a smaller pool of engineers who've operated it at scale compared to the well-trodden Postgres-plus-Snowflake pattern.\n\nSo my actual answer: HTAP for a specific, well-justified near-real-time analytics need on moderate data volumes; a traditional warehouse pipeline for anything where nightly or hourly freshness is acceptable and analytical scale matters more than freshness.\n\n**Testing:** whether you can justify HTAP against a concrete freshness requirement rather than reaching for it as a trendy default.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "When HTAP earns its complexity"
+    }
+  ]
+}

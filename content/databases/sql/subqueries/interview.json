@@ -1,0 +1,37 @@
+{
+  "topicId": "subqueries",
+  "interviewQuestions": [
+    {
+      "id": "subqueries-iq1",
+      "question": "Why is `NOT IN` dangerous when the subquery's result can contain a NULL, and what would you use instead?",
+      "answerMarkdown": "`NOT IN (SELECT ...)` expands logically into a chain of `<>` comparisons ANDed together. If even one value in that list is `NULL`, the comparison against it evaluates to `UNKNOWN`, and one `UNKNOWN` inside an `AND` chain drags the whole expression to `UNKNOWN` — never `TRUE` — regardless of how the other comparisons come out. Since `WHERE` only keeps rows where the condition is `TRUE`, the entire query silently returns zero rows, with no error at all.\n\nThe scary part is how easy this is to miss: it works correctly in development against clean test data, then breaks in production the day a single `NULL` sneaks into the subquery's source table — say, a `blocked_customers` table where one row was inserted without a `customer_id`. Nobody notices immediately because there's no error; the report or filter just quietly returns nothing, or in a `NOT IN` used for exclusion, ends up excluding everything.\n\nI'd default to `NOT EXISTS` instead: `WHERE NOT EXISTS (SELECT 1 FROM blocked_customers b WHERE b.customer_id = customers.id)`. It never compares the outer value against individual subquery values, so a `NULL` in the subquery's table has no effect on the result at all.\n\n**Testing:** whether you've actually hit this bug or only know `NOT IN` and `NOT EXISTS` as interchangeable syntax.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "NOT IN and NULL"
+    },
+    {
+      "id": "subqueries-iq2",
+      "question": "What's the difference between a correlated and a non-correlated subquery, and does 'correlated' automatically mean 'slow'?",
+      "answerMarkdown": "A non-correlated subquery stands alone — it doesn't reference anything from the outer query, so conceptually it computes one fixed value or set once, like `WHERE total > (SELECT AVG(total) FROM orders)`. A correlated subquery references a column from the outer row, like `WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)`, so its result conceptually depends on which outer row is currently being evaluated.\n\nThe naive mental model — 'a correlated subquery re-runs once per outer row, so it's an unavoidable nested loop' — isn't how a competent planner actually executes it. Postgres, for example, commonly rewrites a correlated `EXISTS` subquery into a semi-join, which can run about as efficiently as an equivalent hand-written join. So correlated doesn't automatically mean slow; it means you should check `EXPLAIN` rather than assume either way.\n\nWhere it *can* genuinely be slow is when the planner can't find a good join rewrite — for instance, a correlated subquery with a non-sargable predicate inside it, where indexing can't help regardless of the rewrite.\n\n**Testing:** whether you distinguish the logical/conceptual model of a correlated subquery from its actual physical execution — a common gap even among people who write SQL daily.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Correlated subquery performance"
+    },
+    {
+      "id": "subqueries-iq3",
+      "question": "When would you use a subquery with EXISTS instead of a JOIN to check whether a related row exists?",
+      "answerMarkdown": "I'd reach for `EXISTS` specifically when I only need to know *whether* a relationship exists and never touch a single column from the related table in the output. `SELECT * FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)` returns each qualifying customer exactly once, with no risk of duplication.\n\nThe alternative — `SELECT DISTINCT c.* FROM customers c JOIN orders o ON o.customer_id = c.id` — works too, but it's doing more than necessary: it joins in every matching order row (fanning out a customer with 10 orders into 10 joined rows) and then relies on `DISTINCT` to clean that back up. It's easy to forget the `DISTINCT`, and forgetting it silently reintroduces duplicate customers into the result — a bug that's obvious with 3 test orders and easy to miss until it ships.\n\nI'd flip to an actual `JOIN` the moment I need columns from `orders` in the `SELECT` list — at that point the join's fan-out isn't accidental, it's the data I actually asked for, and `EXISTS` structurally can't give me those columns at all since it only tests row existence.\n\n**Testing:** whether you pick the tool based on 'do I need columns from the other table,' which cleanly predicts EXISTS-vs-JOIN in most real cases, rather than habit.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "EXISTS vs JOIN"
+    },
+    {
+      "id": "subqueries-iq4",
+      "question": "What's a CTE, and is it always evaluated exactly once?",
+      "answerMarkdown": "A CTE — a `WITH name AS (...)` clause — names a subquery so later parts of the same statement can reference it, which makes a complex query easier to read by breaking it into named, sequential steps instead of nesting parentheses several levels deep.\n\nWhether it's evaluated once depends on the engine and version, and this is a real gotcha: pre-12 Postgres always materialized a CTE as a separate step, even if referenced only once, acting as an 'optimization fence' the planner couldn't see through. Postgres 12 and later flipped the default — a CTE referenced exactly once is inlined, just like an equivalent derived table would be, and only materializes automatically when referenced more than once (or when explicitly marked `MATERIALIZED`).\n\nThe practical implication: I wouldn't assume 'putting it in a CTE' guarantees it runs once, nor that it always gets inlined for free — I'd check `EXPLAIN` on the actual engine and version in use. If I specifically need a CTE to run exactly once — for example, one with side effects, like a data-modifying `WITH` clause in Postgres — I'd use the explicit `MATERIALIZED` keyword rather than relying on version-dependent defaults.\n\n**Testing:** whether you know CTE materialization behavior changed across a real version boundary, which separates people who've read the current docs from people repeating outdated folklore.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "CTE materialization"
+    }
+  ]
+}

@@ -1,0 +1,159 @@
+{
+  "id": "shell-and-process-groups",
+  "title": "Shell & Process Groups",
+  "area": "operating-systems",
+  "group": "linux-internals",
+  "order": 5,
+  "slug": "shell-and-process-groups",
+  "summary": "Job control from first principles — process groups, sessions, and exactly why closing your terminal kills a background job unless you told it not to.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "shell-and-process-groups-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Ctrl+C only kills the thing you're looking at; closing an SSH session kills a background job you thought was safe. Neither behavior is arbitrary — both come from a small hierarchy the shell builds for you: **sessions**, **process groups**, and the **controlling terminal**.\n\nThis topic covers that hierarchy end to end, so job control stops feeling like memorized shell trivia and starts being a mechanism you can reason about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "shell-and-process-groups-s02",
+      "order": 2,
+      "sectionTitle": "Process groups: why the shell groups related processes together",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **process group** is a set of related processes the kernel treats as one unit for signal delivery. When you run a pipeline like `grep foo file | sort | uniq -c`, the shell puts all three processes in the *same* process group — so a single Ctrl+C sends SIGINT to all three at once, not just the last one in the pipe.\n\nEvery process group has a **group leader** (the first process placed in it, usually the first command of a pipeline) and a **process group ID (PGID)** equal to that leader's PID. `kill -TERM -1234` (note the minus sign) sends the signal to *every process in group 1234*, not to a single process — a distinction that matters when you're cleaning up an entire pipeline or a tree of workers a script spawned, not just its immediate parent.\n\nWithout this grouping, stopping a multi-stage pipeline cleanly would mean the shell tracking and individually signaling every process it ever spawned — process groups make \"stop this whole pipeline\" a single kernel call.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "shell-and-process-groups-s02-q1"
+      ]
+    },
+    {
+      "id": "shell-and-process-groups-s03",
+      "order": 3,
+      "sectionTitle": "Sessions and the controlling terminal",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **session** is one level up from a process group: it's a collection of process groups, typically all the work spawned from one login — one terminal, one SSH connection. The process that starts a session (your login shell) becomes the **session leader**, and a session is usually associated with exactly one **controlling terminal** — the physical or pseudo-terminal device that can send it signals like SIGINT and SIGHUP.\n\nThis two-level structure — session containing multiple process groups — is exactly what lets one terminal juggle a foreground job and several background jobs simultaneously: they're all in the same session (so they share the controlling terminal and get torn down together on logout) but in different process groups (so Ctrl+C only reaches whichever group is currently in the foreground).\n\n`ps -eo pid,pgid,sid,tty,cmd` shows all three IDs side by side — a genuinely useful way to see this hierarchy on a real, running system rather than as an abstract diagram.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "shell-and-process-groups-s04",
+      "order": 4,
+      "sectionTitle": "Foreground vs background jobs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "At any moment, a session's controlling terminal has exactly one **foreground process group** — the one currently allowed to read from the terminal and receive terminal-generated signals (Ctrl+C, Ctrl+Z). Every other process group in the session is a **background** job: still running, but disconnected from keyboard input and immune to those specific keystrokes.\n\n`command &` starts a job directly in the background. `jobs` lists what the current shell is tracking, `fg %1` promotes job 1 back to the foreground (making it able to receive Ctrl+C again and read from the terminal), and `bg %1` resumes a stopped job in the background. If a background job tries to *read* from the terminal — a program waiting on stdin — it gets stopped automatically with SIGTTIN, since letting two process groups race for the same keyboard input would be chaos.\n\nThis foreground/background split is purely about terminal access and signal targeting — it has no bearing on whether a process survives the terminal closing, which is a separate mechanism covered next.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "shell-and-process-groups-s04-q1"
+      ]
+    },
+    {
+      "id": "shell-and-process-groups-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: session → process groups → processes hierarchy",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![session and process group tree with Ctrl+C scope](assets/session-process-group-tree.svg)\n\nThe session is the outermost boundary — everything inside it shares the same controlling terminal and rises or falls together when that terminal goes away. Process groups are the unit the shell actually targets with job-control keystrokes: exactly one is foreground at a time, and Ctrl+C only ever reaches that one.\n\nThis is the concrete mental model to reach for whenever a signal seems to hit \"the wrong things\" or \"not enough things\" — check which group a process is actually in before assuming the signal delivery is broken.",
+      "assets": [
+        {
+          "alt": "session and process group tree with Ctrl+C scope",
+          "path": "assets/session-process-group-tree.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "shell-and-process-groups-s06",
+      "order": 6,
+      "sectionTitle": "Job control signals: Ctrl+C (SIGINT) and Ctrl+Z (SIGTSTP)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The terminal driver translates specific keystrokes into signals sent to the **entire foreground process group** — not to a single process, and not by the shell manually calling `kill`. Ctrl+C generates **SIGINT** (\"stop what you're doing\"), and Ctrl+Z generates **SIGTSTP** (\"pause, but stay resumable\") — the terminal-generated cousin of SIGSTOP, but unlike SIGSTOP, SIGTSTP *can* be caught or ignored, which is why some programs (like `vim`) intercept it to save state before actually suspending.\n\nBecause both signals go to the whole foreground group, Ctrl+C on a three-stage pipeline interrupts all three commands simultaneously — which is almost always what you want, since leaving `sort` running after `grep` was killed would just process a truncated, meaningless input stream.\n\nA stopped job (via Ctrl+Z or SIGTSTP) doesn't disappear — `jobs` still lists it, and `bg`/`fg` resume it exactly where it paused, since SIGCONT (not a restart) is what wakes it back up.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "shell-and-process-groups-s07",
+      "order": 7,
+      "sectionTitle": "What happens to background jobs when you close the terminal — SIGHUP",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a controlling terminal goes away — you close the terminal window, or an SSH connection drops — the kernel sends **SIGHUP** (\"hangup,\" historically named for a phone line disconnecting) to the session leader, and by convention that propagates to every process in the session that hasn't explicitly protected itself from it.\n\nThis is deliberate: without it, every background job from every terminal session you ever opened and closed would keep accumulating on the machine forever, since nothing else automatically cleans them up. SIGHUP's default action is termination, exactly like most other unhandled signals — but unlike SIGKILL, it's an ordinary catchable signal, so a process can install a handler and choose to survive it.\n\nThe common trap: people assume backgrounding a job with `&` is enough to make it survive logout. It isn't — `&` only controls *foreground vs background* within the session; it says nothing about surviving the session itself ending.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "shell-and-process-groups-s07-q1"
+      ]
+    },
+    {
+      "id": "shell-and-process-groups-s08",
+      "order": 8,
+      "sectionTitle": "nohup and disown — surviving terminal close on purpose",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two independent tools solve the SIGHUP problem, and they solve slightly different halves of it:\n\n```bash\n$ nohup ./long-task.sh &     # ignores SIGHUP entirely; output redirected to nohup.out by default\n$ disown %1                  # removes job 1 from the shell's job table, so the shell won't SIGHUP it on exit\n```\n\n`nohup` wraps the command so it explicitly ignores SIGHUP from the start — it's set before the program even runs, so even a program with no SIGHUP-handling code of its own survives. `disown` works differently: it removes the job from the *shell's own bookkeeping* so the shell itself doesn't send SIGHUP to it on exit (some shells propagate SIGHUP to jobs only if they're still tracked) — the process could still be killed by a SIGHUP from elsewhere, but the shell exiting specifically won't be the cause.\n\nThe modern, more robust alternative for anything long-running and important is a proper background service manager (`systemd`, `tmux`/`screen` sessions that persist independently) rather than relying on nohup/disown as the whole survival strategy — those tools are meant for quick, ad hoc cases.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "shell-and-process-groups-s08-q1"
+      ]
+    },
+    {
+      "id": "shell-and-process-groups-s09",
+      "order": 9,
+      "sectionTitle": "Compare: & alone vs nohup vs disown vs tmux/screen",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | `&` alone | `nohup cmd &` | `disown %1` | `tmux`/`screen` session |\n|---|---|---|---|---|\n| Survives Ctrl+C on that job | Yes (different process group) | Yes | Yes | Yes |\n| Survives terminal close / SSH drop | No — SIGHUP still reaches it | Yes — SIGHUP is ignored from the start | Usually — shell won't signal it, though other causes of SIGHUP still apply | Yes — the session itself keeps running independent of any one terminal |\n| Can you reattach and see output live later | No | Only via redirected log file | No | Yes — reattach with `tmux attach` |\n| Best for | Foreground-adjacent quick tasks in the same login | One-off long jobs, fire-and-forget | Jobs already running that you forgot to nohup | Long interactive work you'll want to check back into |\n\n**The practical rule:** if you're about to start something that needs to outlive this terminal, decide *before* you run it — `nohup` from the start, or better, start it inside `tmux`/`screen` so you can also reattach and watch it later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "shell-and-process-groups-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: assuming & alone survives a logout",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I started my script with `./deploy.sh &`, so it's backgrounded and safe to close my SSH session now.\"\n\n**Why it's wrong:** `&` only changes whether the job is in the *foreground* process group of the current session — it has nothing to do with what happens when the session itself ends. Closing the SSH connection tears down the controlling terminal, the kernel sends SIGHUP to the session, and that background job — still a member of the same session — gets terminated right along with everything else, mid-deploy.\n\n**Correct model:** backgrounding (`&`) and surviving-logout are two completely separate concerns solved by two different mechanisms. If a job needs to survive the terminal closing, it needs `nohup`, `disown`, or to be started inside a persistent session tool like `tmux`, decided *before* you disconnect — realizing this after closing the terminal is too late, since the process is usually already gone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "shell-and-process-groups-s10-q1"
+      ]
+    }
+  ]
+}

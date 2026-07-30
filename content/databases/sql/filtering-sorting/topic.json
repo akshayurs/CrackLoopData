@@ -1,0 +1,172 @@
+{
+  "id": "filtering-sorting",
+  "title": "Filtering, Sorting & Pagination",
+  "area": "databases",
+  "group": "sql",
+  "order": 2,
+  "slug": "filtering-sorting",
+  "summary": "Narrowing and ordering result sets — and the pagination trap that quietly slows down every feed and admin table as data grows.",
+  "level": "beginner",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "filtering-sorting-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Almost no query returns \"all rows, in whatever order\" — you narrow with predicates, order with `ORDER BY`, and usually cap the result with `LIMIT`. Each piece looks simple in isolation, and each has a version that works fine at 10,000 rows and falls over at 10 million.\n\nThis topic covers the predicate toolbox, the two competing ways to paginate, and why \"sorted\" without a tiebreaker is a lie the database is allowed to tell you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "filtering-sorting-s02",
+      "order": 2,
+      "sectionTitle": "The predicate toolbox: BETWEEN, IN, LIKE",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Beyond plain `=` and `<`, three predicates cover most real filtering: `BETWEEN a AND b` (inclusive range on both ends — equivalent to `col >= a AND col <= b`), `IN (v1, v2, v3)` (matches any value in a list — cleaner than a chain of `OR`s), and `LIKE 'pat%'` (pattern matching, `%` for any sequence, `_` for one character).\n\nAll three are ordinary boolean predicates — they combine with `AND`/`OR` like any other condition, and they follow the same three-valued-logic rules from the SELECT topic: comparing against `NULL` inside an `IN` list or a `BETWEEN` range still yields `UNKNOWN`, not a match.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "filtering-sorting-s03",
+      "order": 3,
+      "sectionTitle": "Sorting and capping: ORDER BY, LIMIT, OFFSET",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\nSELECT id, title, created_at\nFROM articles\nWHERE status = 'published'\nORDER BY created_at DESC\nLIMIT 20 OFFSET 40;\n```\n\n`ORDER BY` sorts the result (`ASC` by default, `DESC` for descending — sortable on any column or expression, not just ones in `SELECT`). `LIMIT` caps how many rows come back; `OFFSET` skips a number of rows before starting to return them — together they're the classic \"page 3 of results\" pattern: `LIMIT 20 OFFSET 40` means rows 41–60.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "filtering-sorting-s04",
+      "order": 4,
+      "sectionTitle": "Compare: OFFSET pagination vs keyset (\"seek\") pagination",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | OFFSET pagination | Keyset (seek) pagination |\n|---|---|---|\n| Query shape | `ORDER BY x LIMIT n OFFSET k` | `WHERE x > :last_seen ORDER BY x LIMIT n` |\n| Cost per page | Scans and discards `k` rows every time | Uses the index to jump straight to the next page |\n| Cost as page number grows | Gets slower — page 10,000 scans 10,000 × page_size rows | Constant — page 10,000 costs the same as page 2 |\n| Can jump to an arbitrary page number | Yes | No — only \"next\"/\"previous\" from a known cursor |\n| Stable under concurrent inserts | No — rows can shift between pages, causing skips/dupes | Yes — new rows don't shift the cursor's position |\n\n**How to decide:** OFFSET is fine for small, rarely-paginated admin tables where jump-to-page-N matters. Keyset is the right default for infinite-scroll feeds and any dataset large enough that \"page 500\" is a realistic request.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "filtering-sorting-s04-q1"
+      ]
+    },
+    {
+      "id": "filtering-sorting-s05",
+      "order": 5,
+      "sectionTitle": "Pitfall: large OFFSET scanning and discarding rows",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"`LIMIT 20 OFFSET 100000` is just as cheap as `LIMIT 20 OFFSET 20` — it's still only returning 20 rows.\"\n\n**Why it's wrong:** the database still has to walk through and discard the first 100,000 matching rows in sorted order before it can start returning the 20 you asked for — `OFFSET` doesn't skip work, it does the work and throws away the result. On a large, frequently-paginated table, page 5,000 of a feed can take seconds while page 1 takes milliseconds, and the cost grows linearly with the page number.\n\n**Correct model:** past a small number of pages, switch to keyset pagination — remember the last row's sort key and filter `WHERE created_at < :last_seen` instead of counting rows to skip.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "filtering-sorting-s05-q1"
+      ]
+    },
+    {
+      "id": "filtering-sorting-s06",
+      "order": 6,
+      "sectionTitle": "Deterministic ordering needs a tiebreaker column",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`ORDER BY created_at DESC` looks deterministic, but if two rows share the exact same `created_at` timestamp, the database is free to return them in **either order**, and that order can change between runs — SQL makes no ordering guarantee for rows the `ORDER BY` clause doesn't fully distinguish.\n\nThis silently breaks pagination: if row A and row B tie on `created_at` and one lands on page 2 while the other lands on page 3 in one query, a later query might flip which page each lands on — a row can appear twice or vanish entirely across page loads.\n\nThe fix is cheap: always break ties with a column guaranteed unique, usually the primary key — `ORDER BY created_at DESC, id DESC`. Never assume a timestamp column is unique enough on its own, especially on high-throughput tables where many rows can share a millisecond.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "filtering-sorting-s06-q1"
+      ]
+    },
+    {
+      "id": "filtering-sorting-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: LIKE '%x' can't use a normal index",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"There's an index on `name`, so `WHERE name LIKE '%smith'` will use it.\"\n\n**Why it's wrong:** a standard B-tree index is sorted left-to-right on the column's value, so it can efficiently jump to a prefix — `LIKE 'smith%'` can use the index. But a **leading wildcard** (`%smith`) means the match could start anywhere in the string, so there's no sorted prefix to jump to — the engine has to scan and test every row.\n\n**Correct model:** for genuine substring or suffix search, a normal index won't help regardless of pattern placement — reach for full-text search, a trigram index (`pg_trgm` on Postgres), or a search engine like Elasticsearch. Reserve `LIKE` for prefix matches or small tables where a scan is cheap enough.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "filtering-sorting-s07-q1"
+      ]
+    },
+    {
+      "id": "filtering-sorting-s08",
+      "order": 8,
+      "sectionTitle": "Compound ORDER BY and index-backed sorts",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`ORDER BY` on multiple columns sorts by the first column, then breaks ties with the second, and so on — `ORDER BY country, last_name` groups all rows by country first, alphabetized within each country by last name.\n\nThe senior-level detail: if there's a composite index whose column order and sort direction **match** the `ORDER BY` exactly (`CREATE INDEX ON users (country, last_name)`), the engine can read rows already in sorted order straight off the index and skip an explicit sort step entirely. Mismatch the direction (`ORDER BY country ASC, last_name DESC` against an all-`ASC` index) or the column order, and the planner typically falls back to sorting in memory or on disk — which is why `EXPLAIN` showing a `Sort` node on a supposedly-indexed query is a real red flag to chase.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "filtering-sorting-s09",
+      "order": 9,
+      "sectionTitle": "Keyset pagination in practice",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```sql\n-- first page\nSELECT id, created_at, title\nFROM articles\nWHERE status = 'published'\nORDER BY created_at DESC, id DESC\nLIMIT 20;\n\n-- next page: pass back the last row's (created_at, id)\nSELECT id, created_at, title\nFROM articles\nWHERE status = 'published'\n  AND (created_at, id) < (:last_created_at, :last_id)\nORDER BY created_at DESC, id DESC\nLIMIT 20;\n```\n\nThe row-value comparison `(created_at, id) < (:last_created_at, :last_id)` correctly handles ties on `created_at` by falling through to `id` — exactly matching the `ORDER BY` tiebreaker, which is why the two must always be defined together.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": [
+        "filtering-sorting-s09-q1"
+      ]
+    },
+    {
+      "id": "filtering-sorting-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: OFFSET vs keyset cost as pages grow",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![OFFSET latency rising with page depth vs flat keyset pagination latency](assets/offset-vs-keyset-latency.svg)\n\nOFFSET's cost is proportional to how deep into the result set you're paging, because every earlier row still has to be walked and discarded. Keyset's cost stays flat because the `WHERE` predicate lets the index seek directly to the right starting point, regardless of how many pages came before.",
+      "assets": [
+        {
+          "alt": "OFFSET latency rising with page depth vs flat keyset pagination latency",
+          "path": "assets/offset-vs-keyset-latency.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 30,
+      "mcqIds": []
+    },
+    {
+      "id": "filtering-sorting-s11",
+      "order": 11,
+      "sectionTitle": "When OFFSET is still the right call",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Keyset isn't strictly better — it can't jump to an arbitrary page number, only step forward or backward from a known cursor. If a product genuinely needs \"go to page 47\" (common in internal admin tools and some paginated reports), keyset can't do that at all, while OFFSET can, just at a cost.\n\nA senior answer picks based on the actual access pattern: infinite-scroll feeds and APIs that only ever page forward are a clean fit for keyset; small, rarely-deep, jump-to-page UIs are fine with OFFSET. The mistake isn't using OFFSET — it's using OFFSET on a dataset and access pattern where deep pages are common and cheap seeks matter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "id": "inter-process-communication",
+  "title": "Inter-Process Communication",
+  "area": "operating-systems",
+  "group": "processes-threads",
+  "order": 7,
+  "slug": "inter-process-communication",
+  "summary": "Processes are isolated by default — pipes, shared memory, message queues, sockets, and signals are the OS-provided doors through that isolation, each with a different speed/safety trade-off.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "inter-process-communication-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Process isolation is a feature, not a bug — but sometimes two processes genuinely need to exchange data: a shell piping output between commands, a browser's renderer talking to its main process, a database's client library talking to the server. **Inter-Process Communication (IPC)** is the set of OS-provided mechanisms that let that happen without breaking isolation everywhere else.\n\nEach mechanism trades speed against safety and flexibility differently — this topic covers the main ones and, more importantly, when an interviewer would expect you to reach for which.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "inter-process-communication-s02",
+      "order": 2,
+      "sectionTitle": "Why processes need IPC — isolated address spaces by default",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Recall from What Is a Process: every process has its own private virtual address space, and the OS's page tables guarantee one process's memory is simply not visible to another's — that's the isolation the whole process abstraction is built on.\n\nThat guarantee is exactly what makes direct communication impossible without help: there's no shared variable, no shared pointer that means the same thing in two processes, because the same virtual address in two different processes maps to two entirely different physical pages (or to nothing at all). Every IPC mechanism exists to deliberately, narrowly punch a hole through that isolation — the kernel sets up a specific, bounded channel (a buffer, a mapped region, a queue) that both processes can reach, while leaving everything else isolated exactly as before.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "inter-process-communication-s03",
+      "order": 3,
+      "sectionTitle": "Pipes and named pipes (FIFOs)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **pipe** is a unidirectional, in-kernel byte stream with two ends: a write end and a read end. The classic anonymous pipe only works between related processes (typically parent and child after a `fork()`, since the child inherits the parent's file descriptors, including the pipe's ends) — there's no name another unrelated process could use to find it.\n\nA **named pipe (FIFO)** solves that: it's created as an actual entry in the filesystem (`mkfifo` on Unix) that any process with access to that path can open, read from, or write to, without needing a common ancestor. Both are simple byte streams — no message boundaries, just bytes in, bytes out, in order — and both block: a write blocks if the pipe's buffer is full, a read blocks if it's empty.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "inter-process-communication-s03-q1"
+      ]
+    },
+    {
+      "id": "inter-process-communication-s04",
+      "order": 4,
+      "sectionTitle": "Code: a simple pipe between parent and child",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\nint fd[2];\npipe(fd);              // fd[0] = read end, fd[1] = write end\n\npid_t pid = fork();\nif (pid == 0) {\n    close(fd[1]);                   // child only reads\n    char buf[100];\n    read(fd[0], buf, sizeof(buf));\n    printf(\"child got: %s\\n\", buf);\n} else {\n    close(fd[0]);                   // parent only writes\n    write(fd[1], \"hello\", 6);\n}\n```\n\nBoth processes inherit *both* ends of the pipe from `fork()` — closing the end you're not using is essential, not just tidy. If the writer doesn't close its unused read end, a reader waiting for end-of-stream (a `read()` returning 0) can block forever, since the kernel still sees a writer that could theoretically write more. This exact bug — leaving a pipe end open by mistake — is a common real cause of shell scripts or subprocess wrappers that hang forever.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "inter-process-communication-s04-q1"
+      ]
+    },
+    {
+      "id": "inter-process-communication-s05",
+      "order": 5,
+      "sectionTitle": "Message queues",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **message queue** is a kernel-managed queue of discrete, typed messages, rather than a raw byte stream — a sender enqueues a whole message, and a receiver dequeues one, with the boundary between messages preserved (unlike a pipe, where you'd have to build your own framing on top of a byte stream).\n\nMessages can carry a **type** or priority tag, so a receiver can selectively pull messages of a specific type rather than strictly first-in-first-out, and multiple unrelated processes can read from and write to the same named queue without a parent-child relationship. The trade-off versus a pipe: more structure and flexibility, but with real per-message overhead — the kernel is doing more bookkeeping per unit of data than for a plain byte stream, so message queues suit discrete units of work more than a continuous high-throughput byte stream.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "inter-process-communication-s06",
+      "order": 6,
+      "sectionTitle": "Shared memory — the fastest IPC",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Shared memory** maps the *same* physical memory pages into two (or more) processes' address spaces, so both can read and write it directly, as ordinary memory — no copying, no kernel call on every access, no serialization. It's the fastest IPC mechanism there is, because after the initial setup, using it is indistinguishable from accessing any other memory in your own process.\n\nThat speed is also exactly its danger: the OS does **not** serialize or coordinate access for you the way a pipe or message queue naturally does through its read/write API. If two processes write to the same shared region at the same time with no coordination, you get the exact same kind of race condition you'd get from two unsynchronized threads — except now it's across process boundaries too, so you need cross-process synchronization primitives (a named semaphore, a mutex placed in the shared region itself) to make it safe.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "inter-process-communication-s06-q1"
+      ]
+    },
+    {
+      "id": "inter-process-communication-s07",
+      "order": 7,
+      "sectionTitle": "Diagram: shared memory vs message-passing data paths",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Message passing vs shared memory copy counts](assets/ipc-message-vs-shared-memory.svg)\n\nThe number of copies is the whole story: message-passing mechanisms copy data twice — once from sender into the kernel, once from the kernel out to the receiver — while shared memory, once mapped, involves zero copies for ongoing communication. That's the entire source of shared memory's speed advantage, and also why it needs its own synchronization: the kernel isn't mediating each access the way it is for a pipe or queue.",
+      "assets": [
+        {
+          "alt": "Message passing vs shared memory copy counts",
+          "path": "assets/ipc-message-vs-shared-memory.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "inter-process-communication-s08",
+      "order": 8,
+      "sectionTitle": "Sockets as IPC (local and network)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Sockets** are the most general-purpose IPC mechanism, because the same API works whether the two endpoints are on the same machine or different ones across a network. A **Unix domain socket** connects two processes on the same host via a filesystem path, with performance closer to a pipe (no actual network stack involved) but with the bidirectional, connection-oriented semantics of a network socket. A **TCP/UDP socket** does the same thing but genuinely crosses a network.\n\nThe practical reason many systems default to sockets even for same-machine IPC: the code doesn't need to change if the two communicating processes later move onto different machines (a monolith splitting into two services, for instance) — you're already using a mechanism that scales from same-host to cross-network for free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "inter-process-communication-s09",
+      "order": 9,
+      "sectionTitle": "Signals as a lightweight notification mechanism",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **signal** is the lightest-weight IPC mechanism of all — it's not really about transferring data at all, just notifying a process that something happened, identified by a small integer (`SIGTERM`, `SIGKILL`, `SIGCHLD`, `SIGINT`, and so on). A process can install a handler for most signals to run custom code when one arrives, or accept the OS's default behavior (which for many signals is termination).\n\nSignals carry essentially no payload — historically none at all beyond the signal number, though `sigqueue` allows attaching a small integer or pointer-sized value in modern POSIX systems. That's why they're used for *events*, not data transfer: \"a child process exited\" (`SIGCHLD`), \"please shut down gracefully\" (`SIGTERM`), \"the user pressed Ctrl+C\" (`SIGINT`) — never for sending a payload of real application data, which is what the other mechanisms on this page are for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "inter-process-communication-s09-q1"
+      ]
+    },
+    {
+      "id": "inter-process-communication-s10",
+      "order": 10,
+      "sectionTitle": "Compare: pipes vs shared memory vs message queues vs sockets",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Pipes/FIFOs | Message queues | Shared memory | Sockets |\n|---|---|---|---|---|\n| Data unit | Byte stream | Discrete messages | Raw memory, any structure | Byte stream or datagrams |\n| Speed | Fast (two kernel copies) | Moderate (per-message overhead) | Fastest (zero copies after setup) | Slower (network stack, even locally for TCP) |\n| Needs relation? | Anonymous: yes; named (FIFO): no | No | No | No |\n| Synchronization provided? | Yes, implicitly (blocking read/write) | Yes, implicitly | No — you must add your own | Yes, implicitly |\n| Works across machines? | No | No (typically) | No | Yes |\n\n**How to decide:** need raw throughput for a large, frequently-updated buffer and can build your own synchronization → shared memory. Need simple one-way streaming between related processes → a pipe. Need discrete typed messages with priority → a message queue. Need something that might later run across machines, or already does → sockets.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "inter-process-communication-s10-q1"
+      ]
+    },
+    {
+      "id": "inter-process-communication-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: shared memory needs its own synchronization",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I set up shared memory between two processes, so writes from one are automatically safe for the other to read whenever it wants — the OS handles the sharing part.\"\n\n**Why it's wrong:** the OS's job in shared memory ends at mapping the same physical pages into both address spaces — after that, it's just ordinary memory as far as either process is concerned, with **no built-in coordination** at all. Two processes writing and reading the same shared region concurrently, without synchronization, get exactly the same race conditions two unsynchronized threads would (see the concurrency and synchronization topic) — a reader can see a half-written structure, or two writers can interleave and corrupt data, with nothing to catch it.\n\n**Correct model:** shared memory gives you a fast communication *channel*, not a safe one — you must add your own cross-process synchronization, typically a named semaphore (`sem_open`) or a mutex placed inside the shared region itself (using a `pthread_mutex_t` initialized with the `PTHREAD_PROCESS_SHARED` attribute). Skipping this step is the single most common way shared-memory IPC goes wrong in practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "inter-process-communication-s11-q1"
+      ]
+    }
+  ]
+}

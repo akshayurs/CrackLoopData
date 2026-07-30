@@ -1,0 +1,45 @@
+{
+  "topicId": "storage-file-organization",
+  "interviewQuestions": [
+    {
+      "id": "storage-file-organization-iq1",
+      "question": "Why does a database read and cache data in fixed-size pages instead of individual rows?",
+      "answerMarkdown": "I'd start from the hardware: seeking to a random location on disk costs a fixed penalty regardless of how much you read once you're there, so it's cheaper to read a chunk that will likely be needed again than to read one row at a time. That chunk is the page — 8 KB in Postgres, 16 KB in InnoDB — and it holds many rows plus a small slot array that maps row identifiers to their byte offsets.\n\nThe buffer pool then caches whole pages in RAM, so once one row on a page is touched, its neighbors are already warm. In a well-sized OLTP system I'd expect a buffer pool hit ratio above 99% — below that, you're paying real disk latency on the hot path, which is usually the first thing I'd check when diagnosing unexplained query slowness.\n\nThe trade-off is that this only pays off if related rows actually get accessed together, which is exactly why physical layout — clustering, index order — matters so much for performance.\n\n**Testing:** whether you understand storage cost is dominated by pages touched, not rows returned.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Why page-based storage"
+    },
+    {
+      "id": "storage-file-organization-iq2",
+      "question": "When would you choose column-oriented storage over row-oriented, and what do you give up?",
+      "answerMarkdown": "I'd frame it around the query shape, not the product category. Row storage keeps a full row contiguous, which is ideal when a query touches most columns of a few rows — the classic OLTP shape, like fetching one order by id. Column storage keeps each column contiguous across all rows, so an aggregate like `AVG(amount)` over 500 million rows only reads the `amount` bytes, skipping everything else, and same-typed values compress together far better — often 5-10x smaller on disk.\n\nThe cost shows up on writes: inserting a single row in a columnar store means touching every column file, so single-row OLTP writes are expensive there, while row stores handle that in one contiguous write.\n\nConcretely: I'd put transactional order-processing on Postgres or MySQL, and route the nightly reporting pipeline that scans billions of rows for aggregates to Redshift or ClickHouse — and I wouldn't try to make one engine do both well.\n\n**Testing:** whether you map storage layout choice to actual query and write patterns rather than reciting OLTP-vs-OLAP as a slogan.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Row vs column storage trade-off"
+    },
+    {
+      "id": "storage-file-organization-iq3",
+      "question": "A table's data size on disk is 3x what you'd expect from its row count. How would you debug this?",
+      "answerMarkdown": "First I'd rule out the obvious: check for large TOASTed columns — a blob or JSON column over roughly 2 KB gets sliced into a side table in Postgres, and if I forgot to account for that in my estimate, the discrepancy is expected, not a bug.\n\nIf that's not it, I'd suspect MVCC bloat: Postgres and InnoDB don't overwrite rows on update, they write new versions and mark old ones dead so concurrent readers keep a consistent view. A table with heavy update or delete traffic and infrequent `VACUUM` (or a long-running transaction blocking cleanup) accumulates dead tuples that inflate disk usage well past the logical row count.\n\nConcretely, I'd run `pg_stat_user_tables` to compare `n_live_tup` against `n_dead_tup`, or check InnoDB's `information_schema` for table vs data-free size, then look for blocking transactions preventing autovacuum from reclaiming space.\n\n**Testing:** whether you know MVCC has a physical storage cost and can name the actual tool to diagnose it, not just the concept.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging table bloat"
+    },
+    {
+      "id": "storage-file-organization-iq4",
+      "question": "How would you estimate whether a 10-million-row table will fit comfortably in a 4 GB buffer pool?",
+      "answerMarkdown": "I'd do the arithmetic out loud rather than guess. Start with an average row size — say a users row at roughly 200 bytes including a few varchars and a timestamp. An 8 KB Postgres page has about 7.8 KB usable after the header and slot array, so that's around 39 rows per page.\n\n10,000,000 rows divided by 39 rows/page is about 256,000 pages, which at 8 KB each is roughly 2 GB of heap data — before indexes. A B+Tree index on the primary key typically adds another 10-20%, so I'd budget closer to 2.3-2.5 GB total.\n\nAgainst a 4 GB buffer pool, that comfortably fits with room for other tables and query working memory — so my answer would be yes, with the caveat that I'd want the actual average row width and index count from the schema, not my assumed 200 bytes, before treating this as final.\n\n**Testing:** whether you can produce a real back-of-envelope estimate under pressure instead of a vague \"it depends.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Sizing tables against RAM"
+    },
+    {
+      "id": "storage-file-organization-iq5",
+      "question": "Why might lowering a table's fill factor below 100% actually improve performance on an update-heavy workload?",
+      "answerMarkdown": "I'd start with what fill factor controls: how full a page is packed on initial write. At 100%, there's no spare room, so an `UPDATE` that grows a variable-length column has nowhere to go on that page — the engine relocates the row to a new page and rewrites every pointer to it, which is expensive and fragments physical layout over time.\n\nSetting fill factor to something like 90% reserves headroom on each page specifically for that in-place growth, so updates that would otherwise force a relocation can instead expand within the same page — cheaper, and it avoids scattering related rows across new pages.\n\nThe trade-off is real: a lower fill factor means more pages for the same data, slightly hurting pure sequential scan speed and wasting some disk space, so I'd only apply it after confirming the workload is actually update-heavy on growable columns — not as a blanket default.\n\n**Testing:** whether you can reason about a physical storage knob as a trade-off rather than a universal best practice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fill factor trade-offs"
+    }
+  ]
+}

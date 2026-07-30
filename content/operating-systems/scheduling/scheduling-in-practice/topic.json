@@ -1,0 +1,187 @@
+{
+  "id": "scheduling-in-practice",
+  "title": "Scheduling in Practice — Linux CFS",
+  "area": "operating-systems",
+  "group": "scheduling",
+  "order": 6,
+  "slug": "scheduling-in-practice",
+  "summary": "How Linux actually schedules processes today: virtual runtime, the red-black tree, nice values, and how CFS quietly replaced MLFQ-style heuristics with fairness accounting.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "scheduling-in-practice-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything so far in this group has been textbook algorithms; this topic is the production case study. Linux's **Completely Fair Scheduler (CFS)** replaced the older MLFQ-style heuristic scheduler in 2007, and it works on a genuinely different principle: instead of queues and priority levels, it tracks each task's **virtual runtime** and always runs whoever has the least of it.\n\nThis is the scheduler running on essentially every Linux server, container host, and Android phone today — understanding it is what turns \"I know the textbook algorithms\" into \"I know how a real system actually schedules a billion machines.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "scheduling-in-practice-s02",
+      "order": 2,
+      "sectionTitle": "Why Linux moved to a Completely Fair Scheduler",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Linux's pre-2007 O(1) scheduler used MLFQ-style heuristics (interactivity detection based on sleep/run history) to guess which processes deserved priority boosts — and those heuristics were exactly the fragile, hard-to-tune kind covered in [Multilevel Queue & MLFQ](multilevel-queue-and-mlfq): they worked well for common cases but had known, reproducible failure modes where the heuristic misjudged a workload and gave it clearly wrong treatment.\n\nIngo Molnar's 2007 replacement, CFS, deliberately abandoned heuristic-based interactivity detection entirely in favor of a mathematically simple, principled fairness model: don't try to *guess* what a process needs, just ensure every runnable process gets a CPU share proportional to its weight, tracked precisely, all the time.\n\nThis is a direct, real-world resolution of the exact tension the senior nuance in the MLFQ topic named — \"too many hard-to-tune parameters\" was replaced with \"one clean invariant to maintain.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "scheduling-in-practice-s02-q1"
+      ]
+    },
+    {
+      "id": "scheduling-in-practice-s03",
+      "order": 3,
+      "sectionTitle": "The core CFS idea: virtual runtime and the red-black tree",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every runnable task has a **vruntime** (virtual runtime) — roughly, how much CPU time it's consumed so far, adjusted by its weight (from nice value, next slide). CFS's entire scheduling decision reduces to one rule: **always run the runnable task with the smallest vruntime**.\n\nAs a task runs, its vruntime increases (roughly proportional to real time elapsed, inversely scaled by its weight); once it's no longer the smallest, it gets preempted in favor of whoever now has the least. Over time, this naturally converges toward every task having accumulated roughly equal (weighted) vruntime — a mathematical fairness guarantee, not a heuristic approximation of one.\n\nTo make \"find the smallest vruntime\" fast even with thousands of runnable tasks, CFS stores them in a **red-black tree** keyed by vruntime — a self-balancing binary tree giving O(log n) insertion and O(1) access to the leftmost (smallest-vruntime) node, which is exactly the next task to run.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "scheduling-in-practice-s03-q1"
+      ]
+    },
+    {
+      "id": "scheduling-in-practice-s04",
+      "order": 4,
+      "sectionTitle": "Diagram: CFS picking the leftmost (least vruntime) task",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![CFS runqueue as a red-black tree](assets/cfs-red-black-tree.svg)\n\nThe leftmost-node lookup is O(1) precisely because red-black trees maintain a cached pointer to it; only *inserting* a task back into the tree after it runs (with its now-larger vruntime) costs the O(log n) rebalancing work.\n\nThis is why CFS scales well to systems with very high numbers of runnable tasks — the expensive part of scheduling is proportional to the log of the task count, not the count itself.",
+      "assets": [
+        {
+          "alt": "CFS runqueue as a red-black tree",
+          "path": "assets/cfs-red-black-tree.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "scheduling-in-practice-s05",
+      "order": 5,
+      "sectionTitle": "Nice values and weighted fairness in CFS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Unix's `nice` value (-20 to 19, lower is higher priority) predates CFS, but CFS reinterprets it precisely: nice isn't a queue selector or a strict ordering rule anymore, it's a **weight multiplier** on how fast a task's vruntime accumulates. A task at nice -20 has a much higher weight, so its vruntime grows slowly relative to real time, letting it stay \"leftmost\" (and thus scheduled) more often; a task at nice 19 has low weight, so its vruntime grows fast, dropping it out of contention sooner.\n\nEach nice level differs by a fixed ~10% CPU-share multiplier from its neighbor — meaning nice 0 vs nice 1 is a modest, proportional difference, not an on/off priority switch — which is why nice-based tuning in CFS feels smooth and predictable rather than the discrete jumps of a queue-level priority scheme.\n\nCritically: a nice -20 task never *starves* a nice 19 task the way strict priority scheduling could — the nice 19 task still gets a share of CPU, just a much smaller one, because CFS's invariant is proportional fairness, not strict precedence.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "scheduling-in-practice-s05-q1"
+      ]
+    },
+    {
+      "id": "scheduling-in-practice-s06",
+      "order": 6,
+      "sectionTitle": "How CFS handles I/O-bound vs CPU-bound processes without explicit queues",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "MLFQ needed explicit queues and demotion/promotion rules to separate interactive from CPU-bound processes. CFS achieves the equivalent effect as a natural side effect of its one invariant, with no separate mechanism at all: an I/O-bound process sleeps often, so it barely accumulates vruntime while blocked — when it wakes up, its vruntime is far behind the currently-running tasks, so it's immediately the leftmost node and gets scheduled right away, giving it excellent, MLFQ-like responsiveness with zero special-casing.\n\nA CPU-bound process, by contrast, keeps running and keeps accumulating vruntime continuously, so it naturally falls behind newly-woken or lighter-weight tasks in the ordering without ever needing an explicit \"demote this process\" rule — the same vruntime comparison that governs everything else handles it automatically.\n\nThis is the elegance interviewers are really testing for when they ask about CFS: one simple, uniform rule (least vruntime runs next) reproduces MLFQ's *entire* behavioral goal without needing MLFQ's queues, demotion rules, boost intervals, or anti-gaming logic at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "scheduling-in-practice-s07",
+      "order": 7,
+      "sectionTitle": "Compare: CFS's approach vs textbook MLFQ",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Both target the same behavioral goal — favor interactive/short work without starving CPU-bound/long work — via very different mechanisms.\n\n| | MLFQ | CFS |\n|---|---|---|\n| Core mechanism | Multiple discrete priority queues, tasks move between them | Single ordering by vruntime, no discrete queues |\n| Number of tunable parameters | Many — queue count, quantum per queue, boost interval, gaming defenses | Few — mainly per-task weight (from nice) |\n| Anti-starvation | Explicit periodic priority boost, must be separately implemented | Built into the invariant itself — every task's vruntime is bounded by definition |\n| Gaming resistance | Requires explicit cumulative-usage tracking to prevent exploitation | Structurally harder to game — vruntime accrues from actual CPU consumption, not self-reported yield timing |\n\n**How to decide which framing to use in an interview:** if asked to *design* a scheduler from scratch, MLFQ's explicit rules are easier to reason through step by step; if asked \"how does a real production scheduler actually work,\" CFS's vruntime model is the accurate, current answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "scheduling-in-practice-s07-q1"
+      ]
+    },
+    {
+      "id": "scheduling-in-practice-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: assuming \"nice -20\" guarantees real-time-like behavior",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Setting a process to nice -20 makes it behave like a real-time task — it'll always preempt everything and never be delayed.\"\n\n**Why it's wrong:** nice -20 under CFS is still just a *weight* — it makes vruntime accumulate more slowly, so the task gets scheduled more often and for a larger proportional share, but it's still subject to CFS's fairness invariant, still shares the CPU with everything else, and still has no formal bound on worst-case latency. It's a strong preference, not a real-time guarantee — exactly the same category error as the general pitfall in [Real-Time Scheduling](real-time-scheduling) about priority not equaling guaranteed latency.\n\n**Correct model:** for actual bounded-latency requirements, use Linux's real-time scheduling classes (`SCHED_FIFO`, `SCHED_RR`), which sit in a completely separate, higher-precedence scheduling class above CFS entirely — nice values only affect priority *within* the normal CFS class, they don't cross into or override the real-time classes' guarantees at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "scheduling-in-practice-s08-q1"
+      ]
+    },
+    {
+      "id": "scheduling-in-practice-s09",
+      "order": 9,
+      "sectionTitle": "Senior nuance: CFS's successor, EEVDF",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "As of Linux 6.6 (2023), CFS was replaced by **EEVDF** (Earliest Eligible Virtual Deadline First) as the default scheduling class — a staff-level detail worth knowing exists, since \"Linux uses CFS\" is no longer strictly the current answer, even though CFS's vruntime concept lives on inside EEVDF's design.\n\nEEVDF's motivation: pure vruntime-ordering (CFS) can still let a task that's been sleeping a long time \"jump the line\" and dominate the CPU for a stretch once it wakes, since its vruntime is so far behind — technically fair over time, but a real, observed source of latency spikes for other tasks in practice. EEVDF adds an explicit **virtual eligible time and deadline** per task, closer in spirit to the EDF concept from Real-Time Scheduling, giving tighter, more predictable latency bounds for the general-purpose case without CFS's remaining slack.\n\nThe pattern worth naming in an interview: this is scheduling research directly crossing over into production twice in under two decades (heuristic MLFQ → fairness-based CFS → deadline-aware EEVDF), each replacing the last specifically because a *measured*, real production latency problem motivated it — not academic preference.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "scheduling-in-practice-s10",
+      "order": 10,
+      "sectionTitle": "CFS's scheduling classes and where it fits among them",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "CFS (or EEVDF today) is only one of several **scheduling classes** Linux's scheduler framework supports, evaluated in strict precedence order: `SCHED_DEADLINE` (EDF-based, the strongest formal guarantee, for genuinely deadline-critical tasks) runs first if any such task is ready; then `SCHED_FIFO`/`SCHED_RR` (fixed real-time priority classes); only then does the normal class (CFS/EEVDF) get any CPU time at all, for everything without an explicit real-time designation.\n\nThis layered structure is why the earlier pitfall's fix works: giving a task `SCHED_FIFO` doesn't just raise its nice value, it moves it into an entirely different, strictly higher-precedence class that CFS-class tasks (regardless of their nice value) cannot preempt.\n\nKnowing this hierarchy exists — and that ordinary process priority tuning (`nice`) only operates within the bottom class — is exactly the kind of \"staff engineer knows the layers below the common API\" detail that separates textbook scheduling knowledge from operational fluency with a real kernel.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "scheduling-in-practice-s11",
+      "order": 11,
+      "sectionTitle": "How this shows up in production",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`chrt` shows and sets a process's scheduling class and priority directly (`chrt -p <pid>` reports whether something is running under `SCHED_OTHER`/CFS, `SCHED_FIFO`, etc.), and is the right first command when investigating whether a latency-sensitive process is actually getting real-time treatment or just a favorable nice value.\n\nKubernetes' CPU request/limit model builds directly on cgroups, which in turn hook into CFS's fairness accounting: a pod's CPU \"shares\" request is implemented as a cgroup CPU weight, which CFS honors the same way it honors nice-derived task weights — proportional fairness, not a hard reservation, which is exactly why a pod can still get starved of CPU under contention even with a generous request, unless a hard `limit` (CFS bandwidth control, a separate quota mechanism) is also set.\n\nWhen a container's CPU usage looks throttled despite \"enough\" nodes being available, checking whether it's hitting a CFS bandwidth quota (`cpu.cfs_quota_us`) versus simply losing the proportional-fairness contest for shares is the exact diagnostic distinction this topic equips you to make.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "scheduling-in-practice-s11-q1"
+      ]
+    },
+    {
+      "id": "scheduling-in-practice-s12",
+      "order": 12,
+      "sectionTitle": "Recap: what a strong interview answer sounds like",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer to \"how does Linux decide what runs next\" says \"it uses a scheduler.\" A solid mid-level answer names CFS and vruntime. A strong senior/staff answer does what this topic modeled throughout: names vruntime and the red-black tree, explains *why* it replaced MLFQ (fragile heuristics, not a bug fix), connects nice values to proportional weight rather than strict ordering, and knows CFS sits below the real-time scheduling classes and has itself been superseded by EEVDF.\n\nThe throughline across this entire group is worth restating explicitly: every algorithm here — FCFS, SJF, Round Robin, priority, MLFQ, RM/EDF, CFS — is answering the exact same question (\"who runs next, and why\") with a progressively more refined mechanism, each one fixing a specific, nameable weakness in what came before it.\n\nBeing able to trace that lineage — not just recite each algorithm in isolation — is what makes a scheduling answer sound like it comes from someone who understands the *design process*, not just the final textbook list.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

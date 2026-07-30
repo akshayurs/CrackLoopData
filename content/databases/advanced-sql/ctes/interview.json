@@ -1,0 +1,45 @@
+{
+  "topicId": "ctes",
+  "interviewQuestions": [
+    {
+      "id": "ctes-iq1",
+      "question": "How would you write a query to list every employee's full management chain up to the CEO?",
+      "answerMarkdown": "This needs a recursive CTE, since I don't know the chain's depth ahead of time and a plain join can only traverse one fixed level. I'd anchor on the employee in question, then recursively join upward through `manager_id` until I hit a row with no manager.\n\n```sql\nWITH RECURSIVE chain AS (\n  SELECT employee_id, manager_id, name, 1 AS level\n  FROM employees WHERE employee_id = 42\n  UNION ALL\n  SELECT e.employee_id, e.manager_id, e.name, c.level + 1\n  FROM employees e\n  JOIN chain c ON e.employee_id = c.manager_id\n)\nSELECT * FROM chain ORDER BY level DESC;\n```\n\nI'd add a depth cap (`WHERE c.level < 20`) as cheap insurance against a data bug creating a reporting cycle, even though a normal org chart shouldn't have one. I'd also mention that for a one-off lookup like this, walking it in application code with a loop is a reasonable alternative — the CTE wins when I need this for every employee in one query.\n\n**Testing:** whether you reach for recursion immediately for unknown-depth hierarchies, and whether you defensively cap depth.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Walking a management chain"
+    },
+    {
+      "id": "ctes-iq2",
+      "question": "When would you use a CTE versus a temporary table for the same intermediate result?",
+      "answerMarkdown": "I'd default to a CTE for anything scoped to one query — it's more readable than a nested subquery and doesn't need cleanup. I'd switch to a temp table in three cases: I need the intermediate result across multiple separate statements in the same session, I need to put an index on it because it's large and gets scanned repeatedly, or I need the query planner to have accurate statistics on it, which a materialized temp table gets from `ANALYZE` in a way a CTE typically doesn't.\n\nA concrete example: if I'm running a multi-step ETL job where step 2 and step 3 both need the deduplicated output of step 1, and that output is a few million rows, I'd materialize it into a temp table and index the join key — re-deriving it as a CTE in every downstream statement would mean recomputing the same expensive dedup logic each time.\n\n**Testing:** whether you know these aren't interchangeable and can point to a scenario where temp table wins.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "CTE vs temp table"
+    },
+    {
+      "id": "ctes-iq3",
+      "question": "A recursive CTE meant to find all reachable cities from a starting city never terminates. How do you debug and fix it?",
+      "answerMarkdown": "I'd start from the termination rule: recursion stops only when a pass adds zero new rows. If it never terminates, either the underlying route data has a cycle (city A connects to B, B connects back to A) or my recursive member isn't excluding cities already visited, so it keeps re-adding the same reachable set every pass.\n\nI'd check the recursive member for a visited-guard — something like `WHERE NOT r.to_city = ANY(re.path)` using an accumulated path array — and add it if missing. If the guard is already there and it still doesn't terminate, I'd suspect the path isn't being carried forward correctly across iterations, or the join condition isn't actually restricting to the previous iteration's new rows.\n\nAs a safety net regardless of the root cause, I'd also add an explicit depth cap so a similar bug in the future degrades to \"returns an incomplete but bounded result\" instead of \"times out the whole session.\"\n\n**Testing:** whether you can reason from the termination mechanism to the actual bug, rather than guessing at fixes.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging infinite recursion"
+    },
+    {
+      "id": "ctes-iq4",
+      "question": "You rewrote a slow query to use CTEs for readability and it got noticeably slower. What might be going on?",
+      "answerMarkdown": "My first suspicion is CTE materialization behavior — on some engines and versions, a CTE is executed once and its result cached as an opaque block, which blocks the optimizer from pushing filters or join conditions from the outer query down into it. If the original query let the optimizer see the whole picture and pick a smart index, and the CTE version hides part of that picture, the plan can get meaningfully worse.\n\nI'd check `EXPLAIN ANALYZE` for a materialization or CTE-scan node and compare estimated versus actual row counts at that boundary. If that's the cause, on engines that support it I'd add a `NOT MATERIALIZED` hint, or just rewrite the CTE back as an inlined subquery for that specific one — readability doesn't have to mean giving up performance everywhere, but it's worth knowing where the trade-off can bite.\n\n**Testing:** whether you know CTE syntax and CTE execution semantics aren't the same thing, and that readability can have a real performance cost on some engines.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "CTE materialization performance"
+    },
+    {
+      "id": "ctes-iq5",
+      "question": "What's a case where you'd choose to traverse a hierarchy in application code instead of a recursive CTE?",
+      "answerMarkdown": "I'd reach for application-side traversal when the walk needs business logic mid-traversal that's awkward to express in SQL — permission checks per node, early termination based on a rule that depends on external state, or emitting progress/logging at each level for observability. A recursive CTE runs as one opaque unit; if something needs to happen conditionally between levels, a loop in code is far easier to write and debug.\n\nI'd also lean application-side if the hierarchy is small and shallow (a handful of levels), where the extra round trips are negligible and the code is simpler to test and reason about than a `WITH RECURSIVE` block. I'd flip back to a recursive CTE the moment the tree gets wide or deep enough that per-level round trips start to dominate — that's when doing it in one database round trip clearly wins.\n\n**Testing:** whether you can name the real trade-off (debuggability and flexibility vs round-trip cost) instead of treating recursive CTEs as always superior.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "SQL recursion vs application loops"
+    }
+  ]
+}

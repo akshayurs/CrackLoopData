@@ -1,0 +1,187 @@
+{
+  "id": "signals",
+  "title": "Signals",
+  "area": "operating-systems",
+  "group": "linux-internals",
+  "order": 1,
+  "slug": "signals",
+  "summary": "The async-notification mechanism the kernel uses to interrupt a process — common signals, handlers, and the safety rules that make handler code its own tricky discipline.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "signals-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **signal** is the kernel's way of tapping a process on the shoulder mid-execution: \"stop what you're doing, something happened.\" Ctrl+C, a segfault, `kill -9`, a child exiting — all of these reach your process as signals.\n\nThis topic covers what signals are, the handful you'll actually see in production, how (and how not) to handle them, and why `kill -9` is the one command that never fails to work.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "signals-s02",
+      "order": 2,
+      "sectionTitle": "What a signal actually is",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **signal** is an asynchronous notification the kernel delivers to a process, interrupting whatever it was doing. Unlike a return value or a pipe write, a signal doesn't carry a payload — it's just a number (1 through roughly 64) that says \"this specific thing happened,\" nothing more.\n\nSignals can come from three places: the kernel itself (a bad memory access raises `SIGSEGV`), another process (`kill(pid, sig)`), or the terminal driver translating a keypress (Ctrl+C becomes `SIGINT`). The receiving process doesn't get to choose *when* it's interrupted — that's what makes signals genuinely asynchronous, and genuinely hard to write correct handlers for.\n\nOnce delivered, the process has exactly three choices for what happens next: run the default action, run a custom handler, or ignore it entirely — and two signals don't even give it that choice (see the SIGKILL/SIGSTOP slide).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "signals-s03",
+      "order": 3,
+      "sectionTitle": "The signals you'll actually see",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A handful of signals cover almost every real interview and on-call scenario:\n\n- **SIGINT** (2) — Ctrl+C from the terminal. Polite request to stop.\n- **SIGTERM** (15) — the default `kill` signal, and what orchestrators (systemd, Kubernetes, Docker) send to ask a process to shut down.\n- **SIGKILL** (9) — unconditional, immediate termination. `kill -9`.\n- **SIGSEGV** (11) — the process touched memory it doesn't own; the kernel kills it and, if configured, dumps core.\n- **SIGCHLD** (17) — sent to a parent when one of its children exits or stops, so the parent knows to `wait()` and reap it.\n\nEach has a number and a name, and both work interchangeably with `kill` (`kill -TERM 1234` and `kill -15 1234` are identical) — but scripts should prefer the name, since signal numbers aren't guaranteed identical across every Unix variant.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "signals-s03-q1"
+      ]
+    },
+    {
+      "id": "signals-s04",
+      "order": 4,
+      "sectionTitle": "Default actions: what happens if you do nothing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every signal has a **default action** the kernel takes if the process hasn't installed a handler or explicitly ignored it. There are four:\n\n- **Terminate** — the process exits. Most signals default here (`SIGTERM`, `SIGINT`, `SIGKILL`).\n- **Terminate + core dump** — exits and writes a memory snapshot to disk for post-mortem debugging (`SIGSEGV`, `SIGABRT`, `SIGFPE`).\n- **Ignore** — nothing happens (`SIGCHLD`'s default on most systems, `SIGURG`, `SIGWINCH` for terminal resize).\n- **Stop / Continue** — suspends or resumes the process without killing it (`SIGSTOP`/`SIGTSTP` stop, `SIGCONT` resumes) — this is exactly what Ctrl+Z does.\n\nA process can override the default for most signals by installing a handler or explicitly ignoring the signal — but not for every signal, which is where SIGKILL and SIGSTOP come in a few slides from now.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "signals-s05",
+      "order": 5,
+      "sectionTitle": "Installing a signal handler",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **signal handler** is a function you register to run instead of the default action when a signal arrives. The kernel pauses the process's normal execution, runs your handler function, then resumes where it left off (or exits, if the handler does).\n\nTwo APIs exist: the old `signal()` — simple but with inconsistent, historically platform-dependent semantics — and `sigaction()`, the modern, POSIX-specified replacement that lets you control exactly which signals are blocked while your handler runs, whether interrupted system calls auto-restart, and more. Production C code should always reach for `sigaction()`; `signal()` survives mostly in textbooks and quick scripts.\n\nRegistering a handler doesn't create a new thread — it hijacks the *existing* thread's control flow at whatever instruction it was on, which is exactly why handler code has such strict safety rules (two slides ahead).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "signals-s06",
+      "order": 6,
+      "sectionTitle": "Code: catching SIGINT to clean up before exit",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A common real pattern: catch Ctrl+C, flip a flag, and let the main loop exit cleanly instead of dying mid-write.\n\n```c\n#include <signal.h>\n#include <stdio.h>\n\nvolatile sig_atomic_t stop = 0;\n\nvoid handle_sigint(int sig) {\n    stop = 1;  // only this is guaranteed safe here\n}\n\nint main(void) {\n    struct sigaction sa = {0};\n    sa.sa_handler = handle_sigint;\n    sigaction(SIGINT, &sa, NULL);\n\n    while (!stop) {\n        // do work\n    }\n    printf(\"flushing state, exiting cleanly\\n\");\n    return 0;\n}\n```\n\nThe handler does the absolute minimum — set a `volatile sig_atomic_t` flag — and all real cleanup (closing files, flushing buffers) happens back in `main()`'s normal flow, outside the handler. That split is the pattern to memorize, not just this snippet.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "signals-s07",
+      "order": 7,
+      "sectionTitle": "Why SIGKILL and SIGSTOP can't be caught, blocked, or ignored",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**SIGKILL** (9) and **SIGSTOP** (19) are special-cased in the kernel: a process cannot install a handler for them, block them, or ignore them. The kernel enforces the default action unconditionally.\n\nThis is deliberate, not an oversight. Every other signal is a request the process can intercept and even refuse to act on — useful for graceful shutdown, but it means a badly-behaved or malicious process could install a handler that swallows `SIGTERM` forever and never die. The system needs at least one lever that is guaranteed to work no matter what code the target process is running, or how broken its state is. SIGKILL is that lever for termination, SIGSTOP the equivalent for suspension (job control relies on SIGSTOP always working).\n\nThe cost: SIGKILL gives the process zero chance to clean up — no closing files, no flushing writes, no releasing locks. The kernel just removes it from the scheduler and tears down its resources.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "signals-s07-q1"
+      ]
+    },
+    {
+      "id": "signals-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: signal delivery timeline",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![signal delivery timeline from raise to handler return](assets/signal-delivery-timeline.svg)\n\nDelivery isn't instantaneous: a signal becomes **pending** the moment it's sent, but the kernel only actually delivers it the next time the target process is scheduled to run (or returns from a syscall). If the process is already blocking that signal, it stays pending until unblocked.\n\nThe handler itself runs on the *process's own stack*, in user mode, as if it were a function call injected at the interruption point — which is exactly why it must leave everything the way it found it.",
+      "assets": [
+        {
+          "alt": "signal delivery timeline from raise to handler return",
+          "path": "assets/signal-delivery-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "signals-s09",
+      "order": 9,
+      "sectionTitle": "Async-signal-safety: why most functions are unsafe inside a handler",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A function is **async-signal-safe** if it's safe to call from inside a signal handler — meaning it won't corrupt state if it happens to interrupt itself, or another non-reentrant function, mid-execution. Most of the standard library is **not** safe.\n\n`malloc()` and `free()` are the classic trap: they maintain an internal heap data structure protected by a lock. If your handler interrupts the *main* program while it's mid-`malloc()` — lock held, heap structure half-updated — and the handler itself calls `malloc()`, you deadlock or corrupt the heap. `printf()` has the same problem internally (it buffers and often allocates).\n\nPOSIX publishes a short, specific list of guaranteed-safe calls: things like `write()`, `_exit()`, `signal()` itself, and setting a `volatile sig_atomic_t` variable. The safe pattern used everywhere in real code: do nothing but flip a flag or write a byte to a self-pipe inside the handler, and do the real work back in the normal program flow once it notices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "signals-s09-q1"
+      ]
+    },
+    {
+      "id": "signals-s10",
+      "order": 10,
+      "sectionTitle": "Compare: SIGTERM vs SIGKILL",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | SIGTERM (15) | SIGKILL (9) |\n|---|---|---|\n| Can be caught/ignored | Yes | No, never |\n| Gives process a chance to clean up | Yes — close files, flush buffers, release locks | No — resources torn down unconditionally |\n| Default `kill` behavior | `kill pid` sends this | Requires `kill -9 pid` explicitly |\n| Risk if process is unresponsive | May hang forever if the process never reacts (e.g. stuck in uninterruptible I/O, or deliberately ignoring it) | Always works — the kernel enforces it |\n| Production convention | Try first; give the process a grace period | Last resort, only after the grace period expires |\n\n**Why you always try SIGTERM first:** it lets the process release database connections, flush write buffers, and deregister from a load balancer before dying — skipping straight to SIGKILL turns a clean shutdown into a crash, which is exactly what orchestrators like Kubernetes and systemd are built to avoid by default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "signals-s10-q1"
+      ]
+    },
+    {
+      "id": "signals-s11",
+      "order": 11,
+      "sectionTitle": "How this shows up in production: graceful shutdown with a grace period",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Kubernetes terminating a pod is the textbook real-world use of this whole mechanism: it sends `SIGTERM` to the container's main process, then starts a **grace period timer** (default 30 seconds, configurable via `terminationGracePeriodSeconds`). If the process is still running when the timer expires, Kubernetes escalates to `SIGKILL`.\n\nThis is why a well-behaved production service installs a `SIGTERM` handler that: stops accepting new requests, finishes in-flight ones, closes database and cache connections, then exits on its own — ideally well inside the grace window. A process that ignores `SIGTERM` (or is stuck handling it slowly) gets forcibly killed mid-request, which is exactly the ungraceful outcome the whole handshake exists to avoid.\n\nThe same pattern shows up in `systemd` service stop, Docker's `docker stop` (SIGTERM, then SIGKILL after a timeout), and most process managers — it's a general convention, not a Kubernetes-specific quirk.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "signals-s11-q1"
+      ]
+    },
+    {
+      "id": "signals-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: doing non-trivial work inside a signal handler",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"My handler just logs the signal and cleans up a data structure — that's simple enough to be safe.\"\n\n**Why it's wrong:** \"simple\" from a correctness standpoint isn't the bar — *reentrancy* is. Calling `printf()` to log, or `malloc()`/`free()` to clean up a structure, can interrupt the very same function already running on the main thread, corrupting a lock or a heap structure that both copies now touch. The bug is intermittent and timing-dependent, which makes it brutal to reproduce — it might work in testing for months and then corrupt state under real production load.\n\n**Correct model:** treat the handler as a trigger, not a worker. Set a `volatile sig_atomic_t` flag (or write one byte to a self-pipe / use `signalfd` on Linux) and return immediately; do the actual logging, cleanup, and shutdown logic in the normal program flow, which checks that flag on its own schedule and isn't fighting reentrancy at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "signals-s12-q1"
+      ]
+    }
+  ]
+}

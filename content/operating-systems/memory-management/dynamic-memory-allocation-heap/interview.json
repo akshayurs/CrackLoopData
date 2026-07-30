@@ -1,0 +1,37 @@
+{
+  "topicId": "dynamic-memory-allocation-heap",
+  "interviewQuestions": [
+    {
+      "id": "dynamic-memory-allocation-heap-iq1",
+      "question": "How does malloc decide where to get memory, and what happens on free()?",
+      "answerMarkdown": "malloc(n) first rounds n up to a size class and checks that class's free list — if a free chunk of the right size already exists, it's returned immediately with no system call at all. Only when no suitable chunk exists does the allocator go to the OS: `sbrk` to extend the traditional heap for small/medium requests, or `mmap` for large ones (glibc's threshold is around 128 KB), then it carves the new region into chunks and serves the request from there.\n\nfree(ptr) looks at the small header stored just before the pointer it was given — which records at least the chunk's size — marks that chunk free, and tries to coalesce it with its immediately adjacent free neighbors so fragmentation doesn't accumulate. For mmap-backed large allocations specifically, free can `munmap` the region straight back to the OS instead of keeping it around in a free list.\n\nThe detail I'd flag as the interesting one: freeing memory usually doesn't shrink your process's actual memory footprint (RSS) right away, because small/medium heap memory stays in the allocator's free lists for reuse rather than being returned to the OS — which is why `top` can show a process \"still using\" a lot of memory right after a big batch of frees.\n\n**Testing:** whether you understand malloc/free as a two-layer system (userspace allocator over OS memory), not a single black box.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "malloc/free mechanics end to end"
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-iq2",
+      "question": "What's the difference between a use-after-free bug and a double-free bug, and why are they both dangerous?",
+      "answerMarkdown": "A use-after-free happens when code reads or writes through a pointer after the memory it points to has already been freed. The danger is that the allocator is free to hand that same memory to a completely unrelated allocation the moment it's freed — so the use-after-free might silently corrupt someone else's live data, or read stale/garbage data that looks plausible but is wrong.\n\nA double-free is calling free() twice on the same pointer. Because free adds the chunk back onto a free list, doing it twice inserts the same chunk into that list twice — a future allocation can then hand out that memory to two different owners at once, so two parts of the program end up aliasing the same bytes without knowing it.\n\nBoth are dangerous for the same underlying reason: the allocator's bookkeeping lives in memory the program itself can read and write, so a bug in how the program uses pointers becomes a bug in the allocator's internal state — which is exactly why these bug classes are also classic security exploit primitives (heap grooming attacks specifically target this). Modern allocators add mitigations — tcache double-free detection in glibc, for instance — but the underlying risk is structural, not fully eliminated.\n\n**Testing:** whether you can explain not just what each bug is, but *why* it's dangerous at the mechanism level.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Use-after-free vs double-free"
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-iq3",
+      "question": "Why would a production team swap out the default allocator (glibc's ptmalloc) for jemalloc or tcmalloc?",
+      "answerMarkdown": "The default allocator is a reasonable general-purpose choice, but two failure modes show up under real production load. First, fragmentation: a long-running service doing years of varied-size allocate/free cycles can see its resident memory creep upward over time even though the *live* data hasn't grown — the free lists have splintered into pieces that don't line up with new request sizes. jemalloc in particular was designed with fragmentation control as a first-class goal, which is part of why Redis adopted it.\n\nSecond, multithreaded contention: ptmalloc can serialize concurrent allocations from different threads more than a high-throughput service wants, since multiple threads hammering malloc/free show up as lock contention in a profiler. tcmalloc and jemalloc both use per-thread caches specifically to avoid that contention, which is why Google's C++ services default to tcmalloc.\n\nThe practical upside I'd emphasize: switching allocators is usually a link-time or `LD_PRELOAD` change with zero application code changes, which makes it a genuinely low-risk lever to reach for once a profiler or a memory-growth graph points at the allocator rather than the application logic.\n\n**Testing:** whether you know allocator choice is a real, low-risk production lever, not just an academic detail.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Choosing a production allocator"
+    },
+    {
+      "id": "dynamic-memory-allocation-heap-iq4",
+      "question": "What's the difference between a memory leak and a heap overflow, and which is easier to detect in production?",
+      "answerMarkdown": "A memory leak is a reachability problem: the program allocates memory and then loses every pointer that could reach it — never frees it — while the memory itself stays perfectly valid and untouched. A heap overflow is a bounds problem: the program writes past the end of an allocated chunk, corrupting whatever comes next in the heap, often the next chunk's header, which can silently break a future free() or coalesce operation far away from where the actual bug occurred.\n\nLeaks are the easier of the two to detect in production, because the symptom is straightforward and visible from the outside: resident memory (RSS) climbing steadily over time with no corresponding drop, catchable with basic monitoring or tools like Valgrind/`LeakSanitizer` in staging. Heap overflows are much harder — the corruption often doesn't crash the program at the point it happens, it crashes later, somewhere unrelated, when the corrupted metadata is finally used; that's exactly the kind of bug AddressSanitizer exists to catch by instrumenting every heap access at build time.\n\nI'd frame the practical difference as: leaks fail loud and slow (memory graph trending up), overflows fail quiet and then catastrophically, later, somewhere else.\n\n**Testing:** whether you understand these as structurally different bug classes with different detection strategies, not just \"two kinds of heap bugs.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Leaks vs overflows in production"
+    }
+  ]
+}

@@ -1,0 +1,182 @@
+{
+  "id": "columnar-olap",
+  "title": "Columnar Storage & OLAP Operations",
+  "area": "databases",
+  "group": "data-warehousing",
+  "order": 3,
+  "slug": "columnar-olap",
+  "summary": "Why analytics engines are fast — columnar layout, compression, and vectorized execution — plus the cube operations (roll-up, drill-down, slice, dice) analysts actually run against them.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "columnar-olap-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[OLTP vs OLAP](oltp-vs-olap) explained *why* analytics engines use column-store layout; this topic explains *how* that layout, plus compression and vectorized execution, turns into the 10-50x speedups that make scanning billions of rows in seconds feel routine.\n\nIt also covers the query-side vocabulary analysts and BI tools use against that storage — roll-up, drill-down, slice, and dice — and the two techniques (partition pruning, predicate pushdown) that let a warehouse skip reading most of the data it doesn't need, which matters more to real-world query speed than the compression itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-olap-s02",
+      "order": 2,
+      "sectionTitle": "Columnar layout, compression, vectorized scans",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Columnar layout** stores each column's values contiguously on disk, so a query touching 2 of 50 columns reads only those columns' bytes — the mechanism covered in OLTP vs OLAP. Two further techniques compound on top of that layout to make analytics engines fast.\n\n**Compression** works dramatically better on a column of similar values than on a row of mixed types — a `status` column with only 4 distinct values compresses to a couple of bits per row with dictionary encoding; a `country` column sorted or clustered compresses well with run-length encoding. Row-stores can compress too, but mixing a customer name, a timestamp, and a float in one row leaves far less exploitable repetition.\n\n**Vectorized execution** processes a batch of values (typically thousands) from a column in one tight CPU loop — using SIMD instructions to add or compare many values per CPU cycle — instead of one row at a time through a general-purpose row-by-row interpreter. Combined, a modern column-store OLAP engine (ClickHouse, DuckDB, Snowflake's execution engine) can scan and aggregate billions of rows per second on a single node.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "columnar-olap-s02-q1"
+      ]
+    },
+    {
+      "id": "columnar-olap-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: row-store vs column-store on disk",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Row-store vs column-store byte layout for the same table](assets/row-vs-column-store.svg)\n\nThe physical byte order is the entire difference between the two layouts — same data, same logical table, completely different disk arrangement. Every downstream property (which query pattern is fast, how well compression works, whether a query can skip unread columns) follows directly from this one layout decision.\n\nThis is also why converting a table from row-store to column-store isn't a config flag — it's a full physical rewrite of how the data sits on disk.",
+      "assets": [{"alt": "Row-store vs column-store byte layout for the same table", "path": "assets/row-vs-column-store.svg"}],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-olap-s04",
+      "order": 4,
+      "sectionTitle": "OLAP cube ops: roll-up, drill-down, slice, dice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "These four terms describe how analysts navigate multi-dimensional data (think: sales by product, region, and time) — vocabulary that shows up constantly in BI tools and interview questions alike. **Roll-up**: aggregate up a dimension's hierarchy — daily sales rolled up to monthly, or city sales rolled up to country. **Drill-down**: the reverse — go from monthly back to daily, or country back to city, to see the detail behind an aggregate number.\n\n**Slice**: fix one dimension to a single value and look at the rest — \"show me all metrics, but only for Q1.\" **Dice**: select a sub-cube by fixing ranges or values on *multiple* dimensions at once — \"show me Q1 and Q2, for the West and East regions only.\"\n\nAll four map directly to SQL: roll-up and drill-down are `GROUP BY` at different levels of a dimension hierarchy (often via `GROUP BY ROLLUP` or `CUBE` extensions); slice and dice are `WHERE` clauses fixing one or more dimensions. The \"cube\" terminology predates modern SQL warehouses (from 1990s OLAP tools) but the underlying operations are exactly what a BI dashboard's filters and drill-through clicks are doing today.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "columnar-olap-s04-q1"
+      ]
+    },
+    {
+      "id": "columnar-olap-s05",
+      "order": 5,
+      "sectionTitle": "Partition pruning and predicate pushdown",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Compression and vectorization make the data you read fast to process — **partition pruning** and **predicate pushdown** reduce how much data you have to read in the first place, which usually matters more.\n\n**Partition pruning**: if a table is physically partitioned by date (a common warehouse practice), a query filtering `WHERE order_date >= '2026-07-01'` can skip reading every partition before that date entirely, without even opening those files. **Predicate pushdown**: within a file or column chunk, the engine checks metadata (min/max values stored per chunk) before decompressing — if a chunk's `amount` column has a stored max of 50 and the query filters `WHERE amount > 1000`, the engine skips decompressing that chunk at all, knowing no row inside could match.\n\nTogether these mean a well-partitioned, well-organized warehouse table can answer a filtered query by touching a tiny fraction of total stored bytes — the compression ratio matters for what remains, but pruning and pushdown decide how much \"remains\" in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "columnar-olap-s05-q1"
+      ]
+    },
+    {
+      "id": "columnar-olap-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: point lookups and updates on a column store",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Column-stores are just a faster kind of database — let's use one for our application's live traffic too.\"\n\n**Why it's wrong:** fetching or updating a single row means touching every column's separate physical location — the exact opposite of what column-store layout is optimized for. Where a row-store gets a whole row in one disk read, a column-store has to reassemble one row from N separate column files or chunks, one read per column. Updates are worse: many column-store formats are effectively append-only or use large immutable chunks for compression efficiency, so a single-row update commonly means writing a delta/tombstone record and merging it in later (compaction), rather than a fast in-place row update.\n\n**Correct model:** column-stores are built for read-heavy, scan-heavy analytical workloads, not point lookups or high-frequency small updates. Running OLTP traffic against one produces the same mismatch as running OLAP against a row-store, just with the failure modes flipped — slow point queries and expensive small writes instead of slow scans.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "columnar-olap-s06-q1"
+      ]
+    },
+    {
+      "id": "columnar-olap-s07",
+      "order": 7,
+      "sectionTitle": "Numbers: compression ratios and scan speed",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete figures make the columnar advantage tangible. A low-cardinality column (like `status` with 4 values, or `country`) commonly compresses **10-20x** with dictionary encoding in formats like Parquet or ORC. A high-cardinality but sorted or clustered column (timestamps, sequential IDs) commonly gets **3-8x** via run-length or delta encoding. Across a typical mixed-type analytics table, **4-10x** overall compression is a realistic expectation.\n\nOn scan speed: a modern vectorized OLAP engine on a single modern server core can commonly process **1-4 billion rows per second** for a simple filter-and-aggregate query, when the data fits the CPU cache well and partition pruning has already eliminated most of the table. This is why a \"sum this column, filtered by date, across a 10-billion-row table\" query that would be unthinkable on a row-store without heavy pre-aggregation is routine on Snowflake, BigQuery, or ClickHouse.\n\nInterview signal: naming a plausible compression ratio (roughly 4-10x for real data) and a scan-rate order of magnitude (billions of rows/sec/core under good conditions) shows you've engaged with the mechanism, not just memorized \"column-stores are fast.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-olap-s08",
+      "order": 8,
+      "sectionTitle": "Materialized views and pre-aggregation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Even with columnar storage, compression, and pruning, some queries are expensive enough — or run often enough — that recomputing them from raw fact-table rows every time is wasteful. A **materialized view** pre-computes and stores a query's result (often an aggregate, like daily revenue by region) so subsequent queries read the small pre-computed table instead of scanning the large fact table.\n\nThe trade-off is **staleness versus cost**: a materialized view needs to be refreshed (fully or incrementally) as new data arrives, and until it refreshes, it's answering with slightly old numbers. Modern warehouses (Snowflake, BigQuery, ClickHouse) support **incremental** materialized view refresh — updating just the affected rows rather than recomputing the whole view — which keeps this cheap even on large tables.\n\nThis is the warehouse-side analogue of caching: you're trading a bit of staleness (usually seconds to minutes with incremental refresh) for a large reduction in the compute cost of a frequently-run, expensive aggregation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "columnar-olap-s08-q1"
+      ]
+    },
+    {
+      "id": "columnar-olap-s09",
+      "order": 9,
+      "sectionTitle": "Note: ETL/ELT pipelines feed the warehouse (see data-engineering)",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Everything in this group has assumed data already sits in the warehouse in a clean, dimensionally-modeled, columnar form — but getting it there is its own substantial discipline. **ETL** (extract, transform, load) transforms data before loading it in; **ELT** (extract, load, transform) loads raw data first and transforms it inside the warehouse using its own compute, which has become more common as warehouse compute got cheap and elastic.\n\nBoth approaches, orchestration tools (Airflow, dbt, Dagster), streaming ingestion, and the broader data pipeline discipline are covered in depth under **data-engineering** — this group deliberately treats ETL/ELT as a one-slide bridge rather than re-teaching it, since the topic itself belongs there.\n\nWhat's worth carrying forward from this group into that one: the warehouse-side design choices covered here (grain, SCDs, columnar layout, partitioning) are exactly what a well-designed ETL/ELT pipeline is loading data *into* — the two disciplines are two ends of the same pipe.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-olap-s10",
+      "order": 10,
+      "sectionTitle": "Staff-level nuance: designing partitions and sort keys together",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer treats partitioning and compression as automatic, warehouse-managed details. A staff-level answer knows that **the physical clustering of data — partition key and sort/cluster key choice — is a design decision that directly determines whether pruning and predicate pushdown actually help**, and getting it wrong silences both without any error message, just slower queries than expected.\n\nConcretely: partitioning `fact_sales` by `order_date` only helps queries that filter on `order_date`; a query filtering by `region` instead still has to scan every partition. Many warehouses let you additionally define a **clustering/sort key** within partitions (e.g. cluster by `region` within each date partition) so that predicate pushdown's min/max-per-chunk trick also works for the second-most-common filter column. Choosing this requires knowing your actual query patterns — the same \"model for the real access pattern\" principle from dimensional modeling, applied to physical layout instead of schema shape.\n\nThe interview-differentiating move: naming that pruning effectiveness is a property of how you *chose* to organize the data, not something the storage format guarantees for free — a warehouse table with the wrong partition/cluster key can be just as slow as an unpruned row-store scan for the wrong query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "columnar-olap-s10-q1"
+      ]
+    },
+    {
+      "id": "columnar-olap-s11",
+      "order": 11,
+      "sectionTitle": "Compare: what makes a query fast in a column-store",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Technique | What it saves | Depends on |\n|---|---|---|\n| Columnar layout | Skips unread columns entirely | Query touching few columns out of many |\n| Compression | Reduces bytes read/decompressed for touched columns | Column cardinality and value patterns |\n| Vectorized execution | Reduces CPU cycles per value processed | Engine implementation, not data layout |\n| Partition pruning | Skips whole partitions/files | Filter matching the partition key |\n| Predicate pushdown | Skips chunks within a file via min/max metadata | Filter matching a well-clustered or sorted column |\n\n**The throughline:** most of these techniques only help if the query pattern matches the physical design decisions made ahead of time (partition key, sort key, which columns are commonly filtered) — a column-store isn't fast unconditionally, it's fast for the access patterns its layout was chosen for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-olap-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: assuming compression makes storage layout irrelevant",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Storage is cheap and everything's compressed anyway, so it doesn't matter how we partition or order the data — the warehouse will figure it out.\"\n\n**Why it's wrong:** compression reduces the *size* of what you read, but pruning and pushdown determine *how much* you read in the first place — and those depend entirely on the data's physical organization matching your query patterns. A table partitioned by the wrong column, or with no clustering on the columns actually used in `WHERE` clauses, forces a full scan regardless of how well each individual chunk compresses. Compression savings on a full scan are still a full scan; pruning savings on an unmatched partition key are zero.\n\n**Correct model:** treat partition and sort/cluster key choice with the same seriousness as the fact table's grain — both are physical design decisions made once, both are expensive to change after a warehouse holds years of data, and both determine whether the fancy columnar engine underneath actually gets to skip work or just processes everything a little faster per byte.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+{
+  "id": "containers-namespaces-cgroups",
+  "title": "Containers — Namespaces & cgroups",
+  "area": "operating-systems",
+  "group": "linux-internals",
+  "order": 6,
+  "slug": "containers-namespaces-cgroups",
+  "summary": "How Linux containers are actually built from two kernel primitives — namespaces and cgroups — with no virtual machine or hypervisor involved anywhere.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "containers-namespaces-cgroups-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **container is a regular Linux process** — same scheduler, same kernel, same everything — wearing a restricted view of the system. There's no hypervisor, no second kernel, no virtual hardware anywhere in the picture.\n\nThe restriction comes from two independent kernel mechanisms working together: **namespaces**, which give a process its own private view of a global resource (its own PID numbering, its own network stack, its own filesystem mounts), and **cgroups**, which limit and account for how much of the real, shared hardware that process can use. Docker, containerd, and Kubernetes are orchestration on top of these — not a different isolation technology underneath.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "containers-namespaces-cgroups-s02",
+      "order": 2,
+      "sectionTitle": "The big idea: a container is a process, not a VM",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A virtual machine virtualizes **hardware** — it runs a full second kernel on top of emulated (or hypervisor-mediated) CPU, memory, and devices, so the guest OS genuinely believes it owns a whole computer. A container virtualizes **views of one kernel** — the process runs directly on the host's real kernel, scheduled by the host's real scheduler, but the kernel selectively hides and restricts what that process can see and touch.\n\nThis is why `docker run` starts in milliseconds while booting a VM takes tens of seconds: there's no second kernel to boot, no hardware to emulate — the \"container\" is just a normal `fork`/`exec` with a handful of extra flags telling the kernel which namespaces to create and which cgroup to place the new process in.\n\nEverything else in this topic is really just explaining what those flags actually do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s02-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s03",
+      "order": 3,
+      "sectionTitle": "Namespaces: giving a process its own view of a global resource",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **namespace** wraps a specific global kernel resource so that processes inside the namespace see their own private, isolated instance of it, while processes outside see the normal, unwrapped resource — and by default, neither side can see into the other.\n\nThe key mental model: nothing about the underlying resource is duplicated in hardware or even fully in the kernel's core data structures — it's the *view* that's namespaced. Two processes in different PID namespaces can both believe they are \"PID 1,\" because each namespace has its own PID numbering table mapping namespace-local PIDs to real, global PIDs the host kernel tracks underneath.\n\n`unshare()` and `clone()` with namespace flags are the actual syscalls that create a new namespace and place a process into it — this is precisely what `docker run` does under the hood before running your container's entrypoint.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "containers-namespaces-cgroups-s04",
+      "order": 4,
+      "sectionTitle": "The namespace types: PID, network, mount, UTS, IPC, user",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Six namespace types cover what a container actually needs isolated:\n\n- **PID** — its own process ID numbering; the container's first process is PID 1 inside, some large host PID outside.\n- **Network** — its own network stack: interfaces, routing table, port numbers. A container can bind port 80 without conflicting with the host's own port 80.\n- **Mount** — its own filesystem mount table, so mounting or unmounting inside the container doesn't affect the host's view (or other containers').\n- **UTS** — its own hostname and domain name, so `hostname` inside the container can differ from the host's.\n- **IPC** — its own System V IPC and POSIX message queue namespace, preventing containers from signaling each other via shared memory segments meant to be private.\n- **User** — maps container-internal UIDs to different (often unprivileged) host UIDs, so \"root inside the container\" can be an unprivileged, ordinary user on the host.\n\nA container typically runs with all six active simultaneously — Docker's default `docker run` composes them together, though each can be used independently (`unshare --pid` alone, for instance).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s04-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: a containerized process's PID namespace vs the host's",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![same process shown as two different PIDs across namespaces](assets/pid-namespace-dual-view.svg)\n\nThe process genuinely is PID 1 from inside the container's namespace — `ps` run inside the container shows it that way, and it inherits PID 1's special kernel responsibilities (like reaping orphaned children within the namespace). From the host's perspective, that same process is just another ordinary PID in the host's own, much larger PID space.\n\nThis dual identity is also why killing \"PID 1\" inside a container is different from killing an ordinary process — several signal-handling defaults are altered for a namespace's PID 1, which has caused real bugs when people ran a script directly as a container's entrypoint expecting normal signal behavior.",
+      "assets": [
+        {
+          "alt": "same process shown as two different PIDs across namespaces",
+          "path": "assets/pid-namespace-dual-view.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 38,
+      "mcqIds": []
+    },
+    {
+      "id": "containers-namespaces-cgroups-s06",
+      "order": 6,
+      "sectionTitle": "cgroups: limiting and accounting for resource usage",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**cgroups** (control groups) solve a different problem than namespaces: namespaces control what a process can *see*, cgroups control how much of the real, shared hardware it can *use*. A cgroup is a labelled group of processes the kernel tracks together for resource accounting and enforcement — you can set a CPU quota, a memory ceiling, or an I/O bandwidth limit on the group, and the kernel enforces it against every process inside, and every child process they spawn.\n\nThis is the mechanism behind `docker run --memory=512m` and Kubernetes resource `limits`/`requests` — both ultimately configure a cgroup for the container's process tree. Without cgroups, namespaces alone would give isolation of *view* but not isolation of *impact*: a runaway process could still be invisible-but-still-starve every other container on the box for CPU or memory, since nothing would be capping what it actually consumes.\n\nLinux has gone through two cgroup implementations — **cgroup v1** (per-resource-type hierarchies) and **cgroup v2** (a single unified hierarchy) — modern distributions and container runtimes default to v2.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s06-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s07",
+      "order": 7,
+      "sectionTitle": "What cgroups control: CPU, memory, I/O limits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The three resource controllers you'll actually configure in practice:\n\n- **CPU** — either a relative share (this cgroup gets 2x the CPU time of that one, under contention) or a hard quota (this cgroup gets at most 0.5 CPU-cores worth of time, even if the machine is otherwise idle). Kubernetes `requests` map to shares; `limits` map to a hard quota.\n- **Memory** — a hard ceiling on resident memory. Exceeding it doesn't throttle gracefully — the kernel's OOM killer targets a process in the cgroup (often, though not always, the biggest consumer) and kills it outright.\n- **I/O (blkio/io controller)** — limits on read/write bandwidth or IOPS per block device, preventing one noisy container from starving others' disk access on a shared volume.\n\nA subtlety that catches people in production: hitting a **CPU** limit causes throttling (the process just gets slower, still runs), while hitting a **memory** limit causes a hard kill — the same mental model of \"soft cap\" doesn't transfer between the two resource types, and conflating them leads to surprise OOM-kills that look like crashes rather than the throttling people expected.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s07-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s08",
+      "order": 8,
+      "sectionTitle": "Diagram: how a container runtime composes namespaces + cgroups + a root filesystem",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![docker run namespace, cgroup, and rootfs setup flow](assets/container-setup-flow.svg)\n\nNone of these three steps depend on each other technically — you could apply namespaces without cgroups, or cgroups to a process with no namespace isolation at all — but a container in the conventional sense is specifically the combination of all three: an isolated view (namespaces), a resource cap (cgroups), and its own filesystem contents (image layers + `pivot_root`/`chroot`).\n\nThis is also exactly why \"rootless\" containers and tools like `unshare` can demonstrate individual pieces of container isolation without needing Docker at all — Docker is orchestrating these same three primitives, not inventing a fourth one.",
+      "assets": [
+        {
+          "alt": "docker run namespace, cgroup, and rootfs setup flow",
+          "path": "assets/container-setup-flow.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 40,
+      "mcqIds": []
+    },
+    {
+      "id": "containers-namespaces-cgroups-s09",
+      "order": 9,
+      "sectionTitle": "Union/layered filesystems (e.g., overlayfs) for container images",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A container **image** is a stack of read-only **layers**, each one a diff of filesystem changes from the layer below it — an OS base layer, then a layer adding your language runtime, then a layer adding your application code. **overlayfs** is the kernel filesystem that stacks these layers at runtime into what looks like one coherent filesystem, without physically copying or merging any of the underlying layers' files.\n\nOn top of the read-only image layers, the container runtime adds one **writable layer** unique to that running container instance. Any file the container modifies gets copied into this writable layer first (copy-on-write, the same core idea as `fork()`'s COW pages), leaving the original image layers completely untouched — which is exactly why the same image can back many running containers simultaneously without them corrupting each other's filesystem state, and why deleting a container throws away only that thin writable layer, not the image.\n\nThis layering is also the mechanism behind image build caching and fast image pulls: a layer already present locally (shared across many images built from the same base) never needs to be downloaded or rebuilt again.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s09-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s10",
+      "order": 10,
+      "sectionTitle": "Compare: containers vs virtual machines — isolation boundary and overhead",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Containers | Virtual machines |\n|---|---|---|\n| Isolation boundary | Kernel-enforced views (namespaces) + resource limits (cgroups) — one shared kernel | A hypervisor emulating hardware — each VM runs its own full kernel |\n| Startup time | Milliseconds (just a process start) | Seconds to tens of seconds (a full OS boot) |\n| Per-instance overhead | Very low — shares the host kernel's memory footprint | Higher — each VM needs its own kernel, drivers, and OS memory footprint |\n| Isolation strength | Weaker — a kernel exploit can potentially cross container boundaries, since all containers share one kernel | Stronger — a guest kernel compromise is contained by the hypervisor's hardware-enforced boundary |\n| Density on one host | Very high — hundreds of containers is routine | Lower — each VM's fixed overhead limits how many fit |\n\n**How to decide:** containers when density and startup speed matter and you trust the workloads (or add extra layers like gVisor/Kata for stronger isolation); VMs when you're running genuinely untrusted or multi-tenant-hostile workloads that need a hardware-enforced boundary, not just a kernel-enforced one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s10-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: assuming container isolation is as strong as VM isolation",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Containers are isolated, so running an untrusted or multi-tenant-hostile workload in a container is just as safe as putting it in its own VM.\"\n\n**Why it's wrong:** every container on a host shares the exact same kernel. Namespaces restrict what a process can *see*, and cgroups restrict what it can *use*, but neither adds a hardware-enforced boundary — if an attacker finds a kernel vulnerability (a bug in a syscall, a namespace implementation flaw), they can potentially escape the container's restricted view entirely, because they're exploiting the one kernel every container on that host is trusting. A VM's isolation instead rests on the hypervisor and, ultimately, hardware virtualization support — a fundamentally different, generally stronger boundary.\n\n**Correct model:** treat container isolation as strong-but-not-absolute, appropriate for running your own trusted services separately, but insufficient on its own for hostile multi-tenant code. For that case, either use VMs, or a container runtime specifically designed to add a stronger boundary — gVisor (intercepts syscalls in a sandboxed user-space kernel) or Kata Containers (runs each container in its own lightweight VM) are the real-world answers to exactly this gap.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s11-q1"
+      ]
+    },
+    {
+      "id": "containers-namespaces-cgroups-s12",
+      "order": 12,
+      "sectionTitle": "Numbers: what a container actually costs vs a VM",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Concrete figures worth having ready: a minimal container can start in under **100ms** — it's a `fork`/`exec` plus namespace setup, no different in kind from starting any other process. A minimal VM, even a lightweight one (Firecracker microVMs, purpose-built for fast boot), typically takes **125ms–a few seconds** to boot a kernel and reach a runnable state; a traditional full VM (QEMU/KVM booting a general-purpose Linux distro) is commonly **10-30+ seconds**.\n\nMemory overhead follows the same pattern: a container's overhead beyond the application itself is on the order of single-digit megabytes (namespace and cgroup bookkeeping); a VM needs its own kernel and OS memory footprint before your application even starts, commonly **100MB-1GB+** depending on the guest OS. This is why it's routine to run hundreds of containers on a host that could only fit a few dozen comparable VMs.\n\nThe interview-useful framing: containers trade some isolation strength for roughly one to two orders of magnitude less startup latency and per-instance overhead — quantify it like this rather than saying \"containers are lighter weight,\" which sounds like a guess rather than a number you actually know.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "containers-namespaces-cgroups-s13",
+      "order": 13,
+      "sectionTitle": "Beyond namespaces and cgroups: seccomp and capabilities",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Namespaces and cgroups cover *view* and *resource usage*, but a container's main process is still, technically, capable of any syscall a normal process can make — including ones that would be dangerous even inside a restricted namespace, like loading a kernel module or rebooting the machine. Two more kernel mechanisms narrow this further, and are worth knowing as the pieces that complete the real picture.\n\n**Linux capabilities** split up what used to be an all-or-nothing \"root\" privilege into dozens of fine-grained permissions (`CAP_NET_BIND_SERVICE` to bind low ports, `CAP_SYS_ADMIN` — a notoriously broad grab-bag one to be wary of granting). Docker drops most capabilities by default even for a container's root user, which is why \"root inside a container\" is far less dangerous than root on the host.\n\n**seccomp** (secure computing mode) filters which syscalls a process is allowed to make at all — Docker's default seccomp profile blocks several dozen rarely-needed, historically exploit-prone syscalls outright, so even a fully compromised container process can't call them.\n\nA production-hardened container setup layers all four: namespaces (view), cgroups (resource cap), dropped capabilities (privilege reduction), and a seccomp profile (syscall reduction) — no single one of them is \"container security\" on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "containers-namespaces-cgroups-s13-q1"
+      ]
+    }
+  ]
+}

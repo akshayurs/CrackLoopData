@@ -1,0 +1,29 @@
+{
+  "topicId": "tlb-and-translation-caching",
+  "interviewQuestions": [
+    {
+      "id": "tlb-and-translation-caching-iq1",
+      "question": "Why might a context switch hurt performance even after the switch itself is done?",
+      "answerMarkdown": "People usually think of context-switch cost as the direct part — saving and restoring registers, updating scheduler bookkeeping — which really is small, a few hundred cycles. The part that's easy to miss is what happens to the TLB: without address-space tagging (ASIDs/PCIDs), a switch invalidates cached translations, because process A's virtual page 5 and process B's virtual page 5 mean completely different physical frames. The newly-scheduled process then runs its first accesses to each page cold, paying a full page-table-walk cost — potentially several hundred cycles per miss — until the TLB re-warms with its translations.\n\nI'd give the concrete fix, not just the diagnosis: ASIDs let multiple processes' TLB entries coexist, so switching back to a process that ran recently can hit immediately on entries that were never evicted, instead of restarting from empty every single time. This turns \"switch away and back\" from a guaranteed cold-TLB penalty into something that depends on TLB capacity and how much other work ran in between.\n\nThe practical implication I'd flag: this cost is invisible if you only measure time spent inside the scheduler routine — it shows up as elevated average memory latency in whatever runs *after* the switch, which is why workloads with many short-lived threads or aggressive time-slicing can show real throughput loss that's easy to misattribute.\n\n**Testing:** whether you know the indirect, TLB-driven cost exists at all, and can name ASIDs as the actual mitigation rather than just describing the symptom.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "The hidden cost of context switching"
+    },
+    {
+      "id": "tlb-and-translation-caching-iq2",
+      "question": "Walk me through what happens, step by step, on a TLB miss.",
+      "answerMarkdown": "The CPU issues a virtual address, and the MMU first checks the TLB for a matching entry — that check fails, which is the miss. What happens next depends on the CPU architecture: on hardware-walked designs like x86, dedicated silicon in the MMU automatically walks the page table, one memory access per level (four levels is typical on x86-64), following pointers down the tree until it reaches the leaf entry with the actual physical frame number. On software-walked designs, the miss instead traps to the OS, and a kernel handler does the equivalent walk in software.\n\nOnce the frame number is found, two things happen: the original memory access finally completes using the now-known physical address, and — critically — the translation gets inserted into the TLB so the *next* access to that same page is a hit instead of another miss.\n\nI'd add the cost framing an interviewer likely wants: a 4-level walk on a miss can mean 4+ sequential memory accesses just to find where the data is, versus 1 fast on-chip lookup on a hit — which is why even a 99% vs 95% hit-rate difference changes average translation cost by roughly 4x, since misses are so much more expensive than hits.\n\n**Testing:** whether you can narrate the full miss path including the TLB-fill step at the end, not just \"it looks it up in the page table.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "The TLB miss path in detail"
+    },
+    {
+      "id": "tlb-and-translation-caching-iq3",
+      "question": "How would you diagnose whether TLB misses are actually hurting a production workload's performance?",
+      "answerMarkdown": "I'd start with hardware performance counters rather than guessing — on Linux, `perf stat -e dTLB-load-misses,iTLB-load-misses` (or the equivalent on the specific CPU's PMU) gives a direct miss count and rate, which is much more reliable than inferring it from general slowness. A high miss rate alongside a workload that touches a large, scattered working set — a database buffer pool, a large in-memory cache — is the classic signature.\n\nFrom there I'd correlate with the access pattern: is the working set genuinely large relative to TLB coverage (a few thousand entries times 4 KB pages is only a few tens of MB), or is it a context-switch-churn problem (many short-lived threads on a system without effective ASID reuse)? Those point to different fixes — huge pages for the first case, reducing switch frequency or checking ASID/PCID support for the second.\n\nI'd verify a fix actually helped by re-measuring the same counters before and after, rather than trusting an overall latency number that could move for unrelated reasons — TLB effects are subtle enough that eyeballing end-to-end latency alone risks attributing an improvement to the wrong cause.\n\n**Testing:** whether you'd reach for hardware counters and a specific diagnostic path instead of a vague \"it's probably the TLB\" guess.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Diagnosing TLB pressure in production"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "backup-ha",
+  "interviewQuestions": [
+    {
+      "id": "backup-ha-iq1",
+      "question": "What's the difference between RPO and RTO, and how would you set them for a given system?",
+      "answerMarkdown": "**RPO (Recovery Point Objective)** is how much data you can afford to lose, measured in time — if your last usable backup point is 20 minutes before a disaster, your RPO for that incident was 20 minutes. **RTO (Recovery Time Objective)** is how long you can afford to be down while recovering, regardless of how little data was actually lost. They're independent: a system can lose almost no data but take hours to come back online, or lose an hour of data but be back up in minutes.\n\nI wouldn't set these from whatever the backup tooling defaults to — I'd start from business impact. For a payments system, I'd push for an RPO near zero (via synchronous replication and continuous WAL archiving) and an RTO of minutes, because both lost transactions and extended downtime have direct financial and trust cost. For an internal analytics warehouse fed by a daily batch job, I'd accept an RPO of a day and an RTO of most of a day, since the source data can simply be reprocessed.\n\nOnce set, I'd design the actual backup/replication strategy backward from those numbers — WAL archiving cadence for RPO, standby count and automation for RTO — and periodically re-verify both are still being met as the system grows.\n\n**Testing:** whether you treat RPO/RTO as business decisions to be engineered for, not technical facts that fall out of the tooling.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "RPO vs RTO"
+    },
+    {
+      "id": "backup-ha-iq2",
+      "question": "Someone just ran an accidental `DROP TABLE` on a production table at 2:47 PM. Your last full backup was last night at midnight. How do you recover, and how much data do you actually lose?",
+      "answerMarkdown": "If point-in-time recovery is set up — a full backup plus continuously archived WAL — I'd restore the most recent full backup, then replay the archived WAL forward to a target time just before 2:47 PM, stopping right before the `DROP TABLE` statement itself. That recovers everything up to essentially the moment of the mistake, not just up to the last full backup, so the actual data loss is minutes, not the full day since midnight.\n\nWithout PITR set up in advance, the honest answer is worse: the only recovery point is last night's full backup, meaning roughly 14 hours and 47 minutes of legitimate writes are gone along with the dropped table — a real, avoidable loss that PITR exists specifically to prevent.\n\nOperationally, I'd restore into a separate instance first rather than directly onto production, verify the table and surrounding data look correct, and then decide whether to cut over or selectively copy the recovered table back — restoring directly over a live production database on the first attempt is itself a risk I'd rather not take during an already-stressful incident.\n\n**Testing:** whether you know PITR is what turns 'lost since last backup' into 'lost since the mistake,' and whether you'd restore safely rather than directly overwriting production.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Recovering from an accidental DROP TABLE"
+    },
+    {
+      "id": "backup-ha-iq3",
+      "question": "Your team has automated failover with a standby promoted after a single failed health check. What could go wrong with this setup, and how would you fix it?",
+      "answerMarkdown": "The immediate risk is a false-positive failover: a transient network blip, a brief GC pause, or a momentarily overloaded primary can fail one health check without the primary actually being dead. If the failover system promotes a standby on that single signal while the original primary is still alive and accepting writes, you get split-brain — two nodes both believing they're the primary, which can produce silently diverging data with no automatic way to reconcile it, and every connected client gets reset in the process.\n\nI'd fix this in two layers. First, require the health check to fail consistently across multiple checks over a meaningful window before triggering promotion, accepting a slightly slower response to a genuine failure in exchange for far fewer disruptive false positives. Second, and more importantly, use a real fencing or consensus mechanism — tools like Patroni use a distributed consensus store specifically so a promotion can only happen once quorum agrees the old primary is actually unreachable, and ideally the old primary is actively prevented from accepting further writes (STONITH-style fencing) rather than just assumed to be gone.\n\nI'd also make sure every failover — real or false-positive — is logged and alerted on, since a system that fails over silently and successfully can hide a flapping health check for a long time before someone notices the pattern.\n\n**Testing:** whether you know 'automated failover' isn't automatically safe, and can name both the detection-robustness fix and the fencing/consensus fix, not just one.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Split-brain risk in automated failover"
+    },
+    {
+      "id": "backup-ha-iq4",
+      "question": "Your company has three synchronously replicated standbys and someone proposes cutting the backup budget since 'we're already redundant.' How do you respond?",
+      "answerMarkdown": "I'd push back directly: replication and backups protect against two entirely different failure classes, and having excellent redundancy for one says nothing about the other. Synchronous replicas protect against hardware failure — a disk dies, a node crashes, a rack loses power — because the data genuinely exists intact on other machines. They do nothing to protect against a logical error: an accidental `DROP TABLE`, a bad migration that silently corrupts a column, or an application bug that overwrites good data with bad data. All three standbys will faithfully, correctly replicate that mistake within milliseconds, because from the database's perspective it's just another valid write.\n\nI'd give a concrete cost comparison to make it tangible: the backup budget is typically a small fraction of the infrastructure cost of the replica fleet, and it's the only thing standing between a bad migration and total, unrecoverable data loss across every copy of the data. I'd frame keeping both as covering complementary failure modes, not redundant spending — dropping backups because replication exists is optimizing away exactly the protection replication doesn't provide.\n\n**Testing:** whether you can clearly separate what replication protects against from what backups protect against, and make the business case for both rather than treating either as sufficient alone.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "HA does not replace backups"
+    }
+  ]
+}

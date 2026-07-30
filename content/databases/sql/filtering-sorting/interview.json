@@ -1,0 +1,29 @@
+{
+  "topicId": "filtering-sorting",
+  "interviewQuestions": [
+    {
+      "id": "filtering-sorting-iq1",
+      "question": "How would you design pagination for an infinite-scroll feed that needs to stay fast as users scroll deep into it?",
+      "answerMarkdown": "I'd reach for keyset (\"seek\") pagination instead of the more familiar `LIMIT/OFFSET`. With OFFSET, `LIMIT 20 OFFSET 100000` still forces the database to walk through and discard 100,000 rows before it can return the next 20 — cost grows linearly with how deep you scroll, so page 1 is instant and page 5,000 is seconds slow.\n\nKeyset instead remembers the last row you saw and filters forward from there: `WHERE (created_at, id) < (:last_created_at, :last_id) ORDER BY created_at DESC, id DESC LIMIT 20`. The index can seek directly to that point regardless of how many pages came before, so cost stays roughly constant no matter how deep the user has scrolled.\n\nThe trade-off I'd flag: keyset can't jump to an arbitrary page number, only step from a known cursor — fine for infinite scroll, wrong for an admin table that needs \"go to page 47.\" I'd also make sure the sort has a unique tiebreaker (usually the primary key) so ties don't cause skipped or duplicated rows across page loads.\n\n**Testing:** whether you know OFFSET has a real cost curve, not just that keyset exists as a buzzword.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Designing feed pagination"
+    },
+    {
+      "id": "filtering-sorting-iq2",
+      "question": "Why might `ORDER BY created_at DESC LIMIT 20 OFFSET 20` return a row you already saw on the previous page, or skip one entirely?",
+      "answerMarkdown": "This is almost always a missing-tiebreaker bug. `ORDER BY created_at DESC` only guarantees ordering on `created_at` — if two rows share the exact same timestamp, SQL doesn't promise which one comes first, and that choice can differ between two runs of the identical query, especially under concurrent writes or after a plan change.\n\nConcretely: if rows A and B tie on `created_at` and sit right at the boundary between page 1 and page 2, one query might put A on page 1 and B on page 2, while a later query flips them — so a user paging forward sees B twice, or never sees A at all. High-throughput tables make this worse, since many rows can genuinely share a millisecond-resolution timestamp.\n\nThe fix is cheap and I'd apply it by default on any paginated query: add a unique column as a secondary sort key, almost always the primary key — `ORDER BY created_at DESC, id DESC`. That guarantees a total order, so ties are broken the same way every time.\n\n**Testing:** whether you treat 'sorted' as meaning 'fully deterministic,' which it only is once every tie is broken by a unique column.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging pagination skips/dupes"
+    },
+    {
+      "id": "filtering-sorting-iq3",
+      "question": "A search box does `WHERE name LIKE '%' || :query || '%'` and it's slow on a large table even though `name` is indexed. What's happening and how would you fix it?",
+      "answerMarkdown": "The leading wildcard is the problem. A standard B-tree index is sorted left-to-right on the column's value, so it can jump straight to rows starting with a given prefix — `LIKE 'smith%'` can use it. But `%smith%` means the match can start anywhere in the string, so there's no fixed prefix to seek to, and the engine falls back to scanning and testing every row against the pattern.\n\nIf the real requirement is prefix search (autocomplete-style), I'd just drop the leading wildcard and the existing index solves it. If it's genuine substring search — which this looks like — a normal index can't help regardless of how it's tuned, so I'd reach for a purpose-built solution: a trigram index (`pg_trgm` on Postgres) for fuzzy substring matches, full-text search (`tsvector`/`GIN`) for word-level matching, or an external search engine like Elasticsearch if the query load and relevance requirements justify a separate system.\n\nI'd also check the actual data volume and query frequency before reaching for infrastructure — on a 10,000-row table a sequential scan on every keystroke might genuinely be fine.\n\n**Testing:** whether you understand *why* the index stops helping, not just that 'LIKE is sometimes slow.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fixing a slow LIKE search"
+    }
+  ]
+}

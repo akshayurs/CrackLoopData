@@ -1,0 +1,172 @@
+{
+  "id": "acid-lifecycle",
+  "title": "ACID & Transaction Lifecycle",
+  "area": "databases",
+  "group": "transactions-concurrency",
+  "order": 1,
+  "slug": "acid-lifecycle",
+  "summary": "What a transaction actually guarantees, how it moves through commit/abort states, and where atomicity and durability are really implemented under the hood.",
+  "level": "beginner",
+  "slideCount": 11,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "acid-lifecycle-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **transaction** groups multiple reads and writes into one unit that either fully happens or fully doesn't. **ACID** — Atomicity, Consistency, Isolation, Durability — is the contract a database makes about that unit.\n\nEvery isolation-level question, every deadlock, every \"why didn't my write survive the crash\" incident traces back to one of these four letters. This topic builds the vocabulary; the next four topics in this group go deep on isolation and the mechanisms (locking, MVCC) that deliver it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 28,
+      "mcqIds": []
+    },
+    {
+      "id": "acid-lifecycle-s02",
+      "order": 2,
+      "sectionTitle": "Atomicity, Consistency, Isolation, Durability",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Take the classic example: transferring $100 from account A to account B — a debit and a credit that must move together.\n\n- **Atomicity** — the debit and credit both happen, or neither does. No world exists where money left A but never reached B.\n- **Consistency** — the transaction takes the database from one valid state to another: total balance across A+B is unchanged, and every constraint (foreign keys, checks) still holds.\n- **Isolation** — a concurrent transaction reading A and B never sees the halfway state where A is debited but B isn't yet credited.\n- **Durability** — once the transfer commits and the bank shows you a confirmation, that fact survives a crash one second later.\n\nEach letter is answering a different failure mode: A answers \"what if we crash mid-write,\" C answers \"what if the app has a bug,\" I answers \"what if two things run at once,\" D answers \"what if we crash right after telling the user it worked.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "acid-lifecycle-s02-q1"
+      ]
+    },
+    {
+      "id": "acid-lifecycle-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: transaction states",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![State machine: Active to Partially Committed to Committed on the happy path, or to Failed then Aborted on error](assets/transaction-states.svg)\n\nA transaction starts **active** while it executes statements. If every statement succeeds, it moves to **partially committed** — the work is done in memory/log but not yet guaranteed durable. Only after the commit record is durably written does it become **committed**.\n\nAny error along the way — a constraint violation, a deadlock victim, an explicit `ROLLBACK` — moves it to **failed**, and the system then **undoes** its partial writes to reach **aborted**. Note that \"partially committed\" is not durable: a crash there still requires recovery to decide whether to redo or undo it (the next group's topic on WAL and recovery covers exactly this).",
+      "assets": [
+        {
+          "alt": "State machine: Active to Partially Committed to Committed on the happy path, or to Failed then Aborted on error",
+          "path": "assets/transaction-states.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "acid-lifecycle-s04",
+      "order": 4,
+      "sectionTitle": "BEGIN … COMMIT / ROLLBACK, and savepoints",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Most engines default to **autocommit** — every statement is its own transaction. Wrapping statements in an explicit block is how you get atomicity across more than one:\n\n```sql\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts SET balance = balance + 100 WHERE id = 'B';\nCOMMIT;\n```\n\nIf anything fails between `BEGIN` and `COMMIT`, run `ROLLBACK` (or the engine does it for you on a fatal error) and neither update takes effect.\n\n**Savepoints** let you roll back part of a transaction without abandoning the whole thing:\n\n```sql\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nSAVEPOINT before_credit;\nUPDATE accounts SET balance = balance + 100 WHERE id = 'B';\n-- suppose this insert fails a constraint\nINSERT INTO audit_log VALUES (...);\nROLLBACK TO before_credit;\n-- the debit from A is still pending; only the credit + failed insert are undone\nCOMMIT;\n```",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "acid-lifecycle-s05",
+      "order": 5,
+      "sectionTitle": "How atomicity is actually implemented: undo",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Atomicity isn't magic — it's an **undo log**. Before (or as) a transaction overwrites a row, the engine records enough information to reverse the change.\n\n**MySQL/InnoDB** keeps undo records in the rollback segment; a `ROLLBACK` walks them backward, restoring old values. **Postgres** takes a different route: it never overwrites a row in place — an `UPDATE` writes a brand-new row version and leaves the old one alone (this is the same MVCC machinery the isolation-levels and mvcc-deadlocks topics cover). If the transaction aborts, the new version is simply marked dead and ignored; nothing needs to be \"undone\" because the old version was never touched.\n\nThe interview-relevant point: atomicity's cost is proportional to how much you wrote before failing. A transaction that updates 10 million rows and then rolls back isn't free — InnoDB has to apply 10 million undo records, which can take longer than the original write.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "acid-lifecycle-s05-q1"
+      ]
+    },
+    {
+      "id": "acid-lifecycle-s06",
+      "order": 6,
+      "sectionTitle": "Why \"consistency\" is partly the app's job",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The database only enforces the constraints you actually declare — primary keys, foreign keys, `CHECK`, `NOT NULL`, uniqueness. It has no idea that \"account balance should never go negative\" unless you write that as a `CHECK (balance >= 0)`.\n\nIf your application logic has a bug — say it credits the wrong account — the database will happily commit that transaction. It was atomic, isolated, and durable; it was **not** consistent with your business rules, because those rules were never told to the database.\n\nThis is why \"C\" in ACID is the odd one out: A, I, and D are properties the engine guarantees regardless of your schema. Consistency is a joint guarantee — the engine enforces what you declare, and the application must declare (or itself enforce) the rest.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "acid-lifecycle-s07",
+      "order": 7,
+      "sectionTitle": "What durability actually means once COMMIT returns",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When `COMMIT` returns successfully, the engine is promising the write survives a crash — including the OS crashing or power loss, not just the database process dying.\n\nThat promise only holds if the commit record was **fsync'd** to disk, not just written to the OS page cache. A page-cache write can vanish on power loss even though the database process thinks it's on disk. This is why `synchronous_commit` (Postgres) or `innodb_flush_log_at_trx_commit` (MySQL) exist as tunables — turning them off trades durability for throughput, because `fsync` is often the slowest step in a commit.\n\nThe practical numbers: an `fsync` to a spinning disk can cost 5-10ms; to an SSD, well under 1ms; batching many commits into one `fsync` (\"group commit\") is how engines get that cost down to a fraction of a millisecond per transaction under load.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "acid-lifecycle-s07-q1"
+      ]
+    },
+    {
+      "id": "acid-lifecycle-s08",
+      "order": 8,
+      "sectionTitle": "Compare: autocommit vs explicit transactions",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Autocommit | Explicit transaction |\n|---|---|---|\n| Scope | Each statement is its own transaction | You choose the boundary with `BEGIN`/`COMMIT` |\n| Use when | Single independent writes (one `UPDATE`, one `INSERT`) | Multiple statements must succeed or fail together |\n| Risk | None from multi-statement inconsistency — but no way to group | Holding it open too long blocks other transactions (see next slide) |\n| Default in | MySQL (autocommit=1 by default), most ORMs per-statement outside a unit of work | Explicitly opened by app code, ORMs' `transaction.atomic()` / `@Transactional` |\n\n**How to decide:** if a business operation touches more than one row or table and both must land together, wrap it explicitly — relying on autocommit for a multi-step operation is a common source of partial-update bugs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "acid-lifecycle-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: long-running transactions holding resources",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Wrapping everything in one big transaction is safer, so I'll keep it open across an API call, an external HTTP request, or a report that takes minutes.\"\n\n**Why it's wrong:** an open transaction holds locks (in a locking engine) or blocks garbage collection of old row versions (in an MVCC engine like Postgres, where it pins the oldest snapshot `VACUUM` must respect). A transaction left open for 10 minutes while waiting on a slow API call can block every other writer touching the same rows, and in Postgres can cause severe table bloat because dead row versions can't be cleaned up until the oldest open transaction finishes.\n\n**Correct model:** keep transactions as short as possible — do external calls, user think-time, and report generation **outside** the transaction, and only wrap the actual atomic database operation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "acid-lifecycle-s09-q1"
+      ]
+    },
+    {
+      "id": "acid-lifecycle-s10",
+      "order": 10,
+      "sectionTitle": "Savepoints and partial rollback in practice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Savepoints matter beyond the syntax on slide 4 because they're how ORMs implement nested `try`/`except` blocks around a transaction. Django's `atomic()` blocks and Rails' nested transactions both compile down to savepoints under the hood, not real nested transactions (most engines don't have true nested transactions).\n\nOne sharp edge worth knowing: in Postgres, if a statement inside a transaction errors and you don't roll back to a savepoint, the **entire transaction** is poisoned — every subsequent statement fails with \"current transaction is aborted\" until you either roll back to a savepoint taken before the error or abort the whole transaction. This trips up engineers coming from MySQL, where a single statement failure doesn't necessarily kill the rest of the transaction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "acid-lifecycle-s11",
+      "order": 11,
+      "sectionTitle": "The nuance: ACID is a single-node promise",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "ACID, as classically defined, describes what **one** database node guarantees for **one** transaction against its own data. It says nothing about a \"transaction\" that spans two separate databases or microservices — updating an order-service database and a payment-service database together is not an ACID operation unless you build extra machinery (distributed transactions via two-phase commit, or a saga with compensating actions) on top.\n\nA staff-level answer distinguishes these explicitly: \"ACID\" inside one Postgres instance is a solved, cheap guarantee; \"ACID-like\" behavior across services is expensive (2PC blocks on the slowest participant and any coordinator failure) or approximate (sagas trade atomicity for eventual consistency plus compensation logic). Reaching for a distributed transaction when a single well-modeled database would do is one of the most common architecture mistakes interviewers probe for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "acid-lifecycle-s11-q1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "stored-programs-triggers",
+  "interviewQuestions": [
+    {
+      "id": "stored-programs-triggers-iq1",
+      "question": "When would you put business logic in a stored procedure versus the application layer?",
+      "answerMarkdown": "My default is application code — it's testable with normal unit-test tooling, reviewable in the same PR as the feature, and visible to any engineer who reads the codebase without needing to know a database-specific procedural language. I'd move logic into a stored procedure only when it needs a guarantee the application layer can't provide: it must run atomically across several statements, and I want that atomicity even if the call comes from a different client, a migration script, or a future service I haven't built yet.\n\nA concrete example: a funds-transfer operation that debits one account and credits another must never partially apply. Wrapping both updates plus an audit insert in one procedure with implicit transaction semantics is safer than trusting every future caller to wrap it in a transaction correctly themselves.\n\nI'd flag the cost explicitly: procedures are harder to test, often live outside the normal application CI pipeline, and are tied to one database's dialect — so I'd only pay that cost where the guarantee is worth it.\n\n**Testing:** whether you can name a real trade-off instead of treating stored procedures as either always good or always an anti-pattern.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Where stored logic belongs"
+    },
+    {
+      "id": "stored-programs-triggers-iq2",
+      "question": "What are the risks of relying heavily on triggers for cross-table consistency?",
+      "answerMarkdown": "The core risk is invisibility. A trigger's effects don't show up anywhere in the statement that fires them — an engineer reading `UPDATE orders SET status = 'shipped'` in application code has no signal that it also updates inventory, fires an analytics insert, and queues a webhook, unless they already know to go check the schema for triggers. That makes debugging unexpected data changes or unexplained slowness into schema archaeology instead of a straightforward code read.\n\nThe second risk is performance: a row-level trigger runs once per affected row, synchronously, inside the original transaction. A bulk update that used to be fast can become minutes-long and lock-holding the moment a trigger with its own per-row query gets attached, and this often isn't caught until it hits production-scale data.\n\nI'd reserve triggers for things that must never be skippable regardless of caller — auditing, `updated_at` maintenance — and push everything else into explicitly-called application logic or stored procedures, where the chain of effects is visible in one place.\n\n**Testing:** whether you've actually debugged a trigger-caused surprise, since the invisibility problem is hard to appreciate in the abstract.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trigger risks"
+    },
+    {
+      "id": "stored-programs-triggers-iq3",
+      "question": "A bulk data migration that updates a million rows is taking hours longer than expected on a table with several triggers. How would you investigate?",
+      "answerMarkdown": "I'd start by listing every trigger on the table (`information_schema.triggers` or the engine's equivalent) and check which are row-level versus statement-level — a row-level trigger runs once per affected row, so on a million-row update that's a million executions of whatever logic is inside it, all synchronous and inside the same transaction.\n\nFor each row-level trigger, I'd look at what it actually does: a trigger doing its own lookup query or write to another table multiplies the cost of the whole migration by a million. I'd check whether the trigger's logic is even necessary during a bulk migration — some engines let you disable specific triggers for the duration of a controlled migration and re-enable them after, or you can temporarily convert the logic to a statement-level trigger or a single post-migration batch job instead.\n\nIf disabling isn't safe (say, the trigger enforces a constraint the migration itself could violate), I'd instead look at batching the migration into smaller chunks with pauses, so each transaction's per-row trigger cost stays bounded and doesn't hold locks for hours at a stretch.\n\n**Testing:** whether you connect the specific symptom (slow bulk write) to the specific mechanism (per-row trigger execution) rather than guessing at generic tuning.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging trigger-caused slowness"
+    },
+    {
+      "id": "stored-programs-triggers-iq4",
+      "question": "Why did the industry move away from putting heavy business logic in stored procedures, and where do they still make sense?",
+      "answerMarkdown": "In the 2000s, stored procedures were popular partly because application-side transaction and connection-pooling tooling was weaker, so pushing multi-statement atomicity into the database was the pragmatic choice. As application frameworks got better transaction support, and as teams grew and needed logic that was easy to test, code-review, and keep portable across database engines, the balance shifted: application code is easier to unit test, lives in the same repo and CI pipeline as everything else, and doesn't require every engineer to learn a database-specific procedural language just to read business rules.\n\nStored procedures and triggers still earn their place for guarantees the application layer genuinely can't provide on its own — constraints and audit trails that must hold no matter which client writes, including a script or a future service nobody's built yet. The mistake is using them for logic that's likely to change often or needs regular code review, where the database-language tooling and lack of visibility become a real cost.\n\n**Testing:** whether you can explain this as a genuine trade-off shift with real causes, not just repeat \"stored procedures are outdated\" as received wisdom.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Why the industry shifted away"
+    }
+  ]
+}

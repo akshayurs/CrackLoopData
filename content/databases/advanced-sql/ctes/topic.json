@@ -1,0 +1,161 @@
+{
+  "id": "ctes",
+  "title": "Common Table Expressions & Recursion",
+  "area": "databases",
+  "group": "advanced-sql",
+  "order": 2,
+  "slug": "ctes",
+  "summary": "Naming subqueries for readability, then extending that same syntax to walk hierarchies and graphs that a plain join can't traverse.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "ctes-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **Common Table Expression (CTE)** — the `WITH name AS (...)` block before a query — gives a subquery a name you can reference later, turning a nested mess into a readable sequence of steps. That alone makes CTEs worth knowing.\n\nThe bigger reason they matter in interviews: a **recursive** CTE can reference itself, which is the only standard-SQL way to walk a hierarchy of unknown depth — an org chart, a category tree, a friend-of-a-friend graph — without knowing in advance how many levels deep you'll go.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "ctes-s02",
+      "order": 2,
+      "sectionTitle": "WITH name AS (...) for readability",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A CTE lets you name an intermediate result and reference it like a table for the rest of the query — you can chain several, each building on the last.\n\n```sql\nWITH high_value_orders AS (\n  SELECT customer_id, SUM(amount) AS total\n  FROM orders\n  GROUP BY customer_id\n  HAVING SUM(amount) > 1000\n),\nrepeat_customers AS (\n  SELECT customer_id FROM high_value_orders\n  WHERE customer_id IN (SELECT customer_id FROM orders GROUP BY customer_id HAVING COUNT(*) > 3)\n)\nSELECT * FROM repeat_customers;\n```\n\nThe same logic nested as subqueries would be three levels of parentheses deep and hard to read top to bottom. A CTE reads like a sequence of named steps — closer to how you'd actually explain the logic out loud.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "ctes-s02-q1"
+      ]
+    },
+    {
+      "id": "ctes-s03",
+      "order": 3,
+      "sectionTitle": "Recursive CTE: anchor plus recursive member",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A recursive CTE has two parts joined by `UNION ALL`. The **anchor member** is a normal query that produces the starting rows. The **recursive member** references the CTE's own name and runs repeatedly, each time operating on the *previous* iteration's output, until it returns zero rows.\n\n```sql\nWITH RECURSIVE org_chart AS (\n  SELECT employee_id, manager_id, 1 AS depth   -- anchor: top of the tree\n  FROM employees WHERE manager_id IS NULL\n  UNION ALL\n  SELECT e.employee_id, e.manager_id, oc.depth + 1  -- recursive member\n  FROM employees e\n  JOIN org_chart oc ON e.manager_id = oc.employee_id\n)\nSELECT * FROM org_chart;\n```\n\nThe engine effectively loops: run the anchor once, then keep re-running the recursive member against only the newest batch of rows, accumulating results, until a pass produces nothing new.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "ctes-s03-q1"
+      ]
+    },
+    {
+      "id": "ctes-s04",
+      "order": 4,
+      "sectionTitle": "Walking an org tree or a graph path",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The same pattern walks any hierarchy without knowing its depth up front — an org chart, a bill-of-materials, a category tree, or the shortest path in a graph. Add a column that accumulates a path or distance as you go:\n\n```sql\nWITH RECURSIVE reachable AS (\n  SELECT to_city AS city, 1 AS hops, ARRAY[from_city, to_city] AS path\n  FROM routes WHERE from_city = 'NYC'\n  UNION ALL\n  SELECT r.to_city, re.hops + 1, re.path || r.to_city\n  FROM routes r\n  JOIN reachable re ON r.from_city = re.city\n  WHERE NOT r.to_city = ANY(re.path)  -- avoid revisiting a city\n)\nSELECT city, MIN(hops) FROM reachable GROUP BY city;\n```\n\nThe `NOT r.to_city = ANY(re.path)` guard is doing double duty here — it prevents cycles in the graph *and* is what makes termination guaranteed, since each recursive step can only add cities not already visited.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "ctes-s05",
+      "order": 5,
+      "sectionTitle": "Diagram: recursive CTE iterations expanding a tree",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Recursive CTE discovering one org-chart level per iteration](assets/recursive-cte-levels.svg)\n\nEach recursive pass adds exactly one level of depth — the engine can't \"skip ahead\" to grandchildren before it has processed children, because the recursive member only sees the previous iteration's output as its input.",
+      "assets": [
+        {
+          "alt": "Recursive CTE discovering one org-chart level per iteration",
+          "path": "assets/recursive-cte-levels.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "ctes-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: missing termination means infinite recursion",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I wrote a `WITH RECURSIVE` query, so it'll just figure out when to stop.\"\n\n**Why it's wrong:** the recursion only stops when a pass produces **zero new rows**. If your data has a cycle (employee A reports to B, B reports to A — a data-quality bug, but it happens) and you never filtered against a visited-path column, every iteration keeps producing rows forever. Most engines cap this with a `max_recursion` limit or statement timeout and the query eventually errors out, but not before consuming real resources.\n\n**Correct model:** always design the recursive member so a strictly monotonic quantity — depth, a path array of visited nodes, a decreasing remaining budget — guarantees the row count trends to zero. For graph traversal specifically, guard against revisiting a node explicitly (`WHERE NOT x = ANY(path)`), don't assume the source data has no cycles.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "ctes-s06-q1"
+      ]
+    },
+    {
+      "id": "ctes-s07",
+      "order": 7,
+      "sectionTitle": "Compare: CTE vs subquery vs temp table",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Subquery | CTE | Temp table |\n|---|---|---|---|\n| Readability | Nests deeply, hard to follow | Named, linear, easy to follow | Named, but needs a separate statement |\n| Reused within query | No — must repeat the subquery | Yes, referenced by name multiple times | Yes |\n| Materialization | Never on its own | Engine-dependent (see next slide) | Always — written to disk/temp storage |\n| Scope | One query | One query (unless recursive) | Session or transaction |\n| Indexable | No | No | Yes — you can add indexes to it |\n\n**How to decide:** CTE for readability and one-query reuse; temp table when you need to index the intermediate result or reuse it across multiple statements; plain subquery only for a genuinely one-off, simple filter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "ctes-s07-q1"
+      ]
+    },
+    {
+      "id": "ctes-s08",
+      "order": 8,
+      "sectionTitle": "Senior nuance: CTE materialization is engine-dependent",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer treats CTEs as \"just named subqueries, always inlined the same way.\" A senior answer knows this varies by engine and version. Historically, **PostgreSQL before v12** always **materialized** a non-recursive CTE — ran it once, wrote the result to a temporary buffer, and could not push filters from the outer query down into it, sometimes causing surprisingly bad plans. **Postgres 12+** inlines CTEs like subqueries by default (unless marked `MATERIALIZED` or the CTE is referenced multiple times or is recursive). Other engines (SQL Server, MySQL 8+) have their own inlining rules.\n\nThe practical takeaway: if a CTE-based query is unexpectedly slow, check whether the engine materialized it — `EXPLAIN` shows a `CTE Scan` node when it did — and consider rewriting as a subquery or adding `MATERIALIZED`/`NOT MATERIALIZED` hints where supported.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "ctes-s08-q1"
+      ]
+    },
+    {
+      "id": "ctes-s09",
+      "order": 9,
+      "sectionTitle": "Recursive CTEs vs application-side loops",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "A common design question: should hierarchy traversal happen in SQL (a recursive CTE) or in application code (loop, fetch children, repeat)?\n\nA recursive CTE does the traversal in one round trip and lets the database's own indexes drive each step — far fewer network round trips for a deep or wide tree. An application-side loop is easier to debug and cap (you can bail out after N iterations trivially, log each step, add business logic mid-traversal) but pays a network round trip per level and can turn into an N+1 query pattern on a wide tree.\n\nInterview signal: recognizing that recursive CTEs win on round trips but recursive application code wins on debuggability and flexibility is the trade-off a staff engineer names unprompted.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "ctes-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: forgetting a depth cap on unbounded hierarchies",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"My data doesn't have cycles, so an unbounded recursive CTE is safe.\"\n\n**Why it's wrong:** cycle-free doesn't mean shallow. A category tree that's supposed to be 4 levels deep can, after years of one team nesting categories inside categories, reach 40 levels on one bad branch — and a recursive CTE with no depth cap will happily walk all 40, returning far more rows than any caller expects, or timing out on a pathological branch.\n\n**Correct model:** add an explicit depth limit in the recursive member (`WHERE depth < 20`) even when you believe the data is well-formed. It's cheap insurance against a future data-entry mistake turning a fast query into an outage, and it documents the assumption for the next person reading the query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": [
+        "ctes-s10-q1"
+      ]
+    }
+  ]
+}

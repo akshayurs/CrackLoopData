@@ -1,0 +1,29 @@
+{
+  "topicId": "io-techniques-polling-interrupts-dma",
+  "interviewQuestions": [
+    {
+      "id": "io-techniques-polling-interrupts-dma-iq1",
+      "question": "Why is DMA important for a disk controller transferring a large file?",
+      "answerMarkdown": "I'd start from what the CPU would otherwise have to do. Without DMA, even with interrupts handling the *waiting* problem, the interrupt handler still has to move every word of the transfer between the device and memory itself — for a 100MB file at 4 bytes per instruction, that's tens of millions of CPU instructions purely for data movement, on top of whatever the application actually wanted to do with that data.\n\nDMA removes the CPU from that copy path entirely: the CPU programs a DMA controller with a source, destination, and length, and the controller moves the entire block directly over the bus between the device and memory. The CPU's involvement becomes constant — one setup, one completion interrupt — regardless of whether the transfer is 4KB or 400MB, which is the property that actually matters at scale.\n\nConcretely, a modern NVMe SSD can sustain multiple gigabytes per second; without DMA, keeping up with that rate via CPU-driven copying would consume a meaningful fraction of a CPU core just moving bytes, starving actual application work. I'd close by naming the real remaining CPU cost: DMA setup and cache coherence management aren't free, they're just orders of magnitude cheaper than per-byte copying.\n\n**Testing:** whether you understand DMA as solving the copy-cost problem specifically, distinct from what interrupts already solved (the wait-cost problem).",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Why DMA matters for large transfers"
+    },
+    {
+      "id": "io-techniques-polling-interrupts-dma-iq2",
+      "question": "When would polling actually outperform interrupt-driven I/O, given that interrupts exist specifically to avoid wasting CPU cycles?",
+      "answerMarkdown": "I'd challenge the premise a little: interrupts avoid waste when events are *infrequent* relative to CPU speed, but every interrupt has fixed overhead — saving register state, switching to kernel context, sometimes a pipeline flush — commonly a few microseconds. At sufficiently high event rates, that fixed cost per event can dominate, and polling in a tight loop, checked at exactly the right cadence, can actually beat interrupt dispatch overhead.\n\nThe canonical real example is Linux's **NAPI** network driver framework: under light traffic, it uses interrupts (cheap, since events are rare) to detect the first packet. But once packets start arriving fast and steadily, it switches to polling the receive queue directly, avoiding the overhead of generating and handling one interrupt per packet — a 10-gigabit NIC under load could otherwise generate hundreds of thousands of interrupts per second. Once traffic quiets down, it falls back to interrupts so the CPU isn't wasted polling an idle queue.\n\nUser-space frameworks like DPDK take this further, dedicating an entire core to continuous polling for workloads where even NAPI's hybrid overhead and interrupt latency variance are unacceptable — high-frequency trading systems, packet routers.\n\n**Testing:** whether you can go beyond \"interrupts good, polling bad\" and reason about the actual crossover point where the trade-off flips.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "When polling beats interrupts"
+    },
+    {
+      "id": "io-techniques-polling-interrupts-dma-iq3",
+      "question": "You're designing the I/O path for a new device driver. How would you decide between polling, interrupts, and DMA?",
+      "answerMarkdown": "I'd frame the decision around two variables: how often the device signals an event, and how much data moves per event. For a device with rare events and tiny data — a keyboard, sending one interrupt per keystroke with a few bytes — interrupt-driven programmed I/O is already optimal; DMA's setup overhead wouldn't pay for itself moving 1-2 bytes, and polling would waste CPU waiting on something that happens maybe a few times a second.\n\nFor a device with large transfers regardless of frequency — a disk read, a network card doing bulk transfer — DMA is close to mandatory once transfer sizes get into the kilobytes-and-up range, since the CPU cost of manual copying scales with bytes moved while DMA's doesn't. I'd pair DMA with interrupts for completion notification in the common case.\n\nThe edge case I'd flag explicitly: a device with extremely high event frequency but small per-event data — a busy network card handling many small packets — can hit a regime where per-interrupt overhead itself becomes the bottleneck, which argues for a hybrid like NAPI (interrupts when idle, polling under load) layered on top of DMA for the actual byte movement. I'd want real throughput numbers for the target hardware before committing, since \"DMA + interrupts\" isn't automatically right at extreme event rates.\n\n**Testing:** whether you can reason from first principles about a design trade-off rather than reciting a fixed rule for which technique to use.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Designing an I/O strategy from scratch"
+    }
+  ]
+}

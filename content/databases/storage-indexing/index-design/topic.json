@@ -1,0 +1,187 @@
+{
+  "id": "index-design",
+  "title": "Index Design & Selectivity",
+  "area": "databases",
+  "group": "storage-indexing",
+  "order": 4,
+  "slug": "index-design",
+  "summary": "Choosing and shaping indexes like an engineer — selectivity, covering indexes, clustered vs non-clustered, and the everyday mistakes that quietly disable an index.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "index-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Knowing what a [B+Tree index](btree-indexes) is doesn't tell you when to add one, on which column, or in what order — that's index design, and it's where most real-world query performance work actually happens. Interviewers care less about the data structure and more about whether you can reason about selectivity, covering indexes, and the ways an index quietly stops being used.\n\nThis topic is the practical layer on top of the structure: choosing indexes by reflex (\"just index everything\") is a common junior mistake that a staff engineer is expected to catch in code review.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 34,
+      "mcqIds": []
+    },
+    {
+      "id": "index-design-s02",
+      "order": 2,
+      "sectionTitle": "Selectivity and cardinality",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cardinality** is the number of distinct values in a column. **Selectivity** is cardinality relative to row count — a column's selectivity is high when a typical equality filter on it matches a small fraction of rows.\n\nA `user_id` column in a 10-million-row `orders` table might have 2 million distinct values — selectivity of `1/5` on average (5 orders per user), which is decent. An `is_deleted` boolean has cardinality 2, meaning a filter matches roughly half the table — terrible selectivity as a standalone index.\n\nThe formula worth having ready: **selectivity ≈ distinct values / total rows**, closer to 1 is more selective. The planner uses exactly this kind of statistic (via `ANALYZE` in Postgres, updated table stats in MySQL) to decide whether an index beats a full scan for a given filter.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "index-design-s02-q1"
+      ]
+    },
+    {
+      "id": "index-design-s03",
+      "order": 3,
+      "sectionTitle": "Covering indexes and index-only scans",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Normally, an index lookup finds a match and then has to fetch the actual row from the heap to get columns not in the index — a second I/O per matching row. A **covering index** includes every column the query needs (either as key columns or, in Postgres, via `INCLUDE`), so the engine can answer the query from the index alone, never touching the heap. This is called an **index-only scan**.\n\nExample: `CREATE INDEX ON orders (user_id) INCLUDE (status, total)` lets `SELECT status, total FROM orders WHERE user_id = 42` be answered entirely from the index — for a query returning thousands of rows, that can cut I/O roughly in half, or more if the heap rows aren't cached.\n\nThe catch: Postgres still needs to check row visibility per MVCC rules unless the **visibility map** confirms the page has no relevant uncommitted changes, so index-only scans depend on a recently vacuumed table to reach their full benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "index-design-s04",
+      "order": 4,
+      "sectionTitle": "Compare: clustered vs non-clustered indexes",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Clustered index | Non-clustered index |\n|---|---|---|\n| Data location | Leaf nodes ARE the actual table rows, in index key order | Leaf nodes hold a pointer back to the row's real location |\n| Count per table | Exactly one (the table can only be physically sorted one way) | Many — as many as you create |\n| Range scan on the key | Extremely fast — data is physically contiguous | Fast for the index, but each row still needs a heap fetch unless covering |\n| Default in | MySQL InnoDB — always clusters on the primary key | Postgres — the heap is unordered by default; every index is non-clustered (`CLUSTER` command is a one-time manual reorder) |\n\n**How to decide:** on InnoDB, picking a good clustering key (usually the primary key) matters enormously since you only get one — a randomly-ordered UUID primary key clusters the table randomly too, hurting every range query on insertion order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "index-design-s04-q1"
+      ]
+    },
+    {
+      "id": "index-design-s05",
+      "order": 5,
+      "sectionTitle": "Pitfall: over-indexing punishing writes",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"If a column might be filtered on someday, index it now — indexes are cheap insurance.\"\n\n**Why it's wrong:** every index adds a write to every `INSERT`, and to every `UPDATE` that touches an indexed column. A table with 8 indexes turns one logical insert into 9 physical writes, and each index also needs its own buffer pool cache space — spreading the cache thinner across more structures can hurt overall hit rate, even for indexes that do get used.\n\n**Correct model:** treat each index as a cost paid on every write, forever, against a benefit only realized if that specific query pattern is actually common. A practical habit: check `pg_stat_user_indexes` (Postgres) or `sys.dm_db_index_usage_stats` (SQL Server) periodically for indexes with near-zero scans — an unused index is pure write tax with no offsetting benefit, and dropping it is free performance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "index-design-s06",
+      "order": 6,
+      "sectionTitle": "Pitfall: functions on a column disabling the index",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"I have an index on `email`, so `WHERE LOWER(email) = 'a@b.com'` will use it.\"\n\n**Why it's wrong:** a standard B+Tree index on `email` stores the raw values in sorted order. `LOWER(email)` computes a *different* value for every row at query time, which doesn't correspond to any position in a tree sorted by the original, unmodified column — so the planner can't use the index and falls back to a full scan, silently, with no error.\n\n**Correct model:** either query the column as stored (`WHERE email = 'a@b.com'` if case is normalized on write), or build a **functional/expression index** — `CREATE INDEX ON users (LOWER(email))` in Postgres — which indexes the *result* of the expression, letting a query using that exact expression use the index again. The same trap applies to `WHERE DATE(created_at) = '2024-01-01'` versus indexing `created_at` directly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "index-design-s06-q1"
+      ]
+    },
+    {
+      "id": "index-design-s07",
+      "order": 7,
+      "sectionTitle": "Code: CREATE INDEX, composite and partial indexes",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Three real, common index shapes worth recognizing on sight:\n\n```sql\n-- Simple index, equality lookups on user_id\nCREATE INDEX idx_orders_user_id ON orders (user_id);\n\n-- Composite: equality column first, range column last\nCREATE INDEX idx_orders_user_created\n  ON orders (user_id, created_at);\n\n-- Partial: index only the rows actually queried this way,\n-- much smaller and cheaper to maintain than a full index\nCREATE INDEX idx_orders_pending\n  ON orders (created_at)\n  WHERE status = 'pending';\n```\n\nThe partial index is the one candidates most often haven't seen: if only 2% of a 10-million-row table has `status = 'pending'` and that's the only status ever range-queried, a partial index is roughly 2% the size of a full index on the same column — cheaper to maintain and it stays fully cached in memory.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "index-design-s07-q1"
+      ]
+    },
+    {
+      "id": "index-design-s08",
+      "order": 8,
+      "sectionTitle": "Numbers: estimating whether an index will actually be used",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A concrete estimate you should be ready to produce: a table has 20 million rows, and a filter matches 400,000 of them — 2% selectivity. Using the index means roughly 400,000 random heap lookups (assuming no covering index), each costing something like a fraction of a millisecond if cached, more if not. A full scan reads all 20 million rows sequentially, which at typical throughput might take a few seconds regardless of the filter.\n\nAt 2% selectivity, the index almost always wins — 400,000 targeted lookups beats reading 20 million rows. Push selectivity to 30-40% and the crossover flips, because now you'd be doing 6-8 million random lookups, which costs more total I/O than one sequential pass.\n\nThe number to internalize: planners commonly favor an index somewhere in the single-digit-to-low-teens percent selectivity range, and that threshold moves with how well cached the heap is and how wide the rows are — which is why \"is this index selective enough\" is a question with a numeric, not folklore, answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "index-design-s09",
+      "order": 9,
+      "sectionTitle": "Multi-column selectivity: order matters even among equality columns",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a composite index has multiple equality-filtered columns, the left-prefix rule says any of them can lead — so which should? Put the **most selective column first**, because it narrows the tree the most before the next column even matters.\n\nExample: `(tenant_id, status)` on a multi-tenant table where each tenant has thousands of rows split across 5 statuses. Leading with `tenant_id` narrows to one tenant's slice immediately; leading with `status` first would only narrow to one-fifth of the *entire* table across all tenants — a much larger, less useful slice — before even applying the tenant filter.\n\nThis is a subtler version of the left-prefix rule from B+Tree design: it's not just about whether a column can be used, it's about which order minimizes the tree traversal you're actually paying for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "index-design-s09-q1"
+      ]
+    },
+    {
+      "id": "index-design-s10",
+      "order": 10,
+      "sectionTitle": "Diagram: index-only scan vs regular index scan",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Regular index scan hopping to the heap versus an index-only scan stopping at the leaf](assets/index-scan-vs-index-only-scan.svg)\n\nThe visual difference is one arrow: a regular index scan always makes a second hop to the heap after finding a match in the index; an index-only scan (using a covering index) stops at the index leaf because everything the query needs is already there.\n\nThat one skipped hop, multiplied across every matching row, is exactly what makes covering indexes worth designing deliberately for hot, high-row-count queries.",
+      "assets": [
+        {
+          "alt": "Regular index scan hopping to the heap versus an index-only scan stopping at the leaf",
+          "path": "assets/index-scan-vs-index-only-scan.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    },
+    {
+      "id": "index-design-s11",
+      "order": 11,
+      "sectionTitle": "Reading an EXPLAIN plan to check index health",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The senior move isn't guessing whether an index helps — it's checking. `EXPLAIN ANALYZE` in Postgres (or `EXPLAIN` plus the actual execution stats in MySQL) shows both the planner's row-count *estimate* and the *actual* rows returned; a large gap between them (say, estimated 500, actual 200,000) means outdated table statistics are causing bad index-vs-scan decisions, and a fresh `ANALYZE` is the fix, not a schema change.\n\nLook for `Index Scan` vs `Seq Scan` vs `Index Only Scan` in the plan output, and for `Heap Fetches` under an index-only scan — a high heap-fetch count under what should be an index-only scan usually means the visibility map is stale, pointing back to a vacuum problem, not an indexing one.\n\nThe habit to build: never assume an index is helping — read the plan, compare estimate to actual, and only then decide whether the fix is a new index, a statistics refresh, or a vacuum.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "index-design-s12",
+      "order": 12,
+      "sectionTitle": "Pitfall: adding an index to fix a slow query without checking the plan first",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"This query is slow, so the fix is to add an index on the columns in the `WHERE` clause.\"\n\n**Why it's wrong:** the slowness might not be a missing index at all — it could be a function wrapping the filtered column (disabling an existing index silently), stale statistics causing a bad plan choice, lock contention from a long-running transaction, or the query genuinely returning a large, unselective fraction of the table where no index would help anyway. Adding an index blind treats a symptom without diagnosing the cause, and adds permanent write overhead even if it doesn't fix anything.\n\n**Correct model:** run `EXPLAIN ANALYZE` first, always. It tells you whether an index is missing, ignored, or simply wouldn't help given the query's actual selectivity — the fix should follow directly from what the plan shows, not from a reflex.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": [
+        "index-design-s12-q1"
+      ]
+    }
+  ]
+}

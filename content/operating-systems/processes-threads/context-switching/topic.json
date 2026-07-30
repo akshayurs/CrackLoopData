@@ -1,0 +1,159 @@
+{
+  "id": "context-switching",
+  "title": "Context Switching",
+  "area": "operating-systems",
+  "group": "processes-threads",
+  "order": 6,
+  "slug": "context-switching",
+  "summary": "What a context switch actually saves and restores, why it costs more than it looks like it should, and why that cost quietly shapes scheduler design.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 7,
+  "slides": [
+    {
+      "id": "context-switching-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A **context switch** is the OS pausing one running thread or process and resuming another — saving the first's CPU state so it can pick up exactly where it left off, and loading the second's saved state so it does the same.\n\nIt sounds like a small operation — swap some register values — but it's one of the most performance-sensitive things an OS does, running potentially thousands of times per second on a busy system. Interviewers use it to test whether you understand OS mechanisms at a level deeper than \"the scheduler picks the next process.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 32,
+      "mcqIds": []
+    },
+    {
+      "id": "context-switching-s02",
+      "order": 2,
+      "sectionTitle": "What a context switch saves and restores",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When the OS switches away from the currently running thread, it saves that thread's **execution context** into its PCB (or thread control block): the program counter, the stack pointer, general-purpose CPU register values, and condition/flag registers. It then loads the next thread's previously saved context from its own PCB into the actual CPU registers, and execution resumes there as if it never stopped.\n\nFor a **process** switch specifically, there's an additional, more expensive step: swapping the page table pointer (on x86, reloading the CR3 register) so the CPU now translates virtual addresses using the new process's memory mappings instead of the old one's. A thread switch within the same process skips this entirely, since threads in one process already share the same page tables.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "context-switching-s02-q1"
+      ]
+    },
+    {
+      "id": "context-switching-s03",
+      "order": 3,
+      "sectionTitle": "Diagram: context switch timeline between two processes",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Context switch timeline between two processes](assets/context-switch-timeline.svg)\n\nThe timeline makes the cost visible directly: the shaded \"switch\" blocks are pure overhead — no user-visible work happens during them, they exist only to save and load state. Every microsecond spent in a shaded block is a microsecond neither A nor B is making progress.",
+      "assets": [
+        {
+          "alt": "Context switch timeline between two processes",
+          "path": "assets/context-switch-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 36,
+      "mcqIds": []
+    },
+    {
+      "id": "context-switching-s04",
+      "order": 4,
+      "sectionTitle": "Process context switch vs thread context switch — why threads are cheaper",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Process context switch | Thread context switch (same process) |\n|---|---|---|\n| Registers/PC saved & restored | Yes | Yes |\n| Page table reload | Yes — new address space mapping | No — same address space throughout |\n| TLB effect | Often flushed or re-tagged, causing translation misses afterward | Largely untouched |\n| Cache effects | New process's data/code likely evicts old process's cache lines | Same process's data was likely already resident |\n| Typical relative cost | Baseline (higher) | Often several times cheaper |\n\n**How to decide what to optimize:** if profiling shows heavy time in context switching, check whether the workload is process-heavy (many short-lived processes) or thread-heavy — moving process-level concurrency to thread-level concurrency, where safe to do so, is a standard lever for reducing this specific overhead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "context-switching-s04-q1"
+      ]
+    },
+    {
+      "id": "context-switching-s05",
+      "order": 5,
+      "sectionTitle": "What triggers a context switch: interrupt, syscall, time-slice expiry",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Context switches don't happen at arbitrary moments — the OS only gets a chance to consider one at specific trigger points. **Time-slice expiry**: a hardware timer interrupt fires, telling the kernel the running thread has used its allotted slice and it's time to let the scheduler reconsider. **Blocking calls**: a thread requests I/O or waits on a lock, voluntarily giving up the CPU since it can't proceed anyway. **Interrupts**: a hardware device (disk, network card) signals completion, and the kernel may switch to a thread that was waiting on it. **Higher-priority preemption**: a thread that becomes ready has higher priority than what's currently running, so the scheduler preempts.\n\nNotice a common thread: every trigger is either the kernel being *told* something changed (a timer, an interrupt) or a thread *voluntarily* giving up the CPU — a thread can never be silently swapped out with no trigger at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "context-switching-s06",
+      "order": 6,
+      "sectionTitle": "The hidden costs: cache/TLB flush and cold-cache effects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The register save/restore itself is fast — a handful of CPU instructions. The real cost of a context switch is almost entirely **indirect**, showing up *after* the switch completes, not during it.\n\nWhen the new thread or process starts running, its data and instructions likely aren't in the CPU's L1/L2 cache anymore — the previous thread's memory accesses evicted them. The new thread pays extra cache misses until its working set gets \"warmed back up.\" For process switches specifically, the reloaded page table can also invalidate TLB entries, so the next several memory accesses pay a full page-table walk instead of a cached translation.\n\nThis is why context-switch cost is usually measured in **total lost throughput**, not just the microseconds spent literally inside the kernel's switch routine — the cold-cache tax afterward is frequently the larger cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "context-switching-s06-q1"
+      ]
+    },
+    {
+      "id": "context-switching-s07",
+      "order": 7,
+      "sectionTitle": "Real numbers: how expensive is a context switch, actually?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rough, commonly-cited figures on modern hardware: the direct kernel-side cost of a context switch is on the order of **1-5 microseconds**. The indirect cold-cache cost that follows can be substantially larger — often cited as an additional effective cost on the order of tens of microseconds worth of extra cache misses, depending heavily on the workload's memory footprint and how much the new thread's working set overlaps with what's still cached.\n\nPut in perspective: at a few microseconds each, a system doing 100,000 context switches per second spends a small single-digit percentage of a core just switching — noticeable, but survivable. A pathologically thrashing system doing millions of unnecessary switches per second can lose a large fraction of total CPU capacity purely to switching overhead, which is exactly the failure mode schedulers are designed to avoid.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "context-switching-s07-q1"
+      ]
+    },
+    {
+      "id": "context-switching-s08",
+      "order": 8,
+      "sectionTitle": "Why context-switch overhead shapes scheduler design",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because switching isn't free, scheduler algorithms are explicitly designed around minimizing unnecessary switches, not just picking a \"fair\" next thread. **Time-slice length** is a direct trade-off against switch overhead: a shorter slice improves responsiveness (interactive threads wait less) but multiplies the number of switches per second; a longer slice amortizes switch cost better but can make the system feel less responsive.\n\nModern schedulers also try to preserve **CPU affinity** — keeping a thread on the same core across successive time slices where possible — precisely to avoid the extra cold-cache cost of migrating it to a core whose caches don't have its data. Linux's Completely Fair Scheduler (CFS) explicitly factors in a \"minimum granularity\" for exactly this reason: switch too eagerly and the overhead itself becomes the bottleneck you were trying to schedule around.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "context-switching-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: treating context-switch cost as negligible at high thread counts",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "**Wrong belief:** \"Context switches are microseconds, so having a few thousand extra threads runnable at once can't meaningfully hurt performance.\"\n\n**Why it's wrong:** the cost doesn't scale linearly and harmlessly — once the number of runnable threads far exceeds the number of cores, the scheduler starts time-slicing aggressively among them, and the system can spend a large fraction of its time switching rather than doing useful work, a state sometimes called **thrashing** at the scheduling level (distinct from, but analogous to, memory thrashing). Each extra thread also adds a cold-cache penalty for every other thread it displaces, compounding the direct switch cost.\n\n**Correct model:** treat \"how many runnable threads relative to core count\" as a real capacity question, not a free variable. This is precisely why bounded thread pools (see Threads & Multithreading) and event-driven, single-threaded-per-core designs (Nginx's worker model, Node.js's event loop) exist — both are deliberate strategies to keep the number of runnable, competing execution contexts close to the number of actual cores.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": [
+        "context-switching-s09-q1"
+      ]
+    },
+    {
+      "id": "context-switching-s10",
+      "order": 10,
+      "sectionTitle": "Why switching between threads of the same process is cheaper",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Pulling the whole topic together into the single most commonly asked framing: switching between two threads of the **same** process skips the page table reload entirely, because both threads already share identical virtual-to-physical mappings — there's nothing to swap. The TLB stays valid across the switch, so there's no extra translation-miss penalty beyond ordinary cache effects from the new thread's own working set.\n\nSwitching between two **different processes** (or two threads belonging to different processes) requires reloading the page table pointer, which on many architectures invalidates or re-tags TLB entries, adding real translation-miss cost on top of the baseline register save/restore.\n\nThe staff-level way to say this out loud: \"process switches pay a page-table and TLB tax that thread switches within one process don't, because sharing an address space is exactly what makes threads threads.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

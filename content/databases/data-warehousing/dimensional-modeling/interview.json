@@ -1,0 +1,29 @@
+{
+  "topicId": "dimensional-modeling",
+  "interviewQuestions": [
+    {
+      "id": "dimensional-modeling-iq1",
+      "question": "Design a star schema for an e-commerce company's sales data warehouse. Walk me through your decisions.",
+      "answerMarkdown": "I'd start with grain, before touching a single column, because it's the hardest thing to change later: I'd pick **one row per order line item**, not one row per order — an order can span multiple products, and a fact table that can't represent that either forces awkward workarounds or silently picks one product per order for analysis.\n\nThe fact table (`fact_sales`) would hold numeric measures — quantity, unit price, discount, line total — plus surrogate-key foreign keys to dimensions: `dim_customer`, `dim_product`, `dim_date`, `dim_store`. I'd keep the order ID itself as a **degenerate dimension** — a plain column on the fact table, not a separate table, since it has no descriptive attributes of its own beyond identifying which lines belong together.\n\nFor `dim_customer`, I'd use **SCD Type 2** — customers' regions, tiers, and contact info change, and a report analyzing sales by region needs to reflect the region that was true *when the sale happened*, not the customer's current region. `dim_date` I'd pre-populate as a full calendar table (with day-of-week, fiscal quarter, holiday flags) rather than computing those from a raw date at query time — a classic warehouse trick that makes date-based BI filters trivial.\n\nI'd keep all dimensions denormalized (star, not snowflake) unless `dim_product`'s category hierarchy turns out large and volatile enough that update anomalies become a real problem.\n\n**Testing:** whether you reason from grain first, and know the specific vocabulary (degenerate dimension, SCD Type 2, calendar dimension) that signals real warehouse design experience.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Designing a star schema from scratch"
+    },
+    {
+      "id": "dimensional-modeling-iq2",
+      "question": "A stakeholder complains that revenue-by-region reports changed for past months after a customer moved regions. How would you diagnose and fix this?",
+      "answerMarkdown": "I'd diagnose it as a classic **SCD Type 1 problem**: if `dim_customer` overwrites the region column in place with no history, then a report joining historical fact rows to the current dimension table picks up the customer's *current* region for every sale that customer ever made — including sales that happened while they lived in the old region. The report isn't buggy in the SQL sense; it's correctly joining to a dimension table that no longer has the information needed to answer the question accurately.\n\nThe fix is migrating that dimension attribute to **SCD Type 2**: instead of overwriting the region column, insert a new dimension row for the customer with the new region and effective-date columns (`valid_from`, `valid_to`, `is_current`) marking the old row as no longer current. Critically, I'd also need to backfill the `fact_sales` table's `customer_key` foreign key for historical rows to point at the *dimension row version* that was valid at the time of each sale, not just today's current version — this is usually the part teams get wrong, patching the dimension table but leaving old facts pointing at the wrong version.\n\nI'd validate the fix by re-running the affected historical reports and confirming which specific months' numbers change back, and I'd document which other attributes on `dim_customer` might have the same latent issue before another one causes a second surprise.\n\n**Testing:** whether you can trace a business-facing symptom back to a specific SCD implementation gap and describe the actual backfill needed, not just \"switch to Type 2.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging an SCD Type 1 bug"
+    },
+    {
+      "id": "dimensional-modeling-iq3",
+      "question": "Why would an experienced data engineer choose a finer fact-table grain than the current dashboard actually requires?",
+      "answerMarkdown": "I'd frame it as a cost-asymmetry argument: storing finer-grained data than today's dashboard needs costs a bit more storage and an extra `GROUP BY` at query time — both cheap, especially on a modern column-store warehouse. Aggregating too coarsely up front costs the ability to ever answer a more granular question later without reprocessing historical source data, which is often expensive or, if the source system has already purged old raw events, sometimes impossible.\n\nA concrete example: if a fact table is built at daily grain because that's all the launch dashboard needs, and six months later product wants hour-by-hour conversion analysis, the daily grain has already thrown away the information needed to answer that — there's no query that recovers hourly detail from a daily row. The team is stuck re-ingesting historical raw events, if they even still exist in the source system, which they often don't past a retention window.\n\nSo my default is to model at the finest grain the source data genuinely offers (line-item level, event-level, whatever the OLTP source actually produces), and let dashboards aggregate up from there — the aggregation is a query-time decision, but the grain is a data-modeling decision made once, and it's the one decision this whole discipline can't cheaply undo.\n\n**Testing:** whether you understand grain as a one-way door and can justify over-provisioning granularity as a deliberate, cost-justified choice rather than just \"more detail is always better.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Grain as a one-way decision"
+    }
+  ]
+}
