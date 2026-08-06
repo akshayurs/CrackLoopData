@@ -1,0 +1,182 @@
+{
+  "id": "spark-performance-tuning",
+  "title": "Spark Performance Tuning",
+  "area": "data-engineering",
+  "group": "big-data-frameworks",
+  "order": 6,
+  "slug": "spark-performance-tuning",
+  "summary": "Every lever from this group in one practical workflow: read the UI, catch spill and skew, size executors sanely, and lean on adaptive execution instead of hand-tuning everything up front.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "spark-performance-tuning-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This topic ties together [shuffle](partitioning-and-shuffle), [skew](partitioning-and-shuffle), and [join strategy](distributed-joins-at-scale) into a practical workflow: how to actually diagnose why a real Spark job is slow, rather than guessing.\n\nThe short version — read the job UI before touching any configuration, distinguish a capacity problem from a shuffle/skew problem, and know the handful of concrete levers (caching, executor sizing, adaptive execution) that fix each. Most \"just add more executors\" instincts are wrong for the same reason: they treat every slow job as a capacity problem when most aren't.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-performance-tuning-s02",
+      "order": 2,
+      "sectionTitle": "Reading the execution UI",
+      "subTitle": "Stages, tasks, and where time actually goes",
+      "type": "concept",
+      "markdown": "Spark's built-in UI (usually port 4040 on the driver, or the history server for completed jobs) breaks a job into stages, and each stage into tasks. Three views matter most for diagnosis: the **stage timeline** (which stages take the longest, and are they compute-bound or shuffle-bound based on shuffle read/write size), the **task duration distribution** (a handful of stragglers among fast tasks means skew), and the **SQL tab's physical plan** (which join and scan strategies actually ran).\n\nThe discipline: open the UI before changing anything. Guessing at a fix without looking is how teams spend a week tuning the wrong lever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-performance-tuning-s02-q1"
+      ]
+    },
+    {
+      "id": "spark-performance-tuning-s03",
+      "order": 3,
+      "sectionTitle": "Caching a reused dataset",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a DataFrame is consumed by more than one action — filtered once, then aggregated three separate ways — Spark recomputes the entire lineage from source for *each* action unless you explicitly `cache()` or `persist()` it after the shared portion of the pipeline.\n\nThis is a common, easy-to-miss cost: a job that reads and filters a large dataset, then runs three different `.count()`-style actions against the filtered result, silently re-reads and re-filters the source data three times instead of once, because caching is never automatic. The fix is a one-line `.cache()` call right after the shared computation, before it branches into multiple downstream uses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-performance-tuning-s03-q1"
+      ]
+    },
+    {
+      "id": "spark-performance-tuning-s04",
+      "order": 4,
+      "sectionTitle": "Adaptive query execution",
+      "subTitle": "Replanning based on real data, not estimates",
+      "type": "concept",
+      "markdown": "**Adaptive Query Execution (AQE)**, enabled by default in modern Spark, lets the engine revise its plan *during* execution based on actual runtime statistics, rather than committing entirely to estimates made before any data was touched.\n\nThree concrete things AQE does: it can **switch a shuffle join to a broadcast join** mid-query if actual shuffled data turns out smaller than the pre-execution estimate suggested; it can **coalesce small shuffle partitions** into fewer, larger ones automatically, cutting the over-partitioning problem down without manual tuning; and it can **detect and split a skewed partition automatically**, handling some of the manual salting work this group covered without the engineer writing that logic by hand.\n\nAQE doesn't eliminate the need to understand these problems — it reduces how often you need to hand-fix them, and you should still verify it actually kicked in via the physical plan.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "spark-performance-tuning-s04-q1"
+      ]
+    },
+    {
+      "id": "spark-performance-tuning-s05",
+      "order": 5,
+      "sectionTitle": "Spill: when memory isn't enough",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Spill** happens when a task's data (typically during a shuffle or a large aggregation) exceeds the memory allotted to it, and Spark writes the excess to local disk mid-operation to keep going instead of failing.\n\nSpill isn't a crash — the job still completes — but it's a real, visible slowdown, because disk I/O is far slower than memory, and it's the kind of cost that scales badly: a job that spills a little at moderate data volumes can spill catastrophically once volume grows, well before it ever runs out of memory outright. The Spark UI reports spilled bytes per stage directly; consistent, growing spill across runs is the signal that a task's memory allocation is genuinely undersized for its data, not a one-off blip.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-performance-tuning-s05-q1"
+      ]
+    },
+    {
+      "id": "spark-performance-tuning-s06",
+      "order": 6,
+      "sectionTitle": "Over-partitioning \"just in case\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A common defensive habit: setting shuffle partitions very high — thousands, tens of thousands — reasoning that \"more parallelism can't hurt.\" It can. Tens of thousands of tiny tasks means the driver spends real time and memory tracking and scheduling every single one, and per-task overhead (starting a task, serializing its result, reporting status) is roughly fixed regardless of how little data that task actually processes.\n\nAt the extreme, a job with far more tasks than the cluster has cores just queues most of them anyway, so the \"parallelism\" bought nothing while the scheduling overhead cost something real. The fix isn't a bigger cluster — it's sizing partitions to actual data volume (roughly 100-200MB per task) rather than defaulting to \"more is safer.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-performance-tuning-s06-q1"
+      ]
+    },
+    {
+      "id": "spark-performance-tuning-s07",
+      "order": 7,
+      "sectionTitle": "Executor sizing",
+      "subTitle": "Cores/memory per executor vs number of executors",
+      "type": "concept",
+      "markdown": "Given a fixed total cluster resource budget, there's a real trade between **few large executors** (more memory and cores each, but fewer JVMs — less overhead per executor, but a single executor failure loses more work) and **many small executors** (more resilience to any one failure, but more per-executor JVM and coordination overhead).\n\nA common practical starting point: 4-5 cores per executor (beyond that, per-executor I/O and garbage-collection contention tends to dominate), with memory sized to comfortably hold the largest partition a task in that executor will process, plus headroom for the JVM itself. This isn't a universal formula — it's a starting point to measure from, adjusted based on what the job's actual shuffle and cache-memory needs turn out to be.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-performance-tuning-s08",
+      "order": 8,
+      "sectionTitle": "Wide vs narrow transformations",
+      "subTitle": "Only wide ones force a shuffle",
+      "type": "compare",
+      "markdown": "| | Narrow transformation | Wide transformation |\n|---|---|---|\n| Examples | map, filter, union | groupBy, join, repartition, distinct |\n| Data movement | None — each output partition depends on one input partition | Requires a shuffle — output partitions depend on data from many input partitions |\n| Cost | Cheap, parallelizes trivially | Expensive — pays shuffle's disk/network/serialization cost |\n\nRecognizing which category an operation falls into, before writing a pipeline, is what lets you predict whether a chain of transformations will trigger one shuffle, several, or none — and where in a long pipeline the actual cost is concentrated.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "spark-performance-tuning-s08-q1"
+      ]
+    },
+    {
+      "id": "spark-performance-tuning-s09",
+      "order": 9,
+      "sectionTitle": "Common, high-leverage wins",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A short list of fixes that resolve a disproportionate share of real Spark slowness, roughly in order of how often they matter:\n\n- **Filter and project early** — reduce the data volume before it hits an expensive shuffle or join, not after.\n- **Avoid UDFs where a built-in function exists** — preserve Catalyst's ability to optimize.\n- **Broadcast small tables explicitly when statistics might be stale** — don't assume the optimizer's guess is current.\n- **Check for skew before adding capacity** — a straggler task isn't fixed by more executors.\n- **Cache genuinely reused datasets, and only those** — caching something used once wastes memory for no benefit.\n\nNone of these require deep Spark internals knowledge to apply — they require checking the UI first and matching the fix to the actual bottleneck it shows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-performance-tuning-s10",
+      "order": 10,
+      "sectionTitle": "A tuning session, start to finish",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A realistic diagnostic sequence for \"this job got slow\":\n\n```text\n1. Open the Spark UI. Which stage takes the longest wall-clock time?\n2. In that stage: shuffle read/write large relative to input size?\n   -> Yes: likely shuffle-bound. Check join strategy via .explain().\n   -> No: likely compute-bound. Check for UDFs blocking optimization.\n3. Task duration distribution: one or few tasks much slower than median?\n   -> Yes: skew. Consider salting, isolating the key, or AQE's\n      skew-join handling (check it's enabled and actually triggered).\n   -> No: proceed to capacity check.\n4. Spilled bytes per stage: nonzero and growing over recent runs?\n   -> Yes: executor memory undersized for this data volume. Increase\n      memory per executor, or repartition to shrink per-task data.\n5. Only after 1-4: consider adding executors, if the job is genuinely\n   compute-bound with no shuffle/skew/spill issue found.\n```\n\nThe order matters — checking capacity last, not first, is the discipline that saves the most wasted effort.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-performance-tuning-s11",
+      "order": 11,
+      "sectionTitle": "The senior instinct",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior engineer's answer to \"the job is slow\" is a guess — usually \"add more executors\" or \"increase memory.\" A senior engineer's answer is a process: open the UI, identify whether the bottleneck is shuffle, skew, spill, or genuine capacity, and apply the specific fix that matches what's actually shown — because each of those four problems has a different fix, and the wrong fix for the actual problem wastes money and time without helping.\n\nThat diagnostic discipline, not memorizing every configuration knob, is what interviewers are actually probing for when they ask a Spark performance question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-performance-tuning-s12",
+      "order": 12,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Everything so far assumed Spark already has the machines it needs. The final topic in this group covers where those machines actually come from — how a cluster manager allocates executors, the difference between static and dynamic allocation, and what changes across standalone, YARN, and Kubernetes as the underlying resource provider.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

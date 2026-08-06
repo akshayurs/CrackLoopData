@@ -1,0 +1,37 @@
+{
+  "topicId": "comparing-paradigms-and-choosing-one",
+  "interviewQuestions": [
+    {
+      "id": "comparing-paradigms-and-choosing-one-iq1",
+      "question": "Which paradigm would you use to implement a function that computes total revenue from shipped orders, and why?",
+      "answerMarkdown": "I'd lean functional here, and I'd justify it by applying a specific lens rather than a style preference: does this problem need shared mutable state, or is it purely a derivation from input data? Computing shipped revenue is the second kind — there's no entity with a lifecycle, no invariant to protect over time, just a transformation from a list of orders to a number.\n\nConcretely: `sum(o.amount for o in orders if o.status == 'shipped')`, or the equivalent `orders.filter(shipped).map(amount).reduce(add)`. That's shorter than a hand-rolled loop with a mutable accumulator, but the length isn't the reason I'd choose it — the reasons are that it's trivially unit-testable (call it with a list, assert the number, no object setup) and safe to run across threads with zero locking if this ever needs to process a large batch in parallel, since there's no mutable state for concurrent calls to race over.\n\nIf this were instead \"track an order's status as it moves through fulfillment, enforcing that it can never go from shipped back to pending,\" I'd switch answers entirely and reach for an object that owns its state and its valid transitions — because now the state and the invariant *are* the point, which functional composition doesn't help with directly.\n\n**Testing:** whether you can apply the state-vs-transform decision lens to a concrete example instead of defaulting to one favorite paradigm.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Design rationale"
+    },
+    {
+      "id": "comparing-paradigms-and-choosing-one-iq2",
+      "question": "You're reviewing a PR where a stateless string-formatting utility was implemented as a class with one public method, instantiated through a factory. What would you say?",
+      "answerMarkdown": "I'd flag it as unnecessary ceremony and suggest a plain function instead, but I'd be specific about *why* rather than just asserting a style preference, because \"classes are bad\" is exactly as wrong as \"everything must be a class.\"\n\nThe concrete cost: this utility has no state to bundle and no identity to track between calls — every property that makes OOP's encapsulation valuable (protecting an invariant close to mutable data) is absent here. Wrapping it in a class adds an allocation, a layer of indirection a reader has to traverse to find where the actual formatting logic lives, and a factory adds a second layer beyond that for no corresponding benefit. Testing it now requires constructing the class (and possibly the factory) instead of just calling a function with an input and asserting the output.\n\nI'd point at the same failure mode named in this Topic's pitfall — mandating one paradigm everywhere, historically enterprise Java's \"everything is a class\" convention — and note the fix isn't a blanket rule either way, it's asking per-piece-of-code whether there's actual state to protect. Here there isn't, so a function is the better fit; if this utility later grew internal caching state, revisiting the decision would be reasonable.\n\n**Testing:** whether you can give a concrete, structural code-review argument instead of a vague stylistic objection.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "comparing-paradigms-and-choosing-one-iq3",
+      "question": "How does paradigm choice affect whether a piece of code is safe to parallelize without adding explicit locking?",
+      "answerMarkdown": "Race conditions need two ingredients: shared state, and mutation of it from more than one thread without coordination. Remove either and the bug class disappears entirely — and a functional, immutable-data approach removes the mutation half by construction, not by discipline.\n\nConcretely: a pure `shippedRevenue(orders)` function over an immutable list is automatically safe to call from a hundred threads at once — there is nothing for concurrent calls to race over, because none of them write anything shared. Contrast that with an `OrderBook` object holding a mutable running total that `markShipped` updates in place: the moment two threads can call `markShipped` concurrently, you get a classic lost-update race — both read the old total, both compute a new one, and whichever writes last wins, silently dropping the other update. Fixing that needs an explicit lock or an atomic operation, and getting the granularity of that lock right (too coarse and you serialize everything; too fine and you miss an interleaving) is a genuinely hard problem even for experienced engineers.\n\nSo the practical rule I'd apply: default to immutable, functional-style code for anything that will run under real concurrency, and reserve mutable shared state for cases where the identity and in-place update actually matter enough to justify the locking discipline it now requires.\n\n**Testing:** whether you understand immutability as removing a bug class structurally, versus just \"functional code is safer\" as an unexamined slogan.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "comparing-paradigms-and-choosing-one-iq4",
+      "question": "A teammate wants to rewrite your team's OOP domain model in a purely functional style, arguing it's inherently better. How do you respond?",
+      "answerMarkdown": "I'd push back on \"inherently better\" specifically, because the decision lens this Topic teaches is per-problem, not a universal ranking. If the domain model represents entities with real identity and lifecycle — an `Account` that gets debited and credited by different code paths, with an invariant like \"balance never goes negative\" that has to hold after every operation — OOP's bundling of that state with the operations that can change it gives you a natural place to enforce the invariant close to the data. A purely functional rewrite would need to thread the account's state through every function call as an explicit parameter and return value, and in my experience that state-threading often ends up *less* readable, not more, because it obscures which function is actually responsible for a given invariant — you have to trace the threading instead of reading one class.\n\nWhere I'd agree with the rewrite: any part of the same codebase that's a data transformation with no identity to track — parsing, validation, report aggregation — genuinely benefits from a functional style, for the testability and concurrency-safety reasons covered earlier in this group.\n\nSo my actual proposal would be a per-piece-of-code split, not an all-or-nothing rewrite: keep the identity-bearing entities as objects, and pull the surrounding data-transformation logic out into functional-style pipelines, which is exactly the multi-paradigm pattern that Scala, Kotlin, and modern Python all support directly.\n\n**Testing:** whether you can resist a one-paradigm-is-better argument and make the case for per-problem selection instead — the actual thesis of this group.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design rationale"
+    }
+  ]
+}

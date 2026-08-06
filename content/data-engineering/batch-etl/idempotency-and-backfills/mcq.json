@@ -1,0 +1,110 @@
+{
+  "topicId": "idempotency-and-backfills",
+  "mcqs": [
+    {
+      "id": "idempotency-and-backfills-s02-q1",
+      "slideId": "idempotency-and-backfills-s02",
+      "question": "Why is a plain `INSERT`-based append considered non-idempotent for a batch job that might be retried?",
+      "options": [
+        "Running the insert twice adds every row a second time, producing a different (duplicated) end state than running it once",
+        "INSERT statements are not supported by most modern warehouses",
+        "Append operations always run slower than upsert operations",
+        "Idempotency only applies to DELETE statements, never to INSERT"
+      ],
+      "correctIndex": 0,
+      "explanation": "Idempotency means repeating an operation yields the same result as doing it once — a plain append fails that test directly, since a second run duplicates rows rather than reproducing the original end state. INSERT is universally supported by warehouses, performance speed isn't the defining property of idempotency, and the concept applies to any operation type, not just deletes.",
+      "difficulty": "easy",
+      "level": "beginner"
+    },
+    {
+      "id": "idempotency-and-backfills-s03-q1",
+      "slideId": "idempotency-and-backfills-s03",
+      "question": "A job's INSERT commits successfully, but the job times out before reporting success, causing the orchestrator to retry it. What causes the resulting duplicate rows?",
+      "options": [
+        "A bug in the transform's business logic that inserted incorrect values",
+        "The source system sent the same data to the pipeline twice",
+        "The orchestrator intentionally duplicates data during every retry as a safety measure",
+        "The append operation itself was correct both times, but running it twice is not the same as running it once, since nothing prevented the retry from inserting the same rows again"
+      ],
+      "correctIndex": 3,
+      "explanation": "The insert logic was completely correct on both executions — the problem is purely that correctness for one run doesn't imply safety for two runs, which is exactly the gap idempotency closes. There's no business-logic bug here, orchestrators don't intentionally duplicate data, and the source didn't need to send anything twice — the pipeline's own retry did that on its own.",
+      "difficulty": "medium",
+      "level": "intermediate"
+    },
+    {
+      "id": "idempotency-and-backfills-s04-q1",
+      "slideId": "idempotency-and-backfills-s04",
+      "question": "Why does partition overwrite achieve idempotency without needing to match individual rows by a unique key?",
+      "options": [
+        "Every run clears the entire target partition before writing, so the granularity of replacement is the whole partition rather than individual rows",
+        "It doesn't actually achieve idempotency without a unique key",
+        "Partition overwrite only works on tables with exactly one column",
+        "It relies on the orchestrator to deduplicate rows automatically after the write completes"
+      ],
+      "correctIndex": 0,
+      "explanation": "Because the write clears its own partition first, the second run's delete removes exactly what the first run inserted before rewriting the same data, making the end state identical regardless of row-level keys. It does achieve real idempotency this way, has no restriction to single-column tables, and doesn't depend on the orchestrator performing any separate deduplication step.",
+      "difficulty": "medium",
+      "level": "intermediate"
+    },
+    {
+      "id": "idempotency-and-backfills-s06-q1",
+      "slideId": "idempotency-and-backfills-s06",
+      "question": "A transform's logic is fixed after discovering a bug, and the team wants to backfill 90 days of history. Why is a partition-overwrite-based job well-suited to this?",
+      "options": [
+        "Partition overwrite prevents any transform logic from ever needing to be fixed again",
+        "Each of the 90 backfill runs cleanly replaces its own partition, with no risk of duplicating data regardless of how many times a given partition has already been written",
+        "Backfilling only works if the job has never been run before",
+        "Partition overwrite requires downstream consumers to be paused for the entire 90-day backfill"
+      ],
+      "correctIndex": 1,
+      "explanation": "The specific property that makes this safe is that overwrite doesn't care about prior run history for a partition — it always produces the same correct end state regardless of how many times that partition has been touched before. It doesn't prevent future bugs, backfilling works for previously-run jobs (that's the whole point), and pausing all downstream consumers isn't required by the pattern itself, though communicating about it is wise.",
+      "difficulty": "medium",
+      "level": "intermediate"
+    },
+    {
+      "id": "idempotency-and-backfills-s07-q1",
+      "slideId": "idempotency-and-backfills-s07",
+      "question": "A team backfills `fct_orders` to fix a bug but doesn't re-run the three downstream marts and dashboard built on top of it. What's the resulting state?",
+      "options": [
+        "The downstream marts and dashboard automatically inherit the corrected data with no further action needed",
+        "Nothing changes, since backfilling a table has no effect on anything else",
+        "fct_orders is now correct, but the downstream artifacts are stale relative to it, silently disagreeing with their own source",
+        "The backfill will fail outright unless all downstream consumers are refreshed simultaneously"
+      ],
+      "correctIndex": 2,
+      "explanation": "Because downstream marts, dashboards, and feature pipelines materialize their own copies or aggregates built from the old fct_orders data, fixing the source table doesn't retroactively update anything built on top of it — that's exactly the reprocessing blast radius problem. Materialized downstream artifacts don't automatically inherit upstream fixes, the backfill has real downstream consequences, and it won't fail simply because dependents haven't been refreshed yet.",
+      "difficulty": "hard",
+      "level": "advanced"
+    },
+    {
+      "id": "idempotency-and-backfills-s08-q1",
+      "slideId": "idempotency-and-backfills-s08",
+      "question": "A backfill overwrites a partition that a live dashboard is actively querying. What's the risk during the moment between the partition's delete and its re-insert?",
+      "options": [
+        "The dashboard is guaranteed to automatically pause queries until the backfill completes",
+        "There's no risk at all, since deletes and inserts are always instantaneous",
+        "A query hitting the table during that window can see an empty or partial state, appearing as a data outage rather than routine maintenance",
+        "The backfill will always fail if any dashboard query is running concurrently"
+      ],
+      "correctIndex": 2,
+      "explanation": "The delete-then-insert sequence has a real window where the partition is empty or partially written, and a live query landing in that window can show a confusing gap that looks like an outage rather than expected maintenance. Deletes and inserts aren't instantaneous, dashboards don't automatically pause for backend maintenance, and concurrent queries don't cause the backfill itself to fail.",
+      "difficulty": "hard",
+      "level": "advanced"
+    },
+    {
+      "id": "idempotency-and-backfills-s10-q1",
+      "slideId": "idempotency-and-backfills-s10",
+      "question": "A batch job's logic internally calls an equivalent of `today()` to determine which data to process, rather than accepting a date parameter. What happens when you try to backfill it for March 3rd?",
+      "options": [
+        "The job correctly processes March 3rd's data because the orchestrator overrides today() automatically",
+        "The job processes data based on the real current date, not March 3rd, because it has no way to be told to treat March 3rd as its target date",
+        "The job will refuse to run entirely and raise a configuration error",
+        "This has no effect on backfilling, since today() always returns the logical date during a backfill"
+      ],
+      "correctIndex": 1,
+      "explanation": "Without an explicit date parameter driving its logic, the job has no channel through which a backfill can tell it to behave as though it were running on March 3rd — it will process data relative to whatever the real current date is instead. Orchestrators don't transparently override a job's internal today() calls, the job won't raise a configuration error on its own, and today() reflects real time, not the logical date, unless the job is explicitly written to use the logical date instead.",
+      "difficulty": "hard",
+      "level": "advanced"
+    }
+  ]
+}

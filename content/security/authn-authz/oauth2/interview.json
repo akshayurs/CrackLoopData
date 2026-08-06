@@ -1,0 +1,45 @@
+{
+  "topicId": "oauth2",
+  "interviewQuestions": [
+    {
+      "id": "oauth2-iq1",
+      "question": "What problem does OAuth 2.0 actually solve, and what is it explicitly not?",
+      "answerMarkdown": "OAuth solves **delegated authorization** — letting a third-party app access some of your data on another service without ever seeing your password for that service. Before OAuth, the only option was the password anti-pattern: hand the app your actual credentials, which gives it unlimited, unscoped access indistinguishable from you logging in yourself, and revocable only by changing your password everywhere.\n\nOAuth's fix is that the app never sees your password at all. You authenticate directly with the service you're delegating to, and it hands the app a limited-scope, revocable **token** instead of your credentials — the app can do exactly what the token's scopes allow, nothing more, and you can kill that access without touching your password.\n\nWhat I'd flag immediately, because it's the most common mistake people make describing OAuth: it is **not an authentication protocol**. It says nothing about who the user is — it only proves a token grants some access. \"Continue with Google\" *feels* like a login, but the identity-assertion part is layered on top by a separate standard, OpenID Connect, which uses OAuth's plumbing but adds the actual identity claim OAuth alone doesn't make.\n\n**Testing:** whether you keep authorization and authentication cleanly separated, since conflating them is the single most common OAuth mistake in interviews.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "oauth2-iq2",
+      "question": "Walk me through the Authorization Code grant with PKCE, step by step, and explain why each security-relevant step exists.",
+      "answerMarkdown": "Five steps. The Client redirects your browser to the Authorization Server with a `code_challenge` — a hash of a random value the Client generated. You authenticate **directly with the Authorization Server**, not the Client — this is deliberate, since it's what keeps your password away from the third-party app entirely. You approve the requested scopes, and the Authorization Server redirects your browser back to the Client with a short-lived, single-use **authorization code**.\n\nHere's the part people skip: the Client then sends that code, plus the original unhashed `code_verifier`, directly to the Authorization Server via a **server-to-server call** — not through your browser. The Authorization Server checks the verifier hashes to the challenge it saw earlier, proving the entity redeeming the code is the same one that started the flow, and only then issues the access token. Finally the Client uses that token against the Resource Server.\n\nThe two security-critical design choices: routing the actual token exchange server-to-server means the access token never appears in browser history or a redirect URL — only the code does, and it's single-use and short-lived, so intercepting it alone isn't very useful. And PKCE proves Client identity without needing a durable secret, which is why it works even for a mobile app or SPA that can't keep anything truly hidden in its own code.\n\n**Testing:** whether you can explain *why* each step exists, not just recite the sequence — interviewers often probe exactly the code-exchange and PKCE rationale specifically.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Flow mechanics"
+    },
+    {
+      "id": "oauth2-iq3",
+      "question": "Why does PKCE matter for public clients specifically, and why is it now recommended for confidential clients too?",
+      "answerMarkdown": "A confidential client — a traditional server-side web app — can authenticate itself during the code exchange with a client secret, because it has somewhere genuinely private to keep that secret: its own server, never exposed to the user. A public client — a mobile app or a browser-based single-page app — has no such place. Any secret bundled into an app binary or shipped in JavaScript to the browser can be extracted by decompiling the binary or just opening dev tools, so it was never actually secret to begin with.\n\nPKCE solves this without needing any durable secret at all: the Client generates a random verifier per flow, sends a hash of it upfront as the challenge, and later proves possession of the original value at exchange time. Since the verifier is single-use and generated fresh each flow, there's nothing that needs to stay hidden across app installs the way a shared client secret would.\n\nThe reason it's now recommended universally, even for confidential clients that *could* still use a secret: PKCE also defends against **authorization code interception** — if an attacker somehow captures the code in transit (a misconfigured redirect, a shared device), they still can't complete the exchange without the matching verifier, which only the legitimate client that started the flow ever generated. That's defense-in-depth that has nothing to do with whether the client can keep a secret.\n\n**Testing:** whether you understand PKCE solves two distinct problems — no-durable-secret for public clients, and code-interception defense for everyone — not just one.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "PKCE"
+    },
+    {
+      "id": "oauth2-iq4",
+      "question": "You're reviewing an OAuth integration and notice it requests far broader scopes than the app's actual functionality needs. What's the risk, and how would you push back?",
+      "answerMarkdown": "The immediate risk is blast radius: scopes are supposed to implement least privilege, so a calendar-viewing app requesting `drive.readonly` alongside `calendar.readonly` is taking on liability for data it doesn't need. If that access or refresh token ever leaks — through a log, a misconfigured error report, a compromised server — the exposure is everything the broad scope covers, not just what the feature actually uses.\n\nThere's a user-trust dimension too: the consent screen is a literal rendering of the requested scopes, and an over-broad request is a visible red flag to a security-conscious user deciding whether to approve the integration — it can cost adoption independent of any actual breach.\n\nWhat I'd push for concretely: narrow the request to exactly what the feature needs — `drive.file` (access only to files the app created) instead of `drive.readonly` (everything in the user's Drive), if that's sufficient for the actual use case. I'd also treat this as a signal to check the *refresh* token handling specifically, since a refresh token is a long-lived, sensitive credential functionally equivalent to a stored password — it should be encrypted at rest and revocable the moment a user disconnects the integration, and an overly broad scope makes a refresh-token leak proportionally worse.\n\n**Testing:** whether you connect scope minimization to concrete blast-radius reasoning, rather than treating 'least privilege' as an abstract principle to recite.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "oauth2-iq5",
+      "question": "Why were the implicit grant and the Resource Owner Password Credentials grant deprecated, and what replaced them?",
+      "answerMarkdown": "Both existed to work around a limitation early mobile and single-page apps had: they couldn't easily do a secure server-to-server code exchange, or keep a client secret confidential the way a traditional server-side app could.\n\nThe **implicit grant** worked around this by skipping the code-exchange step entirely and returning the access token directly in the browser's redirect URL. That solved the practical problem but reintroduced exactly the exposure the code exchange was designed to prevent — the token now lands in browser history, referrer headers, and server access logs, any of which can leak it.\n\nThe **Resource Owner Password Credentials** grant went further backward: the user's actual username and password get sent directly to the Client, which forwards them to the Authorization Server. That's the exact password anti-pattern OAuth exists to eliminate, just formalized as a named grant type.\n\nWhat actually fixed the underlying problem both grants were awkwardly working around: **PKCE**, which lets any client — public or confidential — do a secure code exchange without needing a durable secret. Once PKCE existed, there was no remaining justification for either deprecated grant, which is why the Authorization Code + PKCE flow is now the universal recommendation rather than a special case for one client type.\n\n**Testing:** whether you understand these were reasonable workarounds for a real limitation, not just 'bad' grants — and that PKCE is specifically what made them unnecessary.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Deprecated grants"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "exactly-once-semantics",
+  "interviewQuestions": [
+    {
+      "id": "exactly-once-semantics-iq1",
+      "question": "Is true exactly-once delivery actually possible? What do real systems build instead?",
+      "answerMarkdown": "Not at the level of a single message over an unreliable network — that's the two generals problem. If a sender loses the acknowledgment for a message, it can't tell whether the message itself was lost or just the ack, and safety forces it to retry, which can duplicate a message that already arrived. No protocol built purely on message-passing eliminates that ambiguity with certainty.\n\nWhat real systems build is **effectively-once**: delivery stays at-least-once, so nothing is silently dropped, and duplicates are neutralized after the fact so the observable *effect* looks exactly-once even though the underlying delivery wasn't. Two building blocks make that work: **idempotent producers**, which tag messages with sequence numbers so a broker can recognize and drop a retried duplicate at the point of entry, and **transactions**, which atomically commit a consumer's offset together with its output so the whole read-process-write cycle is all-or-nothing.\n\nConcretely, Kafka's exactly-once semantics is exactly this combination — idempotent producers plus transactions — not a magic delivery guarantee. Every system I've seen that claims exactly-once is really claiming this, whether or not it says so explicitly.\n\n**Testing:** whether you understand exactly-once as an engineered end-to-end effect, or believe it's a literal delivery property.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "exactly-once-semantics-iq2",
+      "question": "Your team enabled the stream processing engine's exactly-once mode, but a customer reports a duplicate charge. How would you investigate?",
+      "answerMarkdown": "I'd assume the engine's internal guarantee is working correctly and look at the seam the engine doesn't control: the final write to the payment sink. Enabling exactly-once mode inside the engine only guarantees the internal state and offset handling are consistent — it says nothing about whether the sink itself is idempotent, and that's the most common gap.\n\nConcretely I'd check: **is the charge write idempotent** — does it use an idempotency key so a retried call with the same key is a no-op, or is it a plain 'charge this card' call that duplicates on retry? **Where did the retry actually happen** — a timeout on the payment gateway's response where the charge had actually succeeded is a classic case: the caller retries believing it failed, and the gateway processes it twice unless the idempotency key caught it. **Is this actually the engine's transaction boundary, or a separate call outside it** — sometimes the 'exactly-once' engine setting covers the pipeline's internal write to a queue, and the actual customer-facing charge happens in a downstream service the engine has no visibility into at all.\n\nThe fix, once found, is almost always adding or fixing an idempotency key on the charge call itself — the engine's setting was never going to prevent a duplicate at a sink it doesn't coordinate with transactionally.\n\n**Testing:** whether you know to look past the engine's config at the actual sink behavior, which is where this class of bug always lives.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "exactly-once-semantics-iq3",
+      "question": "When would you choose at-least-once with an idempotent sink over full transactional exactly-once, and what's the cost difference?",
+      "answerMarkdown": "I'd choose the idempotent-sink route whenever the sink can naturally be expressed as an upsert or a keyed write, because it gets the same end-to-end correctness at meaningfully lower cost. Concretely: a write like 'set this user's last-seen-at to X' or 'upsert this order row keyed by order ID' produces an identical result whether it's applied once or three times — retries under at-least-once are just harmless no-ops, no transaction coordination required.\n\nThe cost difference is real. Transactional exactly-once needs the offset commit and the sink write bound into one atomic unit, which adds coordination overhead on every commit and forces downstream 'read committed' consumers to wait for that commit before seeing results — production numbers I've seen put this in the range of a noticeable throughput tax, often high single digits to a few tens of percent depending on commit interval, plus added end-to-end latency roughly bounded by that interval. The idempotent-sink route pays none of that; the only cost is designing the write to be naturally idempotent, which is usually a schema decision, not a runtime cost.\n\nWhere I'd still reach for full transactions: when the sink genuinely can't be made idempotent — a pure append-only log, or an external side effect like sending a physical notification — because there, a duplicate write is a duplicate side effect with no way to detect and suppress it after the fact.\n\n**Testing:** whether you can articulate the cost trade-off with real numbers, not just recite that both options exist.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "exactly-once-semantics-iq4",
+      "question": "A junior engineer wants to turn on transactional exactly-once for every pipeline in the org 'to be safe.' How would you respond?",
+      "answerMarkdown": "I'd push back gently but concretely, because 'safer' isn't free here — transactional exactly-once has a real, measurable throughput and latency cost, and applying it uniformly means paying that cost on workloads that never needed the guarantee.\n\nI'd walk through the actual test: for each pipeline, ask 'if this specific write happened twice instead of once, does anything bad actually happen?' A dashboard counter being 0.01% high after a rare retry — no, that's not worth transactional overhead. A payment charge being applied twice — yes, absolutely worth it. A push notification arriving twice — probably not, that's a minor annoyance, not a correctness failure. A financial ledger entry being duplicated — yes, without question.\n\nI'd also point out that most of the 'not worth it' cases already get correctness for free if the write is naturally idempotent — an upsert keyed by a stable ID doesn't need a transaction to avoid double-counting, at-least-once delivery plus that upsert already produces the right answer.\n\nThe framing I'd leave them with: default to the cheapest guarantee that's actually correct for the specific workload, and reserve transactional exactly-once for the cases where you can name the concrete bad outcome a duplicate would cause. That's a decision made per-pipeline based on what's at stake, not a blanket setting.\n\n**Testing:** whether you can teach the cost-awareness that separates junior 'use the strongest guarantee' instinct from senior trade-off reasoning.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design judgment"
+    }
+  ]
+}

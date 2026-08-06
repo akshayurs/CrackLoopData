@@ -1,0 +1,37 @@
+{
+  "topicId": "broken-access-control",
+  "interviewQuestions": [
+    {
+      "id": "broken-access-control-iq1",
+      "question": "What is IDOR, and walk me through a concrete example of finding one.",
+      "answerMarkdown": "IDOR — Insecure Direct Object Reference — is when an endpoint fetches a resource by a direct, guessable identifier, usually a sequential ID, without checking that the requester actually owns that resource.\n\nThe classic find: you're logged into an app, you view your own order at `GET /orders/1234`, and you notice the ID is just a plain integer. You change it to `GET /orders/1235` and get back someone else's order — their address, items, maybe the last four digits of a card. You're still authenticated as yourself; the server just never checked whether order 1235 belongs to you.\n\nThe root cause is almost always the same missing clause: the query is `SELECT * FROM orders WHERE id = ?` instead of `SELECT * FROM orders WHERE id = ? AND user_id = ?`. Authentication ran and passed. Authorization — does *this* resource belong to *this* user — simply never ran.\n\nThe fix is that added clause, plus returning a 404 rather than a 403 on failure, so probing IDs doesn't even confirm whether a given order exists for someone else. I'd also flag it as worth testing systematically — automated tests asserting \"user A gets 404 on user B's resources\" across every resource type — rather than relying on catching it during manual review.\n\n**Testing:** whether you can describe the mechanism precisely, not just name-drop \"IDOR.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "broken-access-control-iq2",
+      "question": "Why is Broken Access Control the #1 OWASP category, and why is it so hard to fully eliminate compared to something like CSRF?",
+      "answerMarkdown": "Two things push it to the top. First, it's genuinely common: access control has to be verified correctly on *every* endpoint that touches user-specific or privileged data — there's no single switch to flip, unlike `SameSite` cookies closing most CSRF for free. A system can get authorization right on 199 out of 200 endpoints and still ship an exploitable IDOR on the 200th. Second, tooling caught up — automated scanners got substantially better at detecting IDOR and missing-function-level-authorization patterns, surfacing bugs that were always there but previously needed manual probing.\n\nThat first point is really the interesting one for how you'd approach fixing it: since per-endpoint diligence doesn't scale, I'd push for making the *default* safe rather than reviewing harder. Concretely — a shared authorization decorator or middleware so ownership logic is written and tested once, deny-by-default routing so a missing check means \"nobody gets in\" rather than \"everybody does,\" and authorization tests as a first-class CI suite rather than something caught in manual review.\n\nThe honest answer to \"can you fully eliminate it\" is no — but you can make the failure mode a loud CI failure instead of a silent production bug.\n\n**Testing:** whether you can reason about why a vulnerability class resists a one-time fix, and what a systemic mitigation looks like.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Why it's common"
+    },
+    {
+      "id": "broken-access-control-iq3",
+      "question": "A frontend engineer says their admin panel is secure because the delete-account button only renders for admin roles, and the underlying API route isn't linked from anywhere else in the UI. What's wrong with this reasoning?",
+      "answerMarkdown": "Two separate mistakes are stacked here, and I'd want to unpack both.\n\nFirst: hiding the button is a UX decision, not a security control, because the client is entirely under the user's control. Anyone can open dev tools, or just skip the UI and call the API directly with curl once they know or guess the route — there's no code running server-side that stops them.\n\nSecond: \"the route isn't linked anywhere\" is security through obscurity applied to access control, and it fails predictably. URLs leak through browser history, referrer headers, and JavaScript bundles that reference the route even without a visible link — and automated scanners crawl JS source specifically looking for route strings that never get rendered as a link. `/admin/users/delete` is not a hard guess once `/admin/users/list` is known to exist.\n\nWhat I'd ask for instead: the route itself checks the caller's role server-side, independent of anything the UI does or doesn't render. The UI hiding the button remains good practice for UX — it just isn't, and was never, the actual control.\n\n**Testing:** whether you can identify both the client-trust mistake and the obscurity mistake as distinct failures, since people often only name one.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "broken-access-control-iq4",
+      "question": "How would you design a system so that a developer forgetting an authorization check doesn't automatically become a production vulnerability?",
+      "answerMarkdown": "I'd assume forgetting will happen — reviewing every endpoint perfectly forever isn't a realistic control — and design so a forgotten check fails closed instead of open.\n\nFour concrete pieces:\n\n- **Deny by default at the routing layer.** New routes require an explicit authorization annotation to be reachable at all, so a missing decorator means \"nobody can access this\" rather than \"everybody can.\" That inverts the failure direction from dangerous to merely broken.\n- **Centralize ownership logic.** A shared `@require_owner(Resource)`-style decorator means the actual check is written and tested once, instead of every route hand-rolling its own `WHERE user_id = ?` clause and occasionally getting it wrong.\n- **Authorization as a first-class test suite.** Automated tests asserting cross-user access returns 404 across every resource type, run in CI on every change — catching a regression before merge, not after a bug bounty report.\n- **Alert on the probing signal.** A spike in 403/404s against sequential IDs from one account is a detectable pattern worth logging and alerting on, tying access control back to the logging and monitoring practices that catch what prevention missed.\n\nThe unifying principle: don't rely on discipline for something that has to be correct on every one of hundreds of endpoints — build the system so the safe outcome is also the default outcome.\n\n**Testing:** whether you think in terms of systemic, fail-safe design rather than \"we'll be careful in code review.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "System design"
+    }
+  ]
+}

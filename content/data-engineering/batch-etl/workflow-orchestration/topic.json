@@ -1,0 +1,174 @@
+{
+  "id": "workflow-orchestration",
+  "title": "Workflow Orchestration",
+  "area": "data-engineering",
+  "group": "batch-etl",
+  "order": 5,
+  "slug": "workflow-orchestration",
+  "summary": "Scheduling, sequencing, and recovering pipeline jobs as a dependency graph — the control-plane layer that turns a pile of scripts into a system that survives failure on its own.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "workflow-orchestration-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every pipeline eventually has more than one job, and those jobs have dependencies: the dbt run can't start until ingestion lands today's data, and a downstream export can't start until dbt finishes. An **orchestrator** (Airflow, Dagster, Prefect) is the system that knows this graph and enforces it — scheduling, sequencing, retrying, and alerting, without a human watching a clock.\n\nThis is genuinely different from cron, and the difference is the whole point of this topic: cron knows *when* to fire a job; an orchestrator knows *whether it's safe to*, based on what else has or hasn't finished.\n\nOrchestration was the map's \"control plane\" layer in [The Modern Data Stack](data-stack-landscape) — this topic goes deep on how that control plane actually works.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "workflow-orchestration-s02",
+      "order": 2,
+      "sectionTitle": "Why cron doesn't scale",
+      "subTitle": "No dependency awareness, no retries, no visibility",
+      "type": "concept",
+      "markdown": "Cron runs a command at a fixed time. That's the entire feature set, and it's exactly why it stops working once you have more than a couple of interdependent jobs:\n\n- **No dependency awareness** — you schedule the ingestion job at 2am and the transform job at 4am, hoping ingestion finishes by then. The first time ingestion runs long, the transform job runs on stale or incomplete data, silently.\n- **No retries** — a job that fails due to a transient network blip just... fails. Someone notices tomorrow, or doesn't.\n- **No visibility** — there's no dashboard showing which jobs ran, which failed, or how long each took. You're grepping log files across servers to reconstruct what happened.\n\nEvery orchestrator exists specifically to fix these three gaps, which is why \"why not just use cron\" is a question worth being able to answer precisely rather than dismissively.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "workflow-orchestration-s02-q1"
+      ]
+    },
+    {
+      "id": "workflow-orchestration-s03",
+      "order": 3,
+      "sectionTitle": "A pipeline as a DAG of tasks",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Dependency-aware DAG scheduling tasks based on upstream success](assets/orchestration-dag.svg)\n\nThe orchestrator reads this graph and decides, moment to moment, which tasks are eligible to run — a task becomes eligible only once every task pointing into it has succeeded. This is the mechanical definition of \"dependency-aware scheduling,\" and it's what cron structurally cannot express.",
+      "assets": [
+        {
+          "alt": "Dependency-aware DAG scheduling tasks based on upstream success",
+          "path": "assets/orchestration-dag.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "workflow-orchestration-s04",
+      "order": 4,
+      "sectionTitle": "Scheduling models",
+      "subTitle": "Fixed interval, data-driven, event-triggered",
+      "type": "concept",
+      "markdown": "Not every DAG should trigger the same way:\n\n- **Fixed interval** — \"run every day at 6am,\" the cron-like default. Simple, predictable, but blind to whether the data it needs has actually arrived.\n- **Data-driven / sensor-triggered** — the DAG waits for a signal that upstream data is actually ready (a file landing in S3, a row appearing in a source table) before starting, rather than guessing a time it's probably ready.\n- **Event-triggered** — the DAG starts in direct response to an external event (a webhook, a message on a queue), with no fixed schedule at all.\n\nFixed-interval is the right default for most batch work because it's simple and debuggable. Data-driven triggering matters specifically when upstream timing is unreliable — a vendor's file drop that shifts by hours — and a fixed schedule would otherwise run against incomplete data on a regular basis.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "workflow-orchestration-s04-q1"
+      ]
+    },
+    {
+      "id": "workflow-orchestration-s05",
+      "order": 5,
+      "sectionTitle": "Retries, timeouts, and alerting as task properties",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In a mature orchestrator, reliability behavior isn't bolted on separately — it's configured per task, alongside the task's actual logic:\n\n- **Retries** — how many times to retry on failure, and with what backoff. A transient API timeout should retry automatically; a bug in your SQL should not (retrying broken logic just fails again, slower).\n- **Timeouts** — how long a task is allowed to run before it's killed and treated as failed. Without one, a stuck task can silently block every downstream task indefinitely.\n- **Alerting** — who gets notified, and how urgently, when a task exhausts its retries. A dashboard refresh failing at 2am might page nobody until morning; a task feeding a real-time fraud model failing should page immediately.\n\nTreating these as per-task configuration, not a single global policy, is what lets a pipeline behave differently for its critical path versus its nice-to-have branches.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "workflow-orchestration-s06",
+      "order": 6,
+      "sectionTitle": "Backfilling",
+      "subTitle": "Re-running a DAG for a past date range",
+      "type": "concept",
+      "markdown": "A **backfill** re-runs a DAG for a range of past dates, not just \"now\" — needed after a logic bug is fixed and history needs correcting, after a new pipeline is built and needs historical data populated, or after an outage that needs the missed days re-processed.\n\nOrchestrators support this natively by treating each scheduled run as tied to a **logical date** (sometimes called the execution date) rather than the wall-clock time it happens to actually run — a DAG \"for March 3rd\" can be triggered on March 3rd, or backfilled by triggering it later with that same logical date, and the task's logic (reading \"yesterday's data\" relative to its logical date, not to real \"now\") behaves identically either way.\n\nThis only works cleanly if tasks are written to be idempotent with respect to their logical date — running the March 3rd task twice should produce the same result both times, which is exactly the property the next topic in this group covers in depth.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "workflow-orchestration-s06-q1"
+      ]
+    },
+    {
+      "id": "workflow-orchestration-s07",
+      "order": 7,
+      "sectionTitle": "Airflow-style vs Dagster-style vs Prefect-style",
+      "subTitle": "How each models data",
+      "type": "compare",
+      "markdown": "| | Airflow | Dagster | Prefect |\n|---|---|---|---|\n| **Core abstraction** | Tasks in a DAG (task-centric) | Assets/software-defined tables (data-centric) | Tasks/flows (Python-native, task-centric) |\n| **Data awareness** | Limited — tasks are opaque to the scheduler | Strong — the scheduler understands what data asset each step produces | Moderate — flexible but less structured around data lineage by default |\n| **Typical fit** | Mature, battle-tested, huge ecosystem of integrations | Teams wanting typed, testable, lineage-aware pipelines | Teams wanting lightweight, Python-first orchestration |\n\nThe real distinction to name in an interview: Airflow's abstraction is fundamentally about **tasks and their order**; Dagster's is fundamentally about **data assets and their dependencies**, which changes how you reason about and test a pipeline even though both ultimately execute a DAG under the hood.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "workflow-orchestration-s07-q1"
+      ]
+    },
+    {
+      "id": "workflow-orchestration-s08",
+      "order": 8,
+      "sectionTitle": "A hidden circular dependency or unbounded retry loop",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Two failure modes that look fine in a small DAG and become genuinely dangerous at scale.\n\n**A circular dependency**: task A depends on task B, which — through a chain of a few other tasks — ends up depending back on A, often introduced accidentally when someone adds a \"just double check X finished\" dependency without tracing the full chain. Most orchestrators detect true cycles at DAG-parse time and refuse to schedule it, but a *near*-cycle across DAGs (DAG 1 waits on a sensor for DAG 2's output, DAG 2 waits on a sensor for DAG 1's) can deadlock at runtime without ever being flagged as a cycle by either DAG's own validator.\n\n**An unbounded retry loop**: a task configured to retry indefinitely on failure, with no cap, can consume orchestrator worker slots forever if the underlying cause never resolves itself — starving every other task waiting for a free worker. This is why retries need both a maximum count and, ideally, escalating backoff, never \"retry forever.\"\n\nBoth are caught by the same habit: review a DAG's dependency chain and retry policy explicitly before it goes to production, not just its individual task logic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "workflow-orchestration-s08-q1"
+      ]
+    },
+    {
+      "id": "workflow-orchestration-s09",
+      "order": 9,
+      "sectionTitle": "Task idempotency as a precondition for safe retries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An orchestrator can retry a failed task automatically, but that's only safe if re-running the task produces the same correct result as running it once — if a task partially completed before failing (say, it inserted half its rows, then crashed), a naive retry that re-runs the same insert logic can duplicate that half.\n\nThis is why orchestration and idempotency are inseparable in practice: the orchestrator provides the *mechanism* to retry, but the task's own logic has to provide the *guarantee* that retrying is harmless — typically via an idempotent write pattern like partition overwrite or a merge/upsert, rather than a blind append.\n\n[Idempotency & Backfills](idempotency-and-backfills), next in this group, covers exactly how to design that guarantee — treat this as the reason it matters, not just an abstract best practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "workflow-orchestration-s10",
+      "order": 10,
+      "sectionTitle": "Sensors and deferrable tasks",
+      "subTitle": "Waiting without wasting a worker slot",
+      "type": "concept",
+      "markdown": "A **sensor** is a task that waits for an external condition — a file landing in S3, a row appearing in a table — before letting downstream tasks proceed. The naive implementation polls in a loop, holding a worker slot the entire time it waits, which can starve the orchestrator's capacity if many DAGs are all waiting on slow external signals simultaneously.\n\n**Deferrable tasks** (Airflow's term; other orchestrators have equivalents) solve this by releasing the worker slot entirely while waiting, and registering the wait with a lightweight separate process that resumes the task only once the condition is actually met. The user-visible behavior is identical — the DAG waits, then proceeds — but the orchestrator's capacity isn't held hostage by tasks that are doing nothing but waiting.\n\nThis matters operationally once a team has many DAGs with sensors: without deferrable tasks, a burst of pipelines all waiting on the same slow upstream source can exhaust worker capacity and block unrelated, ready-to-run tasks from starting at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "workflow-orchestration-s10-q1"
+      ]
+    },
+    {
+      "id": "workflow-orchestration-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Orchestration is the connective tissue across everything else in this group: it decides when extraction runs, sequences CDC-fed loads against dbt transforms, and enforces the retry and alerting policy that makes a pipeline something you can actually trust unattended.\n\nThe two ideas to carry forward, both covered next: **idempotency** is the property that makes an orchestrator's automatic retries and backfills safe rather than dangerous, and **pipeline reliability testing** builds on top of both to catch bad data, not just failed jobs — a pipeline can run green from the orchestrator's perspective while still loading silently wrong data, which orchestration alone can never detect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

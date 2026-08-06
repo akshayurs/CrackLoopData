@@ -1,0 +1,37 @@
+{
+  "topicId": "oltp-vs-olap",
+  "interviewQuestions": [
+    {
+      "id": "oltp-vs-olap-iq1",
+      "question": "What's the difference between OLTP and OLAP, and why can't one database usually do both well?",
+      "answerMarkdown": "OLTP is optimized for many small, fast, concurrent transactions — insert an order, update a balance — while OLAP is optimized for a handful of heavy aggregation queries scanning millions of rows. The reason one engine struggles to do both is physical, not just conceptual: OLTP engines store data row-oriented so a full record comes back in one read, and OLAP engines store data column-oriented so scanning one field across every row doesn't drag along every other column.\n\nThose are opposite bets on disk layout, and you can't have both simultaneously in the same physical storage without compromise. That's exactly what HTAP systems try to do — keep a row store and a columnar replica in sync — and why they still generally underperform a dedicated engine on both axes: it's a real compromise, not a free lunch.\n\nConcretely, I'd point at consistency too: OLTP needs strict ACID guarantees because a double-charge is unacceptable; OLAP tolerates a dashboard being a few minutes stale, which lets it relax consistency in exchange for scan throughput.\n\nThe practical consequence for a data engineer: you build a pipeline specifically to move data from the OLTP system, where it's generated, into a separate OLAP system, where it can be queried heavily without threatening the app that depends on the OLTP system staying fast.\n\n**Testing:** whether you can connect the physical storage layout to the workload it serves, not just recite the two acronyms.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "oltp-vs-olap-iq2",
+      "question": "Someone on your team wants to run nightly reporting queries directly against the production Postgres database instead of building a pipeline into a warehouse. What's your concern?",
+      "answerMarkdown": "My concern is resource contention, not correctness — the reporting queries will get the right answer, but they can starve the transactional workload that Postgres exists to serve, because a full-table scan for a report competes for the same I/O, CPU, and buffer cache that thousands of small checkout transactions depend on.\n\nConcretely, I've seen an unindexed analytical query hold locks or saturate disk I/O long enough that ordinary app queries started timing out — the report finished fine, but checkout degraded for the duration. A read replica reduces this but doesn't eliminate it: replication lag grows under heavy analytical load, and it's still a row store, so a big columnar scan is inherently the wrong shape of query for it even without contention.\n\nMy recommendation would be a proper extract into a warehouse or lake — even a simple nightly dump — so the analytical workload runs on a system built for scans, in parallel with, not against, the production database. If the team needs fresher-than-nightly numbers, CDC into a warehouse gets close to real-time without ever touching primary capacity for the analytical query itself.\n\nI'd frame it to the team as a cost trade: building the pipeline costs setup time once; running reports against prod costs an outage risk every time volume spikes.\n\n**Testing:** whether you understand this isn't a correctness issue but an operational-risk one, and can propose the standard fix.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Production risk"
+    },
+    {
+      "id": "oltp-vs-olap-iq3",
+      "question": "Why do warehouse schemas often look deliberately denormalized, when you were taught that normalization is 'correct' database design?",
+      "answerMarkdown": "Normalization is correct for the problem it solves — avoiding update anomalies when a system does frequent small writes to the same facts. A warehouse has close to the opposite problem: it's written in bulk, infrequently, and read constantly by analysts running aggregations, so the cost that matters most is join cost at query time, not write-anomaly risk.\n\nA fully normalized warehouse turns every business question into a chain of joins across many small tables — slow on a columnar engine that's built for wide scans, not join-heavy execution plans. The standard response is a **star schema**: one wide fact table (say, `fact_orders`, one row per order line) plus a small number of dimension tables (`dim_customer`, `dim_product`, `dim_date`), so a typical report is one or two joins instead of ten.\n\nThe trade being made explicitly: you accept some repeated, denormalized dimension data — a customer's name might sit next to millions of fact rows instead of being joined in — in exchange for query speed. That's the right trade because storage is cheap and the warehouse is read far more often than it's written.\n\nSo it's not that normalization is \"wrong\" — it's optimized for a different workload than the one a warehouse actually serves.\n\n**Testing:** whether you can justify a schema design decision by workload rather than by a rule memorized from an OLTP class.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Schema design"
+    },
+    {
+      "id": "oltp-vs-olap-iq4",
+      "question": "Your team is evaluating an HTAP database to eliminate the ETL pipeline between your OLTP system and your warehouse. What would you push back on?",
+      "answerMarkdown": "I'd push back on the assumption that HTAP eliminates the trade-off rather than just relocating it. HTAP systems typically maintain an internal row store for transactions and a columnar replica kept near-real-time in sync — which removes the *external* pipeline, but the internal replication mechanism is still doing the same fundamental work a CDC-based ETL pipeline does, just inside one product instead of across two.\n\nThe real cost is performance ceiling on both sides: an HTAP engine generally won't match a dedicated OLTP engine's peak transactional throughput, or a dedicated OLAP engine's scan performance on very large analytical workloads, because it's architected as a compromise between the two access patterns rather than optimized purely for either. For a mid-size analytical workload that's a completely reasonable trade; for a company doing genuinely large-scale reporting or very high-throughput transactions, it can mean paying a performance tax on the workload you care about most.\n\nI'd also flag operational maturity: dedicated OLTP and OLAP engines are extremely well understood, with deep tooling and a large hiring pool of engineers who've operated them. HTAP is a newer, smaller ecosystem — fewer people have debugged its specific failure modes at 3am, which is a real cost even if the technology performs as advertised.\n\nConcretely, I'd ask for a load test against our actual peak transaction volume and our heaviest real analytical query, not a vendor benchmark, before treating this as a clear win.\n\n**Testing:** whether you can evaluate a vendor's simplification claim critically instead of taking \"no more ETL\" at face value.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture trade-offs"
+    }
+  ]
+}

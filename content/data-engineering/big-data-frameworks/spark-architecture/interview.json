@@ -1,0 +1,37 @@
+{
+  "topicId": "spark-architecture",
+  "interviewQuestions": [
+    {
+      "id": "spark-architecture-iq1",
+      "question": "Walk me through what happens, architecturally, when you submit a Spark job.",
+      "answerMarkdown": "The driver process starts up and runs your application code, but the transformations in that code — filter, map, groupBy — don't execute anything yet; they just build up a logical plan, because Spark is lazily evaluated. Nothing real happens until an action like collect, count, or write is called.\n\nWhen an action fires, the driver asks the cluster manager — standalone, YARN, or Kubernetes — for executor resources. The driver then takes the accumulated plan, breaks it into stages at every shuffle boundary, breaks each stage into tasks (one per partition), and ships those tasks out to executors to run in parallel. Executors do the actual work — reading data, applying transformations, holding cached results in memory — and report status and results back to the driver.\n\nIf an executor dies mid-job, Spark doesn't need a backup copy of its data — it uses recorded lineage to recompute just the lost partitions and keeps going. That's the core loop: plan lazily, trigger on action, distribute as stages and tasks, recover via lineage rather than replication.\n\n**Testing:** whether you can narrate the driver/executor/cluster-manager relationship accurately, not just name the three terms.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "spark-architecture-iq2",
+      "question": "Why does Spark use lineage-based recovery instead of just replicating data the way HDFS does?",
+      "answerMarkdown": "It's a different bet about where the cost should land. HDFS replication pays a fixed, continuous storage cost — typically 3x — for every block, all the time, whether or not a failure ever actually happens. Lineage-based recovery pays nothing until a failure occurs, and then pays a time cost to recompute exactly the lost partitions by replaying the transformations that produced them.\n\nFor most Spark workloads, that's the better trade: executor failures are relatively rare events compared to how continuously the storage overhead of full replication would be paid, so recomputing occasionally is cheaper overall than tripling storage permanently. It also fits Spark's role — it's typically processing data that's durably stored elsewhere (HDFS, S3, a warehouse), so the RDDs themselves are disposable, recomputable intermediate state, not the system of record that needs its own replication guarantee.\n\nThe place this trade-off bites is when lineage chains get very long or expensive to recompute — a deep chain of transformations with no caching means a lost partition triggers a large recomputation, which is exactly why caching matters at points where recomputation would otherwise be expensive.\n\n**Testing:** whether you understand this as a deliberate cost trade-off tied to Spark's role as a compute layer, not an accident or a limitation.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "spark-architecture-iq3",
+      "question": "A Spark job that used to run fine now crashes the driver with an out-of-memory error, right after a small code change added a `.collect()` call. How do you diagnose and fix it?",
+      "answerMarkdown": "The symptom — driver OOM, executors otherwise fine — is the classic signature of pulling too much data into the driver, and a newly added collect() is exactly the kind of change that causes it. collect() materializes the entire distributed result as an in-memory object on the single driver process, which is sized very differently from the combined memory of the executor fleet, so a dataset that's totally manageable spread across 200 executors can easily blow out one process trying to hold all of it at once.\n\nMy first step is to check the size of what's being collected — if it's meant to be a small aggregated result, I'd verify the aggregation actually happened before the collect() rather than after. If someone added `.collect()` to inspect data mid-pipeline for debugging and left it in, that's an easy, quick fix: remove it, or replace it with `.take(20)` or `.show()` which only pull a bounded sample.\n\nIf the use case genuinely needs the full dataset materialized somewhere, the fix is architectural, not a driver-memory bump: write directly to storage from the executors (`.write.parquet(...)`) instead of routing everything through the driver, since executors writing in parallel to distributed storage don't have this single-process bottleneck at all.\n\n**Testing:** whether you can connect a specific code change to the specific architectural reason it breaks, and fix the root cause rather than just requesting more driver memory.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "spark-architecture-iq4",
+      "question": "What's the difference between an RDD and a Spark DataFrame, and why would you still reach for the lower-level RDD API?",
+      "answerMarkdown": "An RDD is Spark's foundational, low-level abstraction — a distributed, partitioned collection with no schema awareness, where you write transformations as arbitrary functions over records. A DataFrame sits on top of RDDs and adds a schema, which lets Spark's Catalyst optimizer reason about the data — pushing down filters, pruning unused columns, choosing physical execution strategies — in ways it structurally can't for opaque RDD code, since Catalyst has no visibility into what an arbitrary lambda does.\n\nIn practice I default to DataFrames for essentially everything — the optimizer gains are large enough that hand-rolled RDD code is usually a mistake, not an optimization. I'd drop down to the RDD API only for genuinely low-level control the DataFrame API doesn't expose: custom partitioning logic tied to a specific downstream system's key layout, or an algorithm that's naturally expressed as arbitrary object manipulation that doesn't fit the columnar, schema-aware model DataFrames assume.\n\nEven then, I'd isolate the RDD code to the specific step that needs it and convert back to a DataFrame immediately after, rather than writing a whole pipeline in RDDs and losing the optimizer's benefit across the board.\n\n**Testing:** whether you know DataFrames are the default for a real, optimizer-driven reason, and can name a genuine, narrow exception rather than treating RDD-vs-DataFrame as a style preference.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

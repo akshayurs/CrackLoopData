@@ -1,0 +1,37 @@
+{
+  "topicId": "obt-vs-star-schema",
+  "interviewQuestions": [
+    {
+      "id": "obt-vs-star-schema-iq1",
+      "question": "What is One Big Table, and why has it become a real alternative to star schema in the last several years?",
+      "answerMarkdown": "OBT pre-joins a fact table and every dimension it needs into a single flat table, so queries against it need zero joins — every attribute is already sitting on the fact row. It's denormalization pushed to its logical end: star schema is one join per dimension, OBT is none.\n\nIt's become viable for infrastructure reasons, not a new modeling insight. Columnar storage with dictionary encoding means repeated dimension attributes compress to nearly nothing, so the storage penalty that made wide tables look wasteful in the 2000s barely registers today. And modern warehouses make rebuilding a wide table cheap and elastic — pay-per-query serverless compute instead of a fixed, provisioned ETL box running overnight.\n\nSo the trade is real but the price of one side of it dropped: OBT still costs you update efficiency and cross-fact-table reuse, but that cost is easier to swallow now that the alternative (star schema's join overhead) is comparatively more expensive at billion-row scale.\n\n**Testing:** whether you can explain OBT's rise as an economics shift rather than a fad or a superior modeling technique.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "obt-vs-star-schema-iq2",
+      "question": "When would you build an OBT instead of relying on the existing star schema, and when would you refuse to?",
+      "answerMarkdown": "I'd build one when a specific consumer's need is narrow and the update cost is genuinely low. The clearest case is an ML feature table — training wants one row per example with every feature pre-joined, doesn't care much about update efficiency because it's often rebuilt wholesale on a schedule anyway, and benefits enormously from removing join logic that a data scientist writing Python, not SQL, shouldn't have to get right. A BI-tool-facing table for a single dashboard is the other common case — non-technical users writing drag-and-drop queries make fewer mistakes with zero joins to configure.\n\nI'd refuse when the table needs to serve many different consumers with different slicing needs, or when its underlying dimensions change frequently. If ten fact tables share a customer dimension and I built ten separate OBTs, I'd be duplicating the same join logic ten times, and any future change to what \"active customer\" means has to be applied consistently across all ten — a maintenance trap waiting to happen.\n\nMy actual default: keep the star schema as the durable source of truth, and materialize an OBT on top of it for the specific consumer that needs the flat shape. That gets update efficiency where it matters and query simplicity where it's asked for.\n\n**Testing:** whether you make this decision per-consumer rather than treating OBT as a blanket replacement for dimensional modeling.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "obt-vs-star-schema-iq3",
+      "question": "A team built an OBT joining five upstream sources. Six months later, one source changes its schema and the whole pipeline breaks. What happened, and how would you have designed around it?",
+      "answerMarkdown": "What happened is the coupling that OBT quietly introduces at build time: pre-joining five sources into one wide table means those five sources now share a single blast radius. A schema change in just one — a renamed column, a new required field, a changed data type — can break the join step for the entire table, even though the other four sources are perfectly fine.\n\nCompare that to a star schema: the same change would touch exactly one dimension table, and every other dimension and every fact table that already loaded stays valid. OBT bought query-time simplicity by trading away that isolation.\n\nWhat I'd have done differently: build the star schema as the base layer first, with each source landing into its own dimension or fact table, isolated from the others' changes. Then materialize the OBT as a derived, disposable view on top — if a source schema changes, only the materialization step for that one dimension needs a fix, and the OBT rebuild is a mechanical re-run, not an emergency. I'd also add a schema-contract check on each source so a breaking change is caught before it reaches the pipeline, not after.\n\n**Testing:** whether you can connect a production incident to the specific architectural trade-off (coupling) that caused it, and propose a structural fix rather than a patch.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "obt-vs-star-schema-iq4",
+      "question": "Some engineers argue OBT makes dimensional modeling obsolete now that storage is cheap. How do you respond?",
+      "answerMarkdown": "I'd push back on \"obsolete\" specifically, because cheap storage only removes one side of the trade-off — it doesn't touch the other side, which is update cost and dimension reuse across multiple fact tables. Storage got cheap; the coupling and maintenance cost of a wide, pre-joined table did not.\n\nConcretely: if ten fact tables all need a customer dimension, building ten OBTs means ten copies of the same join logic, and a definitional change — what counts as \"active\" — now has to land in ten places or drift apart silently. That's not a storage problem cheap disks can fix; it's a consistency problem that only a shared, conformed dimension solves.\n\nWhat's actually true is narrower and more useful: cheap storage makes OBT a *much more attractive tactical choice* for a specific consumer — an ML pipeline, a single BI dashboard — than it used to be. It doesn't make the underlying discipline of facts, dimensions, and conformance pointless; most serious warehouses I've seen still keep a star-schema (or equivalent) foundation and treat OBTs as materialized, disposable views derived from it, not as a replacement for the foundation itself.\n\n**Testing:** whether you can separate \"cheaper\" from \"free\" and hold onto the parts of dimensional modeling that a storage-cost argument doesn't actually address.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

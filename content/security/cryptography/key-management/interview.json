@@ -1,0 +1,37 @@
+{
+  "topicId": "key-management",
+  "interviewQuestions": [
+    {
+      "id": "key-management-iq1",
+      "question": "Why do most real-world cryptographic failures trace back to key management rather than a broken algorithm?",
+      "answerMarkdown": "Because the algorithms — AES, RSA, ECC, HMAC — are mathematically sound and have survived decades of adversarial review; the actual point of failure is almost always what happens to the key before or after that sound math runs. A perfectly implemented AES-GCM encryption is worthless if the key sits in a committed config file, in an unrotated credential from three years ago, or in an environment variable that gets accidentally logged.\n\nConcretely: a hardcoded key committed to git remains recoverable from history forever, regardless of whether the current file gets cleaned up — that single mistake defeats every cryptographic guarantee downstream of it instantly. A key that's never rotated means a single undetected leak has an unbounded window of usefulness to an attacker. A symmetric key shared across far more services than necessary means one compromised service exposes every other service using that same key.\n\nThe practical implication for how I diagnose an incident or review a design: when something is described as \"our encryption got broken,\" my first questions are about the key's lifecycle — how was it generated, where does it live, who can reach it, has it ever been rotated — before I question the algorithm at all. The algorithm is very rarely the actual weak link.\n\n**Testing:** whether you understand where the real risk concentrates in a cryptographic system, which is the difference between reciting algorithms and doing real security engineering.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "key-management-iq2",
+      "question": "What is forward secrecy, and why does modern TLS require it?",
+      "answerMarkdown": "Forward secrecy means compromising a server's long-term private key today doesn't let an attacker decrypt sessions that already happened and were recorded in the past. Without it, a passive attacker can record encrypted traffic for years, unable to read any of it in real time, then decrypt the entire archive retroactively the moment they obtain the long-term key through any means — a breach, a legal order, a future cryptanalytic advance.\n\nOlder TLS configurations using static RSA key transport were exactly this vulnerable: the same long-lived RSA private key that identified the server was also what unlocked every session's symmetric key, past and future, if it were ever compromised. Ephemeral Diffie-Hellman (ECDHE in modern TLS) fixes this by generating a brand-new, temporary key pair for every single session's key exchange and discarding it immediately afterward — there's no long-lived secret whose later compromise can reconstruct an already-discarded ephemeral value.\n\nTLS 1.3 makes this mandatory rather than optional precisely because mass surveillance and \"harvest now, decrypt later\" attacks are a real, demonstrated threat model — an adversary with the patience and storage to record traffic now and wait years for a key compromise is a realistic concern for high-value targets, not a hypothetical.\n\n**Testing:** whether you understand the specific threat forward secrecy defends against, not just that it's a checkbox modern TLS happens to have.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "key-management-iq3",
+      "question": "You discover an AWS access key hardcoded in a service's source code, committed six months ago to a repository that's always been private. What do you do?",
+      "answerMarkdown": "I'd treat the key as compromised immediately and rotate it — deleting it from the current code is necessary but nowhere near sufficient, because git history preserves every prior commit indefinitely, and \"private\" isn't the same as \"never exposed.\"\n\nThe reasoning: over six months, that key has been present in every clone anyone made, every CI job that checked out the repo, potentially in build logs or artifact caches, and the repository's private status could have changed at any point (a misconfigured access grant, a fork, an integration that mirrors it somewhere else) without anyone noticing. I wouldn't spend time trying to determine definitively whether anyone actually saw it — that's usually not verifiable with confidence, and the cost of rotating is far lower than the cost of guessing wrong.\n\nMy concrete steps: rotate the credential immediately (revoke the old one, generate a new one), check CloudTrail or equivalent access logs for any usage from unexpected sources during the exposure window, move the credential to a proper secrets manager or environment-injected secret rather than re-hardcoding a new one, and set up a pre-commit secret scanner so this specific mistake can't land again. I'd also use this as the trigger for a broader repo scan — if one credential was hardcoded, it's worth checking whether there are others.\n\n**Testing:** whether you treat exposure as the trigger for action regardless of certainty about actual misuse, and can name the complete remediation, not just \"remove the line.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    },
+    {
+      "id": "key-management-iq4",
+      "question": "Why would a system use Diffie-Hellman for key exchange instead of just using RSA to encrypt a symmetric key directly, as covered in hybrid encryption?",
+      "answerMarkdown": "Both solve the same core problem — agreeing on a symmetric key without a pre-shared secret — but they differ in one property that matters a lot in practice: **forward secrecy**.\n\nWith RSA-based key transport, the client encrypts a symmetric key using the server's long-term RSA public key. If that long-term private key is ever compromised, an attacker who recorded the encrypted traffic can decrypt every session key ever protected by it, retroactively — one leaked key unlocks the server's entire recorded history. With Diffie-Hellman, especially the ephemeral variant (ECDHE), both sides generate a fresh, temporary key pair for that single exchange and throw it away afterward. Even if the server's long-term identity key is compromised later, there's no way to reconstruct the ephemeral private values used in any specific past session, because those never depended on the long-term key to derive the shared secret in the first place — the long-term key is only used to *authenticate* the exchange via a signature, not to directly encrypt the session key.\n\nThis is exactly why TLS 1.3 dropped RSA key transport entirely and mandates (EC)DHE — the industry consensus is that forward secrecy is worth the extra computational cost of generating fresh key material per session, given the real threat of \"harvest now, decrypt later\" attacks against recorded traffic.\n\n**Testing:** whether you can articulate the specific security property (forward secrecy) that differentiates two approaches that otherwise solve the same surface-level problem.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

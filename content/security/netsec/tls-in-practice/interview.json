@@ -1,0 +1,37 @@
+{
+  "topicId": "tls-in-practice",
+  "interviewQuestions": [
+    {
+      "id": "tls-in-practice-iq1",
+      "question": "What does TLS actually guarantee, and what's a common mistake people make about what it covers?",
+      "answerMarkdown": "Three things, precisely: confidentiality (an observer can't read the payload), integrity (an observer can't modify it undetected), and authentication (the client can verify the server's identity, and with mutual TLS, vice versa).\n\nThe mistake I see most is treating \"we use TLS\" as a blanket statement that the whole system is secure. TLS secures the pipe, full stop. It says nothing about whether the server itself is trustworthy, whether the application logs the decrypted payload in plaintext, or whether the data is protected once it's sitting in a database. I've reviewed systems that were fully TLS-everywhere and still logged customer PII in cleartext to a log aggregator with weak access control — TLS was working exactly as designed the entire time.\n\nThe practical habit this creates: when someone says \"it's encrypted,\" the next question is always \"encrypted where, and what happens after it's decrypted?\" TLS answers the first question completely and the second question not at all.\n\n**Testing:** whether you can state TLS's guarantees precisely, or wave at \"it's secure\" without being able to say what \"secure\" actually covers.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "tls-in-practice-iq2",
+      "question": "When would you use certificate pinning, and what's the operational risk that makes teams cautious about it?",
+      "answerMarkdown": "I'd reach for pinning when the threat model specifically includes a compromised or coerced CA, not just a network attacker — think a mobile app talking to your own API, where you control both ends and want to reject even a certificate that chains validly through the public CA system, because that chain could be forged by a compromised intermediate CA or a nation-state-level actor.\n\nThe operational risk is real and has caused outages: if you pin to a specific leaf certificate and that certificate rotates — which it should, routinely — every client that hasn't been updated with the new pin is now permanently locked out, with no graceful fallback, until it ships an update. Mobile apps are especially exposed because you can't force an update the way you can redeploy a server.\n\nThe mitigation I'd use is pinning to the **public key or an intermediate CA** rather than the leaf certificate, since that survives routine cert renewal — and always shipping a **backup pin** for the next planned rotation, so you're never one renewal away from bricking your own client base. Given the fragility, I'd only pin where the specific CA-compromise threat genuinely justifies the ops risk — not as a default \"more security is always better\" move.\n\n**Testing:** whether you weigh pinning as a real trade-off with a specific outage history, rather than treating it as a free security upgrade.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "tls-in-practice-iq3",
+      "question": "Why would a backend team adopt mutual TLS for service-to-service calls instead of just using API keys or bearer tokens?",
+      "answerMarkdown": "API keys and bearer tokens are strings — they can be copied into a log line, checked into a config file by accident, or replayed by anyone who intercepts them, and revoking one usually means a coordinated rotation across every service that holds it. mTLS replaces that with a cryptographic identity proof baked into the handshake itself: each service holds a certificate (often short-lived, auto-rotated by a service mesh or internal CA), and a request without a valid client cert never reaches the application layer at all — there's no token to leak because nothing bearer-style is ever transmitted.\n\nIt also composes cleanly with zero-trust designs: a policy engine can make an authorization decision based on the verified service identity from the certificate, independent of which network segment the call came from. That's a stronger and more auditable signal than \"this request had the right API key,\" which tells you nothing about who actually sent it if the key leaked.\n\nThe cost is real operational complexity — certificate issuance, rotation, and revocation infrastructure for every service, which is exactly why this pattern usually rides on a service mesh (Istio, Linkerd) rather than being hand-rolled per team. I wouldn't reach for it in a small system with a handful of services and low risk; it earns its complexity at a scale where credential sprawl is already a real operational pain.\n\n**Testing:** whether you can articulate the specific weakness of bearer credentials that mTLS fixes, and honestly weigh the operational cost against it.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "tls-in-practice-iq4",
+      "question": "A production outage traces back to a certificate that expired over the weekend. As the on-call staff engineer, how would you both fix it and prevent a repeat?",
+      "answerMarkdown": "Immediate fix first: issue and deploy a renewed certificate through whatever channel is fastest — manual renewal via the CA if automation is broken, then restart or reload the affected service. I'd also check whether other certs on adjacent services share the same renewal pipeline, because if one silently expired, others on the same schedule are likely close behind.\n\nThe root cause is almost never cryptographic — it's that expiry monitoring either didn't exist or wasn't tied to a channel anyone actually watches. So the prevention work is process, not crypto: move to **short-lived, automatically renewed certificates** (ACME-style for public certs, an internal CA integrated with the deploy pipeline for internal ones) so a human never has to remember a renewal date at all. Automation doesn't remove the risk, though — it moves it: now the renewal *pipeline* has to be monitored, with alerting on renewal failures well before the cert's actual expiry, not just an alert at T-1-day that can be missed on a Friday.\n\nI'd also add a synthetic check that actually connects and validates the live certificate in production — not just a check against the CA's records — since the two can drift if a rollout to one region silently fails. The postmortem action item that actually matters is \"how many days before expiry does someone get paged,\" not \"we renewed it.\"\n\n**Testing:** whether you go past the immediate fix to the systemic gap — the same signal a strong incident postmortem is graded on.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    }
+  ]
+}

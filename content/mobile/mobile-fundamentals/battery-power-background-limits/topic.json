@@ -1,0 +1,161 @@
+{
+  "id": "battery-power-background-limits",
+  "title": "Battery, Power & Background Execution Limits",
+  "area": "mobile",
+  "group": "mobile-fundamentals",
+  "order": 4,
+  "slug": "battery-power-background-limits",
+  "summary": "Every mobile OS throttles background work aggressively, for the same reason: battery is the scarcest resource on the device. Learn the shared vocabulary before WorkManager/Background Tasks specifics.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "battery-power-background-limits-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A server that runs a background job at 3am costs a fraction of a cent in compute. The same background job on a phone costs something the user actually notices: **battery they were counting on lasting the day**.\n\nEvery mobile OS treats battery as a scarce, user-visible resource and throttles background work accordingly — deferring it, batching it, and outright killing apps that abuse it. This topic covers the shared vocabulary: where battery actually goes, why background work is capped, and how to reason about power cost before you profile it. `WorkManager` and `BGTaskScheduler` specifics live in the Android and iOS groups.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "battery-power-background-limits-s02",
+      "order": 2,
+      "sectionTitle": "Where battery actually goes",
+      "subTitle": "Radio, screen, CPU",
+      "type": "concept",
+      "markdown": "Three subsystems account for nearly all of a phone's power draw, and they don't cost the same:\n\n- **Screen** is usually the single largest consumer while the device is in active use — brightness and how long it stays on dominate.\n- **Radio** (cellular, WiFi, Bluetooth, GPS) is the one background work touches most, and it has the fixed ramp-up/tail cost per active period covered in [mobile networking](mobile-networking-essentials) — a background sync isn't just \"a bit of CPU,\" it's a radio wakeup too.\n- **CPU/GPU** matters most for sustained work — video decode, heavy computation, rendering — and scales with how busy the cores are, not just whether the app is running.\n\nThe practical implication: a background task that touches the network is almost always more expensive than one that's pure CPU, because it pays both costs, and a task that runs frequently in small bursts is worse than the same total work done in one batch, for the same ramp/tail reason as networking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "battery-power-background-limits-s02-q1"
+      ]
+    },
+    {
+      "id": "battery-power-background-limits-s03",
+      "order": 3,
+      "sectionTitle": "Why every OS aggressively limits background work",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Battery life is the resource users complain about loudest and switch apps over fastest — an app that quietly drains 15% overnight gets uninstalled, often without the user ever diagnosing why. Platform vendors know this reflects on the *OS*, not just the offending app, so both Android and iOS have progressively tightened background limits release over release.\n\nThe design philosophy is the same on both: background work is a **privilege the OS grants and can revoke**, not a right the app has by default. An app gets a short guaranteed window on backgrounding, then has to explicitly request anything beyond that through OS-mediated APIs (a deferred job, a background task request) that the OS schedules according to its own judgment — batched with other apps' requests, deferred to a charging window, or denied outright if the device is in a low-battery state.\n\nThis is why you can't simply spawn a background thread and expect it to run indefinitely — the OS is actively watching and will suspend or kill work it judges wasteful.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "battery-power-background-limits-s03-q1"
+      ]
+    },
+    {
+      "id": "battery-power-background-limits-s04",
+      "order": 4,
+      "sectionTitle": "Wakelocks and why holding one wrong drains a battery overnight",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **wakelock** (Android's explicit term; iOS has equivalent background-activity assertions) is a flag an app can raise to tell the OS \"keep the CPU awake, don't let the device sleep, even though the screen is off.\" It exists for legitimate cases — finishing a large download, playing audio — where sleeping mid-task would be wrong.\n\nThe failure mode is almost always the same: a wakelock acquired before a network call or a long operation, with **no timeout and no guaranteed release on every code path** — an exception, an early return, a crash — that skips the release call. The device then never sleeps, at full CPU wake power, until something else intervenes (the OS force-kills the app, or the battery is dead by morning).\n\nThe defensive pattern: always pair acquire with a `try/finally`-style guaranteed release, and always set a timeout as a backstop even when you expect the normal path to release it — a timeout that fires needlessly costs nothing; a wakelock that never releases costs the whole battery.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "battery-power-background-limits-s04-q1"
+      ]
+    },
+    {
+      "id": "battery-power-background-limits-s05",
+      "order": 5,
+      "sectionTitle": "A generic doze/app-standby-style power state model",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Both major platforms converge on the same shape of idea, under different names: when a device has been stationary and unused for a while (screen off, not charging, not moving), the OS enters a deep power-saving mode that suspends most background activity for **all** apps at once, waking briefly on a periodic \"maintenance window\" to let deferred work run in a batch, then going back to sleep.\n\nAn app that isn't actively used by the user for an extended period can additionally be moved to a stricter standby bucket, independent of device-wide doze, that throttles its background access even more — this is per-app, based on usage patterns, not just device-wide idleness.\n\nThe two mechanisms stack: a rarely-used app on a stationary, idle device gets the most restrictive treatment of all. Designing for this means: don't assume your deferred work runs promptly — it runs in the next maintenance window, which could be minutes away on an active device or much longer on an idle one.\n\n![Repeating doze suspend and maintenance cycles with an app-standby bucket throttling a low-usage app](assets/doze-maintenance-cycles.svg)",
+      "assets": [
+        {
+          "alt": "Repeating doze suspend and maintenance cycles with an app-standby bucket throttling a low-usage app",
+          "path": "assets/doze-maintenance-cycles.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": []
+    },
+    {
+      "id": "battery-power-background-limits-s06",
+      "order": 6,
+      "sectionTitle": "Deferring, batching, and coalescing background jobs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because the OS batches deferred work into maintenance windows anyway, the winning strategy is to **cooperate with that batching rather than fight it**. Concretely: express work as \"run this sometime in the next few hours, ideally on WiFi and charging\" rather than \"run this now, exactly.\"\n\nCoalescing multiple logically-separate background needs (a sync, a cache refresh, an analytics flush) into one scheduled job that does all three when it runs is strictly better than three independent schedules — the OS wakes the device once for all three instead of three separate times, each paying its own ramp-up cost.\n\nBoth platforms' job-scheduling APIs are built around this: you declare constraints (network type, charging state, a flexible time window) and let the OS decide the exact moment, batching your request with other apps' requests it's already waking the device for. Fighting this by demanding an exact execution time defeats the entire point of the system and gets your requests deprioritized.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "battery-power-background-limits-s07",
+      "order": 7,
+      "sectionTitle": "User-facing work vs deferrable maintenance work",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Work type | Example | Right approach |\n|---|---|---|\n| **User-facing, time-sensitive** | Sending a message the user just typed | Foreground-adjacent execution, small guaranteed background window, or a foreground service with a visible notification if it must survive backgrounding |\n| **Deferrable maintenance** | Nightly cache cleanup, analytics batch upload, pre-fetching tomorrow's content | Scheduled job with loose constraints (charging, WiFi, flexible window) |\n\nThe classification mistake goes both ways: treating deferrable work as urgent (an analytics flush that insists on running immediately, draining battery for data nobody's waiting on) wastes power for no user benefit; treating urgent work as deferrable (queuing a just-sent chat message behind a maintenance window) makes the app feel broken. Get the classification right first — the API choice follows directly from it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "battery-power-background-limits-s07-q1"
+      ]
+    },
+    {
+      "id": "battery-power-background-limits-s08",
+      "order": 8,
+      "sectionTitle": "Measuring battery impact before optimizing",
+      "subTitle": "What to profile",
+      "type": "concept",
+      "markdown": "Battery optimization without measurement is guessing, and it's easy to guess wrong — the operation that *feels* expensive (a big CPU computation) is often cheaper than the one that feels trivial (a tiny network ping fired every 30 seconds), because of the radio's fixed per-wakeup cost.\n\nWhat's actually worth profiling: **wakeup frequency** (how often does this code path run the device out of idle), **radio-active time** attributable to your app specifically, not just total bytes sent, and **CPU time while the screen is off**, which platform battery-usage tools attribute per app and often break down by wakelock hold time.\n\nThe realistic workflow: ship instrumentation that tracks these three numbers in production (not just a dev-device guess), because real-world battery behavior depends on network quality, device age, and usage patterns that a clean lab environment doesn't reproduce — the same job that's cheap on a fast WiFi connection can be expensive for a user on a weak cellular signal, retrying repeatedly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "battery-power-background-limits-s09",
+      "order": 9,
+      "sectionTitle": "Polling a server on a tight timer \"just to be safe\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A feature needs to know when something changes server-side, and the simplest thing to build is a timer that polls every 15 or 30 seconds \"just to be safe.\" It works in a demo and quietly becomes one of the worst battery offenders in the app, because every single poll pays a full radio ramp-up-and-tail cost, whether or not anything actually changed.\n\nThe fix is almost never \"poll less often\" — it's **push instead of pull**: a push notification or a persistent connection (WebSocket, long-polling with server cooperation) that only wakes the client when there's genuinely something new, so idle periods cost nothing instead of costing a wakeup every 15 seconds regardless of activity.\n\nWhen push genuinely isn't available, at minimum make the polling interval adaptive — back off aggressively when nothing's changed recently, and align it with the OS's own maintenance-window batching instead of running on an independent tight timer that fights the system's power model.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "battery-power-background-limits-s09-q1"
+      ]
+    },
+    {
+      "id": "battery-power-background-limits-s10",
+      "order": 10,
+      "sectionTitle": "Holding a wakelock across a network call with no timeout",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A background sync acquires a wakelock, fires a network request, and releases the wakelock in the success callback. It looks correct, and it is — right up until the network call hangs, the server never responds, or a lost connection means the callback never fires at all.\n\nWith no timeout, the wakelock is held indefinitely: the device stays fully awake, burning battery, for as long as that stuck request sits open — sometimes until the OS notices and force-kills the offending process, sometimes not until the battery is gone. This is a top cause of \"my phone died overnight for no reason\" reports, and it's rarely caught in testing because a dev environment's network rarely hangs indefinitely the way a real flaky connection does.\n\nThe fix is always the same: pair the acquire with both a guaranteed release (covering the error and timeout paths, not just success) and an explicit timeout on the wakelock itself as a backstop, independent of whether the network call has its own timeout configured correctly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "battery-power-background-limits-s10-q1"
+      ]
+    }
+  ]
+}

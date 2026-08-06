@@ -1,0 +1,161 @@
+{
+  "id": "design-mobile-client-feed-app",
+  "title": "Designing a Mobile Client — Feed/Content App",
+  "area": "mobile",
+  "group": "mobile-system-design",
+  "order": 7,
+  "slug": "design-mobile-client-feed-app",
+  "summary": "A second worked case study focused on pagination, prefetch, and offline reading rather than real-time messaging — paged caching, optimistic engagement actions, and the two bugs that make a feed feel broken.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "design-mobile-client-feed-app-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a feed client\" is [Designing a Mobile Client — Chat/Messaging App](design-mobile-client-chat-app)'s counterpart interview prompt, and it exercises a different slice of this group: pagination, prefetch, and read-heavy offline caching rather than real-time delivery and message state machines. Where chat is about getting a write reliably delivered, a feed is about making a long, continuously-scrolling read experience feel instant and correct.\n\nThis topic works through the paginated-cache architecture, optimistic engagement (likes/comments) reconciling with server truth, and the two failure modes — a flickering like button and a feed that re-fetches page one on every open, losing the user's place — that separate a thought-through design from a naive one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-feed-app-s02",
+      "order": 2,
+      "sectionTitle": "Framing the problem",
+      "subTitle": "what 'design a feed client' is really asking",
+      "type": "concept",
+      "markdown": "Scope clarification matters here just as much as in the chat case study: is this feed personalized/ranked (implying the order can change between fetches, which affects pagination) or reverse-chronological (a much simpler, stable order)? Does it need offline reading of already-seen content, or just smooth online scrolling? Do posts support engagement actions (likes, comments) that need optimistic UI, or is it read-only?\n\nFor this topic, the scope is: a reverse-chronological or lightly-ranked feed, offline reading of previously-fetched content, and optimistic like/comment-count actions — deliberately not a fully personalized ranking algorithm's backend complexity, which is a distinct (and mostly backend-side) problem from the client architecture this topic covers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-feed-app-s03",
+      "order": 3,
+      "sectionTitle": "The feed client's architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Feed client architecture with the paged local cache fed by a prefetcher and an action queue, both talking to the remote API](assets/feed-client-architecture.svg)",
+      "assets": [
+        {
+          "alt": "Feed client architecture with the paged local cache fed by a prefetcher and an action queue, both talking to the remote API",
+          "path": "assets/feed-client-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-feed-app-s04",
+      "order": 4,
+      "sectionTitle": "Paginating and caching for smooth infinite scroll",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Applying [Mobile API Design & Backend-for-Frontend](mobile-api-design-bff)'s pagination guidance directly: cursor-based pagination, not offset-based, since a feed's underlying content changes between requests (new posts arrive) and offset pagination breaks visibly under insertion — items skip or duplicate as the whole list shifts underneath a fixed offset.\n\nThe client caches each fetched page in the local database, keyed by its position in the feed's sequence, so scrolling back up to already-seen content reads from the local cache rather than re-fetching — this is what makes scrolling back up feel instant, and it's a direct consequence of treating the local database as the source of truth the UI renders from, exactly the offline-first pattern applied to a read-heavy feed instead of a write-heavy chat.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "design-mobile-client-feed-app-s04-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-feed-app-s05",
+      "order": 5,
+      "sectionTitle": "Merging a fresh page with the cached feed",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nfun mergePage(cached: List<Post>, freshPage: List<Post>): List<Post> {\n    val seenIds = cached.map { it.id }.toSet()\n    val newPosts = freshPage.filterNot { it.id in seenIds }\n    return cached + newPosts   // append only genuinely new items, preserve existing order\n}\n```\n\nThe de-duplication step matters because a naive 'just append whatever the API returned' merge can produce a duplicate if the same post appears in two overlapping page fetches — which happens more often than it sounds, especially if a cursor's position shifts slightly due to a post being deleted between two of the user's requests. Merging by ID, not by position, is what keeps the feed correct under that kind of real-world churn.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "design-mobile-client-feed-app-s05-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-feed-app-s06",
+      "order": 6,
+      "sectionTitle": "Optimistic likes/comments reconciling with the server",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A like tap applies the same optimistic-UI pattern from [Offline-First Design](offline-first-design): flip the local `liked` flag and increment the local count immediately, queue the actual API call, and roll back to the pre-change snapshot if the server rejects it. The one genuinely feed-specific wrinkle: the server's like count for a popular post is changing constantly from *other* users' actions too, not just this user's own action — so \"reconciling with the server\" here means merging this user's own optimistic delta with a count that's independently drifting upward from everyone else's activity, not just confirming or rolling back a single isolated write.\n\nThe practical approach: track this user's own optimistic delta (+1 for their own like) separately from the last-known server count, and display `serverCount + localDelta` rather than overwriting the whole displayed count with a possibly-stale server value that would visibly erase other users' likes that arrived since the last fetch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-feed-app-s06-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-feed-app-s07",
+      "order": 7,
+      "sectionTitle": "Offline reading",
+      "subTitle": "what to prefetch so the feed works on a subway",
+      "type": "concept",
+      "markdown": "Full offline-first writing (queued likes/comments that work with zero connectivity, synced later) is a real, deliberate scope decision — for a feed specifically, the read side matters more than the write side, since users spend far more time scrolling than liking. Prefetching the next page or two as the user approaches the bottom of the current one (from [Caching & Prefetching Strategy for Mobile Clients](caching-prefetching-mobile-clients)) means a user who loses signal mid-scroll (entering a subway tunnel, a classic real scenario for this exact product category) still has a page or two of already-fetched content to keep scrolling through before hitting a genuine 'no more content' wall.\n\nImage prefetching for the next page's thumbnails specifically matters here too — a feed with text loaded but images still spinning feels broken even if the actual text content is present, so prefetching should cover the visual content the user will actually see, not just the underlying data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-feed-app-s08",
+      "order": 8,
+      "sectionTitle": "Pull-to-refresh vs background-refreshed feeds",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Pull-to-refresh | Background-refreshed |\n|---|---|---|\n| User control | explicit — user decides when to check for new content | automatic — refreshes on a schedule or app-foreground event |\n| Surprise factor | low — user asked for this | can be jarring if content reorders or shifts while user is mid-scroll |\n| Battery/data cost | only when user acts | ongoing, needs to be bounded (e.g. only on foreground, not a background timer) |\n| Common pairing | almost always present regardless of the other mechanism | a 'new posts available' banner rather than silently inserting content above the user's current scroll position |\n\nMost production feeds combine both: pull-to-refresh always available as an explicit user action, plus a lightweight background check on app-foreground that, if new content exists, shows a non-disruptive 'N new posts' banner the user can tap rather than silently reordering content underneath their thumb mid-scroll — silent reordering is specifically what causes users to lose their place and feel like the app is buggy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-feed-app-s08-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-feed-app-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: a like button that flickers",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "If the optimistic local state and the periodically-refetched server state aren't reconciled carefully, a like button can visibly flicker: the user taps like, it fills in immediately (optimistic), then a background feed refresh fetches a server response that hasn't yet reflected this user's like (a race between the optimistic write's server-side processing and an unrelated read-refresh), and the button briefly reverts to unliked before the like's own confirmation catches up and re-fills it.\n\nThe fix is treating the optimistic local action as authoritative for that specific post until *its own* server confirmation (or explicit rejection) arrives — an unrelated background feed refresh should never silently overwrite a post's engagement state while a pending optimistic action for that exact post is still in flight; the merge logic needs to check for and respect in-flight local actions rather than always trusting the latest fetched server snapshot uncritically.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-feed-app-s09-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-feed-app-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: re-fetching page 1 on every open, losing scroll position",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A feed that discards its cached state and re-fetches from page 1 every time the app is reopened (or the tab is revisited) forces the user to re-scroll past everything they already saw to get back to where they were — a real, commonly-cited annoyance in feed-heavy apps, and a direct contradiction of the local-cache-as-source-of-truth pattern this whole topic is built on.\n\nThe fix is persisting both the cached pages AND the user's scroll position (or, more robustly, the ID of the last-visible post) across app sessions, restoring the feed to that exact point on reopen rather than starting cold — while still allowing an explicit pull-to-refresh or a 'new posts' banner tap to intentionally jump to the top when the user actually wants that. The distinction that matters: automatic loss of place on every reopen is a bug; the user's own explicit choice to refresh to the top is a feature.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-feed-app-s10-q1"
+      ]
+    }
+  ]
+}

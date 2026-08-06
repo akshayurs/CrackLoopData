@@ -1,0 +1,161 @@
+{
+  "id": "core-data-swiftdata-persistence",
+  "title": "iOS Persistence — Core Data & SwiftData",
+  "area": "mobile",
+  "group": "ios",
+  "order": 8,
+  "slug": "core-data-swiftdata-persistence",
+  "summary": "Core Data's managed-object-and-context model down to the SQLite file underneath, SwiftData as its Swift-native replacement, and the threading and migration mistakes that corrupt data or crash on scale.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "core-data-swiftdata-persistence-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Core Data** is Apple's object-graph persistence framework — not simply 'SQLite with an API,' though SQLite is its default storage underneath. It manages an in-memory graph of objects, tracks changes to them, and knows how to fault data in and out of memory as needed, save it to disk, and keep multiple parts of an app's data in sync.\n\n**SwiftData**, introduced in iOS 17, is the same underlying model dressed in a modern, macro-based Swift API — less boilerplate, but the mental model underneath (contexts, fetches, migrations) carries over almost directly. Most of what makes Core Data hard — threading rules, migration, over-fetching — is exactly what makes SwiftData hard too, just with friendlier syntax.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s02",
+      "order": 2,
+      "sectionTitle": "Managed objects, contexts, and the persistent store",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three layers, and confusing them is the source of most Core Data bugs:\n\n- **NSManagedObject** — a single entity instance (a `Task`, a `User`). It's tracked by whichever context created or fetched it.\n- **NSManagedObjectContext** — a scratchpad that tracks changes to a set of managed objects in memory. Nothing hits disk until you `save()` the context. Multiple contexts can exist, each with its own uncommitted changes.\n- **NSPersistentContainer / NSPersistentStoreCoordinator** — owns the actual on-disk store (SQLite by default) and mediates between it and every context.\n\nThe model to hold onto: a context is a **staging area**, not the source of truth. Two contexts can independently hold different, uncommitted versions of the same entity until one of them saves — which is exactly why passing a managed object between contexts naively causes real bugs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "core-data-swiftdata-persistence-s02-q1"
+      ]
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s03",
+      "order": 3,
+      "sectionTitle": "The stack from model to SQLite",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Core Data layered stack from managed objects through the context and coordinator down to the SQLite store](assets/core-data-stack.svg)",
+      "assets": [
+        {
+          "alt": "Core Data layered stack from managed objects through the context and coordinator down to the SQLite store",
+          "path": "assets/core-data-stack.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s04",
+      "order": 4,
+      "sectionTitle": "Fetching and saving",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```swift\n// Fetch\nlet request = Task.fetchRequest()\nrequest.predicate = NSPredicate(format: \"isComplete == NO\")\nrequest.sortDescriptors = [NSSortDescriptor(key: \"dueDate\", ascending: true)]\nlet tasks = try context.fetch(request)\n\n// Mutate and save\nlet newTask = Task(context: context)\nnewTask.title = \"Ship the release\"\nnewTask.isComplete = false\ntry context.save()   // nothing hits disk until this call\n```\n\nA predicate filters at the **store** level (translated to SQL under the hood for the default SQLite store), not by fetching everything and filtering in Swift — this is the difference between a query that scales and one that silently loads an entire table into memory as the data grows.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "core-data-swiftdata-persistence-s04-q1"
+      ]
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s05",
+      "order": 5,
+      "sectionTitle": "SwiftData",
+      "subTitle": "the same ideas, a Swift-native API",
+      "type": "code",
+      "markdown": "```swift\n@Model\nclass Task {\n    var title: String\n    var isComplete: Bool = false\n    var dueDate: Date?\n}\n\n// In a SwiftUI view:\n@Query(filter: #Predicate<Task> { !$0.isComplete },\n       sort: \\Task.dueDate)\nvar tasks: [Task]\n\n@Environment(\\.modelContext) var context\nfunc addTask() {\n    context.insert(Task(title: \"Ship the release\"))\n    // SwiftData autosaves by default; explicit try context.save() still available\n}\n```\n\n`@Model` replaces the `.xcdatamodeld` visual editor entirely — the entity is just a plain Swift class with property wrappers doing the work, and `#Predicate` gives compile-time-checked, type-safe queries instead of Core Data's string-based `NSPredicate` format strings, which fail silently at runtime on a typo.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s06",
+      "order": 6,
+      "sectionTitle": "Core Data vs SwiftData vs a plain SQLite wrapper",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Core Data | SwiftData | Plain SQLite (GRDB, SQLite.swift) |\n|---|---|---|---|\n| Boilerplate | high (visual model editor, generated classes) | low (macros, plain Swift types) | low, but manual SQL/query building |\n| Type safety | weak (string-keyed predicates/keys) | strong (#Predicate, KeyPath) | strong, but you own the schema mapping |\n| Object graph / relationships | first-class | first-class (built on Core Data) | manual, via foreign keys and joins |\n| Minimum OS | iOS 3+ | iOS 17+ | any, pure Swift/C |\n| Control over exact queries | good (NSPredicate, batch requests) | good, newer, fewer edge cases covered | full — you write the SQL |\n\nSwiftData is the right default for new apps targeting iOS 17+. Core Data is still the answer for apps needing to support older OS versions or leaning on mature features (complex migrations, `NSFetchedResultsController`) SwiftData hasn't fully replicated yet. A plain SQLite wrapper wins when you want full control over query shape and don't need an object-graph layer at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "core-data-swiftdata-persistence-s06-q1"
+      ]
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s07",
+      "order": 7,
+      "sectionTitle": "Lightweight vs custom migrations",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Ship a new app version with an added or renamed property on an entity, and existing users' on-disk data needs to migrate to the new model without data loss. **Lightweight migration** handles the simple cases automatically — adding an optional property, renaming with a documented mapping — and Core Data infers the mapping from the two model versions.\n\n**Custom (heavyweight) migration** is required when the change isn't structurally inferable: splitting one entity into two, transforming a stored value's format (a string date becoming a `Date`), or merging previously-separate entities. That requires a mapping model or custom migration policy code that Core Data runs during the migration pass.\n\nThe practical risk: skip planning for migration entirely and ship a schema change, and existing users' app either crashes on launch trying to open an incompatible store, or — worse, silently — loses data if the migration path wasn't tested against real production-shaped data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "core-data-swiftdata-persistence-s07-q1"
+      ]
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: crossing threads without a context",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`NSManagedObject` instances and their context are **not thread-safe for cross-thread access** — a managed object fetched on the main context and then touched from a background queue is a real, reproducible crash (`_PFManagedObject_coerceValueForKeyWithDescription` and similar) or silent corruption, not a theoretical risk.\n\nThe fix is `context.perform { }` (async) or `performAndWait { }` (sync) — every access to a managed object or its context happens inside a block dispatched to that specific context's own queue, never accessed directly from an arbitrary thread. For genuinely cross-context work (fetch on a background context, hand results to the main context for UI), pass the **object ID** (`NSManagedObjectID`), which is thread-safe, and re-fetch the object on the receiving context — never pass the `NSManagedObject` instance itself across contexts.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "core-data-swiftdata-persistence-s08-q1"
+      ]
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: an unbatched fetch loading an entire table",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`context.fetch(request)` with no `fetchLimit` or `fetchBatchSize` on a table that's grown to tens of thousands of rows pulls the whole result set into memory at once — fine in early testing with a hundred seed rows, a real memory spike and UI stall once real users accumulate real data.\n\nThe fix has two levers: `fetchBatchSize` makes Core Data fault results in from the store in chunks as they're actually accessed, instead of materializing everything upfront; `fetchLimit` caps the absolute number of rows for cases like 'show the 20 most recent.' For a `UITableView`/`UICollectionView` showing a large, growing dataset, `NSFetchedResultsController` (or a SwiftData `@Query` with pagination in newer OS versions) handles batching and change notifications together, which is almost always the right tool over a manual fetch-and-reload.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "core-data-swiftdata-persistence-s09-q1"
+      ]
+    },
+    {
+      "id": "core-data-swiftdata-persistence-s10",
+      "order": 10,
+      "sectionTitle": "The senior nuance: pick the persistence layer by query shape, not by hype",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mid-level answer picks Core Data or SwiftData because it's 'the Apple way.' A senior answer starts from the actual **access pattern**: does the data need relationships and an object graph the UI navigates interactively (a note-taking app's folders and notes), or is it closer to a flat cache of records fetched by key (an offline cache of API responses)? The former is squarely Core Data/SwiftData's strength; the latter is often simpler and faster as a plain key-value or SQLite store, avoiding the object-graph machinery's overhead entirely.\n\nThe general decision framework for local storage — when to reach for a database at all versus a flatter store — is covered as its own topic in Mobile Fundamentals; this topic is specifically the concrete Core Data/SwiftData mechanics once that choice is made. Getting the choice itself wrong (using Core Data as a dumping ground for what's really a flat API cache) is a more expensive mistake than any individual threading or migration bug, because it's a structural decision that's costly to unwind later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    }
+  ]
+}

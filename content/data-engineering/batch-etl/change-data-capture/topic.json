@@ -1,0 +1,174 @@
+{
+  "id": "change-data-capture",
+  "title": "Change Data Capture",
+  "area": "data-engineering",
+  "group": "batch-etl",
+  "order": 3,
+  "slug": "change-data-capture",
+  "summary": "Capturing every insert, update, and delete from a source database's transaction log instead of querying its tables — the fix for the delete-blindness and source-load problems query-based extraction can't avoid.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "change-data-capture-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Change Data Capture (CDC)** reads a source database's write-ahead log or binlog — the internal record it already keeps of every write, used for its own crash recovery and replication — instead of running queries against its tables.\n\nThat one design choice fixes both structural gaps from [Extraction Patterns](extraction-patterns): the log records deletes explicitly, and reading it never competes with the OLTP workload for query capacity, because it's not a query at all.\n\nThe cost is real infrastructure: CDC couples your pipeline to the source database's internals — replication slots, log retention — in ways query-based extraction never does. This topic covers the mechanism and exactly where that coupling bites.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "change-data-capture-s02",
+      "order": 2,
+      "sectionTitle": "Why query-based extraction can't reliably see everything",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two gaps in query-based extraction motivate CDC directly. First, **deletes**: a watermark query only sees rows currently present in the table — a deleted row leaves no trace to query for, so it silently disappears from the pipeline with no signal.\n\nSecond, **every intermediate update**: if a row is updated three times between extraction runs, a watermark query only ever sees its *final* state at query time — the two intermediate states are gone, even though something meaningful may have happened in between (a price that was temporarily wrong, a status that briefly flipped and flipped back).\n\nBoth gaps share a root cause: querying a table only ever shows you *current state*, never the sequence of events that produced it. CDC captures the event sequence directly, because that's literally what a write-ahead log is.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "change-data-capture-s02-q1"
+      ]
+    },
+    {
+      "id": "change-data-capture-s03",
+      "order": 3,
+      "sectionTitle": "Log-based CDC",
+      "subTitle": "Reading the WAL/binlog, not the tables",
+      "type": "diagram",
+      "markdown": "![Debezium connector tailing the Postgres write-ahead log into Kafka, never touching the tables directly](assets/cdc-wal-tailing.svg)\n\nThe key structural fact: the connector is a **consumer of the log**, exactly like a replica database would be. From the primary database's perspective, a CDC connector looks like another replica catching up on writes — not like a query competing for table locks or buffer cache.",
+      "assets": [
+        {
+          "alt": "Debezium connector tailing the Postgres write-ahead log into Kafka, never touching the tables directly",
+          "path": "assets/cdc-wal-tailing.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "change-data-capture-s04",
+      "order": 4,
+      "sectionTitle": "How connectors tail the log",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A CDC connector (Debezium is the dominant open-source example) attaches to the source database using a replication protocol the database already exposes for exactly this purpose — Postgres's logical replication slots, MySQL's binlog replication protocol, or equivalent mechanisms elsewhere.\n\nThe connector registers as a replication consumer, and the database streams every committed write to it as it happens, in commit order. The connector decodes the low-level log format into a structured event and publishes it — typically to a Kafka topic, one topic per source table.\n\nThis is fundamentally the same mechanism a physical or logical **replica** database uses to stay in sync with a primary — CDC just redirects that stream to a data pipeline instead of (or in addition to) another database.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "change-data-capture-s05",
+      "order": 5,
+      "sectionTitle": "The CDC event shape",
+      "subTitle": "Before/after image, operation type, transaction metadata",
+      "type": "concept",
+      "markdown": "A single CDC event typically carries:\n\n- **Operation type** — `INSERT`, `UPDATE`, or `DELETE`.\n- **Before image** — the row's values before the change (null for an insert).\n- **After image** — the row's values after the change (null for a delete).\n- **Transaction metadata** — commit timestamp, transaction ID, sometimes the log sequence number, which lets you reconstruct exact ordering and reason about what happened within a single transaction.\n\nHaving both before and after images is what makes CDC strictly more informative than a snapshot query: an `UPDATE` event tells you the price changed from $40 to $35, not just that the current price is $35. That before/after pair is exactly what powers audit trails and \"what changed and when\" debugging that timestamp-based extraction structurally cannot provide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "change-data-capture-s05-q1"
+      ]
+    },
+    {
+      "id": "change-data-capture-s06",
+      "order": 6,
+      "sectionTitle": "Log-based vs trigger-based CDC vs polling",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Log-based | Trigger-based | Polling (watermark) |\n|---|---|---|---|\n| **Load on source** | Minimal — reads log, not tables | Moderate — a trigger fires on every write | Recurring query cost every run |\n| **Sees deletes?** | Yes | Yes | No |\n| **Setup complexity** | High — replication access, connector infra | Moderate — a trigger + shadow table per source table | Low — it's SQL |\n| **Coupling to source internals** | High — log retention, replication slots | Moderate — triggers live inside the source DB | Low |\n\nTrigger-based CDC (a database trigger writes every change to a shadow \"changelog\" table) predates log-based CDC and still shows up in older systems — it captures the same before/after information, but adds write overhead to every transaction on the source table, since the trigger runs synchronously as part of the write. Log-based CDC avoids that overhead entirely by reading a log the database was writing anyway.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "change-data-capture-s06-q1"
+      ]
+    },
+    {
+      "id": "change-data-capture-s07",
+      "order": 7,
+      "sectionTitle": "Coupling to source-DB internals",
+      "subTitle": "Replication slots, log retention, failover",
+      "type": "concept",
+      "markdown": "CDC's efficiency comes at the price of real coupling to the source database's operational details, in ways a simple `SELECT` never creates:\n\n- **Replication slots** (Postgres) reserve a position in the WAL for the connector and, critically, **prevent the database from reclaiming that WAL space** until the connector has consumed it — an idle or crashed connector can cause the source's disk usage to grow unbounded.\n- **Log retention** — the source only keeps so much log history; if the connector falls behind that window, the entries it needed are gone, and recovery requires a fresh snapshot, not just resuming.\n- **Failover** — if the source database fails over to a replica, the connector needs the replication slot or equivalent position to exist on the new primary too, which many setups don't handle automatically.\n\nNone of this is visible when the pipeline is running normally — it only shows up during an incident, which is exactly why it needs deliberate monitoring rather than being discovered the hard way.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "change-data-capture-s07-q1"
+      ]
+    },
+    {
+      "id": "change-data-capture-s08",
+      "order": 8,
+      "sectionTitle": "A CDC connector falling behind until the source purges WAL",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The incident shape unique to log-based CDC: a connector goes down (a bug, a full disk, a deploy that forgot to restart it) and isn't restarted quickly enough. Meanwhile, the source database keeps a replication slot reserved for it, so the WAL keeps growing, unable to be reclaimed — and depending on configuration, that alone can eventually fill the source database's disk and take down the primary, not just the pipeline.\n\nIf the connector is down long enough that the source's log retention limit is exceeded (in setups without a hard-reserved slot, or once an operator manually drops a runaway slot to save the primary), the connector can no longer resume from where it left off — the log entries it needs are gone. Recovery means re-running the initial snapshot from scratch, not a quick restart.\n\nThe defense: monitor replication slot lag as a first-class metric with its own alert, treat a stuck CDC connector as an urgent incident even if nothing downstream looks broken yet, and know your source database's log retention window before you need it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "change-data-capture-s08-q1"
+      ]
+    },
+    {
+      "id": "change-data-capture-s09",
+      "order": 9,
+      "sectionTitle": "Snapshot + streaming",
+      "subTitle": "Bootstrapping initial state before tailing live changes",
+      "type": "concept",
+      "markdown": "A brand-new CDC connector has a cold-start problem: the log only has *changes*, not the table's full current state. Reading the log alone from the moment you attach would miss every row that existed before you started.\n\nThe standard solution is **snapshot + streaming**: the connector first takes a consistent snapshot of the table's current full state (typically a `SELECT *` at a point captured alongside a specific log position), loads that as the initial baseline, and then begins streaming log changes from that exact log position onward — so nothing is missed and nothing is double-counted at the seam.\n\nThis two-phase process is why standing up CDC on an existing large table isn't instantaneous — the initial snapshot on a very large table can itself take hours and puts a one-time load on the source comparable to a full extraction, even though ongoing operation afterward is nearly load-free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "change-data-capture-s10",
+      "order": 10,
+      "sectionTitle": "Where captured changes go next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A CDC connector's events don't stop at extraction — they typically flow into a durable, ordered log (most commonly a Kafka topic) that downstream consumers subscribe to independently. That decoupling is deliberate: the warehouse-loading pipeline, a search-index updater, and a cache-invalidation service can all consume the same change stream without any of them querying the source database, and without CDC needing to know who's downstream at all.\n\nThis is exactly the architecture covered in depth in Kafka Deep Dive, in the Stream Processing group — CDC is one of the most common *producers* feeding into that kind of durable event log, and the two topics are meant to be read together for the full picture of a CDC-fed streaming architecture.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "change-data-capture-s11",
+      "order": 11,
+      "sectionTitle": "When CDC is worth its cost",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "CDC is the right default when deletes genuinely matter, when near-real-time freshness has a real business justification (per [Batch vs Streaming](batch-vs-stream-tradeoffs)), or when the source table is large enough that repeated query-based extraction meaningfully burdens it.\n\nIt's usually not worth it for a small, slow-changing reference table, or a team without the operational maturity to monitor replication slot lag and handle a source failover correctly — the coupling to source internals is a real, ongoing cost, not a one-time setup tax.\n\nThe honest framing to carry forward: CDC doesn't make extraction free, it moves the cost from \"repeated query load on the source\" to \"operational coupling to the source's replication internals.\" Choose it because that trade genuinely favors you, not because it's the more sophisticated-sounding answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "change-data-capture-s11-q1"
+      ]
+    }
+  ]
+}

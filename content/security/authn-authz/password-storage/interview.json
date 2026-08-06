@@ -1,0 +1,37 @@
+{
+  "topicId": "password-storage",
+  "interviewQuestions": [
+    {
+      "id": "password-storage-iq1",
+      "question": "How should passwords be stored, and why is that different from just encrypting them?",
+      "answerMarkdown": "Passwords should be stored as a **salted, slow, one-way hash** — never plaintext, and never reversible encryption. The distinction that matters: the server should never be *able* to recover the original password, even with full access to everything it stores, because it never actually needs to — it only needs to verify that a submitted password matches, which a one-way hash gives you without ever storing anything the original can be derived from.\n\nEncryption fails this test because it's reversible by design: `encrypt(password, key)` can always be turned back into the plaintext given the key, and that key commonly lives in the same app config or environment that a database breach frequently reaches too. Once both leak together, encryption bought nothing.\n\nConcretely, that means: a unique random **salt** per user combined with the password before hashing, defeating precomputed rainbow tables; a **slow, purpose-built** algorithm like bcrypt, scrypt, or argon2 rather than a fast general-purpose hash like SHA-256, so that even a stolen hash resists brute-forcing at scale; and using a vetted library for all of this rather than a homegrown scheme, since cryptographic hardening depends on adversarial review a solo implementation never gets.\n\n**Testing:** whether you know the core property — non-reversibility — that distinguishes correct storage from encryption, not just that hashing is generally 'more secure.'",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "password-storage-iq2",
+      "question": "Why can't you just use SHA-256 with a salt for password hashing? Isn't SHA-256 cryptographically secure?",
+      "answerMarkdown": "SHA-256 is cryptographically secure for what it's designed for — fast, collision-resistant integrity checking, like verifying a downloaded file matches its published hash. That exact speed is the problem when you point it at passwords: a modern GPU computes billions of SHA-256 hashes per second, so an attacker who steals a salted-SHA-256 hash can still brute-force through common passwords and dictionary variations at enormous speed, because salting stops *bulk* precomputed attacks but does nothing to slow down an attack targeted at one specific hash.\n\nbcrypt, scrypt, and argon2 exist specifically to close that gap — they're deliberately slow, with a tunable cost factor, so each guess costs milliseconds instead of nanoseconds. That's negligible overhead for one legitimate login but turns brute-forcing billions of candidates into an infeasible amount of compute. scrypt and argon2 go further with memory-hardness, specifically to blunt GPUs and custom ASICs, which have abundant compute but not unlimited fast memory to parallelize against.\n\nSo the honest framing: SHA-256 isn't 'broken' as a hash function, it's simply the wrong tool for this specific adversarial model, where the attacker gets unlimited offline attempts against a value they already possess.\n\n**Testing:** whether you understand *why* speed is the relevant property here, rather than conflating 'cryptographically secure' with 'appropriate for every hashing use case.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Algorithm choice"
+    },
+    {
+      "id": "password-storage-iq3",
+      "question": "What's the difference between a salt and a pepper, and does adding a pepper actually matter if you're already using bcrypt?",
+      "answerMarkdown": "A **salt** is random, unique per user, and stored alongside the hash in the database — it doesn't need to be secret, and its job is purely to make identical passwords produce different-looking hashes, defeating precomputed rainbow tables. A **pepper** is an additional secret value, shared across all users, that's deliberately kept *out* of the database — typically in application config or a secrets manager.\n\nPeppering matters in a specific threat scenario: an attacker who steals the database (hashes and salts) but not the application's config or secrets store. Without the pepper, that attacker can't correctly compute candidate hashes to check against the stolen data, even knowing the exact algorithm and every user's salt. That's a realistic split in practice, since databases and app secrets are often on genuinely different systems with different access controls.\n\nBut I'd be precise about what it doesn't do: if both the database *and* the pepper leak together — which happens if an attacker compromises the application server itself, not just the database — you're back to relying on bcrypt's cost factor alone. So peppering is real defense-in-depth on top of a strong hash, never a substitute for one, and I wouldn't reach for it before making sure the core hashing choice (argon2/bcrypt/scrypt with an appropriate cost factor) is solid first.\n\n**Testing:** whether you can place peppering correctly as a layered, secondary control rather than either dismissing it or overselling its coverage.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Defense in depth"
+    },
+    {
+      "id": "password-storage-iq4",
+      "question": "Your team correctly hashes passwords with argon2, but a security review flags the login endpoint as still vulnerable. What did the review likely find, and how would you fix it?",
+      "answerMarkdown": "Almost certainly a missing runtime defense: strong hashing protects a *stolen database* from bulk offline cracking, but it does nothing about an attacker guessing passwords directly against the *live* login endpoint, which never touches the stored hashes at scale in the first place. If there's no rate limiting or account lockout, an attacker can run credential stuffing — trying breached username/password pairs from another site — or straightforward brute force against your endpoint at whatever speed your infrastructure allows, entirely independent of how well the passwords are hashed.\n\nThe fix is throttling the guessing itself: rate limit login attempts per account and per IP within a time window, and lock an account (temporarily, with a clear unlock path) after repeated failures. That turns an attack that could otherwise run at thousands of attempts per second into one throttled to a handful per minute — slow enough to be economically pointless long before it succeeds, regardless of how strong or weak any individual password happens to be.\n\nI'd frame this for the team as two genuinely separate problems that both need solving: hashing protects you *if* a breach happens; rate limiting protects you so an attacker doesn't need a breach to begin with. Fixing one doesn't substitute for the other.\n\n**Testing:** whether you can distinguish storage-time defenses from runtime defenses, and recognize that a strong hash alone leaves a real gap.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Runtime defenses"
+    }
+  ]
+}

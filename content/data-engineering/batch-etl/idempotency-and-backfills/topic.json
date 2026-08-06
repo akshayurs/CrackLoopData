@@ -1,0 +1,171 @@
+{
+  "id": "idempotency-and-backfills",
+  "title": "Idempotency & Backfills",
+  "area": "data-engineering",
+  "group": "batch-etl",
+  "order": 6,
+  "slug": "idempotency-and-backfills",
+  "summary": "Designing batch jobs so re-running them is always safe, including for historical date ranges — the property that makes retries, backfills, and orchestration itself trustworthy.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "idempotency-and-backfills-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**Idempotent** means running an operation twice produces the same result as running it once. For a batch job, that's the difference between a retry being a harmless no-op and a retry silently duplicating every row it already inserted.\n\nThis property is the quiet precondition under everything the last two topics covered: an orchestrator's automatic retries are only safe if the task is idempotent, and a backfill re-running 30 days of history is only correct if each day's job can run more than once without consequence.\n\nMost data engineers learn this the hard way — a job retries after a transient failure, and a table that should have one row per order now has two, discovered only when someone notices revenue doubled. This topic is how to design so that never happens.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-backfills-s02",
+      "order": 2,
+      "sectionTitle": "Idempotent vs non-idempotent operations",
+      "subTitle": "Append vs overwrite-partition vs upsert",
+      "type": "concept",
+      "markdown": "Three common write patterns, and only two of them are idempotent by construction:\n\n- **Append (plain INSERT)** — not idempotent. Running it twice inserts every row twice. This is the default behavior of the naivest possible pipeline, and it's exactly why \"just insert the new rows\" is a trap.\n- **Overwrite-partition** — idempotent. Delete (or truncate) the specific partition being written, then insert fresh — running it twice produces the identical end state both times, because the second run's delete removes exactly what the first run inserted before re-inserting the same thing.\n- **Upsert (MERGE)** — idempotent, if the unique key is chosen correctly. Running it twice updates the same rows in place rather than duplicating, because the merge matches on a key rather than blindly inserting.\n\nThe practical rule: plain append is almost never the right choice for anything that might retry or backfill — which, given orchestration's retry behavior, is nearly everything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "idempotency-and-backfills-s02-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s03",
+      "order": 3,
+      "sectionTitle": "A retried job double-inserting rows",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The canonical incident: a job appends today's orders with a plain `INSERT`, the job times out due to a transient network issue *after* the insert actually committed but *before* it reported success back to the orchestrator, the orchestrator sees a failure and retries, and the retry inserts the exact same rows again.\n\nNobody wrote a bug in the transform logic — the insert itself was completely correct both times. The problem is that \"correct once\" and \"safe to run twice\" are different properties, and plain append has the first without the second.\n\nThe failure is often silent for a while: totals look roughly right until someone reconciles against a source system and finds today's order count is double what it should be, at which point the fix requires manually identifying and deleting the duplicate rows — a cleanup that's much more expensive than designing the write to be idempotent from the start would have been.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "idempotency-and-backfills-s03-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s04",
+      "order": 4,
+      "sectionTitle": "Partition overwrite as the standard pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For most batch jobs organized around a time dimension — \"today's data,\" \"this hour's data\" — **partition overwrite** is the simplest reliable fix: the job's write target is a specific partition (say, `orders/dt=2026-08-06/`), and every run first clears that exact partition, then writes fresh into it.\n\nRun it once: the partition gets today's data. Run it again (a retry, or an intentional backfill): the partition gets cleared and rewritten with the same data, landing in the identical end state. There's no dependency on matching individual rows by key — the granularity of \"what gets replaced\" is the whole partition, which is both simpler to reason about and easier to verify (\"does this partition's row count look right\") than a row-level merge.\n\nThe trade-off: partition overwrite only works cleanly when your data naturally partitions along the dimension you're re-running (usually date), and when a run genuinely owns its entire partition rather than sharing it with other jobs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "idempotency-and-backfills-s04-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s05",
+      "order": 5,
+      "sectionTitle": "An upsert that makes a load safe",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "When data doesn't cleanly partition by run (say, a CDC-fed load where any historical row could theoretically be re-emitted), a keyed upsert is the idempotent pattern instead of partition overwrite:\n\n```sql\nMERGE INTO fct_orders AS target\nUSING staging_orders AS source\nON target.order_id = source.order_id\nWHEN MATCHED THEN\n  UPDATE SET\n    order_total = source.order_total,\n    updated_at = source.updated_at\nWHEN NOT MATCHED THEN\n  INSERT (order_id, order_total, updated_at)\n  VALUES (source.order_id, source.order_total, source.updated_at)\n```\n\nRunning this twice with the same `staging_orders` content is safe: the second run's `MATCHED` branch updates the same rows to the same values instead of inserting duplicates. The correctness of this entirely depends on `order_id` genuinely being unique per logical order — a poorly chosen or non-unique key silently breaks the idempotency guarantee while looking identical in normal operation.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-backfills-s06",
+      "order": 6,
+      "sectionTitle": "Backfilling a date-partitioned table after a logic change",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once a transform's logic changes — a bug fix, or a new business rule that should apply retroactively — the historical partitions built under the old logic are now \"wrong\" relative to the new definition, and a **backfill** re-runs the transform for each affected historical date, overwriting each partition with output from the corrected logic.\n\nThis is exactly where partition-overwrite idempotency pays for itself: backfilling 90 days means running the same job 90 times, once per logical date, and each run cleanly replaces its own partition with no risk of duplicating anything, precisely because overwrite doesn't care how many times a given partition has been written before.\n\nThe operational question worth asking before backfilling: does *every* downstream consumer of this table need the corrected history, or only some? A backfill changes historical numbers a dashboard or report may have already shown to someone — that's sometimes desired (correcting an error) and sometimes surprising (a number a stakeholder already reported changing underneath them), so it's worth flagging before running, not just after.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "idempotency-and-backfills-s06-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s07",
+      "order": 7,
+      "sectionTitle": "The reprocessing blast radius",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Backfilling one table rarely stays contained to that table. If `fct_orders` feeds three downstream marts, a dashboard, and an ML feature pipeline, backfilling `fct_orders` means all of those need to be re-run too if they should reflect the corrected data — and if they're not, you now have a table that's correct and three downstream artifacts that are stale relative to it, silently disagreeing with their own source.\n\nThis is the **reprocessing blast radius**: the full set of downstream artifacts a backfill logically obligates you to also refresh, which is often much larger than the one table someone initially set out to fix. In a well-built system with an orchestrator that understands lineage (Dagster's asset model makes this especially visible), triggering a backfill can cascade the re-run through dependents automatically. In a looser system, this list has to be traced by hand, and it's easy to miss a downstream consumer nobody remembered existed.\n\nBefore backfilling anything with real downstream fan-out, mapping this blast radius explicitly is worth the twenty minutes it takes — the alternative is discovering a missed downstream consumer weeks later, still showing pre-backfill numbers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "idempotency-and-backfills-s07-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s08",
+      "order": 8,
+      "sectionTitle": "Backfilling into a table live dashboards are querying",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A backfill that overwrites a partition isn't instantaneous — for a moment, the partition may be empty (post-delete, pre-insert) or contain a partial write, and if a live dashboard queries that exact table during that window, it can show a temporary, confusing dip or gap that looks like a data outage rather than routine maintenance.\n\nThe defense pattern: write the backfilled data to a **new location first** (a staging table, or a new partition version), verify it's complete and correct, and only then atomically swap it into the position live queries read from — many warehouses support an atomic partition-swap or table-rename specifically for this. The visible state transitions directly from \"old, correct data\" to \"new, correct data\" with no visible intermediate empty or partial state.\n\nThe cheaper mitigation when a full swap pattern isn't feasible: schedule backfills during a known low-traffic window and communicate to consumers beforehand — not a structural fix, but it reduces the odds of someone hitting the gap live.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "idempotency-and-backfills-s08-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s09",
+      "order": 9,
+      "sectionTitle": "Exactly-once vs effectively-once",
+      "subTitle": "It's really about idempotent writes, not magic delivery",
+      "type": "concept",
+      "markdown": "\"Exactly-once\" delivery is often talked about as if some messaging system magically guarantees a message is processed exactly one time, end to end, with no possibility of a duplicate ever reaching a consumer. In practice, true exactly-once *delivery* across a distributed system is extremely hard to guarantee, and most systems that advertise it actually provide **at-least-once delivery plus idempotent processing** — which produces the same observable outcome (each logical event's effect happens exactly once) through a different, more achievable mechanism.\n\nThis is sometimes called **effectively-once**: duplicates can arrive, but because the processing step is idempotent (a keyed upsert, a partition overwrite), a duplicate has zero additional effect. The distinction matters because it tells you where to focus effort — chasing a delivery mechanism that guarantees zero duplicates is often much harder and less robust than accepting duplicates can happen and making your write idempotent to them.\n\nThis reframes the entire batch idempotency story in the same terms: you're not preventing retries or duplicate runs from ever happening — you're making sure they don't matter when they do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "idempotency-and-backfills-s10",
+      "order": 10,
+      "sectionTitle": "Designing for \"any historical date,\" not just today",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The design habit that makes all of this hold together: write every batch job so it takes a **date parameter** and behaves correctly for any date — including ones far in the past — rather than special-casing \"today\" and assuming the job only ever runs on the current date.\n\nConcretely, that means the job's logic should never silently call an equivalent of `today()` internally to decide what data to process — it should receive its target date as an explicit parameter (the orchestrator's logical date, from the previous topic) and derive everything from that. A job hardwired to \"today\" cannot be backfilled correctly at all, because there's no way to tell it \"pretend today is March 3rd\" — it will always process whatever the real current date happens to be, no matter what historical date you intended.\n\nThis single habit — parameterize by date, never assume \"now\" — is what turns idempotency from a property of an individual write into a property of the entire job, one that holds for any date you might ever need to backfill.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "idempotency-and-backfills-s10-q1"
+      ]
+    },
+    {
+      "id": "idempotency-and-backfills-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Idempotency is the property [Workflow Orchestration](workflow-orchestration)'s retries and backfills depend on to be safe rather than dangerous, and partition-overwrite/upsert are the two concrete patterns that deliver it in practice — the same two ideas underlying dbt's incremental materialization strategy from earlier in this group.\n\nThe next and final topic in this group, Pipeline Reliability & Testing, builds on top of idempotency to catch a different class of problem entirely: a job can be perfectly idempotent and still load subtly wrong data every single run, which no amount of retry-safety detects. Idempotency answers \"is it safe to re-run this,\" not \"is the output correct\" — that's the next topic's job.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

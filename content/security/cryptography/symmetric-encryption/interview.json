@@ -1,0 +1,37 @@
+{
+  "topicId": "symmetric-encryption",
+  "interviewQuestions": [
+    {
+      "id": "symmetric-encryption-iq1",
+      "question": "Why does the mode of operation matter as much as the choice of cipher, like AES?",
+      "answerMarkdown": "Because AES only defines how to scramble one 16-byte block — it says nothing about what to do with the second block, or the ten-thousandth, and that's the mode's job. Getting the mode wrong produces a broken scheme even with a flawless AES implementation underneath.\n\nThe clearest demonstration is the \"ECB penguin\": encrypt the same image with the same AES key under ECB mode and you can still see the penguin's outline, because identical plaintext blocks always produce identical ciphertext blocks under ECB — the structure leaks straight through. Encrypt it under CBC and it's indistinguishable from random noise. Same cipher, same key, completely different real-world outcome, purely from the mode.\n\nThis is exactly why \"we use AES\" is an incomplete answer in a security review — I'd always ask which mode, because a library that defaults to ECB without the developer consciously choosing it is a real, recurring way teams end up shipping structurally broken encryption. My default recommendation today is AES-256-GCM specifically because it avoids ECB's leak, avoids CBC's padding-oracle history, and bundles in the integrity check neither of the others provides.\n\n**Testing:** whether you understand that cipher and mode are two separate decisions, and that the mode is where most practical failures live.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "symmetric-encryption-iq2",
+      "question": "Explain a padding-oracle attack against CBC mode, and how you'd prevent it.",
+      "answerMarkdown": "It's an attack that exploits any observable difference — an error message, a timing gap, a status code — between \"the decrypted padding was valid\" and \"it wasn't,\" to decrypt an entire CBC ciphertext without ever learning the key.\n\nThe mechanism: CBC needs padding to fill the last block, and standard padding schemes are checkable — a receiver can tell if the decrypted bytes form valid padding. If a system leaks that check's result, even indirectly through response timing, an attacker can manipulate one byte of ciphertext at a time, observe whether padding still validates, and use that single bit of feedback per query — repeated across many queries — to progressively decrypt the whole message. This isn't theoretical; it's caused real vulnerabilities in systems like early SSL/TLS implementations and some cookie-encryption schemes.\n\nThe prevention I'd actually apply: don't use unauthenticated CBC at all for anything new — switch to an authenticated mode like AES-GCM, where the integrity check fails as a single, undifferentiated \"invalid\" outcome before any padding logic even runs, closing off the oracle entirely. If CBC is already in place and can't be swapped immediately, the mitigation is making every failure path — bad padding, bad MAC, anything — return the exact same generic error with the same timing characteristics, so there's no distinguishable signal left for an attacker to exploit.\n\n**Testing:** whether you can explain a specific, historically real attack mechanism and connect it to why authenticated encryption modes exist.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Attacks"
+    },
+    {
+      "id": "symmetric-encryption-iq3",
+      "question": "What's the danger of reusing a nonce with the same key in AES-GCM, and how would you catch this in a code review?",
+      "answerMarkdown": "It's a catastrophic failure, not a minor one — GCM is built on CTR mode, which turns AES into a keystream generator, and if the same key-plus-nonce pair produces the same keystream for two different messages, an attacker who XORs the two resulting ciphertexts together cancels the keystream out entirely, left with the XOR of the two plaintexts. That's often enough to recover both messages with straightforward cryptanalysis, especially against structured data like English text or JSON. On top of that, nonce reuse under GCM specifically also breaks the authentication guarantee, potentially letting an attacker forge valid tags.\n\nIn a code review, I'd look for a few specific red flags: a nonce hardcoded to zero or a fixed value (I've seen this shipped as a well-intentioned \"simplification\"), a nonce derived from a counter that resets on process restart without a persisted state, or a nonce generated from a low-entropy or predictable source rather than a cryptographically secure random generator. I'd also check whether the same key is reused indefinitely across a huge volume of messages — even with correct random nonce generation, the birthday-bound collision probability becomes non-negligible past roughly 2^32 messages under one key with a 96-bit random nonce, which is why key rotation matters even when nonce generation itself is correct.\n\nThe fix is mechanical: generate nonces from a secure random source per message, or use a counter that's guaranteed globally unique and persists correctly across restarts — and never let either default to a fixed or predictable value.\n\n**Testing:** whether you can identify the specific, concrete code patterns that cause this failure, not just recite that nonce reuse is bad.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "symmetric-encryption-iq4",
+      "question": "You're designing a new feature that needs to encrypt user data at rest. Walk me through the choices you'd make.",
+      "answerMarkdown": "I'd default to **AES-256-GCM** unless there's a specific reason not to, and I'd be explicit about why rather than just naming it, because that's what an interviewer is actually checking for.\n\nAES because it's the open, thoroughly reviewed standard — no reason to consider anything custom or unreviewed. 256-bit key mainly for compliance and long-term margin, since AES-128 is already fully secure against brute force; the choice here is more about organizational policy than a real cryptographic gap. GCM specifically because it avoids ECB's structural leak, sidesteps CBC's padding-oracle history, and bundles integrity verification into the same pass — one decision that resolves several historical failure modes at once, rather than combining a cipher mode with a bolted-on HMAC and risking getting that composition wrong.\n\nThe part I'd spend the most actual engineering care on is nonce handling, since that's where GCM's one real sharp edge lives: generate a fresh, cryptographically random 96-bit nonce per encryption operation, store it alongside the ciphertext (it doesn't need to be secret), and never let it default to zero or repeat under the same key. I'd also think about key management up front — where the encryption key itself lives, how it's rotated, whether it's in an HSM or KMS — since that's covered in depth in Key Management but is inseparable from actually deploying this safely.\n\n**Testing:** whether you can make a complete, justified design decision end to end, not just name the right algorithm.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design"
+    }
+  ]
+}

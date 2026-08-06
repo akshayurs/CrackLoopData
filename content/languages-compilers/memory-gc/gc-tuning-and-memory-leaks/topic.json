@@ -1,0 +1,172 @@
+{
+  "id": "gc-tuning-and-memory-leaks",
+  "title": "GC Tuning & Memory Leaks in Managed Languages",
+  "area": "languages-compilers",
+  "group": "memory-gc",
+  "order": 7,
+  "slug": "gc-tuning-and-memory-leaks",
+  "summary": "Living with an automatic scheme, in production: how you leak with a garbage collector watching, how to read a heap dump, and why tuning flags are usually the wrong first move.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "gc-tuning-and-memory-leaks-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"We have a garbage collector, so we can't leak\" is the single most common false belief among engineers new to managed languages, and it causes real production incidents. A tracing collector's guarantee is narrow: it reclaims anything **unreachable**. It has nothing to say about objects that are technically still reachable but that the program will never actually use again — an unbounded cache, a forgotten listener, a static collection that only grows.\n\nThat's a **logical leak**, and it's this topic's main subject: how it happens despite a working collector, how to find it with real tooling rather than guessing, and — separately — how to reason about a collector's tuning levers once you actually know what's wrong.\n\nThis closes the group. Every scheme before this — manual, refcounted, traced, owned — eventually meets production. This is what that looks like.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s02",
+      "order": 2,
+      "sectionTitle": "Reachable but forgotten",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A logical leak needs one thing: an unbroken chain of references from a **root** (a static field, a long-lived singleton, a thread that never exits) all the way down to data the program no longer has any real use for. The collector traces that chain, correctly concludes the data is live, and leaves it alone — it has no concept of \"used\" versus \"merely reachable,\" only reachable versus not.\n\nThe fix is never a collector-tuning flag, because the collector isn't malfunctioning. The fix is finding and breaking the reference chain — removing the entry from the cache, unregistering the listener, letting the static field go — which turns the object genuinely unreachable and lets the exact same collector that \"failed\" to catch it reclaim it on the very next pass.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "gc-tuning-and-memory-leaks-s02-q1"
+      ]
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s03",
+      "order": 3,
+      "sectionTitle": "The usual culprits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- **Unbounded caches**: a map that only grows, with no eviction policy and no size cap — every entry is a legitimate root-reachable object, forever, unless something evicts it.\n- **Static collections**: a `static` list or map accumulates across the entire process lifetime by construction; anything ever added to it stays reachable until the process exits, whether or not anyone still needs it.\n- **Unclosed listeners/subscriptions**: registering a callback with a long-lived event bus, then letting the registering object go out of scope without unsubscribing — the bus still holds a reference, so the \"discarded\" object never actually becomes garbage.\n\nAll three share a shape: something long-lived holds a reference to something meant to be short-lived, and nothing ever breaks that reference on the short-lived object's behalf.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s04",
+      "order": 4,
+      "sectionTitle": "A cache holding on past its usefulness",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A static cache with many reachable objects fanning out, only a few of which are actually needed right now](assets/reachable-vs-used.svg)\n\nEvery box in that field is correctly marked live by the collector. The gap between the whole field and the small \"actually needed\" set is the leak — invisible to the collector, visible only to something that understands the application's real usage pattern.",
+      "assets": [
+        {
+          "alt": "A static cache with many reachable objects fanning out, only a few of which are actually needed right now",
+          "path": "assets/reachable-vs-used.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s05",
+      "order": 5,
+      "sectionTitle": "Subscribe without unsubscribe",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\nclass Widget {\n    Widget(EventBus bus) {\n        bus.subscribe(this::onEvent);   // bus now holds a reference to this Widget\n    }\n    void onEvent(Event e) { /* ... */ }\n}\n\n// Widget created, used briefly, then dropped by the caller —\n// but bus.subscribe never got a matching unsubscribe.\n// The bus's internal list still holds the callback, and the\n// callback holds `this` — so the Widget stays reachable forever.\n```\n\nThe fix is exactly what the pattern implies: whatever registers a callback needs to unregister it on teardown, typically in a `close()`/`dispose()` method the owner is responsible for calling — `bus.unsubscribe(this::onEvent)` at the point the Widget is meant to stop being used. Miss that one call and the object outlives every reasonable expectation of its lifetime, invisibly, because the reference is completely legitimate from the collector's point of view.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "gc-tuning-and-memory-leaks-s05-q1"
+      ]
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s06",
+      "order": 6,
+      "sectionTitle": "Heap dumps: dominator trees and retained size",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A heap dump is a snapshot of every live object and every reference between them at one instant. The tool for finding *why* something is still alive is the **dominator tree**: object A dominates object B if every path from any root to B passes through A — meaning if A were freed, B would become unreachable too.\n\nTwo numbers matter per object: **shallow size** (just that object's own fields) and **retained size** (shallow size plus everything it dominates — everything that would be freed if this object were freed). A single cache object might have a tiny shallow size but a retained size of gigabytes, because it dominates every entry inside it. Sorting a heap dump by retained size, not shallow size, is how you find the actual leak root instead of getting distracted by a large individual object that isn't the real problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "gc-tuning-and-memory-leaks-s06-q1"
+      ]
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s07",
+      "order": 7,
+      "sectionTitle": "Debugging \"it OOMs after a few days\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the question this topic exists to answer directly. First, confirm the shape: memory should climb steadily and never come back down after a major GC — if usage drops back after a full collection, that's not a leak, it's just working-set growth or a cache that legitimately needed to be that size.\n\nIf it genuinely never recovers: take two heap dumps hours or days apart under similar load, and diff retained size by class. A real leak shows one or a handful of classes whose count and retained bytes climb monotonically between the two snapshots — that's your starting point, not a guess.\n\nFrom the growing class, walk its dominator tree back to a root. That retaining path is almost always one of the usual culprits from earlier in this topic: an unbounded cache keyed by something unbounded (user IDs, request IDs, timestamps), or a collection something forgot to remove itself from. Fix the reference chain — bound the cache, add the missing unsubscribe — and confirm with a third dump that the growth actually stopped, rather than assuming the fix worked.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "gc-tuning-and-memory-leaks-s07-q1"
+      ]
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s08",
+      "order": 8,
+      "sectionTitle": "Tuning levers, once you know what's actually wrong",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Once diagnosis (not tuning) has confirmed there's no logical leak — the live set is legitimately large, or legitimately churns a lot — three levers are worth knowing:\n\n- **Heap sizing**: a heap sized too small forces more frequent major collections; too large and each major collection, when it does happen, takes longer because there's more to trace. There's a real sweet spot, workload-dependent, not a bigger-is-always-better relationship.\n- **Generation sizing**: growing the young generation gives short-lived objects more time to die before promotion, directly fighting the [premature-promotion](generational-and-concurrent-gc) problem from the previous topic.\n- **Collector choice**: throughput-optimized collectors (older JVM Parallel GC) versus latency-optimized ones (G1, ZGC, Shenandoah) trade total CPU efficiency for pause-time ceiling — the right choice depends entirely on whether the workload is latency-sensitive or throughput-sensitive.\n\nAll three levers assume the live-data question is already answered correctly; none of them fix a logical leak.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s09",
+      "order": 9,
+      "sectionTitle": "Chasing flags before finding the retaining root",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The single most common wasted-effort pattern on a memory incident: reaching straight for tuning flags — bigger heap, different collector, adjusted generation ratios — before establishing whether there's actually a logical leak underneath.\n\nA bigger heap on top of a real leak doesn't fix anything; it just buys more runway before the same OOM happens, often days later, at a worse time, with a bigger blast radius. A different collector changes the pause profile, not the fact that a growing, unbounded set of objects is being retained. Tuning is a legitimate tool for a legitimately large or churny live set — it is not a substitute for the heap-dump diagnosis in the earlier slides, and applying it first tends to mask the actual problem long enough for it to resurface somewhere more expensive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "gc-tuning-and-memory-leaks-s09-q1"
+      ]
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s10",
+      "order": 10,
+      "sectionTitle": "Prevention beats diagnosis",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every logical leak in this topic traces back to the same missing discipline: something that grows needs an explicit bound, and every subscribe needs a matching unsubscribe on a known lifecycle event. A few habits catch most of this before it reaches production: default every cache to a bounded, evicting implementation (LRU with a size or TTL cap) rather than a plain map; pair every `subscribe`/`register`/`addListener` call with a `close()`/`dispose()` that undoes it, and wire that into whatever lifecycle hook the framework already gives you (a `try`-with-resources equivalent, a component's teardown method); and periodically profile long-running services under realistic load, not just at launch, since a leak that takes days to matter won't show up in a five-minute smoke test.\n\nNone of this requires exotic tooling — it's the same discipline manual memory management asked for, just applied to references instead of `free` calls.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "gc-tuning-and-memory-leaks-s11",
+      "order": 11,
+      "sectionTitle": "The group, in one sentence",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every topic in this group has been the same question asked with a different constraint: [stack-vs-heap-allocation](stack-vs-heap-allocation) set up why the heap needs an answer at all; [manual-memory-management](manual-memory-management) tried a human; [reference-counting](reference-counting) and [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact) tried automatic runtime schemes with different blind spots and costs; [ownership-and-borrowing](ownership-and-borrowing) tried proving it at compile time instead.\n\nThis topic is the reminder that picking a scheme doesn't end the story — it changes *which* mistakes are still possible. A collector removes use-after-free and double-free from the table entirely, and replaces them with a new failure mode of its own: forgetting that reachable isn't the same as needed. Knowing which mistakes are still live under your chosen scheme is most of what \"understanding memory management\" actually means in an interview or in production.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "mapreduce-hadoop",
+  "interviewQuestions": [
+    {
+      "id": "mapreduce-hadoop-iq1",
+      "question": "Explain the MapReduce model and why it made distributed processing tractable for ordinary programmers.",
+      "answerMarkdown": "MapReduce is exactly two functions run over a cluster: **map**, which processes each chunk of input independently and emits key-value pairs, and **reduce**, which collects all values for a given key — after a **shuffle** step redistributes them across machines — and produces the final output for that key.\n\nThe reason it made distributed processing tractable is the restriction itself: because map and reduce are the only allowed operations, the framework can own everything around them — splitting input across machines, scheduling tasks, retrying a failed task on a different machine, and physically shuffling data over the network — without the programmer writing any of that logic. A programmer writes two straightforward functions, as if working on a single machine, and the framework handles the actual distributed-systems complexity.\n\nWord count is the canonical example: map emits `(word, 1)` for every word seen, and reduce sums the 1s per word. It looks trivial, but the same shape scales from a laptop to a thousand-node cluster with the developer's code unchanged.\n\n**Testing:** whether you understand MapReduce as a constrained programming model whose value comes precisely from that constraint, not a general-purpose distributed API.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "mapreduce-hadoop-iq2",
+      "question": "Why was MapReduce eventually displaced by engines like Spark, and does that mean it was a bad design?",
+      "answerMarkdown": "It wasn't a bad design for what it was built for — a single-pass batch job over data that dwarfs any single machine, on hardware that fails constantly. The problem is its cost model: every stage, map output, shuffle, and reduce output, round-trips through disk. For one pass over the data, that's a bounded, acceptable cost.\n\nThe displacement happened because most real workloads aren't one pass. Iterative machine learning, graph algorithms, and multi-step ETL pipelines revisit the same data repeatedly, and MapReduce's model makes each revisit pay the full disk round-trip again, because each iteration is a separate job. Spark's answer was to keep intermediate data in memory across stages and iterations, which turned a repeated disk cost into a one-time cost — early benchmarks showed 10-100x improvements specifically on the iterative workloads where this mattered most.\n\nSo I wouldn't call MapReduce obsolete so much as narrowly scoped in retrospect — for a genuinely single-pass job too large for memory anyway, its model still holds up fine; it's the iterative and interactive majority of workloads that outgrew it.\n\n**Testing:** whether you can explain a technology's replacement in terms of a specific cost-model mismatch, not just \"it got old.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "mapreduce-hadoop-iq3",
+      "question": "What is data locality, and why did it matter so much for Hadoop's design?",
+      "answerMarkdown": "Data locality is the scheduling principle of moving compute to where the data already sits, rather than moving data to wherever compute happens to be free. In Hadoop's design, the scheduler places each map task on, or physically near, the specific machine that holds the relevant HDFS block, instead of shipping that block across the network to some other free machine.\n\nIt mattered because of the scale Hadoop was built for: moving terabytes of data across a cluster network is expensive and slow, while shipping a small compiled task to sit next to data that's already local is nearly free by comparison. This is also why Hadoop clusters typically colocate storage (HDFS) and compute (MapReduce) on the same physical machines — locality only pays off if storage and compute live close together in the first place.\n\nThe idea outlived MapReduce itself. Spark's scheduler still tries to honor data locality where possible, even though modern cloud architectures increasingly separate storage (object stores like S3) from compute, which weakens the locality advantage somewhat — network bandwidth in cloud data centers has also improved enough that the calculus isn't quite as stark as it was for on-premises Hadoop clusters.\n\n**Testing:** whether you understand data locality as a network-cost optimization tied to a specific hardware era, and can reason about where it still applies today.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "mapreduce-hadoop-iq4",
+      "question": "You're asked to justify replatforming an old Hadoop MapReduce pipeline onto Spark. How do you make the business case, and what's the risk of overselling it?",
+      "answerMarkdown": "I'd start by profiling the actual pipeline, not by assuming the general MapReduce-vs-Spark story applies wholesale. If the pipeline is a single-pass batch job over data larger than cluster memory — say, a nightly full-log reprocessing job — the in-memory advantage barely applies, because there's no repeated pass to speed up by caching. The business case there is much weaker: migration cost and risk, for a modest or even negligible runtime win.\n\nWhere the case is strong is a pipeline with multiple chained MapReduce jobs, or anything iterative — each of those chained jobs pays a full disk round-trip that Spark's DAG execution collapses into a single in-memory pipeline. I'd measure the actual chain length and iteration count, estimate the disk I/O being paid today, and quantify the expected reduction, rather than citing the generic 10-100x figure, which is specific to iterative ML workloads and can badly oversell the win on a job that doesn't have that shape.\n\nThe risk of overselling is real: promising a 50x speedup and delivering 1.5x on a job that was already single-pass and disk-bound by nature burns credibility for the next migration proposal. I'd rather under-promise on a mixed-shape pipeline and show the actual measured number after a pilot run.\n\n**Testing:** whether you apply the MapReduce-to-Spark trade-off with actual measurement rather than reciting the general narrative as if it applies uniformly.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

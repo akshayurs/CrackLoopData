@@ -1,0 +1,37 @@
+{
+  "topicId": "warehouse-fundamentals",
+  "interviewQuestions": [
+    {
+      "id": "warehouse-fundamentals-iq1",
+      "question": "What makes a data warehouse architecturally different from an application's OLTP database?",
+      "answerMarkdown": "They're optimized for opposite access patterns. An OLTP database is built to find and update one row fast — a user's profile, a single order — so it's row-oriented and indexed for point lookups. A warehouse is built to scan and aggregate millions of rows fast — total revenue last quarter — so it's columnar and parallelized across many nodes for large scans.\n\nTwo mechanisms carry most of that difference: **MPP** splits a large scan across many worker nodes that each process their own slice, then merges partial results — a technique that only pays off when a query touches a large fraction of the data, which describes analytics but not point lookups. **Columnar storage** lays data out column-by-column so a query touching a handful of columns reads only those columns' bytes, instead of every column of every row.\n\nModern cloud warehouses add a third distinguishing piece: **separated storage and compute**, so clusters scale independently of the data volume, and pricing tracks actual compute usage rather than a fixed provisioned size.\n\nThe interview-ready one-liner: OLTP optimizes for row-level latency at low volume per query; a warehouse optimizes for throughput on large scans, and everything about its architecture follows from that.\n\n**Testing:** whether you can name the underlying mechanisms (MPP, columnar, storage/compute separation), not just say 'warehouses are for analytics.'",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "warehouse-fundamentals-iq2",
+      "question": "A product team wants to show 'your order history' directly from the warehouse in the customer-facing app, since the data is already there. How would you respond?",
+      "answerMarkdown": "I'd push back on using the warehouse for this specific access pattern, even though the data being 'already there' makes it tempting. Order history for one customer is a point lookup — one customer, one small set of rows — and that's exactly the query shape MPP and columnar storage don't help with; the coordination overhead of fanning a query out across a cluster can make a trivial single-row lookup slower than it would be on a purpose-built OLTP database with an index, not faster.\n\nThere's also a cost dimension: many warehouses price by bytes scanned or compute time, so serving a customer-facing feature with per-request warehouse queries means paying warehouse-scale pricing for a workload shape it wasn't priced for, potentially at a much higher per-lookup cost than a database built for this.\n\nWhat I'd propose instead: keep the warehouse as the analytical source of truth, but serve the customer-facing lookup from the application's OLTP database (which likely already has this data) or, if the warehouse genuinely is the only place with the fully joined/enriched view, sync a serving copy to a fast key-value store or cache purpose-built for point lookups. The warehouse stays the aggregation engine; something else handles the single-row read path.\n\n**Testing:** whether you recognize a query-shape mismatch and propose an architecture fix rather than trying to tune the warehouse into doing something it isn't built for.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design judgment"
+    },
+    {
+      "id": "warehouse-fundamentals-iq3",
+      "question": "Why does storage-compute separation matter for a warehouse used by multiple teams with very different workloads?",
+      "answerMarkdown": "Because it lets each team's compute needs scale independently without fighting over the same fixed resources. In a bundled architecture, one cluster serves everyone — a data science team's heavy nightly training-data extraction and a BI team's frequent small dashboard queries compete for the same CPU and memory, and a spike in one degrades the other.\n\nWith storage and compute separated, data sits once in shared object storage, and each team (or workload) can spin up its own independently-sized compute cluster against that same data — the dashboard workload gets a small, always-responsive cluster; the nightly batch job gets a large cluster that spins up, does its work, and spins back down, without either affecting the other's performance or budget.\n\nThe concrete cost benefit follows from the same decoupling: a workload that only runs for two hours a day only pays for compute during those two hours, rather than for a fixed cluster provisioned to handle it around the clock. I'd frame this to a stakeholder concerned about cost as: separation turns 'one shared, contended, always-on resource' into 'several independently-scaled, pay-for-what-you-use resources against the same data.'\n\n**Testing:** whether you can connect the architectural pattern to a concrete multi-tenant operational and cost benefit, not just define the term.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "warehouse-fundamentals-iq4",
+      "question": "A finance team and a marketing team each report a different 'monthly revenue' number, both sourced from data that's technically in the warehouse. What's the likely root cause, and how would you fix it?",
+      "answerMarkdown": "This is almost always a governance failure, not a technical one — the warehouse holds the data, but it isn't actually functioning as the single source of truth in practice. The most common cause: each team has its own derived table, view, or export with slightly different logic — different date-boundary handling, different definitions of what counts as 'revenue' (gross vs. net, included vs. excluded refunds), or a stale materialized view that hasn't refreshed as recently as the other team's.\n\nMy first move would be to trace both numbers back to their actual query or transformation logic rather than assuming the raw data itself is wrong, since the warehouse's raw ingested data is usually consistent — the divergence almost always shows up in the business logic layered on top, in dbt models, views, or ad hoc queries that each team built independently over time.\n\nThe structural fix is establishing a single, well-documented, tested definition of 'monthly revenue' as a shared table or model that both teams query directly, rather than each maintaining their own version of the same metric. That's a process and ownership change as much as a technical one — exactly why a warehouse's value as 'the single source of truth' depends on organizational discipline, not just having the data centralized.\n\n**Testing:** whether you can diagnose a metrics-inconsistency problem as a governance/definition issue rather than assuming it's a data quality or infrastructure bug.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

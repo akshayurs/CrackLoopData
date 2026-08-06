@@ -1,0 +1,172 @@
+{
+  "id": "async-await-and-cooperative-concurrency",
+  "title": "Async/Await & Cooperative Concurrency",
+  "area": "languages-compilers",
+  "group": "concurrency-models",
+  "order": 2,
+  "slug": "async-await-and-cooperative-concurrency",
+  "summary": "Single-threaded concurrency via an event loop — how async/await sugars futures and promises into linear-looking code, why it's brilliant for I/O and useless for CPU work, and how one blocking call can freeze an entire server.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "async-await-and-cooperative-concurrency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "`threads-and-the-shared-memory-model` ended on a question: if shared mutable state is the problem, what do you do instead? Async/await's answer is unusual — it doesn't remove sharing, it removes the *threads*.\n\n**Async/await** gives you one thread, handling many in-flight operations at once, switching between them cooperatively at specific points (`await`) instead of the OS preempting threads whenever it likes. No two pieces of *your* code ever run at literally the same instant, which sidesteps an entire category of races by construction — not by discipline, and not by removing shared state, but by removing the possibility of two threads touching it simultaneously.\n\nThis is the dominant concurrency model for I/O-heavy servers — Node.js, modern Python (`asyncio`), C#'s `async`/`await`, and Rust's `async` all use variations of this idea.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s02",
+      "order": 2,
+      "sectionTitle": "The core idea",
+      "subTitle": "One thread, cooperative switching",
+      "type": "concept",
+      "markdown": "The mental model: one thread runs a queue of tasks, and each task runs uninterrupted *until it hits an await point* — a place where it's waiting on something external (a network response, a timer, a file read). At that point, the task voluntarily yields control back to the **event loop**, which picks up whichever other task is ready to make progress next.\n\nThis is **cooperative** scheduling: a task decides when to yield (at an `await`), unlike OS thread preemption, which can interrupt a thread at any instruction. The upside is real: no two tasks ever execute simultaneously, so there's no need for locks protecting your own in-process state from concurrent access — only one task is ever \"live\" at a time. The downside is exactly as direct: a task that never yields (a long CPU-bound loop with no `await`) blocks everything else on that thread until it finishes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "async-await-and-cooperative-concurrency-s02-q1"
+      ]
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s03",
+      "order": 3,
+      "sectionTitle": "The event loop dispatching work",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Event loop dispatching completed I/O callbacks one at a time to pending tasks](assets/event-loop-hub.svg)",
+      "assets": [
+        {
+          "alt": "Event loop dispatching completed I/O callbacks one at a time to pending tasks",
+          "path": "assets/event-loop-hub.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s04",
+      "order": 4,
+      "sectionTitle": "Futures and promises",
+      "subTitle": "A value that isn't ready yet",
+      "type": "concept",
+      "markdown": "A **future** (or **promise** in JavaScript) is a value representing \"the result of an operation that hasn't completed yet.\" It starts in a pending state, and eventually resolves to either a success value or an error — code can attach callbacks to run once that resolution happens, without blocking the current thread waiting for it.\n\nThis is the mechanism underneath async/await, not a separate concept: an `await someAsyncCall()` is, underneath, attaching \"resume this function from here\" as a callback on the future/promise `someAsyncCall()` returns, then yielding control back to the event loop until that callback fires. Async/await is a *syntax* layer over futures/promises — the runtime capability is the same either way.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s05",
+      "order": 5,
+      "sectionTitle": "What async/await desugars into",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`async`/`await` is genuinely just sugar — the compiler transforms your linear-looking code into a **state machine** (or, in some implementations, a chain of continuations) behind the scenes. Each `await` becomes a point where the generated state machine can suspend, remembering exactly where it was (local variables and all), and resume later when the awaited value is ready.\n\nThis is why async functions can be written to *look* like ordinary sequential code — `const result = await fetchData(); process(result);` — while the compiler is actually generating the callback-registration and control-flow logic a hand-written promise chain would need spelled out explicitly. Knowing this desugaring is what lets you correctly reason about where execution actually pauses, rather than just where the code visually appears to \"wait.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "async-await-and-cooperative-concurrency-s05-q1"
+      ]
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s06",
+      "order": 6,
+      "sectionTitle": "The same logic, two syntaxes",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Same behavior, two syntaxes — this is exactly what async/await desugars into:\n\n```javascript\n// Promise chain\nfunction getUserPosts(userId) {\n  return fetchUser(userId)\n    .then(user => fetchPosts(user.id))\n    .then(posts => posts.filter(p => p.published));\n}\n\n// async/await — same behavior, linear-looking code\nasync function getUserPosts(userId) {\n  const user = await fetchUser(userId);\n  const posts = await fetchPosts(user.id);\n  return posts.filter(p => p.published);\n}\n```\n\nBoth versions yield control back to the event loop at each asynchronous step, and neither blocks the thread while `fetchUser`/`fetchPosts` are pending. The async/await version is easier to read — especially once error handling and branching enter the picture, where promise chains get visually nested and hard to follow, while `try`/`catch` around `await` reads like ordinary synchronous error handling.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s07",
+      "order": 7,
+      "sectionTitle": "Why async shines for I/O and does nothing for CPU",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Async/await's entire performance win comes from overlapping **wait time**, not computation. While one task is awaiting a network response — time the CPU would otherwise spend idle — the event loop runs a different task's code. Ten thousand tasks each waiting 100ms on a database call can all be \"in flight\" on one thread, because none of them are using the CPU while they wait.\n\nA CPU-bound task breaks this completely: it never hits an `await`, so it never yields, and it occupies the single event-loop thread computing for its entire duration — nothing else on that thread makes progress meanwhile. This connects directly to `threads-and-the-shared-memory-model`'s concurrency-vs-parallelism distinction: async/await buys concurrency (many tasks in flight) with zero parallelism (only one ever executing), which is exactly the right trade for I/O-bound work and exactly the wrong tool for CPU-bound work.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "async-await-and-cooperative-concurrency-s07-q1"
+      ]
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s08",
+      "order": 8,
+      "sectionTitle": "One blocking call stalls everything",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The single most common async/await production incident: a synchronous, blocking call slipped into async code — a synchronous file read, a CPU-heavy JSON parse of a huge payload, a call into a library that doesn't itself support async and blocks the calling thread.\n\nBecause the whole model relies on the current task voluntarily yielding at an `await`, a call that blocks *without* yielding doesn't just slow down its own task — it freezes the entire event loop, and every other in-flight request on that thread, for the duration of the block. This is precisely why \"why does one slow synchronous call in this async handler freeze all other requests?\" is such a common debugging question: the answer is always the same shape — something in that handler isn't actually yielding control, whether or not it *looks* asynchronous on the surface.\n\nThe fix is finding and either replacing the blocking call with a genuinely async equivalent, or (for unavoidable CPU-heavy work) offloading it to a worker thread/process pool so it doesn't occupy the event-loop thread at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "async-await-and-cooperative-concurrency-s08-q1"
+      ]
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s09",
+      "order": 9,
+      "sectionTitle": "Node.js vs Python's asyncio",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Node.js | Python `asyncio` |\n|---|---|---|\n| Default execution model | Single-threaded event loop by default | Single-threaded event loop by default |\n| CPU-bound escape hatch | Worker threads (`worker_threads`), or child processes | `multiprocessing`, or `run_in_executor` for a thread/process pool |\n| Why single-threaded at all | Design choice, simplicity — no GIL-style constraint forcing it | CPython's GIL (`dynamic-language-runtimes-v8-and-cpython`) makes true multi-threaded CPU parallelism unavailable anyway, so async fits naturally |\n\nThe two ecosystems converge on the same model for related but distinct reasons: Node.js chose single-threaded-by-default deliberately; CPython's GIL means multi-threading wouldn't have bought CPU parallelism anyway, so `asyncio`'s concurrency-without-parallelism model isn't giving up much that threading would have offered for I/O-bound work in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "async-await-and-cooperative-concurrency-s09-q1"
+      ]
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s10",
+      "order": 10,
+      "sectionTitle": "Fan-out with async/await",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A common pattern that trips people up: awaiting several independent operations *sequentially* when they could run concurrently.\n\n```javascript\n// Sequential: waits for each in turn — 300ms total if each takes 100ms\nconst a = await fetchA();\nconst b = await fetchB();\nconst c = await fetchC();\n\n// Concurrent: all three start immediately, wait for all — ~100ms total\nconst [a, b, c] = await Promise.all([fetchA(), fetchB(), fetchC()]);\n```\n\nThe first version accidentally serializes independent work because each `await` blocks *that task* from proceeding until its own promise resolves, even though nothing stops `fetchB` from starting before `fetchA` finishes. `Promise.all` (or Python's `asyncio.gather`) starts every operation immediately and awaits all of them together — the fix is almost always this pattern, and its absence is a common, easy-to-miss source of unnecessary latency.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "async-await-and-cooperative-concurrency-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Async/await solves the shared-memory problem by removing true concurrent execution of your own code, but it introduces its own failure modes — a fire-and-forget promise that nobody awaits, a task that outlives the request that spawned it — which is exactly what `structured-concurrency` exists to discipline, regardless of whether the underlying model is async/await, threads, or actors.\n\n`comparing-concurrency-models` puts async/await side by side with threads, actors, and CSP against the same \"handle 10,000 concurrent connections\" problem, making the trade-offs from this topic and the last one concrete and comparable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

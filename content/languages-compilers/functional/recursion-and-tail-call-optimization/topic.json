@@ -1,0 +1,161 @@
+{
+  "id": "recursion-and-tail-call-optimization",
+  "title": "Recursion & Tail-Call Optimization",
+  "area": "languages-compilers",
+  "group": "functional",
+  "order": 4,
+  "slug": "recursion-and-tail-call-optimization",
+  "summary": "Functional style favors recursion over mutable loop counters, which means it needs a way to make recursion cheap at scale. Tail-call optimization is the compiler trick that reuses a stack frame instead of growing it — and knowing which languages guarantee it changes how you write the code.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "recursion-and-tail-call-optimization-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Functional style avoids mutable loop counters, so it reaches for **recursion** to express repetition instead — a function calling itself with updated arguments plays the role a `for` loop's index update plays imperatively.\n\nThe catch: naive recursion grows the call stack by one frame per call, which means a plain recursive loop over a million elements can crash with a stack overflow where an imperative loop wouldn't blink. **Tail-call optimization (TCO)** is the compiler trick that fixes this — reusing the current stack frame instead of pushing a new one, when the recursive call is structured the right way.\n\nThis topic is squarely about that trade: what makes a call \"tail position,\" how to reshape a function so it qualifies, and — critically — which languages you can actually rely on for it, because getting this wrong crashes production code, not just a toy example.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s02",
+      "order": 2,
+      "sectionTitle": "Why FP reaches for recursion",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A `for` loop's index variable is mutable state that changes every iteration — exactly what [pure, immutable-first style](pure-functions-and-immutability) avoids. Recursion sidesteps this: instead of mutating a counter, you call the function again with a *new* argument value, and each call has its own independent set of parameters — nothing is mutated, only new bindings are created.\n\n`def sum_list(xs): return 0 if not xs else xs[0] + sum_list(xs[1:])` never assigns to a variable twice. Each recursive call gets its own `xs`, `xs[0]`, and the arithmetic is expressed as a return value, not an accumulator you update in place.\n\nThis is also why languages built around immutability (Haskell, Clojure, Erlang) often have no built-in mutable-counter loop construct at all — recursion (often hidden behind higher-order functions like `map`/`fold`, which are themselves implemented recursively) is the *only* way to repeat something, which is precisely why those languages cannot skip solving the stack-growth problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "recursion-and-tail-call-optimization-s02-q1"
+      ]
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s03",
+      "order": 3,
+      "sectionTitle": "A stack that grows vs. one that stays flat",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The picture that explains the whole topic: a normal recursive call pushes a new frame for every call and can only pop them once the deepest call returns, so the stack grows all the way down before it shrinks. A tail-call-optimized call reuses the current frame in place — the stack never grows past one frame for that call chain.\n\n![A call stack growing with each recursive call compared with tail-call optimization reusing a single frame](assets/tco-stack-reuse.svg)\n\nThe difference is entirely about whether the calling frame has *unfinished work* waiting on the recursive call's result. If it does (as in the left picture — an addition still pending), the frame must stay. If the recursive call is the very last thing the function does, with nothing pending afterward, the frame can be safely discarded first.",
+      "assets": [
+        {
+          "alt": "A call stack growing with each recursive call compared with tail-call optimization reusing a single frame",
+          "path": "assets/tco-stack-reuse.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s04",
+      "order": 4,
+      "sectionTitle": "The accumulator pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A recursive function is only eligible for TCO when its recursive call is in **tail position** — the very last action the function performs, with nothing left to do after it returns. `return n * factorial(n - 1)` is *not* tail-recursive: after `factorial(n - 1)` returns, the function still has to multiply by `n`. That pending multiplication is exactly the \"unfinished work\" that forces the frame to stay alive.\n\nThe **accumulator pattern** fixes this by moving the pending work into an extra parameter that carries the partial result forward, so there's nothing left to do after the recursive call returns: `factorial_acc(n, acc) = acc if n <= 1 else factorial_acc(n - 1, n * acc)`. Now the multiplication happens *before* the recursive call, as part of building the next argument, not after it returns.\n\nThis reshaping — turn \"do work, then recurse, then do more work with the result\" into \"do the work now, recurse with the updated state, and just return whatever comes back\" — is the general technique for making any non-tail-recursive function tail-recursive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "recursion-and-tail-call-optimization-s04-q1"
+      ]
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s05",
+      "order": 5,
+      "sectionTitle": "Factorial, before and after",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The same function, non-tail-recursive then rewritten to be tail-recursive:\n\n```python\n# Non-tail-recursive: multiplication happens AFTER the recursive call returns\ndef factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)   # pending work: the multiplication\n\n# Tail-recursive: the accumulator carries the running product forward\ndef factorial_tco(n, acc=1):\n    if n <= 1:\n        return acc\n    return factorial_tco(n - 1, n * acc)   # nothing pending after this call\n```\n\nIn `factorial`, calling `factorial(5)` cannot finish its own multiplication until `factorial(4)` returns a value — five stack frames must all stay alive simultaneously. In `factorial_tco`, each call computes `n * acc` *before* recursing and then simply returns whatever the next call gives back — there is nothing for the current frame to do afterward, which is exactly the shape a TCO-capable compiler can collapse into a single reused frame.\n\nNote: this rewrite alone does nothing in a language without TCO — see the next slides for which languages actually honor it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s06",
+      "order": 6,
+      "sectionTitle": "How the compiler makes the frame reusable",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Mechanically, TCO works because a tail call has a property an ordinary call doesn't: the current frame's local variables are no longer needed once the call is made — there's nothing left to compute with them. That means the compiler can **overwrite the current frame with the new call's arguments and jump**, instead of pushing a brand-new frame on top and later popping back through all of them.\n\nThis is exactly what a `while` loop with mutable variables compiles down to at the machine level — a jump back to the top with updated register/stack values, no frame growth. A tail-recursive function and a `while` loop are, after this optimization, the *same machine code shape*: constant stack space, a backward jump, updated locals each pass.\n\nThat equivalence is the whole point of TCO: it lets you write the recursive, no-mutation version that fits functional style, and get the loop's performance and memory profile for free, provided the compiler actually performs the transformation — which is not guaranteed everywhere, as the next slide covers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "recursion-and-tail-call-optimization-s06-q1"
+      ]
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s07",
+      "order": 7,
+      "sectionTitle": "Guaranteed vs. not guaranteed",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Whether you can rely on TCO depends entirely on the language specification, not just the compiler's mood:\n\n| Language | TCO status | Practical consequence |\n|---|---|---|\n| **Scheme** | Guaranteed by the language spec | Idiomatic Scheme uses recursion for *all* loops, safely, even unbounded ones |\n| **Elixir / Erlang** | Guaranteed for self-tail-calls | Actor loops (`receive` → recurse) run forever in constant stack space, by design |\n| **JavaScript** | In the ES2015 spec, but almost no engine implements it (V8/Chrome/Node dropped it) | Deep tail recursion still overflows in practice — don't rely on it |\n| **Python** | Not guaranteed, and CPython deliberately does not implement it | Deep recursion hits `RecursionError`; use an explicit loop or increase the recursion limit as a last resort |\n| **Java / C#** | Not guaranteed on the JVM/CLR (some JIT cases optimize it, unreliably) | Same risk as Python — write loops for anything unbounded |\n\nThe rule that follows: in a guaranteed-TCO language, write the recursive version freely. In every other mainstream language, treat unbounded recursion as a real stack-overflow risk and reach for an explicit loop, or an accumulator-based helper *if and only if* you've confirmed the runtime actually optimizes it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "recursion-and-tail-call-optimization-s07-q1"
+      ]
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s08",
+      "order": 8,
+      "sectionTitle": "Assuming safety without checking",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The mistake this whole topic exists to prevent: rewriting a function into tail-recursive form and assuming that alone makes it safe on large input. Tail position is a **necessary** condition for TCO — it is not sufficient. The runtime still has to actually implement the optimization.\n\nThis bites hardest in JavaScript, because it's the most visible counter-example: proper tail calls are *in the ECMAScript 2015 specification*, and developers who read the spec — but not the compatibility tables — write beautifully tail-recursive JavaScript and watch it blow the stack on production data, because V8 (Chrome, Node) never shipped the optimization and other engines followed suit.\n\nThe defensive habit: before relying on TCO for anything that processes unbounded or large input, verify the *specific runtime version* actually performs it — don't infer it from the language spec, a blog post, or how the language feels. When in doubt, default to an explicit loop, which has no such ambiguity.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "recursion-and-tail-call-optimization-s08-q1"
+      ]
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s09",
+      "order": 9,
+      "sectionTitle": "Fixing a stack overflow live",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"This recursive solution stack-overflows on large input — fix it without a loop\" is really asking two things: can you spot the non-tail call, and do you know your language's TCO story well enough to know whether reshaping it actually helps.\n\nThe process: first, identify what's pending after the recursive call — that's the thing blocking tail position, and it's usually an arithmetic operation (`n * factorial(n-1)`) or a list operation (`[x] + recurse(xs)`) applied to the recursive call's result. Second, move that pending operation *before* the call by threading it through an accumulator parameter, so the call becomes the last thing the function does.\n\nThird — and this is the step people skip — check whether the target language/runtime honors TCO at all. If it's Python or browser JavaScript, the accumulator rewrite is good practice (cleaner, more explicit about state) but **will not** by itself fix the stack overflow; you'd need to convert to an explicit loop, or in Python specifically, use an iterative trampoline, or just increase `sys.setrecursionlimit` as a stopgap while flagging it as a real limitation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "recursion-and-tail-call-optimization-s10",
+      "order": 10,
+      "sectionTitle": "The trampoline: TCO without language support",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a language doesn't guarantee TCO, there's still a manual technique to get constant stack space: the **trampoline**. Instead of a function calling itself directly (which grows the stack), it returns a description of the *next* call — a thunk — to a driver loop that keeps invoking whatever comes back, entirely at one stack depth.\n\n```python\ndef factorial_thunk(n, acc=1):\n    if n <= 1:\n        return acc\n    return lambda: factorial_thunk(n - 1, n * acc)  # return a thunk, don't call directly\n\ndef trampoline(fn):\n    result = fn\n    while callable(result):\n        result = result()   # one stack frame, reused every iteration\n    return result\n\ntrampoline(lambda: factorial_thunk(100000))  # runs in constant stack space\n```\n\nEach call to `factorial_thunk` returns immediately — it never waits on a nested call — so no frame ever needs to stay alive; `trampoline`'s `while` loop does the actual repeated work at a single, constant stack depth. This is the standard escape hatch in languages like Python or plain JavaScript where you want recursion's clarity without trusting a TCO guarantee that isn't there.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "recursion-and-tail-call-optimization-s10-q1"
+      ]
+    }
+  ]
+}

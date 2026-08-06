@@ -1,0 +1,174 @@
+{
+  "id": "concurrency-gcd-structured-concurrency",
+  "title": "Concurrency — GCD & Swift Structured Concurrency",
+  "area": "mobile",
+  "group": "ios",
+  "order": 6,
+  "slug": "concurrency-gcd-structured-concurrency",
+  "summary": "Dispatch queues, async/await, actors, and Task as Swift's concrete concurrency model — how work moves off the main thread and back, and the two mistakes that cause frozen UI or silent data races.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "concurrency-gcd-structured-concurrency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every iOS app has one non-negotiable rule: **UIKit and SwiftUI only render from the main thread.** Anything expensive — a network call, image decoding, a database query — has to run elsewhere, and the result has to hop back to main before it touches the UI.\n\nApple's answer to 'how do I run work elsewhere' has evolved twice: **Grand Central Dispatch (GCD)**, the queue-based model that shipped with iOS's earliest days, and **Swift's structured concurrency** (`async`/`await`, actors, `Task`), which replaced deeply nested completion handlers with code that reads top-to-bottom while still being genuinely asynchronous. Most production codebases today run both, and knowing when each is the right tool is the actual skill.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s02",
+      "order": 2,
+      "sectionTitle": "GCD queues",
+      "subTitle": "serial vs concurrent, and the main queue",
+      "type": "concept",
+      "markdown": "GCD organizes work into **dispatch queues**, each either **serial** (one task at a time, in order) or **concurrent** (multiple tasks may run simultaneously, order not guaranteed). The **main queue** is a special serial queue tied to the main thread — it's where UIKit and SwiftUI expect all rendering and layout work to happen, and it's serial specifically so UI updates never race with each other.\n\n```swift\nDispatchQueue.global(qos: .userInitiated).async {\n    let result = expensiveComputation()\n    DispatchQueue.main.async {\n        self.label.text = result   // back on main before touching UI\n    }\n}\n```\n\nThe pattern above — do work off main, hop back to main to update UI — is the single most repeated shape in pre-structured-concurrency iOS code, and getting the hop back wrong is the most common concurrency bug on the platform.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "concurrency-gcd-structured-concurrency-s02-q1"
+      ]
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s03",
+      "order": 3,
+      "sectionTitle": "Dispatching off main and back",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Timeline of work dispatching from the main queue to a background queue and back](assets/gcd-main-background-hops.svg)",
+      "assets": [
+        {
+          "alt": "Timeline of work dispatching from the main queue to a background queue and back",
+          "path": "assets/gcd-main-background-hops.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s04",
+      "order": 4,
+      "sectionTitle": "async/await replacing nested completion handlers",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Before structured concurrency, chaining three dependent async calls meant three nested completion handler closures — the infamous \"pyramid of doom\" — each with its own error-handling branch.\n\n```swift\n// Before: nested completion handlers\nfetchUser { user in\n    fetchOrders(for: user) { orders in\n        fetchDetails(for: orders) { details in\n            // three levels deep, three separate error paths\n        }\n    }\n}\n\n// After: async/await, same behavior, linear code\nlet user = try await fetchUser()\nlet orders = try await fetchOrders(for: user)\nlet details = try await fetchDetails(for: orders)\n```\n\nThe `async` version isn't just prettier — it's a single, ordinary `try`/`catch` for all three calls, and the compiler enforces that you can't forget to call the continuation (a real, recurring bug with completion-handler closures).",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "concurrency-gcd-structured-concurrency-s04-q1"
+      ]
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s05",
+      "order": 5,
+      "sectionTitle": "An async function updating UI",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```swift\n@MainActor\nclass ProfileViewModel: ObservableObject {\n    @Published var name = \"\"\n\n    func loadProfile(id: String) async {\n        do {\n            let profile = try await api.fetchProfile(id)\n            self.name = profile.name   // already on main actor, safe\n        } catch {\n            self.name = \"Error loading profile\"\n        }\n    }\n}\n```\n\nMarking the whole class `@MainActor` means every property access and method call on it is guaranteed to run on the main actor unless explicitly opted out — so the UI mutation after `await` needs no manual `DispatchQueue.main.async` hop. The `await` point is where this function can suspend and let other work run; execution resumes back on the main actor automatically once `fetchProfile` completes.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s06",
+      "order": 6,
+      "sectionTitle": "Actors protecting mutable state",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **actor** is a reference type, like a class, but the compiler enforces that its mutable state can only be touched by one task at a time — accessing an actor's state from outside requires `await`, and the actor serializes those accesses instead of letting them race.\n\n```swift\nactor ImageCache {\n    private var cache: [URL: UIImage] = [:]\n\n    func image(for url: URL) -> UIImage? { cache[url] }\n    func store(_ image: UIImage, for url: URL) { cache[url] = image }\n}\n```\n\nTwo tasks calling `store` concurrently on the same `ImageCache` can't corrupt `cache` the way two threads mutating a plain dictionary could — the actor queues the accesses. This is Swift's answer to the exact class of data races that used to require careful manual locking (`NSLock`, a serial dispatch queue used purely as a mutex) with no compiler help catching a missed lock.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "concurrency-gcd-structured-concurrency-s06-q1"
+      ]
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s07",
+      "order": 7,
+      "sectionTitle": "GCD vs structured concurrency for a new codebase",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | GCD | Structured concurrency |\n|---|---|---|\n| Readability for chained async work | nested closures | linear, top-to-bottom |\n| Data race protection | manual (locks, serial queues) | compiler-enforced via actors |\n| Cancellation | manual bookkeeping | built into Task, propagates automatically |\n| Ecosystem maturity | universal, every API supports it | modern, minimum iOS 13 for async/await, 15+ for full actor ergonomics |\n\nFor new code targeting a reasonably current minimum iOS version, structured concurrency is the default: less error-prone, better cancellation, compiler-checked data-race safety. GCD still shows up for interop with older APIs that only offer completion handlers, and for a few low-level primitives (dispatch groups, barriers) that don't have a clean structured-concurrency equivalent yet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s08",
+      "order": 8,
+      "sectionTitle": "Task and task groups",
+      "subTitle": "structured child work with cancellation",
+      "type": "concept",
+      "markdown": "A `Task` starts a new unit of asynchronous work; a `TaskGroup` runs several child tasks concurrently and structurally ties their lifetime to the group — if the group scope exits (an error, the parent task cancelled), Swift automatically cancels any still-running children rather than leaving them orphaned.\n\n```swift\nfunc loadAllThumbnails(urls: [URL]) async throws -> [UIImage] {\n    try await withThrowingTaskGroup(of: UIImage.self) { group in\n        for url in urls {\n            group.addTask { try await downloadThumbnail(url) }\n        }\n        var images: [UIImage] = []\n        for try await image in group {\n            images.append(image)\n        }\n        return images\n    }\n}\n```\n\nThat automatic cancellation propagation is the **structured** part of structured concurrency — a plain GCD dispatch group has no equivalent; cancelling in-flight work there means manually tracking and checking a flag inside every closure yourself.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: calling async code with no Task context",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`async` functions can't be called from ordinary synchronous code directly — a button's `@IBAction`, a synchronous callback — because there's no suspension point available in a non-async context. The fix is wrapping the call in a `Task { }`, which starts a new asynchronous context inheriting the current actor and priority.\n\n```swift\n@IBAction func refreshTapped() {\n    // Wrong: won't compile — can't 'await' in a sync function\n    // let data = await fetchData()\n\n    Task {\n        let data = await fetchData()\n        self.updateUI(with: data)\n    }\n}\n```\n\nThe subtlety: a `Task` started this way is **detached from the caller's lifetime** by default — it keeps running even if the view that started it disappears, unless you explicitly store and cancel it (`onDisappear { task?.cancel() }`), which is its own common source of wasted work or, worse, a UI update firing after the screen is gone.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "concurrency-gcd-structured-concurrency-s09-q1"
+      ]
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: updating UI from a background queue",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The oldest concurrency bug on the platform, still common in GCD-era code: a background-queue closure directly touches a `UILabel` or `@Published` property without hopping back to main.\n\n```swift\nDispatchQueue.global().async {\n    let image = downloadImage(url)\n    self.imageView.image = image   // wrong: UI touched off main\n}\n```\n\nThe symptom ranges from silent (the update just doesn't visibly apply reliably) to a crash in Debug builds with `-com.apple.CoreUI.MainThreadOnlyKit` style assertions, to actual visual corruption under contention. The fix under GCD is an explicit `DispatchQueue.main.async` wrap; under structured concurrency, marking the owning type `@MainActor` makes the compiler **reject** the mistake at compile time instead of only catching it at runtime — a meaningful safety upgrade, which is a strong argument for migrating UI-facing classes to `@MainActor` even in an otherwise GCD-based codebase.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "concurrency-gcd-structured-concurrency-s10-q1"
+      ]
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-s11",
+      "order": 11,
+      "sectionTitle": "The senior nuance: actors don't eliminate all races",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer treats actors as 'the thing that makes concurrency safe.' A senior answer knows actors only serialize access to **their own** state — a **reentrancy** gap exists: between two `await` points inside the same actor method, another task can run against that same actor and observe or mutate state in a way that invalidates an assumption the first call made before its `await`.\n\n```swift\nactor Account {\n    var balance = 100\n    func withdraw(_ amount: Int) async {\n        guard balance >= amount else { return }\n        await logTransaction()      // suspension point: another withdraw can run here\n        balance -= amount            // balance may have changed since the guard\n    }\n}\n```\n\nTwo concurrent `withdraw` calls can both pass the guard before either decrements `balance`, because the `await` in between yields the actor to the other call. This is the concurrency equivalent of a classic race condition, just moved to a different mechanism — actors remove **data races** (simultaneous raw memory access) but not **logic races** across suspension points, and only careful ordering (re-check the invariant after the `await`, or avoid suspending mid-invariant) fixes it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "concurrency-gcd-structured-concurrency-s11-q1"
+      ]
+    }
+  ]
+}

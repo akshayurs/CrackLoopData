@@ -1,0 +1,172 @@
+{
+  "id": "generics-and-parametric-polymorphism",
+  "title": "Generics & Parametric Polymorphism",
+  "area": "languages-compilers",
+  "group": "type-systems",
+  "order": 4,
+  "slug": "generics-and-parametric-polymorphism",
+  "summary": "Writing code once that works safely across types — generic functions and classes, bounded type parameters, and how erasure versus monomorphization change what you can and can't do at runtime.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "generics-and-parametric-polymorphism-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Without generics, writing a type-safe container that works for any element type means either duplicating the container's code once per type (`IntBox`, `StringBox`, `UserBox`, forever) or giving up type safety and storing everything as `Object`/`Any`, pushing every mismatch to a runtime `ClassCastException`. **Generics** solve this: write the container once, parameterized by a type variable, and get a type-safe version for every concrete type the compiler checks — no duplication, no unsafe casts.\n\n`Box<T>` isn't one type — it's a family of types (`Box<Int>`, `Box<String>`, `Box<User>`), and the compiler enforces that a `Box<Int>` only ever holds `Int`s, at compile time, with none of the runtime-cast risk that an `Object`-based container would carry.\n\nThis Topic covers how generics work, what they cost at runtime depending on the language, and the specific interview question (\"why can't you do `new T()`\") that tests whether you actually understand the mechanism rather than just the syntax.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s02",
+      "order": 2,
+      "sectionTitle": "The problem generics solve",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before generics, a type-safe reusable container had two bad options. **Duplicate per type**: write `IntStack`, `StringStack`, `UserStack`, each with identical push/pop logic differing only in the element type — every bug fix has to be applied N times, and adding a new element type means writing a whole new class. **Use `Object`/`Any`**: write one `Stack` whose elements are `Object`, accepting anything — but now popping requires a cast (`(String) stack.pop()`), and if someone pushed an `Integer` by mistake, that cast fails with `ClassCastException` at runtime, potentially far from where the wrong push happened.\n\nGenerics give you both properties at once: `Stack<T>` is written exactly once, and `Stack<String>` is checked by the compiler to only ever contain `String`s — a mismatched push (`stack.push(42)` on a `Stack<String>`) is a compile error at the push site, not a cast failure later at the pop site. You get the code-reuse of the `Object` version and the safety of the duplicated version, without either downside.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "generics-and-parametric-polymorphism-s02-q1"
+      ]
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s03",
+      "order": 3,
+      "sectionTitle": "Specialized vs erased representations",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "`Box<T>` compiling for two different concrete types can happen in one of two fundamentally different ways underneath, and they produce very different runtime behavior.\n\n**Specialized (monomorphization):** the compiler generates a distinct, fully concrete version of `Box` for every type it's actually used with — `Box<Int>` and `Box<String>` become two separate pieces of compiled code, each knowing its exact element type, with no shared \"generic\" version existing at runtime at all.\n\n**Erased:** the compiler generates exactly *one* version of `Box`'s code, with `T` replaced internally by `Object`/`Any` — `Box<Int>` and `Box<String>` share the identical compiled method bodies at runtime, and the compiler inserts casts at the boundaries (where you read a value back out) to make it look type-safe from the caller's side, even though the runtime representation has genuinely forgotten which `T` you meant.\n\n![A generic Box of T compiled via monomorphization into separate concrete boxes, versus via erasure into one shared boxed type with a cast](assets/monomorphization-vs-erasure.svg)",
+      "assets": [
+        {
+          "alt": "A generic Box of T compiled via monomorphization into separate concrete boxes, versus via erasure into one shared boxed type with a cast",
+          "path": "assets/monomorphization-vs-erasure.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "generics-and-parametric-polymorphism-s03-q1"
+      ]
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s04",
+      "order": 4,
+      "sectionTitle": "A generic max, bounded by Comparable",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```java\n// T is not \"any type\" -- it must support compareTo\nstatic <T extends Comparable<T>> T max(T a, T b) {\n    return a.compareTo(b) >= 0 ? a : b;\n}\n\nmax(3, 5);           // OK -- Integer implements Comparable<Integer>\nmax(\"cat\", \"dog\");    // OK -- String implements Comparable<String>\nmax(new Object(), new Object());  // compile error -- Object has no compareTo\n```\n\nWithout the `extends Comparable<T>` bound, `max`'s body couldn't call `a.compareTo(b)` at all — a fully unconstrained `T` gives you *zero* operations beyond what every possible type supports (assignment, reference equality), and comparison isn't one of them. The bound is what makes the method body's `a.compareTo(b)` call legal, by promising the compiler that whatever `T` ends up being, it will have a `compareTo` method.\n\nThis is the generic-programming pattern in one line: parameterize over the type, but constrain that type parameter to exactly the capabilities the function's body actually needs — no more, no less.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s05",
+      "order": 5,
+      "sectionTitle": "Bounded type parameters",
+      "subTitle": "Constraining a generic to types with certain capabilities",
+      "type": "concept",
+      "markdown": "A fully unconstrained generic type parameter is deliberately weak by design: `<T>` with no bound means the function body can only do things that are true of *literally every possible type* — store it, pass it around, check reference equality. It cannot call any method specific to some types but not others, because the compiler has no guarantee that whatever `T` turns out to be at a given call site actually has that method.\n\n**Bounded type parameters** narrow the set of types `T` can be, in exchange for unlocking operations the bound guarantees exist. `<T extends Comparable<T>>` restricts `T` to types that implement `Comparable`, and in exchange, the function body can legally call `.compareTo()` on any value of type `T` — the bound is a promise, checked at every call site, that whatever concrete type is substituted in actually satisfies it.\n\nThis is the generics equivalent of a function parameter's type: an unbounded generic gives you the fewest guarantees and the widest applicability; a tightly bounded generic gives you more capabilities inside the function at the cost of only working with types that satisfy the bound.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s06",
+      "order": 6,
+      "sectionTitle": "Type erasure vs reification",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Java and C# both compile generics via **type erasure**: at runtime, a `List<String>` and a `List<Integer>` are represented by the exact same compiled class, with `T` replaced by `Object` internally. The generic type information exists only at compile time, for the type checker's benefit — it's erased before the program actually runs, which is where the name comes from.\n\nRust takes the opposite approach, **monomorphization** (a form of reification): the compiler generates a fully separate, specialized copy of the generic code for every concrete type it's instantiated with. `Vec<i32>` and `Vec<String>` are genuinely different compiled types at runtime, each with its own layout and its own generated machine code — there's no shared \"erased\" version underneath.\n\nNeither approach is a bug in the other's language — they're a genuine design trade-off, covered next, between runtime simplicity (one shared implementation, smaller compiled output) and full type information at runtime (faster code per-type, but more compiled output, since every instantiation duplicates the whole implementation).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "generics-and-parametric-polymorphism-s06-q1"
+      ]
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s07",
+      "order": 7,
+      "sectionTitle": "Cost/benefit: erasure's simplicity vs monomorphization's bloat",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Erasure's payoff is runtime simplicity: one compiled implementation serves every type, so the compiled output stays small regardless of how many different types a generic class gets used with, and generic code can even interoperate with pre-generics code (Java's erasure was specifically designed to stay binary-compatible with code compiled before Java 5 introduced generics at all).\n\nMonomorphization's payoff is runtime speed: because each instantiation is a fully specialized, concrete piece of code, the compiler can optimize each one as aggressively as if you'd hand-written it for that exact type — no boxing of primitives, no runtime casts at read boundaries, and the CPU can inline and specialize far more effectively than it could against a shared, type-erased implementation.\n\nThe cost of monomorphization is **code bloat**: a generic function used with fifty different concrete types produces fifty separate compiled copies, which increases binary size and compile time proportionally to the number of instantiations — a real cost Rust developers explicitly manage (sometimes by deliberately erasing to a trait object when bloat matters more than per-type speed). Neither trade-off is free; the right choice depends on whether you're optimizing for compiled-code size or per-call performance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: generic-array creation and raw-type surprises",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Erasure creates a specific, well-known Java trap: **you cannot write `new T[10]`** inside a generic class, even though `new T()` (also disallowed, for a related reason covered next) and array creation feel like they should behave the same. The reason is that arrays in Java, unlike generic collections, retain their element type at runtime (`String[]` genuinely knows it holds `String`s) — but `T` is erased by the time the array would need to be created, so the JVM has no concrete type to give the array, and Java's designers simply disallowed the syntax rather than let it silently create a wrongly-typed array.\n\nThe workaround developers reach for — `(T[]) new Object[10]` — compiles with an unchecked-cast warning and works at the bytecode level, but produces an array whose *actual* runtime type is `Object[]`, not `T[]`; storing it somewhere that later expects a genuinely-typed array (or trying to cast the whole array to a more specific array type) can throw `ClassCastException` at a point that looks unrelated to the generic class where the array was created.\n\n**Raw types** compound this: using `List` instead of `List<String>` (legal for backward compatibility with pre-generics code) silently disables all generic type checking for that variable, reintroducing exactly the cast-failure risk generics exist to prevent, with no compiler warning unless you specifically enable `-Xlint:unchecked`.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "generics-and-parametric-polymorphism-s08-q1"
+      ]
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s09",
+      "order": 9,
+      "sectionTitle": "Erased generics vs monomorphized generics vs Go's",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Java (erased) | Rust (monomorphized) | Go (recent addition, 1.18+) |\n|---|---|---|\n| **Runtime type info** | Gone — one shared implementation, `T` becomes `Object` | Preserved — a fully specialized copy per type | Uses a hybrid (\"GC shape stenciling\") — partial specialization to balance the two |\n| **`new T()` allowed?** | No | Effectively yes, via trait bounds providing a constructor-like capability | No, similarly restricted |\n| **Binary size impact** | Minimal — one implementation regardless of instantiation count | Grows with each distinct instantiation | Smaller than full monomorphization, larger than pure erasure |\n\nGo's design is worth naming specifically because it shows this isn't a strict binary choice — Go's compiler groups types with identical machine representations (pointers of any kind, for instance) into shared implementations while still specializing where representations genuinely differ, landing deliberately between Java's full erasure and Rust's full monomorphization.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "generics-and-parametric-polymorphism-s09-q1"
+      ]
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s10",
+      "order": 10,
+      "sectionTitle": "Why can't you do new T() in Java generics?",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is close to the single most common generics interview question, and the strong answer connects it directly to erasure rather than treating it as an arbitrary language restriction.\n\n`new T()` needs a concrete class to instantiate at the moment the code runs — the JVM has to know *which* constructor to call. But because of erasure, by the time the compiled `Box<T>` class actually executes, `T` no longer exists anywhere in the runtime representation; the compiled code has no way to know whether it's currently being used as a `Box<String>` or a `Box<User>`, so there's no concrete class for `new T()` to instantiate. It's not that the JVM refuses to allow it out of caution — the information needed to do it correctly has been erased before that code ever runs.\n\nThe practical workaround: pass in either a `Class<T>` object (`Box(Class<T> type) { this.type = type; }`, then `type.newInstance()` reflectively) or a factory function (`Supplier<T>`) that the caller provides, since the caller *does* know the concrete type at the call site, before erasure has happened. Naming the workaround, not just the restriction, is what separates a memorized fact from an answer that shows you understand erasure's actual mechanism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "generics-and-parametric-polymorphism-s11",
+      "order": 11,
+      "sectionTitle": "Where generics leave you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Generics let you write one function or class that's checked against many concrete types without giving up compile-time safety — the mechanism (erasure or monomorphization) is a runtime implementation detail, but it has real, visible consequences (array creation, `new T()`, binary size) that a fluent answer needs to connect back to the mechanism, not just recite as isolated trivia.\n\nThe next Topic, subtyping and variance, is the natural sequel: once you have `Box<T>`, the question becomes whether `Box<Dog>` can be used wherever `Box<Animal>` is expected — and the honest answer, unlike simple subtyping, depends on whether the container is mutable and on which direction the type parameter is used in, which is exactly what variance formalizes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    }
+  ]
+}

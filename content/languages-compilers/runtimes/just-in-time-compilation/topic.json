@@ -1,0 +1,192 @@
+{
+  "id": "just-in-time-compilation",
+  "title": "Just-In-Time Compilation",
+  "area": "languages-compilers",
+  "group": "runtimes",
+  "order": 3,
+  "slug": "just-in-time-compilation",
+  "summary": "JIT compilation is how a runtime gets native-code speed from bytecode without giving up portability — profiling hot methods while the program runs, compiling them, and falling back safely when a speculative bet turns out wrong.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "just-in-time-compilation-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "`bytecode-and-virtual-machines` ended on a problem: interpreting bytecode instruction-by-instruction pays dispatch overhead forever. **Just-in-time (JIT) compilation** is the fix — compile the *hot* parts of a running program to native machine code, while it's running, and keep the rest interpreted.\n\nThe payoff is real: a hot loop can go from \"interpreted, dispatch overhead on every instruction\" to \"native machine code, no dispatch at all\" in milliseconds, without you doing anything. The cost is complexity most engineers never see until a benchmark behaves strangely in its first 100ms.\n\nThis topic covers the interpret → JIT → AOT spectrum, how a JIT decides what's hot, tiered compilation, speculative optimization, and the deoptimization safety net underneath all of it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "just-in-time-compilation-s02",
+      "order": 2,
+      "sectionTitle": "The compilation spectrum",
+      "subTitle": "Interpret, JIT, or AOT",
+      "type": "compare",
+      "markdown": "| Approach | When code compiles | Startup | Peak throughput |\n|---|---|---|---|\n| Pure interpretation | Never — every run re-dispatches bytecode | Fastest | Slowest |\n| JIT | While the program runs, for hot methods | Slower (warm-up) | Best (profile-guided) |\n| Ahead-of-time (AOT) | Before the program ships | Fastest (no warm-up) | Good, but no runtime profile data |\n\nJIT sits in the middle by design: it pays a warm-up cost pure interpretation doesn't, but earns back a profile-guided optimization AOT can't get, because AOT compiles before it has ever seen your actual production inputs. `ahead-of-time-compilation-and-native-images` covers the AOT end of this spectrum in depth.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "just-in-time-compilation-s02-q1"
+      ]
+    },
+    {
+      "id": "just-in-time-compilation-s03",
+      "order": 3,
+      "sectionTitle": "Cold code, then a swap",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture a method's lifetime as a timeline: it starts running interpreted while a background profiler counts how often it's called (and how many loop back-edges it executes). Once a threshold is crossed, the JIT compiles it in the background and swaps the compiled version in — the running program never stops for this.\n\n![A method running interpreted while the profiler counts invocations, then switching to running JIT-compiled native code](assets/jit-warmup-timeline.svg)",
+      "assets": [
+        {
+          "alt": "A method running interpreted while the profiler counts invocations, then switching to running JIT-compiled native code",
+          "path": "assets/jit-warmup-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "just-in-time-compilation-s04",
+      "order": 4,
+      "sectionTitle": "Deciding what's worth compiling",
+      "subTitle": "Profiling and hot-path detection",
+      "type": "concept",
+      "markdown": "Compiling every method the moment it's first called would be wasteful — most methods run once or a handful of times, and compilation itself costs CPU time that would outweigh any savings. So the runtime **profiles first, compiles second**.\n\nThe JVM's HotSpot tracks two counters per method: an **invocation counter** (calls) and a **back-edge counter** (loop iterations, incremented on every jump backward to a loop's start). Crossing a threshold on either one marks the method or loop as hot and queues it for compilation. This is why a method called once from `main` stays interpreted forever, while a tight loop inside it can get compiled mid-execution — the back-edge counter climbs fast even in a single call.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "just-in-time-compilation-s04-q1"
+      ]
+    },
+    {
+      "id": "just-in-time-compilation-s05",
+      "order": 5,
+      "sectionTitle": "Tiered compilation",
+      "subTitle": "Fast now, better later",
+      "type": "concept",
+      "markdown": "A single-tier JIT faces a bad trade-off: compile fast with weak optimization, or compile slow with strong optimization — either wastes time on methods that don't deserve it. **Tiered compilation** avoids the choice by using both, in sequence.\n\nHotSpot's version: interpret first, then a fast client-style compiler (C1) kicks in for warm methods with light optimization and extra profiling instrumentation, then the heavier server-style compiler (C2) recompiles the genuinely hot subset with aggressive optimizations, using the profile data C1's instrumentation collected. Each tier is cheaper to reach and collects better data for the next one — `the-jvm-deep-dive` covers C1/C2 concretely.\n\nThe net effect: cold code never pays for expensive optimization it won't use, and hot code eventually gets the best code the compiler can produce, informed by real observed behavior rather than static guesses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "just-in-time-compilation-s05-q1"
+      ]
+    },
+    {
+      "id": "just-in-time-compilation-s06",
+      "order": 6,
+      "sectionTitle": "Speculative optimization",
+      "subTitle": "Betting on the common case",
+      "type": "concept",
+      "markdown": "A JIT's biggest advantage over a static compiler is that it has watched your program actually run — so it can optimize for the case it *observed*, not just the case that's *possible*.\n\n**Speculative optimization** means compiling code that assumes the profiled behavior continues: if a call site has only ever seen one concrete type, the JIT can compile a direct call instead of a virtual dispatch, skip a type check the static type system couldn't eliminate, or inline a method body outright. This is a genuine bet — the compiled code is only correct as long as the assumption holds.\n\nThe payoff can be large: a virtual call resolved and inlined at compile time is dramatically cheaper than one resolved via dispatch on every single call. The cost is that the bet has to be checked, and unwound safely if it fails — which is exactly what deoptimization exists for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "just-in-time-compilation-s07",
+      "order": 7,
+      "sectionTitle": "Inline caches: mono, poly, megamorphic",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The mechanism behind most speculative call-site optimization is the **inline cache**: a call site remembers the concrete type(s) it has seen so far, so a repeat of the same type skips the full dispatch lookup.\n\n- **Monomorphic** — the call site has only ever seen one type. The JIT can compile a direct, often-inlined call.\n- **Polymorphic** — a small number of types (2–4) have shown up. The cache checks each in turn, still much faster than full dispatch.\n- **Megamorphic** — too many types have appeared. The cache gives up and falls back to a generic, slower dispatch every time.\n\n![Monomorphic, polymorphic, and megamorphic call sites and the dispatch strategy the JIT uses for each](assets/call-site-morphism.svg)",
+      "assets": [
+        {
+          "alt": "Monomorphic, polymorphic, and megamorphic call sites and the dispatch strategy the JIT uses for each",
+          "path": "assets/call-site-morphism.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "just-in-time-compilation-s07-q1"
+      ]
+    },
+    {
+      "id": "just-in-time-compilation-s08",
+      "order": 8,
+      "sectionTitle": "Deoptimization",
+      "subTitle": "When the bet breaks",
+      "type": "concept",
+      "markdown": "Speculative code is only valid while its assumption holds. When a monomorphic call site suddenly sees a second type — a new subclass gets passed in for the first time — the compiled code's assumption is now false, and running it further would produce wrong results.\n\n**Deoptimization** is the safety net: the JIT detects the broken assumption, discards the invalidated compiled code, and falls back to interpreting that method (sometimes mid-execution, reconstructing the interpreter's state from the compiled frame). Execution correctness is never at risk — worst case, you pay an interpretation penalty again until the JIT recompiles with a more general assumption (say, polymorphic instead of monomorphic).\n\nThis is why a JIT'd runtime can safely make aggressive bets: the fallback path exists specifically so a wrong guess costs performance, never correctness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "just-in-time-compilation-s08-q1"
+      ]
+    },
+    {
+      "id": "just-in-time-compilation-s09",
+      "order": 9,
+      "sectionTitle": "Reading a compilation log",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`-XX:+PrintCompilation` makes HotSpot's tiering visible in real time:\n\n```\n    102    1       3       Foo::hotLoop (12 bytes)\n    118    2       4       Foo::hotLoop (12 bytes)\n    340    3       4       Foo::hotLoop (12 bytes)   made not entrant\n```\n\nColumn 2 is a compile ID, column 3 is the tier (higher = more optimized: 1 is C1 without profiling, 4 is C2). Reading this: `hotLoop` gets a light C1 compile at 102ms, then C2 recompiles it more aggressively at 118ms once it's proven hot enough — and at 340ms the earlier compiled version is marked **not entrant**, meaning a deoptimization or recompilation replaced it. Seeing \"not entrant\" repeatedly for the same method is a real signal of unstable call-site types worth investigating.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "just-in-time-compilation-s10",
+      "order": 10,
+      "sectionTitle": "Benchmarking without warm-up measures the wrong thing",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The single most common JIT-related mistake: microbenchmarking a JIT'd language by calling a function once or a few times and timing it.\n\nThat measurement captures interpreted execution (or, at best, a low compilation tier) — it says nothing about the code's steady-state, fully-optimized performance, which is usually what you actually care about in production. A method that takes 500μs on its first call might take 5μs once C2 has compiled and inlined it.\n\nProper JIT benchmarking runs a warm-up phase (thousands of iterations, discarded) before the measured phase, and frameworks like JMH exist specifically to automate this correctly — manual `System.currentTimeMillis()` around a single call is a near-guaranteed way to publish a wrong number.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "just-in-time-compilation-s10-q1"
+      ]
+    },
+    {
+      "id": "just-in-time-compilation-s11",
+      "order": 11,
+      "sectionTitle": "The trade JIT makes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "JIT compilation isn't a free upgrade over interpretation — it trades one set of costs for another:\n\n- **Startup latency** — warm-up time before hot code reaches full speed, which is exactly why serverless cold starts hurt JIT'd runtimes disproportionately.\n- **Memory** — compiled native code, profiling data, and (on the JVM) the JIT compiler threads themselves all consume memory the interpreter alone wouldn't.\n- **Non-determinism** — the same method can run at wildly different speeds depending on when in its lifecycle you measure it, which complicates latency-sensitive systems that need predictable tail latency.\n\nIn exchange you get near-native throughput for long-running, hot-loop-heavy workloads without giving up bytecode's portability — the right trade for a long-lived server process, a worse one for a function that runs for 50ms and exits.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "just-in-time-compilation-s12",
+      "order": 12,
+      "sectionTitle": "Where this goes next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Everything here is the general mechanism; the next two topics show two concrete, contrasting real implementations:\n\n- **`the-jvm-deep-dive`** — HotSpot's specific C1/C2 tiers, invocation counters, and how to read `-XX:+PrintCompilation` output for a real running JVM.\n- **`the-clr-and-dotnet-runtime`** — RyuJIT's quick-JIT-then-optimized tiering, and how it compares to HotSpot's approach.\n- **`dynamic-language-runtimes-v8-and-cpython`** — how inline caches and speculative optimization (introduced here) become the *core* strategy for making dynamically-typed languages fast in V8.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

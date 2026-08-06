@@ -1,0 +1,174 @@
+{
+  "id": "memory-management-arc-retain-cycles",
+  "title": "Memory Management — ARC, Retain Cycles & Closures",
+  "area": "mobile",
+  "group": "ios",
+  "order": 5,
+  "slug": "memory-management-arc-retain-cycles",
+  "summary": "How ARC counts references without a tracing garbage collector, and the concrete strong/weak/unowned patterns that create and break retain cycles between objects, delegates, and closures.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "memory-management-arc-retain-cycles-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Swift doesn't have a garbage collector pausing your app to scan for dead objects. Instead, the compiler inserts retain and release calls at compile time — **Automatic Reference Counting (ARC)** — so every object deallocates the instant its reference count hits zero, deterministically, with no GC pause.\n\nThe cost of that determinism is that *you* can create a cycle the compiler can't see through: two objects strongly holding each other, neither count ever reaching zero, both leaked forever. This topic is exactly where those cycles form — delegates, closures, parent-child references — and the weak/unowned vocabulary for breaking them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s02",
+      "order": 2,
+      "sectionTitle": "How ARC counts references",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every class instance carries a hidden reference count. Assigning a **strong** reference to it — the default for every property, variable, and constant unless you say otherwise — increments the count. When a strong reference goes out of scope or is reassigned, the count decrements. The instant it hits zero, `deinit` runs and the memory is freed, **synchronously, right there** — not at some later GC pass.\n\nThis is why Swift memory bugs are usually deterministic and reproducible rather than the occasional GC-pause stutter you'd debug in a garbage-collected language: if an object leaks, it leaks every time, because some strong reference to it never actually reached zero.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "memory-management-arc-retain-cycles-s02-q1"
+      ]
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s03",
+      "order": 3,
+      "sectionTitle": "A strong reference cycle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The simplest possible leak: object A holds a strong reference to B, and B holds a strong reference back to A. Neither's count ever reaches zero, even if every *external* reference to both is dropped — they keep each other alive in a closed loop that nothing outside can see or reach.\n\n![Two objects with a strong reference cycle that ARC cannot deallocate](assets/arc-retain-cycle.svg)",
+      "assets": [
+        {
+          "alt": "Two objects with a strong reference cycle that ARC cannot deallocate",
+          "path": "assets/arc-retain-cycle.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s04",
+      "order": 4,
+      "sectionTitle": "Strong vs weak vs unowned",
+      "subTitle": "choosing the right reference",
+      "type": "compare",
+      "markdown": "| | strong | weak | unowned |\n|---|---|---|---|\n| Increments ref count? | yes | no | no |\n| Type | any | Optional (auto-nils) | non-Optional |\n| Safe if referent deallocates? | prevents deallocation | becomes nil safely | crashes on access |\n| Use when | you own it / it must outlive you | referent may outlive or outlast you, and can legitimately become nil | referent is guaranteed to outlive this reference |\n\nThe decision in practice: use **weak** whenever the referenced object's lifetime isn't guaranteed relative to yours — a delegate, a parent you don't own. Use **unowned** only when you're certain the other object cannot be deallocated before this reference is used; getting that wrong crashes instead of failing gracefully, so weak is the safer default when in doubt.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "memory-management-arc-retain-cycles-s04-q1"
+      ]
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s05",
+      "order": 5,
+      "sectionTitle": "A closure retain cycle, fixed",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Closures capture the variables they reference, and that capture is **strong by default** — including `self`, if the closure is stored somewhere that outlives the current scope (an escaping closure).\n\n```swift\nclass ImageLoader {\n    var onComplete: ((UIImage) -> Void)?\n\n    func load(url: URL) {\n        // Wrong: self captured strongly, and this closure is stored\n        session.loadTask(with: url) { image in\n            self.cachedImage = image      // strong capture of self\n            self.onComplete?(image)\n        }\n    }\n}\n```\n\nIf `session` also holds this closure past the call (a retry queue, a stored completion), `self` and the closure keep each other alive. Fix with a capture list:\n\n```swift\nsession.loadTask(with: url) { [weak self] image in\n    self?.cachedImage = image\n    self?.onComplete?(image)\n}\n```",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "memory-management-arc-retain-cycles-s05-q1"
+      ]
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s06",
+      "order": 6,
+      "sectionTitle": "Delegate patterns and why they're almost always weak",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The delegate pattern is a textbook cycle risk by shape: a child object (a table view's data source, a network client) holds a reference to a delegate that is typically its **owner** — the view controller that created it. The owner already holds the child strongly. If the child held its delegate strongly too, that's a cycle.\n\n```swift\nprotocol DownloaderDelegate: AnyObject {\n    func downloadDidFinish(_ data: Data)\n}\n\nclass Downloader {\n    weak var delegate: DownloaderDelegate?   // almost always weak\n}\n```\n\nThis is why nearly every delegate property in Cocoa/UIKit is declared `weak`, and why the protocol is constrained to `AnyObject` — weak references only work on reference types. The rare exception is a delegate relationship where the delegate's lifetime is genuinely independent and shorter-lived than the delegating object's own lifetime, which is uncommon enough that `weak` should be your starting assumption.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s07",
+      "order": 7,
+      "sectionTitle": "Detecting leaks with Instruments",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Static code review catches obvious cycles, but real leaks often hide behind several layers of indirection. Instruments' **memory graph debugger** (also available as a button directly in Xcode's debug bar) is the tool: it snapshots every live object and every reference between them, and visually highlights cycles it detects — a purple exclamation mark on objects Xcode suspects are leaked.\n\nThe workflow that actually finds bugs: navigate to a screen, pop or dismiss it, then check the memory graph for instances of that screen's view controller or view model that are still alive. If one shows up after you've navigated away, something is still holding it — the graph shows you exactly which reference, letting you trace back to the specific property that should have been weak.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "memory-management-arc-retain-cycles-s07-q1"
+      ]
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: unowned on an object that can outlive it",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`unowned` trades a graceful nil for a crash if you're wrong about the lifetime relationship. A common misuse: assuming a parent always outlives its child and declaring the child's back-reference `unowned`, when in reality the child can be retained elsewhere (a cache, a notification observer, an async callback) and accessed *after* the parent has already deallocated.\n\n```swift\nclass Child {\n    unowned let parent: Parent   // crashes if parent deallocates first\n}\n```\n\nThe fix when the lifetime relationship isn't airtight: use `weak` instead, and handle the optional. `unowned` is appropriate specifically when you can prove — not assume — that the referent's deallocation is guaranteed to happen no earlier than this reference's last use, such as a child object created and destroyed strictly within its parent's own lifetime with no external retains.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "memory-management-arc-retain-cycles-s08-q1"
+      ]
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: capturing self strongly in a long-lived closure",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The most common real-world variant of the closure cycle isn't a one-shot network callback — it's a closure **stored for the app's lifetime**: a `NotificationCenter` observer block, a timer's repeating closure, a Combine `sink` on a long-lived publisher. Any of these capturing `self` strongly means `self` is kept alive for as long as the observer, timer, or subscription exists — which, for a repeating timer or app-wide notification, can be effectively forever.\n\nThe fix is the same `[weak self]` discipline, but the failure mode is sneakier: the leak doesn't show up on one screen dismissal, it accumulates — every time this screen is presented and dismissed without cleanup, one more leaked instance piles up, and memory grows slowly enough that it's easy to miss in a quick manual test but shows up clearly over a long user session or in a memory-growth test.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "memory-management-arc-retain-cycles-s09-q1"
+      ]
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s10",
+      "order": 10,
+      "sectionTitle": "The senior nuance: cycles across value-type boundaries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mid-level answer stops at 'use weak for delegates and closures.' A senior answer knows structs and enums don't participate in reference cycles directly — but a struct **holding a class instance** can still be part of one, and Swift's `@escaping` closures capturing `self` inside a struct's method capture the struct's stored class properties by reference, not the whole value.\n\nThe other senior-level case: cycles that only exist **conditionally**, based on runtime state — a cache that strongly retains its most recent N items, where item N+1 is supposed to evict item 1, but a bug in the eviction logic means the cache silently grows unbounded. That's not a classic two-object cycle; it's a **retention policy bug** that looks identical to a leak in Instruments but needs a different fix (correct the eviction logic, not add a weak reference). Naming that distinction in an interview signals you've actually debugged a leak in production, not just memorized the weak/unowned rules.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-s11",
+      "order": 11,
+      "sectionTitle": "Where this shows up beyond UIKit",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The same discipline applies wherever Swift closures or delegate-shaped protocols capture `self` — Combine's `sink` closures ([State Management — Combine & Observation](state-management-combine-observation)), async task continuations, and third-party SDK callback blocks are all equally capable of forming a cycle if `self` is captured strongly and the closure outlives the call site.\n\nThe interview-ready framing: retain cycles aren't a UIKit-specific quirk, they're a direct consequence of ARC plus closures being reference-capturing by default. Any API shape where you hand a long-lived object a closure that touches `self` is a candidate for `[weak self]`, regardless of which framework it's in.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

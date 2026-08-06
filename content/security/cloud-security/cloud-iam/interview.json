@@ -1,0 +1,37 @@
+{
+  "topicId": "cloud-iam",
+  "interviewQuestions": [
+    {
+      "id": "cloud-iam-iq1",
+      "question": "Why should a workload assume a role instead of holding a long-lived access key?",
+      "answerMarkdown": "It comes down to exposure window. A long-lived access key — the kind you'd embed in application code or an environment variable — stays valid until someone manually notices it's leaked and revokes it, which realistically can be weeks or months. A role, by contrast, is assumed temporarily: the workload requests it, gets back short-lived credentials often valid for under an hour, and those credentials expire automatically whether or not anyone remembers to do anything.\n\nThe practical mechanism that makes this easy is that cloud platforms let you attach a role directly to compute — an instance role on a VM, an execution role on a serverless function, a service account on a Kubernetes pod — and the platform's metadata service hands the running workload fresh credentials continuously, with no secret ever written to code or a config file. If you're hardcoding an access key and secret to call a cloud API, that's the signal you should be attaching a role instead.\n\nThe risk reduction isn't hypothetical: a leaked long-lived key checked into a public repo or an accidental log line is a real, common way accounts get compromised, and it's a failure mode that using role-based credentials for workloads eliminates by construction — there's no static secret to leak in the first place.\n\n**Testing:** whether you know the concrete mechanism (instance/execution roles, metadata service) behind the general advice, not just the advice itself.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "cloud-iam-iq2",
+      "question": "How does IAM policy evaluation handle a case where one policy allows an action and another explicitly denies it?",
+      "answerMarkdown": "Explicit deny wins, unconditionally — it doesn't matter how many other policies allow the action or how permissive the identity's other roles are. If any applicable policy contains an explicit deny for that action, the request is denied.\n\nThe reason this precedence exists is to let you write a hard backstop that nothing else can accidentally override — think \"deny delete on this specific production table, regardless of any other role someone is granted later.\" Without that precedence, a well-intentioned narrow deny could be silently defeated by a broader allow granted to the same identity down the line, which would make deny rules useless as a safety net.\n\nThe corollary that trips people up in practice is the *default*: if nothing explicitly allows an action, the result is also deny — an implicit default-deny, the IAM analogue of a firewall's default posture. So when debugging an unexpected \"access denied,\" the first thing I check is usually whether there's a missing allow rather than assuming there's a hidden explicit deny somewhere, because the missing-allow case is far more common in practice.\n\n**Testing:** whether you know the precedence order precisely enough to debug a real access-denied issue, not just recite \"deny wins.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "cloud-iam-iq3",
+      "question": "You inherit a cloud account where several services hold wildcard admin policies \"temporarily added to unblock work\" months ago. How would you approach cleaning this up without breaking anything?",
+      "answerMarkdown": "I wouldn't start by revoking anything — that's how you turn a cleanup project into an outage. I'd start with data: most providers surface \"last used\" information per permission, so I'd pull actual usage for each over-permissioned identity over a meaningful window (30-90 days) to see what it genuinely touches versus what it's merely allowed to touch.\n\nFrom there, for each service, I'd draft a scoped policy covering only the actions and resources actually observed, deploy it **alongside** the existing wildcard policy rather than replacing it outright, and watch for any access-denied errors that the scoped policy would have caused but the wildcard didn't — a safe way to validate the new policy is complete before removing the old one. Only once a scoped policy has run clean for a reasonable window would I remove the wildcard grant.\n\nThe part I'd insist on before calling this done is the process fix, not just the one-time cleanup: whoever grants a broad policy \"temporarily\" going forward should be required to file a tracked follow-up with an expiry, and I'd set up a recurring access review (monthly or quarterly) that treats any unused permission as a finding. Otherwise this exact backlog reappears in another six months, because the underlying incentive — nothing visibly breaks when access is too broad — never went away.\n\n**Testing:** whether you can execute a real least-privilege remediation safely, with a rollback path, rather than just reciting 'apply least privilege' as an abstract principle.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    },
+    {
+      "id": "cloud-iam-iq4",
+      "question": "Design-wise, why do large organizations run multiple cloud accounts instead of one account with strong IAM boundaries inside it?",
+      "answerMarkdown": "IAM policies inside one account are a strong control, but they're a *logical* boundary layered on top of infrastructure that's still, at the platform level, shared — billing, some service quotas, and certain account-wide settings sit above what IAM policy alone can fully separate. Multiple accounts make the account itself the blast-radius boundary: a credential compromise, a runaway resource, or a misconfigured policy in one account structurally cannot reach resources in another account unless something was deliberately set up to cross that line.\n\nCross-account access still needs to exist for legitimate cases — a shared logging account, a central security-tooling account that needs read access everywhere, a vendor integration — and that's handled through explicit trust policies: account B names exactly which identities in account A may assume a specific, narrowly-scoped role, receiving short-lived credentials rather than a standing permanent grant. That's a much more auditable and containable pattern than one giant account with hundreds of roles trying to logically simulate the same separation through policy alone.\n\nThe trade-off is real operational overhead — account provisioning, cross-account networking, centralized logging and cost visibility all become harder problems that need their own tooling (an AWS Organizations-style setup, for instance). I've seen teams over-fragment into accounts before they had the tooling maturity to manage them well, which just traded one operational headache for another — so I'd frame multi-account as something you grow into deliberately as blast-radius concerns justify it, not a default from day one.\n\n**Testing:** whether you can articulate the specific limit of within-account IAM that multi-account architecture addresses, and honestly name its operational cost.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    }
+  ]
+}

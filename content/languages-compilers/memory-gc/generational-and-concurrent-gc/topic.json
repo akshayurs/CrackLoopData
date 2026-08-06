@@ -1,0 +1,187 @@
+{
+  "id": "generational-and-concurrent-gc",
+  "title": "Generational & Concurrent Garbage Collectors",
+  "area": "languages-compilers",
+  "group": "memory-gc",
+  "order": 5,
+  "slug": "generational-and-concurrent-gc",
+  "summary": "How production collectors make tracing fast enough for real workloads: exploit that most objects die young, then relax stop-the-world so pauses stop scaling with heap size.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "generational-and-concurrent-gc-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Plain mark-sweep or mark-compact traces the whole live heap on every collection, and a multi-gigabyte heap makes that pause too long for anything latency-sensitive. Production collectors — the JVM's G1 and ZGC, .NET's GC — don't use a different algorithm; they add two structural optimizations on top of tracing.\n\n**Generational** collection exploits a measured, near-universal pattern: most objects die within microseconds of being allocated. Segregate new objects into a small region and collecting *just that region* is fast and frequent, because it's small and mostly garbage.\n\n**Concurrent/incremental** collection relaxes the assumption that the mutator must fully stop — trace alongside the running program instead, paying extra bookkeeping to stay correct while things change underneath the trace.\n\nEvery real GC tuning conversation in a production incident is really about these two ideas.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "generational-and-concurrent-gc-s02",
+      "order": 2,
+      "sectionTitle": "The weak generational hypothesis",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Empirically, across an enormous range of real programs: **most objects that are ever allocated die shortly after being allocated**, and the objects that survive one collection are disproportionately likely to survive many more. Temporary loop variables, short-lived request/response objects, and intermediate string-building results dominate allocation volume and almost none of them are alive by the time the next collection runs.\n\nThis is the **weak generational hypothesis** (\"weak\" because it's an empirical tendency, not a guarantee — pathological programs can violate it). If it holds, you don't need to trace the whole heap to find most of the garbage; you need to trace the *recently allocated* region, because that's where almost all of the garbage actually is.\n\nEvery generational collector is built to exploit exactly this asymmetry.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "generational-and-concurrent-gc-s02-q1"
+      ]
+    },
+    {
+      "id": "generational-and-concurrent-gc-s03",
+      "order": 3,
+      "sectionTitle": "Young generation, old generation",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A young generation with frequent minor GC promoting survivors into an old generation swept by a rare major GC](assets/young-old-generation.svg)\n\nNew allocations always land in the young generation. A **minor GC** collects only that region — fast, because it's small, and because the generational hypothesis says most of what's in it is already dead. Objects that survive a few minor collections get **promoted** into the old generation, which is collected far less often, by a **major** (or full) GC that has to scan much more data.",
+      "assets": [
+        {
+          "alt": "A young generation with frequent minor GC promoting survivors into an old generation swept by a rare major GC",
+          "path": "assets/young-old-generation.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "generational-and-concurrent-gc-s04",
+      "order": 4,
+      "sectionTitle": "Write barriers: the cost of splitting the heap",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Splitting the heap creates a correctness problem a single-region collector never has: an old-generation object can hold a reference *into* the young generation (a long-lived cache pointing at a request object it just received, for instance). A minor GC that only traces roots plus the young generation would miss that this young object is actually reachable from the old generation — and free something still live.\n\nThe fix is a **write barrier**: a small piece of code the compiler inserts on every pointer write that crosses generations, recording \"this old object now points into young.\" The minor GC then treats that recorded set as extra roots, so it correctly sees the cross-generational reference without having to scan the entire old generation to find it.\n\nThis is the real cost generational collection pays for its speed: every pointer write everywhere in the program carries a small check, in exchange for minor GCs staying cheap regardless of old-generation size.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "generational-and-concurrent-gc-s04-q1"
+      ]
+    },
+    {
+      "id": "generational-and-concurrent-gc-s05",
+      "order": 5,
+      "sectionTitle": "Why minor GCs are fast and major GCs hurt",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A minor GC's cost is bounded by the young generation's size, which is deliberately kept small — often tens of megabytes even in a multi-gigabyte heap — so a minor pause is typically single-digit milliseconds, frequent enough to be nearly invisible in latency metrics.\n\nA major/full GC has no such bound: it traces (and possibly compacts) the old generation, which holds however much long-lived data the application actually has. This is the pause that shows up as a real production incident — hundreds of milliseconds to multiple seconds on a large heap, exactly the \"p99 latency has 200ms GC pauses\" complaint teams bring to a GC-tuning conversation.\n\nThe practical implication: most GC tuning is really about **minimizing how often and how large the major GC has to be** — sizing the young generation so short-lived objects don't get promoted prematurely, and keeping the old generation's live set as small as memory pressure allows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "generational-and-concurrent-gc-s05-q1"
+      ]
+    },
+    {
+      "id": "generational-and-concurrent-gc-s06",
+      "order": 6,
+      "sectionTitle": "Concurrent and incremental collection",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A generational collector still stops the world for its major GC, and on a large old generation that pause is exactly what latency-sensitive services can't absorb. **Concurrent** collectors attack this directly: run the mark phase on a background thread *while the mutator keeps executing*, instead of pausing everything.\n\nThe correctness problem is the same one stop-the-world sidesteps by brute force — the mutator can change the pointer graph while the collector is mid-trace. Concurrent collectors solve it with extra machinery: a **tricolor** marking scheme (white = unvisited, grey = visited but not yet fully traced, black = fully traced) plus write barriers that catch a mutator write that would otherwise let a live object slip past the trace undetected — the same write-barrier idea from generational GC, repurposed for a different correctness problem.\n\n**Incremental** collectors take a related approach: instead of doing the whole trace at once (even concurrently), break it into small chunks interleaved with the mutator's own execution, trading total throughput for much smaller individual pause slices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "generational-and-concurrent-gc-s06-q1"
+      ]
+    },
+    {
+      "id": "generational-and-concurrent-gc-s07",
+      "order": 7,
+      "sectionTitle": "Real collectors, at a glance",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- **JVM's G1** (Garbage-First): splits the heap into many small regions rather than two fixed generations, and picks whichever regions have the most garbage to collect first — a generational, mostly-concurrent, incremental collector aimed at balancing throughput and pause time for typical server workloads.\n- **JVM's ZGC / Shenandoah**: push much further toward **low pause**, doing almost all marking and even compaction concurrently, targeting sub-millisecond pauses regardless of heap size (Shenandoah and ZGC differ in mechanism, not goal) — the trade-off is somewhat lower total throughput and higher memory/CPU overhead for the concurrent bookkeeping.\n- **.NET's GC**: generational (young/gen0, gen1, gen2) with a background/concurrent mode for the large object heap and gen2, similar trade-off to G1.\n\nAll three are the same core idea from this topic — generations plus some degree of concurrency — tuned toward different points on the throughput/pause trade-off.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "generational-and-concurrent-gc-s08",
+      "order": 8,
+      "sectionTitle": "When the generational hypothesis fails",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Generational GC is tuned for objects that die young. A workload dominated by **long-lived caches with high churn** — entries constantly added and evicted, but the cache itself living for the process's whole lifetime — inverts the assumption the whole design leans on.\n\nEvery cache entry gets allocated (young generation), survives long enough to get promoted (because the minor GC runs before it's evicted, if eviction is slow relative to allocation rate), and then dies in the *old* generation — which is exactly the region the collector was built to scan rarely and expensively. This pattern, sometimes called **premature promotion**, defeats the entire optimization: the young generation stops catching most of the garbage, and the old generation fills with short-lived-in-spirit objects that a major GC now has to clean up.\n\nThe fix is workload-specific: size the young generation larger so objects have more time to die there before promotion, or restructure the cache so it doesn't hold onto entries just long enough to cross that boundary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "generational-and-concurrent-gc-s08-q1"
+      ]
+    },
+    {
+      "id": "generational-and-concurrent-gc-s09",
+      "order": 9,
+      "sectionTitle": "Throughput-optimized vs latency-optimized",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Throughput-optimized (older JVM GCs, e.g. Parallel GC) | Latency-optimized (ZGC, Shenandoah) |\n|---|---|---|\n| Goal | Maximize total work done per unit CPU | Minimize worst-case pause, regardless of heap size |\n| Pause behavior | Stop-the-world major GCs, can be long | Sub-millisecond target, concurrent almost everywhere |\n| Overhead | Low — little concurrent bookkeeping | Higher CPU/memory for barriers and concurrent marking |\n| Fits | Batch jobs, offline processing | Request-serving services with tight p99 latency |\n\nNeither design goal is free: buying lower pause times costs real throughput and memory overhead elsewhere. Picking a collector is picking which of those costs your workload can actually absorb — a batch pipeline doesn't care about a 2-second pause; a request-serving API absolutely does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "generational-and-concurrent-gc-s10",
+      "order": 10,
+      "sectionTitle": "Debugging a p99 with 200ms GC pauses",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the question this topic is built to answer. First step: confirm it's actually a major/full GC and not something else — GC logs (`-Xlog:gc` on the JVM, equivalent tooling elsewhere) show pause type and duration directly; don't guess from application metrics alone.\n\nIf it is a major GC: check the old-generation occupancy trend over time. Growing steadily toward the heap limit points at either a real leak (see [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact)'s logical-leak discussion) or **premature promotion** from the previous slide — check the promotion rate and young-generation survival rate in the same logs.\n\nIf occupancy is stable but pauses are still long, the old generation's live set is simply large for the current collector's algorithm, and the fix is a different collector (moving to G1, ZGC, or Shenandoah trades some throughput for a much lower pause ceiling) rather than tuning flags on the existing one. \"What would you look at first\" has one correct shape of answer: measure before changing anything — GC logs, not guesses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "generational-and-concurrent-gc-s10-q1"
+      ]
+    },
+    {
+      "id": "generational-and-concurrent-gc-s11",
+      "order": 11,
+      "sectionTitle": "Concurrent doesn't mean free",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A common assumption after adopting ZGC or Shenandoah: \"pauses are basically gone, so GC overhead is a solved problem.\" Pause time and total overhead are different numbers. Concurrent collectors pay for low pauses with **more CPU consumed overall** — the tracing work still has to happen, it's just spread across background threads competing with the application for cores, plus the write-barrier cost every mutator thread pays on every relevant pointer write, all the time, not just during a pause.\n\nOn a CPU-constrained deployment (a container with a tight CPU limit, for instance), that background collector work can measurably reduce the throughput available to the application itself, even though no single request ever sees a visible pause. \"Low pause\" is a real, valuable property — it is not the same claim as \"low cost.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "generational-and-concurrent-gc-s12",
+      "order": 12,
+      "sectionTitle": "The shape of a production GC",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every production tracing collector is the same core mark-and-reclaim idea from [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact), made fast enough to ship via two orthogonal levers: generations exploit *where* garbage tends to be (recently allocated), and concurrency relaxes *when* the mutator has to stop for the collector to work safely.\n\nBoth levers cost something — write barriers on every relevant pointer write, and background CPU for concurrent tracing — in exchange for pauses that no longer scale with total heap size the way a naive mark-sweep's do. That's the trade every managed-language runtime is actually making, and it's the frame that turns a vague \"the GC is slow\" complaint into a specific, measurable question: which generation, which phase, concurrent or not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

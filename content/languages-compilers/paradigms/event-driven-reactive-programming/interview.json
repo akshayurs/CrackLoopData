@@ -1,0 +1,37 @@
+{
+  "topicId": "event-driven-reactive-programming",
+  "interviewQuestions": [
+    {
+      "id": "event-driven-reactive-programming-iq1",
+      "question": "How would you model a live price feed updating a UI?",
+      "answerMarkdown": "I'd treat the price source as a **stream** of update events rather than a variable I poll — polling wastes cycles checking for changes that haven't happened and adds latency up to the poll interval, while a push-based stream delivers each tick the moment it exists.\n\nThe UI **subscribes** to that stream instead of the stream knowing anything about the UI — that's the observer/pub-sub relationship, and it means I can add a second UI component (say, a price-alert banner) later that also subscribes, with zero changes to the price source. Between the raw stream and each subscriber, I'd insert transformations that matter for UX, not just correctness: `debounce` or `sample` so the UI doesn't try to repaint on every single tick if updates arrive faster than the screen usefully redraws — a market data feed can tick hundreds of times a second, and a human can't perceive that — and `distinctUntilChanged` so an unchanged price doesn't trigger a redundant re-render.\n\nConcretely with RxJS-style operators: `priceStream$.pipe(sample(interval(100)), distinctUntilChanged()).subscribe(updateUI)` — sample to a sane redraw rate, then drop no-op updates.\n\nThe part I'd flag as the actual skill being tested: naming *which* operator solves which specific problem (sample for redraw rate, distinctUntilChanged for no-op suppression) rather than waving at \"use reactive programming.\"\n\n**Testing:** whether you can turn a paradigm into a concrete, operator-level design rather than a buzzword answer.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "event-driven-reactive-programming-iq2",
+      "question": "What's callback hell, and why did it become a big enough problem to motivate promises and async/await?",
+      "answerMarkdown": "Callback hell is what happens when several asynchronous steps each depend on the previous one's result: `fetchUser(id, user => fetchOrders(user.id, orders => fetchInvoice(orders[0].id, invoice => { ... })))`. Each step nests one level deeper inside the last callback, so the code's *shape* is a pyramid growing rightward rather than a linear sequence of steps.\n\nTwo concrete costs beyond just looking ugly: error handling has to be duplicated at every nesting level, because a normal try/catch around the outermost call doesn't catch errors thrown inside an inner async callback — by the time the inner one runs, the outer synchronous block has already finished. And reading the logical sequence — \"get the user, then their orders, then the first invoice\" — requires mentally unwinding the nesting instead of reading top to bottom, which gets genuinely hard past three or four levels.\n\nPromises fixed the readability problem first, by letting you chain `.then()` calls at one nesting level instead of stacking callbacks, and centralizing error handling in a single `.catch()`. `async`/`await` went further, letting the exact same event-driven, non-blocking execution *read* as ordinary sequential code — `const user = await fetchUser(id)` looks like a normal statement even though it's still suspending and resuming around an event, not blocking a thread.\n\n**Testing:** whether you understand callback hell as a real, specific pain (error propagation, readability) rather than just \"nested code looks bad.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Common mistakes"
+    },
+    {
+      "id": "event-driven-reactive-programming-iq3",
+      "question": "Two independent handlers subscribe to the same button's click event. What can you say — and not say — about the order they'll run in?",
+      "answerMarkdown": "In a standard single-threaded event system (the DOM, Node's event loop), handlers registered for the *same* event on the *same* element typically run in registration order for that single event — that part is usually specified and reliable. What you can't safely assume is anything about ordering relative to a *different* event's handlers, or about timing if either handler does something asynchronous internally.\n\nThe trap is generalizing \"handlers run in registration order\" too far. If handler A kicks off a network request inside the click handler and handler B doesn't, A's *continuation* after the request resolves can run much later than B's handler, even though A was registered first — the synchronous part of A finishes in order, but anything A scheduled asynchronously is now just another event in the queue, competing with whatever else is pending.\n\nThis is exactly the failure mode from the pitfall in this Topic: you can't read event-driven code and know execution order the way you'd read imperative code, because real-world event timing (and, once anything is async, scheduling order) decides it, not source position. If two handlers' relative order actually matters for correctness, I wouldn't rely on registration order implicitly — I'd make the dependency explicit, e.g. by having one handler trigger the other directly, or coordinating them through a single stream with an explicit `concatMap`-style ordering guarantee.\n\n**Testing:** whether you know the real ordering guarantees an event system gives you, and where they silently stop applying once async work is involved.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanics"
+    },
+    {
+      "id": "event-driven-reactive-programming-iq4",
+      "question": "When would you choose plain event listeners over a reactive stream library, given that reactive streams seem strictly more powerful?",
+      "answerMarkdown": "Reactive streams are more powerful, but that power has a real cost: an extra dependency, a learning curve (operators, subscription lifecycle, hot-vs-cold stream semantics), and a debugging story that's harder for a newcomer than \"here's the one function that runs on click.\" I'd choose plain listeners when the composition need is genuinely small.\n\nConcretely: a component with two or three independent event handlers — a button click, a form submit — each doing one self-contained thing with no combining, debouncing, or cancellation logic, gets nothing from a reactive pipeline except indirection. Adding RxJS to handle `button.addEventListener('click', doThing)` is adding a dependency and a mental model for zero composition payoff.\n\nI'd reach for reactive streams specifically when the problem *is* composition: combining multiple event sources into one derived result (autocomplete: keystrokes + debounce + network response + cancellation of stale requests), or when I need built-in lifecycle management — unsubscribing cleanly when a component unmounts — across many concurrent streams, which plain listeners require you to track by hand (remembering to call `removeEventListener` everywhere you called `addEventListener`).\n\nSo the decision isn't \"reactive is better\" — it's \"does this component actually need to compose multiple event sources,\" and most UI code, honestly, doesn't.\n\n**Testing:** whether you can argue against reaching for the fancier tool by default, a good signal of practical judgment.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

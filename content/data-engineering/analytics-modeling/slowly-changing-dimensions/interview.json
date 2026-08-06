@@ -1,0 +1,37 @@
+{
+  "topicId": "slowly-changing-dimensions",
+  "interviewQuestions": [
+    {
+      "id": "slowly-changing-dimensions-iq1",
+      "question": "Explain the difference between SCD Type 1 and Type 2, and when you'd use each.",
+      "answerMarkdown": "Type 1 overwrites — when an attribute changes, you update the row in place and the old value is gone. Type 2 preserves history — instead of updating, you close out the current row with an end date and insert a brand-new row with a new surrogate key, so every version the entity ever had still exists in the table.\n\nThe choice comes down to one question: does the old value have analytical meaning? A typo correction in a customer's name has none — nobody needs to know the customer's name used to be misspelled, so Type 1 is correct and cheap, just a plain UPDATE. A customer's membership tier absolutely has analytical meaning — finance needs to know that last quarter's revenue from this customer happened while they were Silver, not Gold, so overwriting that value would quietly rewrite historical reporting.\n\nThe mechanism that makes Type 2 work is the surrogate key: the fact table stores the surrogate key of whichever dimension row was current at load time, not the natural key. So a historical fact naturally joins back to the historical version, without any date-range logic needed at query time.\n\nI'd pick per attribute, not per table — a real dimension usually mixes both.\n\n**Testing:** whether you understand SCD as an attribute-level design decision tied to whether history has analytical value, not a table-wide setting.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "slowly-changing-dimensions-iq2",
+      "question": "How would you implement a Type 2 SCD load in practice, and what's the trickiest part to get right?",
+      "answerMarkdown": "The pattern is: match incoming records against the dimension on the natural key where `is_current = true`; if a tracked attribute changed, close out the old row (set `effective_end_date` to today, `is_current` to false) and insert a new row with a fresh surrogate key, `effective_start_date` today, `is_current` true. If nothing tracked changed, leave the row alone.\n\nMost warehouses can't cleanly do \"update one row and insert a different row for the same match\" in a single `MERGE`, so in practice I run it as two steps — a targeted update to close rows whose tracked attributes changed, then an insert for the new versions — often inside one transaction so a load never leaves a customer with two `is_current = true` rows.\n\nThe trickiest part is deciding which attributes are *tracked* for change detection. If you compare every column, unrelated fields like a `last_login_at` timestamp will trigger a new version every single day, and your \"slowly\" changing dimension turns into a fast-changing one with an exploding row count. The fix is an explicit tracked-column list — only fire a new version when tier, price, or whatever genuinely matters for history actually changes, and let everything else update quietly on the current row.\n\n**Testing:** whether you've actually built one of these and hit the change-detection scoping problem, not just memorized the theory.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Implementation"
+    },
+    {
+      "id": "slowly-changing-dimensions-iq3",
+      "question": "A revenue-by-tier report shows every historical order under the customer's current tier, even orders from before they upgraded. How do you debug this?",
+      "answerMarkdown": "This is the single most common Type 2 bug, so I'd check it first: is the report's join using the fact's stored surrogate key, or is it joining on the natural key filtered to `is_current = true`? The second pattern silently resolves every fact to today's dimension state regardless of when the fact happened, which is exactly this symptom.\n\nConcretely, I'd pull the SQL behind the report and look at the join clause. If I see something like `JOIN dim_customer d ON f.customer_id = d.customer_id AND d.is_current = true`, that's the bug — it should be `JOIN dim_customer d ON f.customer_sk = d.customer_sk`, joining on the surrogate key that was written onto the fact row at load time.\n\nI'd also sanity-check the dimension itself: pick a customer who's changed tier, and confirm the historical rows actually exist with correct effective-date ranges and only one `is_current = true` row. If the dimension is fine and it's purely the query, the fix is a one-line join change; if the dimension itself never split into versions correctly, the fix is upstream in the load logic, and I'd need to backfill the missing history from source.\n\n**Testing:** whether you can localize a subtle correctness bug to \"query joining wrong\" vs \"dimension load never versioned in the first place.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "slowly-changing-dimensions-iq4",
+      "question": "Would you ever use Type 2 for an attribute that changes every few minutes, like a live account status flag?",
+      "answerMarkdown": "No, and I'd push back on that design if I saw it proposed. Type 2 assumes changes are infrequent relative to fact volume — that's the \"slowly\" in slowly changing dimension. A dimension with 10 million entities and 3 lifetime changes each becomes a 30-million-row table, which is manageable. The same dimension with an attribute changing every few minutes would generate thousands of new rows per entity per day, and the table explodes into hundreds of millions of rows almost immediately, most of which nobody will ever query.\n\nThe deeper issue isn't just storage — it's that a status flag changing every few minutes usually isn't a *dimension* concept at all. It behaves like an event or a fact: something that happened at a point in time, with a timestamp, that you'd want to aggregate or trend, not something you'd look up as \"descriptive context\" about an entity.\n\nWhat I'd actually build depends on the need: if you need current status, keep it as a plain Type 1 attribute updated in place. If you need to know status *history* — how long something stayed in each state — that belongs in its own fact table or event log, with one row per status transition, not as SCD Type 2 rows bolted onto a dimension.\n\n**Testing:** whether you can recognize when a modeling technique is being misapplied outside the assumptions it depends on.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

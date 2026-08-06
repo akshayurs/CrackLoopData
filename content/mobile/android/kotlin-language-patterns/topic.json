@@ -1,0 +1,156 @@
+{
+  "id": "kotlin-language-patterns",
+  "title": "Kotlin Language Patterns for Android",
+  "area": "mobile",
+  "group": "android",
+  "order": 9,
+  "slug": "kotlin-language-patterns",
+  "summary": "Null safety, data/sealed classes, and scope functions are the idioms that show up in nearly every Kotlin Android file. Learn what each buys you and the two ways they get misused.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "kotlin-language-patterns-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Kotlin's language features aren't decoration on top of Java-style Android code — they're load-bearing idioms that show up in nearly every file: null safety eliminates a whole class of crash that dominated Java-era Android, data classes and sealed classes give you free structural correctness for exactly the kind of code Android UI state modeling needs, and scope functions cut down the ceremony around common object-configuration patterns.\n\nThis topic covers the idioms an Android codebase actually leans on daily — not a full Kotlin language tour — and the two ways they get misused: `!!` reintroducing the null-pointer crashes null safety was meant to prevent, and an extension function shadowing a member in a way that quietly confuses readers. [Kotlin Coroutines & Flow](kotlin-coroutines-flow) is covered separately since it's substantial enough to warrant its own topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-language-patterns-s02",
+      "order": 2,
+      "sectionTitle": "Null safety",
+      "subTitle": "?, !!, and why Kotlin kills a class of NPEs",
+      "type": "concept",
+      "markdown": "Kotlin's type system distinguishes nullable (`String?`) from non-nullable (`String`) types at compile time — a non-nullable type is a compiler-enforced guarantee that a value can never be null, and the compiler refuses to let you call a method on a nullable type without first proving (via a null check, `?.`, `?:`, or a smart-cast) that it isn't null at that point.\n\nThis matters specifically because a huge fraction of Java-era Android crashes were `NullPointerException`s from exactly this gap — any reference type could silently be null, and the compiler gave you no help distinguishing \"this is guaranteed non-null\" from \"this might be null and I forgot to check.\" Kotlin makes that distinction part of the type itself, so the compiler catches the missing check at build time instead of a user hitting it at runtime.\n\nThe escape hatch, `!!` (the not-null assertion operator), tells the compiler \"trust me, this isn't null\" and throws an `NullPointerException` immediately if you're wrong — it's a deliberate opt-out of the safety the rest of the language gives you for free, and its overuse (covered later) reintroduces exactly the crash class null safety exists to prevent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "kotlin-language-patterns-s02-q1"
+      ]
+    },
+    {
+      "id": "kotlin-language-patterns-s03",
+      "order": 3,
+      "sectionTitle": "Data classes",
+      "subTitle": "equals/hashCode/copy for free",
+      "type": "concept",
+      "markdown": "A `data class User(val id: String, val name: String)` gets `equals()`, `hashCode()`, `toString()`, and `copy()` generated automatically, all based on the declared properties — no hand-written boilerplate, and critically, no risk of the classic bug where `equals()` and `hashCode()` are implemented inconsistently with each other (breaking anything that puts the object in a `HashSet`/`HashMap`, which relies on both being correct and consistent).\n\n`copy()` deserves particular attention for Android specifically: it creates a new instance with all the same property values except whichever ones you explicitly override (`user.copy(name = \"New Name\")`), which is exactly the pattern needed for the immutable-state-update model covered in the architecture components topic — a `ViewModel` updating one field of its UI state doesn't mutate the existing state object, it creates a new one via `copy()` with that one field changed, preserving the single-source-of-truth discipline that mutation would undermine.\n\nData classes are meant for classes whose entire identity is their data — value objects, DTOs, UI state. A class with real behavior and identity beyond its field values (most business logic classes, most Android framework-adjacent classes) isn't a good data class candidate even though the annotation would technically compile.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-language-patterns-s04",
+      "order": 4,
+      "sectionTitle": "Sealed classes for modeling UI state",
+      "subTitle": "Loading, Success, Error",
+      "type": "concept",
+      "markdown": "A `sealed class` (or `sealed interface`) restricts which classes can extend it to a known, closed set defined in the same file/module — unlike a regular open class hierarchy, the compiler knows the *complete* list of possible subtypes, which unlocks exhaustive `when` matching: a `when` over a sealed class with a branch for every subtype needs no `else` clause, and if a new subtype is added later, every existing `when` that's missing a branch for it becomes a **compile error**, not a silently-missed runtime case.\n\nThis is precisely why sealed classes are the standard way to model UI state on Android (as seen in the architecture components topic's `UiState.Loading`/`Success`/`Error`): the state genuinely is a closed set of possibilities, and you want the compiler to guarantee every consumer handles all of them, forever, even as the app evolves — add a new `UiState.Empty` case next year, and every `when` block across the codebase that renders `UiState` fails to compile until it's updated to handle it, which is exactly the safety net you want for something this central to correctness.\n\nAn open class hierarchy or a plain `enum` can't provide this: an open hierarchy has no bounded set the compiler can verify exhaustiveness against, and a plain enum can't carry different associated data per case the way `Success(user: User)` naturally does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": [
+        "kotlin-language-patterns-s04-q1"
+      ]
+    },
+    {
+      "id": "kotlin-language-patterns-s05",
+      "order": 5,
+      "sectionTitle": "A screen's UI state modeled as a sealed class",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nsealed interface ProfileUiState {\n    data object Loading : ProfileUiState\n    data class Success(val user: User) : ProfileUiState\n    data class Error(val message: String) : ProfileUiState\n}\n\n@Composable\nfun ProfileScreen(state: ProfileUiState) {\n    when (state) {\n        is ProfileUiState.Loading -> LoadingSpinner()\n        is ProfileUiState.Success -> ProfileContent(state.user)   // state.user is smart-cast, no cast needed\n        is ProfileUiState.Error -> ErrorMessage(state.message)\n        // no else needed — the compiler knows these three cases are exhaustive\n    }\n}\n```\n\nNotice `state.user` is accessible with no explicit cast inside the `Success` branch — Kotlin's smart-casting narrows `state`'s type to `ProfileUiState.Success` within that branch automatically, since the `when` already proved which subtype it is. `data object` (rather than a plain `object`) is used for `Loading` specifically to get a sensible `toString()`/`equals()` for a case with no data — a small but real ergonomic detail that avoids `object`'s default identity-based equality behaving surprisingly in tests or logging.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-language-patterns-s06",
+      "order": 6,
+      "sectionTitle": "Extension functions",
+      "subTitle": "Adding behavior without inheritance",
+      "type": "concept",
+      "markdown": "An extension function (`fun View.setVisibleOrGone(visible: Boolean) { ... }`) adds a method-call-syntax function to an existing type — including types you don't own, like Android framework classes — without subclassing or modifying the original class at all. Call sites read exactly like a real member function (`myView.setVisibleOrGone(true)`), even though it's resolved at compile time as a regular top-level function taking the receiver as its first parameter.\n\nThis matters enormously for Android specifically because so much of the platform's own API surface (`View`, `Context`, `String`, collections) is final or otherwise not something you can subclass to add convenience behavior to — extension functions are the idiomatic way to add app-specific helper behavior onto framework types without wrapper classes or static utility methods called awkwardly (`ViewUtils.setVisibleOrGone(myView, true)` versus `myView.setVisibleOrGone(true)`).\n\nA subtlety worth knowing: extension function resolution is **static**, determined by the declared type at the call site, not the runtime type — this differs from real member function overriding/polymorphism, and it's occasionally a source of confusion when an extension function is expected to behave polymorphically across a class hierarchy the way a real virtual method would.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-language-patterns-s06-q1"
+      ]
+    },
+    {
+      "id": "kotlin-language-patterns-s07",
+      "order": 7,
+      "sectionTitle": "Scope functions",
+      "subTitle": "let, apply, run, also, and with",
+      "type": "compare",
+      "markdown": "| Function | Returns | Object reference inside | Typical use |\n|---|---|---|---|\n| `let` | Lambda's result | `it` | Transform a value, or run a block only if it's non-null (`x?.let { ... }`) |\n| `apply` | The original object | `this` | Configure an object's properties, then return it (common in builders) |\n| `run` | Lambda's result | `this` | Compute a result using an object's members as implicit receiver |\n| `also` | The original object | `it` | A side effect (logging) in the middle of a call chain, without altering the chain's result |\n| `with` | Lambda's result | `this` | Group several calls on one object, when it's not the start of a fluent chain |\n\nThe two questions that pick the right one: **what should this expression return** (the original object, for chaining — `apply`/`also`; or the block's result — `let`/`run`/`with`), and **how do I want to refer to the object inside the block** (`this`, so members are called unqualified — `apply`/`run`/`with`; or `it`, useful when you need an explicit name, especially with nested scope functions — `let`/`also`). Memorizing five names is less useful than internalizing this two-axis decision, which is what actually determines which one reads correctly at a given call site.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-language-patterns-s07-q1"
+      ]
+    },
+    {
+      "id": "kotlin-language-patterns-s08",
+      "order": 8,
+      "sectionTitle": "Sealed class vs enum for representing a fixed set of states",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | enum | sealed class |\n|---|---|---|\n| **Associated data** | Same shape for every case (or none) | Each case can carry completely different data |\n| **Exhaustive when** | Yes | Yes |\n| **Fits** | A fixed set of interchangeable labels (a day of the week, a fixed set of network states with no extra data) | A fixed set of cases that genuinely differ in what data they carry |\n\nThe deciding question: does every case in this fixed set carry the **same shape** of associated data (or none at all)? If yes, an `enum` is simpler and says exactly that. If different cases need fundamentally different data — `Loading` needs nothing, `Success` needs a `User`, `Error` needs a message string, as in the UI state example — a `sealed class` is the right fit, because an `enum` constant can't naturally carry a different type of payload per case the way a sealed class's subtypes can. Reaching for a sealed class purely out of habit when an enum would do (all cases genuinely carry identical, or no, data) adds unnecessary ceremony for no real benefit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-language-patterns-s09",
+      "order": 9,
+      "sectionTitle": "Overusing !! and reintroducing the NPEs Kotlin was meant to prevent",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A codebase accumulates `!!` at nearly every point a nullable value is used, often because it's the fastest way to make the compiler stop complaining under deadline pressure — `viewModel!!.loadData()`, `intent.getStringExtra(\"id\")!!` — each one a deliberate promise to the compiler that's checked at runtime instead of compile time, exactly reversing the safety null-safe types were designed to provide.\n\nThe result is a codebase that looks null-safe (every type is technically correctly annotated) while behaving almost exactly like pre-null-safety Java wherever `!!` appears — any of those assertions failing produces the same `NullPointerException` crash null safety was supposed to eliminate, just with the compiler having actively warned about the risk at the exact line that later crashed.\n\nThe fix is treating every `!!` in review as a question that needs an explicit answer: *why is this guaranteed non-null here, and if it somehow isn't, what should happen instead of crashing?* Often the honest answer reveals a real gap — the value genuinely can be null in some flow the code didn't account for — and the fix is a proper null check, a sensible default via `?:`, or restructuring the code so the nullability is handled explicitly rather than asserted away.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-language-patterns-s09-q1"
+      ]
+    },
+    {
+      "id": "kotlin-language-patterns-s10",
+      "order": 10,
+      "sectionTitle": "An extension function that shadows a member and confuses readers",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "An extension function is defined with the same name and signature as an existing member function on the same type — Kotlin's resolution rules always prefer the **member function** over an extension with the same signature, silently. The extension function compiles fine, sits in the codebase, and is simply never called through normal dispatch wherever a member with that exact signature already exists, which is confusing precisely because there's no error or warning pointing at the problem.\n\nThis becomes a real bug, not just a curiosity, when someone writes the extension specifically *intending* to override or customize existing member behavior (a common instinct coming from other languages' extension/monkey-patching mechanisms) and doesn't realize the member always wins — code that looks like it's calling the custom extension logic is silently calling the original member instead, with no signal that anything's amiss.\n\nThe fix is naming discipline: extension functions should almost always have names distinct from any existing member on the type they extend, specifically to avoid this silent-shadowing scenario, and if the actual goal is genuinely overriding behavior (not just adding a new, differently-named helper), extension functions are the wrong tool entirely — that requires real inheritance and overriding, which extension functions, being statically resolved, cannot provide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-language-patterns-s10-q1"
+      ]
+    }
+  ]
+}

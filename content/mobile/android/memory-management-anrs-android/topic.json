@@ -1,0 +1,161 @@
+{
+  "id": "memory-management-anrs-android",
+  "title": "Memory Management & ANRs on Android",
+  "area": "mobile",
+  "group": "android",
+  "order": 8,
+  "slug": "memory-management-anrs-android",
+  "summary": "The main thread has roughly five seconds before the OS calls your app unresponsive. Learn what actually blocks it, the classic Context leak patterns, and how to find both with real tooling.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "memory-management-anrs-android-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Android watches one thread more closely than any other: the main thread. Block it too long — roughly five seconds handling input, less for some specific callbacks — and the OS assumes the app has hung and offers the user a force-close dialog. That's an **ANR** (Application Not Responding), and it's one of the two failure modes this topic is about.\n\nThe other is the Context leak: holding a reference to an Activity (directly, or through a listener, a static field, an inner class) longer than the Activity itself lives, preventing garbage collection of everything it holds. Both failure modes are Android-specific consequences of the same underlying constraint — a single UI thread and OS-enforced memory pressure — that general JVM garbage-collection mechanics don't fully explain on their own; that theory lives in Languages & Compilers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-anrs-android-s02",
+      "order": 2,
+      "sectionTitle": "What actually causes an ANR",
+      "subTitle": "The 5-second main-thread rule",
+      "type": "concept",
+      "markdown": "Android runs all UI work — layout, drawing, input event handling — on a single main thread, processed through a message queue. If the main thread is busy (blocked on synchronous work, stuck in an infinite loop, or waiting on a lock another thread holds) for too long while an input event or certain system callbacks are pending, the OS's own watchdog concludes the app has stopped responding and offers to force-close it.\n\nThe specific threshold varies by what's blocked — roughly five seconds for input dispatch, shorter windows for some Broadcast Receiver callbacks — but the underlying cause is always the same shape: **something ran synchronously on the main thread for too long**, whether that's one very slow operation or many small operations that individually seem fine but collectively exceed the budget.\n\nThe mental model that matters: this isn't the OS being strict about performance style — it's a hard constraint enforced by a real watchdog, and a user staring at a frozen screen for five seconds has already had a bad enough experience that the ANR dialog is almost redundant at that point; the actual damage is done well before the formal threshold triggers the dialog.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "memory-management-anrs-android-s02-q1"
+      ]
+    },
+    {
+      "id": "memory-management-anrs-android-s03",
+      "order": 3,
+      "sectionTitle": "The main thread's message queue and where it gets stuck",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The main thread runs a loop pulling messages (an input event, a `View` invalidation, a posted `Runnable`) off a queue one at a time, processing each to completion before pulling the next. There's no preemption within this model — a message that takes ten seconds to process blocks every message behind it in the queue for that entire ten seconds, including the input event a frustrated user just tapped three more times trying to get a response.\n\nAn ANR watchdog effectively asks: \"has the message currently at the front of the queue been running for longer than the threshold, with the user waiting?\" It doesn't matter whether that one message is doing one giant blocking call or has somehow queued up an unreasonable amount of synchronous work — from the queue's perspective, it's all one long-running item blocking everything behind it.\n\n![Main thread message queue backed up behind a long-running blocking task with a watchdog timeout](assets/main-thread-queue-blocked.svg)",
+      "assets": [
+        {
+          "alt": "Main thread message queue backed up behind a long-running blocking task with a watchdog timeout",
+          "path": "assets/main-thread-queue-blocked.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-anrs-android-s04",
+      "order": 4,
+      "sectionTitle": "Common Context leak patterns",
+      "subTitle": "Static references and inner classes",
+      "type": "concept",
+      "markdown": "Two shapes account for most real Context leaks. The first, covered in the lifecycle topic, is a **static field** holding an Activity or View directly — the field's process-lifetime scope keeps the referenced Activity's entire object graph alive well past its actual destruction.\n\nThe second, subtler shape: a **non-static inner class** (or, in Kotlin, a lambda or anonymous object) implicitly holds a reference to its enclosing instance — an Activity's inner `Handler`, listener, or callback class carries a hidden reference back to the Activity itself, even if nothing in the inner class's code obviously mentions the Activity. If that inner class instance is handed off to something longer-lived (registered with a system service, held by a static callback registry, posted with a long delay), it drags the entire enclosing Activity along with it for as long as it's held, invisibly.\n\nThe fix for the second pattern: use a `static` nested class (which does *not* implicitly hold the enclosing reference) plus an explicit `WeakReference` to the Activity when it's genuinely needed, or scope the callback's lifetime explicitly to the Activity's own lifecycle so it's unregistered before the Activity is destroyed — never assume an inner class is harmless just because its own code doesn't obviously reference the outer Activity.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "memory-management-anrs-android-s04-q1"
+      ]
+    },
+    {
+      "id": "memory-management-anrs-android-s05",
+      "order": 5,
+      "sectionTitle": "A listener leak fixed with a WeakReference or lifecycle-aware scope",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\n// Leaks: inner class implicitly holds a reference to MainActivity\nclass MainActivity : AppCompatActivity() {\n    private val listener = object : SomeLongLivedService.Listener {\n        override fun onEvent() { updateUi() }   // implicitly calls MainActivity.this.updateUi()\n    }\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n        SomeLongLivedService.register(listener)   // service outlives the Activity\n    }\n}\n\n// Fixed: explicit lifecycle-aware unregistration\nclass MainActivity : AppCompatActivity() {\n    private val listener = object : SomeLongLivedService.Listener {\n        override fun onEvent() { updateUi() }\n    }\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n        SomeLongLivedService.register(listener)\n    }\n    override fun onDestroy() {\n        SomeLongLivedService.unregister(listener)   // breaks the reference before the leak matters\n        super.onDestroy()\n    }\n}\n```\n\nThe fix here isn't a `WeakReference` at all — it's simpler and more reliable: explicitly unregistering in `onDestroy` breaks the reference at the moment it stops being needed, rather than relying on the garbage collector to eventually notice a weak reference is only weakly held. A `WeakReference` is the right tool when you genuinely can't guarantee an unregister call will happen; an explicit unregister is preferable whenever you can guarantee it, because it's deterministic rather than dependent on GC timing.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "memory-management-anrs-android-s05-q1"
+      ]
+    },
+    {
+      "id": "memory-management-anrs-android-s06",
+      "order": 6,
+      "sectionTitle": "Detecting leaks",
+      "subTitle": "Heap dumps and LeakCanary's approach",
+      "type": "concept",
+      "markdown": "A **heap dump** is a snapshot of every live object and every reference between them at a point in time — inspecting one lets you ask \"what's keeping this destroyed Activity alive?\" and trace the actual reference chain back to its root cause, rather than guessing.\n\n**LeakCanary** (and similar tooling) automates the tedious part of this: it watches for objects that *should* be garbage-collected soon after a known lifecycle event (an Activity's `onDestroy`, a Fragment's `onDestroyView`) and, if one survives past a grace period and a forced GC, triggers a heap dump and walks the reference graph automatically, surfacing the exact chain of references keeping it alive — \"MainActivity is referenced by SomeLongLivedService.listener, which holds an anonymous inner class instance holding MainActivity.this\" — directly, rather than requiring manual heap-dump analysis for every suspected leak.\n\nThe practical workflow: running leak-detection tooling continuously in debug builds during normal development and QA use catches leaks close to when they're introduced, when the responsible change is still fresh and easy to identify — waiting until a production out-of-memory crash report to start investigating means reconstructing a leak's cause from a much colder trail, often weeks after the change that caused it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": []
+    },
+    {
+      "id": "memory-management-anrs-android-s07",
+      "order": 7,
+      "sectionTitle": "A memory leak vs a legitimate long-lived cache",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Memory leak | Legitimate long-lived cache |\n|---|---|---|\n| **Growth pattern** | Unbounded — grows with usage and never releases what it holds | Bounded — capped size or count, with an eviction policy |\n| **What it holds** | Often accidentally holds Activity/View references it never meant to | Deliberately holds data (not UI references) meant to be reused |\n| **Intent** | Unintentional — nobody meant for this reference to be held | Intentional — the whole point is to keep data around |\n| **Fix** | Break the unintended reference | Not a bug; may still need a size cap if unbounded |\n\nThe distinguishing question when heap-dump tooling flags something surviving longer than expected: was this reference held **on purpose**, and is it **bounded**? A deliberately maintained image cache with an LRU eviction policy holding onto bitmap data is a legitimate, intentional design choice, not a leak — even though it also \"holds onto memory longer than a single screen's lifetime.\" The actual leak signature is specifically an *Activity, View, or Context* reference surviving past its own destruction with no bound and no intent behind it — that's the pattern tooling like LeakCanary is built to detect, and the distinction matters because chasing every long-lived object as a suspected leak wastes effort on legitimate design choices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "memory-management-anrs-android-s07-q1"
+      ]
+    },
+    {
+      "id": "memory-management-anrs-android-s08",
+      "order": 8,
+      "sectionTitle": "An anonymous inner class silently holding its outer Activity",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "An Activity creates an anonymous `Runnable` or listener object — say, posted to a `Handler` with a several-minute delay, or registered with a system service that persists beyond any single screen — and the developer reasons \"it's just a small callback, nothing to leak here,\" without realizing the anonymous class implicitly captures a reference to the enclosing Activity even when its visible code never mentions it by name.\n\nThis is genuinely easy to miss because the leak is invisible in the source code itself — there's no line that says `activity.doSomething()` inside the anonymous class to catch in review; the captured reference is a compiler-generated implicit field, not something written explicitly. A reviewer scanning for \"does this class reference the Activity\" by reading the visible code will not find it, because the capture happens at the language level, not in anything textually present.\n\nThe fix is procedural as much as technical: treat any anonymous inner class, lambda, or non-static nested class defined inside an Activity/Fragment and handed to something longer-lived (a delayed `Handler` post, a static registry, a system service registration) as a leak candidate by default, and either convert it to a `static` class with an explicit `WeakReference`, or make sure whatever it's registered with has a matching unregister call tied to the Activity's own teardown.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "memory-management-anrs-android-s08-q1"
+      ]
+    },
+    {
+      "id": "memory-management-anrs-android-s09",
+      "order": 9,
+      "sectionTitle": "Registering a listener in onCreate and never unregistering it",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A listener or callback is registered in `onCreate` — a broadcast, a sensor, a location update, a long-lived service's event listener — and no corresponding unregister call exists anywhere in the Activity's teardown path. Registration-without-unregistration is the single most common concrete cause behind the abstract \"inner class holds the Activity\" leak pattern: it's not the inner class alone that leaks anything, it's the fact that something longer-lived is holding onto it, and only an explicit unregister severs that.\n\nThe bug is easy to introduce because registration is the part that's obviously necessary to make the feature work at all — skip it and the feature simply doesn't function, which is immediately visible in testing. Unregistration produces no functional symptom if skipped; the feature keeps working exactly the same, and the only consequence is an invisible, slowly-accumulating leak that shows up much later as an unrelated-looking out-of-memory crash.\n\nThe reliable discipline: every registration call should have its unregister counterpart written in the same code review, ideally in the same diff, symmetric in the corresponding lifecycle callback (`onCreate`/`onDestroy`, or `onStart`/`onStop` if the registration should only be active while visible) — treating \"did you also unregister this\" as a mandatory review question for any new registration call, not an occasional afterthought.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "memory-management-anrs-android-s09-q1"
+      ]
+    },
+    {
+      "id": "memory-management-anrs-android-s10",
+      "order": 10,
+      "sectionTitle": "Connecting memory leaks to ANRs",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "These two failure modes aren't unrelated: a severe enough memory leak makes ANRs more likely, because a system under real memory pressure spends more time on garbage collection, and a large or frequent GC pause can itself be long enough to trip the main-thread responsiveness watchdog — especially if that GC work happens to coincide with, or is triggered by, main-thread allocation.\n\nThis is why an app that accumulates several small leaks over a long session sometimes shows *increasing* jank and occasional ANRs the longer it's been open, even though no single operation obviously changed — the accumulated leaked memory is quietly degrading GC behavior for everything else running, main thread included.\n\nThe practical takeaway for debugging a hard-to-reproduce ANR: don't assume it's always a single slow synchronous call. If an ANR correlates with how long the app's been running or how much the user has navigated around, check for accumulated memory leaks contributing GC pressure as a contributing cause, not just profile the specific operation that happened to be on-screen when the ANR fired.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    }
+  ]
+}

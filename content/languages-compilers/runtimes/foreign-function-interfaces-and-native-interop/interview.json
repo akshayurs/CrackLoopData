@@ -1,0 +1,37 @@
+{
+  "topicId": "foreign-function-interfaces-and-native-interop",
+  "interviewQuestions": [
+    {
+      "id": "foreign-function-interfaces-and-native-interop-iq1",
+      "question": "You need to call a native image-processing library from your Java service. Walk me through your plan and the biggest risks.",
+      "answerMarkdown": "I'd start with the FFI mechanism: on a modern JDK I'd reach for the Foreign Function & Memory API (Project Panama) over classic JNI, since it avoids hand-written native glue code and mangled function names — less boilerplate for the same job, with explicit memory-lifetime scoping via `Arena`.\n\nFor the call shape, I'd batch the image data into as few calls as possible — pass the whole image buffer once, not pixel by pixel — because marshaling cost is paid on every crossing, and a tight per-pixel loop across the boundary would dominate the actual processing time with conversion overhead alone.\n\nThe two risks I'd flag before writing code: memory ownership and crash isolation. Native memory the library allocates on my behalf is invisible to the JVM's GC, so I need an explicit, disciplined release path — wrapped in try/finally or an Arena-scoped block, never relying on a finalizer — or I get a slow leak that looks like a healthy managed heap in profiling while the process's actual memory climbs. Separately, a bug in the native library (a segfault) can take down the entire JVM process, unlike a normal exception, so for an unproven or third-party library I'd seriously consider running it in a separate process behind an IPC boundary rather than in-process, trading some latency for real fault isolation.\n\n**Testing:** whether you can plan an FFI integration end to end, including the two risks (memory, crash isolation) that separate a working prototype from a production-safe one.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Applied design"
+    },
+    {
+      "id": "foreign-function-interfaces-and-native-interop-iq2",
+      "question": "Why is JNI so much more verbose than .NET's P/Invoke for the same kind of task?",
+      "answerMarkdown": "The core difference is who does the marshaling work and when. JNI requires you to hand-write the native-side function with a specific mangled name matching the Java class and method, and manually convert every argument and return value between Java's types and native representations using the JNIEnv C API — there's no automatic inference happening.\n\nP/Invoke flips that: you declare an `extern` method with a `[DllImport]` attribute naming the native library and function, and the CLR generates the marshaling code for you at the call site based on the declared parameter types. A call that needs tens of lines of native glue in JNI can be a two-line declaration in P/Invoke for the common cases.\n\nThe trade is control versus convenience — P/Invoke's automatic marshaling handles typical cases well but gives you less explicit say over exactly how a tricky type (a complex struct layout, a callback function pointer) gets converted, where JNI's manual approach, despite the ceremony, lets you control every byte if you need to. I'd also mention that JNI's landscape has moved — the JDK's newer Foreign Function & Memory API narrows this gap significantly by adopting a more declarative, Panama-based approach closer to P/Invoke's spirit.\n\n**Testing:** whether you understand the verbosity difference as a real design trade-off, not just \"Java's API is worse.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "foreign-function-interfaces-and-native-interop-iq3",
+      "question": "A production Java service has a slow memory leak that only shows up in OS-level memory metrics, not in heap dumps or GC logs. How would you investigate, and what would make you suspect an FFI boundary specifically?",
+      "answerMarkdown": "The signature that points me at FFI rather than a normal managed leak: heap dumps and GC logs look completely healthy — no growing object graph, no rising old-gen occupancy — while `top` or a container's memory metrics show steady, unbounded growth. That mismatch is the tell, because it means whatever's leaking isn't on the managed heap at all, and the GC has no visibility into it.\n\nI'd first check whether the service does any native interop — JNI calls, a native library dependency, even indirectly through something like a compression or crypto library that wraps native code. If so, I'd suspect native memory the library allocated on behalf of a managed call that never got freed — a common bug where a `Dispose`/`close`/explicit-free call is missing on an exception path, so cleanup only happens on the success path.\n\nFor tooling, native memory tracking (`-XX:NativeMemoryTracking=summary` on the JVM) or an OS-level tool like `pmap`/`valgrind` (if reproducible outside prod) can show which allocation category is actually growing, distinct from the managed heap. Once confirmed, the fix is almost always adding a guaranteed-cleanup path — try/finally or a resource-scope abstraction — around every native handle acquisition, since a `finalize`-based cleanup is too unreliable to depend on for anything that matters.\n\n**Testing:** whether you can recognize the specific fingerprint of a native-side leak and reach for the right diagnostic tools instead of only checking managed-heap metrics.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "foreign-function-interfaces-and-native-interop-iq4",
+      "question": "Why does calling a native function in a tight loop, once per array element, often perform worse than expected — even though the native code itself is fast?",
+      "answerMarkdown": "Because every crossing of the managed/native boundary pays real marshaling cost, independent of how fast the native function's own logic is. Passing a value across involves converting managed representations (a Java `String`'s UTF-16 backing, a .NET array's managed layout) into whatever the native side expects — allocating a buffer, copying bytes, sometimes pinning memory so the GC won't move it mid-call. None of that work happens inside the native function; it's overhead paid at the boundary, before and after.\n\nCalled once per array element, that fixed per-call overhead gets paid N times for what should be one logical operation, and for small elements the marshaling cost can easily exceed the actual native computation time — the loop ends up dominated by conversion, not by the work it's nominally doing.\n\nThe standard fix is changing the call granularity, not the native code: pass the whole array (or a native-memory-backed buffer/pointer) in a single call and let the native function iterate internally, paying the marshaling cost exactly once. This is the same crossover-point intuition as elsewhere in this area — the fixed cost per operation dominates until you amortize it over enough work per call.\n\n**Testing:** whether you can diagnose an FFI performance problem down to call granularity rather than assuming the native code itself must be slow.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

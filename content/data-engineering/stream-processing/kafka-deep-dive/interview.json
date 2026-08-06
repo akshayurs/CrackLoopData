@@ -1,0 +1,37 @@
+{
+  "topicId": "kafka-deep-dive",
+  "interviewQuestions": [
+    {
+      "id": "kafka-deep-dive-iq1",
+      "question": "Walk me through how Kafka achieves both ordering and parallelism, given those seem like they'd conflict.",
+      "answerMarkdown": "The resolution is that Kafka doesn't promise global ordering — it promises ordering **within a partition**, and gets parallelism by having many partitions. A topic is split into independent, ordered logs (partitions), each of which can be written to and read from independently, so throughput scales by adding partitions and spreading them across brokers.\n\nOrdering survives this because of how records are routed: a producer sends records with the same key to the same partition, consistently, via a hash of the key. So any two events with the same key — say, the same user_id — always land on the same partition and are read back in the order they were written. Events with *different* keys have no ordering guarantee relative to each other, and that's fine, because most use cases only care about per-entity order, not global order.\n\nConsumer-side parallelism follows the same logic: a consumer group splits a topic's partitions among its members, one partition per consumer at a time, so multiple consumers process different partitions concurrently while each partition still has exactly one reader maintaining its order.\n\nThe key insight to state explicitly: Kafka trades global ordering for partition-level ordering, and that trade is what makes the parallelism possible in the first place.\n\n**Testing:** whether you understand that Kafka's ordering guarantee is scoped, not absolute — a very common point of confusion.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "kafka-deep-dive-iq2",
+      "question": "Consumer lag on a topic is climbing steadily and won't come back down even after you add more consumer instances. What would you check?",
+      "answerMarkdown": "The first thing I'd check is partition count relative to consumer count, because that's the most common reason adding consumers doesn't help: if the topic already has as many partitions as consumers, or fewer, additional instances simply have nothing to be assigned and sit idle. Partition count is a hard ceiling on parallelism within a group — you cannot out-scale it by adding more consumer processes.\n\nIf partition count isn't the bottleneck, I'd look at **key skew** next — if one key (a hot user, a dominant tenant) accounts for a disproportionate share of traffic, its partition backs up no matter how many total partitions or consumers exist, since that key's events are pinned to one partition by design. Rebalancing the key scheme, or splitting a hot key into sub-keys, is the fix there, not adding more consumers.\n\nI'd also check for **rebalance churn** — if consumers are joining and leaving frequently (crash loops, aggressive autoscaling, misconfigured session timeouts), the group spends real time paused during rebalances instead of processing, which shows up as lag that doesn't correlate with raw consumer count at all.\n\nLast, I'd check whether the bottleneck is actually downstream — a slow sink write per record caps per-consumer throughput regardless of how many consumers or partitions exist.\n\n**Testing:** whether you can diagnose lag by checking the specific structural causes, not just 'add more consumers' as a reflex.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "kafka-deep-dive-iq3",
+      "question": "How would you decide the partition count for a new topic, and what happens if you get it wrong in either direction?",
+      "answerMarkdown": "I'd size it against **target peak consumer parallelism** with headroom, not against current traffic alone — partition count is much easier to over-provision slightly upfront than to fix later, since increasing it after the fact can disrupt existing key-to-partition ordering guarantees for any keyed data already written.\n\nConcretely: if I expect to run up to 20 consumer instances at peak load, I'd target something like 40-80 partitions — enough headroom to scale consumers up without hitting the ceiling immediately, without going so high that per-partition broker overhead (open file handles, replication bookkeeping, controller metadata) becomes its own problem.\n\nGetting it too low caps parallelism hard: extra consumer instances beyond the partition count simply sit idle, and the only fix is repartitioning, which is disruptive for anything relying on key-based ordering. Getting it too high adds real, if less dramatic, cluster overhead — more replication traffic, slower leader elections during a broker failure, more metadata for the controller to track — without buying you anything if you never actually run that many consumers.\n\nI'd also factor in whether the topic uses keyed ordering at all — a topic with no ordering requirement is much cheaper to repartition later than one where per-key order matters, which pushes me to be more conservative (i.e., a bit more generous) upfront for the latter.\n\n**Testing:** whether you can reason about a concrete sizing decision with both failure directions in mind, not just recite 'more partitions equals more parallelism.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design judgment"
+    },
+    {
+      "id": "kafka-deep-dive-iq4",
+      "question": "What's the difference between standard log retention and log compaction, and when would you use compaction?",
+      "answerMarkdown": "Standard retention deletes records by age or size regardless of key — \"keep 7 days\" removes everything older than that, whatever key it belongs to. **Compaction** is a different model entirely: instead of deleting by age, Kafka keeps only the most recent record for each key and discards older records sharing that key, so the topic converges toward one current value per key rather than a full history.\n\nThe decision comes down to what the topic actually represents. If it's an **event history** — clicks, orders, log lines — where the sequence of events matters and you might need to replay all of it, standard time or size-based retention is right; compaction would destructively lose history you might need. If it's a **changelog of current state** — a user's current profile, a product's current price, a table's current row values mirrored into Kafka via change-data-capture — compaction is the right model, because you only ever care about the latest value per key, and compaction keeps that indefinitely without the storage cost of keeping every historical version.\n\nA concrete example: a CDC pipeline mirroring a `users` table into Kafka should use a compacted topic keyed by user ID — a downstream consumer that restarts can read the compacted topic and reconstruct current state for every user without replaying years of updates.\n\n**Testing:** whether you connect the mechanism (delete-by-age vs keep-latest-per-key) to the right use case, not just define both terms.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    }
+  ]
+}

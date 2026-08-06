@@ -1,0 +1,37 @@
+{
+  "topicId": "partitioning-and-shuffle",
+  "interviewQuestions": [
+    {
+      "id": "partitioning-and-shuffle-iq1",
+      "question": "What is a shuffle, and why is it usually the most expensive part of a distributed job?",
+      "answerMarkdown": "A shuffle is the operation that redistributes data across the cluster by key, required whenever a computation needs everything for a given key visible on one task — a `groupBy`, a `join`, a `repartition`. Before it, data sits wherever it happened to land; after it, all of one key's data lives together on one task.\n\nIt's expensive because it stacks three real costs at once: disk I/O (map-side output typically writes to local disk before it can be sent, and gets read again on arrival), network transfer (data crosses machine boundaries, and network bandwidth is usually the scarcest resource in a cluster compared to CPU), and serialization (objects have to become bytes to cross the wire and get deserialized on the other end, real CPU work at scale).\n\nThe practical consequence: \"the job is slow\" traces back to \"there's an unnecessary or oversized shuffle\" far more often than to \"there's not enough compute.\" I always check a job's shuffle read/write size relative to its input size first — a shuffle that's moving more bytes than the source data itself is usually the actual bottleneck, and adding CPU cores does nothing to fix it.\n\n**Testing:** whether you can name the actual mechanics behind \"shuffles are expensive\" instead of treating it as received wisdom.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "partitioning-and-shuffle-iq2",
+      "question": "A groupBy stage has 999 tasks finish in seconds and one task running for 20 minutes. Walk me through your diagnosis and fix.",
+      "answerMarkdown": "This exact shape — near-uniform fast tasks plus one enormous outlier — is the signature of data skew, not a cluster capacity problem, so my first move is to open the Spark UI and check that one task's shuffle-read size against the median. If it's carrying orders of magnitude more data than the others, that confirms it: one key is disproportionately large, and the whole stage can't finish until that single task does, regardless of how fast the other 999 completed.\n\nI'd specifically avoid the instinct to add executors here — more machines don't help a single overloaded task; the extra capacity just sits idle while the one straggler grinds through its disproportionate share. It also wouldn't help to restart the job, since the underlying data distribution hasn't changed and I'd get the identical result.\n\nThe actual fix depends on the operation. For an aggregation, I'd salt the skewed key — append a random sub-key, aggregate in parallel across the splits, then recombine the partial results. If it's a join and the skewed key is on the smaller side of the join, I'd consider forcing a broadcast join instead, which sidesteps the shuffle-based skew problem entirely by sending the small table whole to every executor rather than shuffling by key.\n\n**Testing:** whether you can correctly diagnose skew from the UI signature and pick a fix that matches the specific operation, rather than reflexively scaling the cluster.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "partitioning-and-shuffle-iq3",
+      "question": "How would you decide the right number of shuffle partitions for a job, and what happens if you get it wrong in either direction?",
+      "answerMarkdown": "I'd target partitions sized so each task handles roughly 100-200MB of shuffled data — enough to parallelize well across the cluster's available cores, small enough that per-task overhead stays a small fraction of the actual work. In practice I'd estimate this from the shuffle's expected data volume divided by that target size, rather than leaving the default (often 200 in `spark.sql.shuffle.partitions`) unexamined for every job regardless of data size.\n\nToo few partitions underutilizes the cluster — if I have 500 available cores but only 50 partitions, 450 cores sit idle while 50 oversized partitions carry the entire load, and I'm paying for capacity I'm not using. Too many partitions flips the problem: thousands of tiny tasks each with real scheduling overhead can mean the driver spends more time tracking and dispatching work than the executors spend doing it, so the coordination cost can exceed the actual computation.\n\nI'd also note the default of 200 is a reasonable middle ground for moderate datasets but is frequently wrong at the extremes — a job shuffling 5TB with 200 partitions gives each task 25GB, which is far too large and will spill to disk; a small job with 200 partitions on a 500MB dataset gives each task 2.5MB, drowning in overhead. I'd tune this per job based on actual data volume rather than trusting a fixed default.\n\n**Testing:** whether you can reason quantitatively about partition sizing rather than treating it as a fixed setting to leave alone.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Tuning"
+    },
+    {
+      "id": "partitioning-and-shuffle-iq4",
+      "question": "Your team wants to just throw more executors at every slow Spark job as a default fix. What's wrong with that strategy, and when does it actually work?",
+      "answerMarkdown": "It works when the job is genuinely compute- or capacity-bound — plenty of independent, roughly evenly sized tasks and not enough cores to run them all in parallel. Adding executors there directly reduces wall-clock time because the work really was parallelizable and under-provisioned.\n\nIt fails, and often wastes money without fixing anything, when the job is shuffle-bound or skew-bound. A shuffle's cost is network transfer, disk I/O, and serialization — none of which shrink because you added CPU cores. And a skewed stage is limited by one task's data volume; more executors just gives the other, already-fast tasks somewhere to run faster, while the actual bottleneck task is unaffected because you can't split one key's data across more machines just by having more machines available.\n\nMy pushback to the team would be to make \"check the job UI first\" a standard step before requesting more cluster capacity — look at shuffle read/write relative to input size, and look at the per-task duration and shuffle-size distribution for outliers. That takes minutes and tells you which of the two very different problems you actually have, instead of guessing and paying for capacity that doesn't address the real bottleneck.\n\n**Testing:** whether you can distinguish capacity problems from shuffle/skew problems and push back on a costly default with a cheap diagnostic instead.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

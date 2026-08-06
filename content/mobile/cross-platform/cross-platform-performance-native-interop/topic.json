@@ -1,0 +1,161 @@
+{
+  "id": "cross-platform-performance-native-interop",
+  "title": "Cross-Platform Performance & Native Interop",
+  "area": "mobile",
+  "group": "cross-platform",
+  "order": 5,
+  "slug": "cross-platform-performance-native-interop",
+  "summary": "Diagnosing jank in a cross-platform app with the right tools for the right layer, and writing native modules or platform channels when the framework's abstraction genuinely runs out.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "cross-platform-performance-native-interop-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every cross-platform app eventually hits two questions in production: 'why is this specific screen janky, and which layer is actually responsible,' and 'this specific thing isn't possible in the framework — how do I reach the native platform directly.'\n\n[Cross-Platform Rendering Models](cross-platform-rendering-models) covered the mechanisms (the bridge, JSI, Flutter's engine); this topic is the practitioner's follow-through: how to actually profile a real jank complaint down to its layer, and how to write the native module or platform channel that closes a genuine framework gap without over-using that escape hatch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s02",
+      "order": 2,
+      "sectionTitle": "Where cross-platform performance actually breaks down",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In practice, cross-platform jank concentrates in a small number of recurring shapes, not a general 'the framework is slow':\n\n- **High-frequency cross-boundary calls** — a gesture or animation driven by many small updates per frame that cross the JS-native boundary individually instead of being batched or handled natively.\n- **Unvirtualized long lists** — rendering far more off-screen content than the viewport needs, in either framework.\n- **Unoptimized image handling** — decoding large images synchronously on a thread that also needs to stay responsive.\n- **Startup cost** — parsing/compiling script (mitigated by Hermes's precompiled bytecode) or first-paint shader compilation (mitigated by Impeller's ahead-of-time approach).\n\nNaming the specific shape, not just 'it's janky,' is what turns a vague complaint into an actionable investigation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "cross-platform-performance-native-interop-s02-q1"
+      ]
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s03",
+      "order": 3,
+      "sectionTitle": "A platform-channel call, round trip",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Sequence diagram of a call crossing the platform channel boundary from Dart/JS to native code and back](assets/platform-channel-round-trip.svg)",
+      "assets": [
+        {
+          "alt": "Sequence diagram of a call crossing the platform channel boundary from Dart/JS to native code and back",
+          "path": "assets/platform-channel-round-trip.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s04",
+      "order": 4,
+      "sectionTitle": "A native module exposing a platform API",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```swift\n// iOS: exposing device battery level to JavaScript (React Native)\n@objc(BatteryModule)\nclass BatteryModule: NSObject {\n  @objc\n  func getBatteryLevel(_ resolve: @escaping RCTPromiseResolveBlock,\n                        reject: @escaping RCTPromiseRejectBlock) {\n    UIDevice.current.isBatteryMonitoringEnabled = true\n    resolve(UIDevice.current.batteryLevel)\n  }\n}\n```\n\n```javascript\n// JavaScript side\nimport { NativeModules } from 'react-native';\nconst level = await NativeModules.BatteryModule.getBatteryLevel();\n```\n\nThe native side does the actual platform-specific work; the JS side gets a plain async function call. This exact shape — thin native wrapper, promise-based JS interface — is the standard pattern for any platform capability the framework doesn't cover, and the Flutter/Dart equivalent (`MethodChannel`) follows the identical structure with different syntax.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "cross-platform-performance-native-interop-s04-q1"
+      ]
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s05",
+      "order": 5,
+      "sectionTitle": "Profiling",
+      "subTitle": "framework tools vs native profilers",
+      "type": "compare",
+      "markdown": "| | Framework-level tools | Native profilers |\n|---|---|---|\n| Flutter | DevTools (widget rebuild tracking, timeline view) | Xcode Instruments, Android Profiler for engine-level GPU/CPU work |\n| React Native | Flipper / React DevTools Profiler (JS-side re-renders), New Architecture Perfetto traces | Xcode Instruments, Android Studio Profiler for native layout/paint cost |\n| What it shows well | JS/Dart-side logic, component re-render frequency, bridge/channel traffic | actual CPU/GPU time, memory, native layout and paint cost, thread-level scheduling |\n\nThe practical workflow: start with the framework-level tool to confirm whether the app-logic layer (JS/Dart) is the bottleneck at all. If it's clean there but the symptom persists, drop to the native profiler — the cost is happening below the framework's visibility, in native rendering, GPU work, or OS-level scheduling the framework tool doesn't instrument.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "cross-platform-performance-native-interop-s05-q1"
+      ]
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s06",
+      "order": 6,
+      "sectionTitle": "Falling back to a native module vs waiting on a framework feature",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a needed capability isn't in the framework yet, the real decision is timing and risk, not just feasibility — a native module can always be written, but it's not always the right call *right now*.\n\nFactors that favor writing the native module immediately: the capability is on the product's critical path and blocking a release, no community plugin exists or the existing ones are unmaintained, or the capability is narrow enough that the module is cheap to write and maintain.\n\nFactors that favor waiting or using an existing community plugin: the framework's own roadmap already has this capability announced for an upcoming release, a well-maintained third-party plugin already exists and covers the need, or the capability is broad enough that a hand-rolled module would become a significant, ongoing maintenance burden across both platforms. Writing a native module is never 'free' — it's code the team now owns on two platforms indefinitely, so the decision should weigh that ongoing cost, not just the one-time implementation effort.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "cross-platform-performance-native-interop-s06-q1"
+      ]
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s07",
+      "order": 7,
+      "sectionTitle": "Pitfall: crossing the bridge/channel per-frame",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A drag gesture, a live-updating progress indicator, or any interaction that fires many small updates per frame and sends each one across the bridge or platform channel **individually** pays that crossing's serialization cost repeatedly — often more expensive, cumulatively, than the actual work being done.\n\nThe fix is batching: accumulate updates and send them in a single crossing per frame (or per meaningful interval) rather than one crossing per event, or — better where available — move the entire interaction to a mechanism that doesn't cross the boundary at all for its hot path. `react-native-reanimated`'s worklets and Flutter's native-side gesture recognizers both exist specifically to let a high-frequency interaction run natively without round-tripping the framework boundary on every frame.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "cross-platform-performance-native-interop-s07-q1"
+      ]
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: a native module that works on one platform and crashes on the other",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Native modules are written per-platform by construction, and it's a common and costly mistake to implement, test, and ship the iOS half thoroughly while the Android half gets a rushed port — different threading models, different lifecycle assumptions, or a platform API that doesn't behave identically to its counterpart (a permission that's synchronous on one platform and requires an async callback on the other).\n\nThe fix is treating both platform implementations as equally first-class in code review and testing, not iOS-then-Android-as-an-afterthought — write the test plan for both platforms before writing either implementation, and specifically test the edge cases each platform's underlying API documents as different (permission denial flows, background-state restrictions, OS version differences within each platform). A native module that only really works on one platform defeats a large part of why the team chose a cross-platform framework in the first place.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "cross-platform-performance-native-interop-s08-q1"
+      ]
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s09",
+      "order": 9,
+      "sectionTitle": "The senior nuance: measure before and after, in production",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A mid-level fix ships a native module or a batching change and calls it done because it 'feels smoother' locally on a fast development device. A senior fix instruments the specific interaction with real user-facing metrics (frame drop rate, time-to-interactive for the affected screen) before the change, ships behind a flag or to a percentage of users, and confirms the metric actually moved in production — because a fast development device with no other apps running can mask exactly the jank that shows up on a three-year-old mid-range Android phone with a dozen background apps.\n\nThe habit of measuring in production, not just locally, is what separates a fix that's provably better from one that's merely believed to be better — and cross-platform apps in particular run on a much wider real-world device spread than a team's own test devices represent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "cross-platform-performance-native-interop-s10",
+      "order": 10,
+      "sectionTitle": "Bringing it together",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The overall discipline this topic teaches: don't reach for a native module as a first resort, and don't rule one out as a last resort either. Profile first to know which layer actually owns the problem, batch and use native-driven interaction handling before assuming a rewrite is needed, and when a genuine framework gap remains, write the native module with both platforms held to the same bar and measured in production, not just locally.\n\nThat combination — mechanism-aware profiling, native interop as a deliberate tool rather than an escape hatch reached for reflexively, and production measurement — is what actually separates a team that ships a performant cross-platform app from one that's perpetually fighting jank it can't quite explain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

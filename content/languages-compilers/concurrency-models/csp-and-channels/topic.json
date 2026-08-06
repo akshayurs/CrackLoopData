@@ -1,0 +1,161 @@
+{
+  "id": "csp-and-channels",
+  "title": "CSP & Channels",
+  "area": "languages-compilers",
+  "group": "concurrency-models",
+  "order": 4,
+  "slug": "csp-and-channels",
+  "summary": "Go's concurrency model — goroutines and channels as typed pipes instead of a shared variable. 'Don't communicate by sharing memory; share memory by communicating' is the whole idea, and it's a second, distinct answer to the shared-state problem from the actor model.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "csp-and-channels-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**CSP (Communicating Sequential Processes)** is the theoretical model behind Go's concurrency story: independent, sequential processes (Go calls them **goroutines**) that don't share memory directly, communicating instead by sending values over explicit, typed **channels**.\n\nIt looks similar to `the-actor-model` at a glance — both remove shared mutable state — but the mental model is genuinely different. Actors address a message to a *named recipient's mailbox*; CSP sends a value into an *anonymous pipe* that any goroutine holding the other end can read. That difference shapes everything else in this topic, including the specific failure mode (a goroutine leak) that's distinct from an actor's mailbox backpressure problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "csp-and-channels-s02",
+      "order": 2,
+      "sectionTitle": "The core idea",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Independent goroutines — lightweight, Go-runtime-scheduled threads of execution, cheaper than OS threads — don't reach into each other's memory. Instead, they pass values through a **channel**: a typed, first-class conduit that one goroutine sends into and another receives from.\n\nThe channel itself does the coordination work a lock would otherwise need to do: a send blocks until a receiver is ready (for an unbounded channel) or until buffer space exists, and a receive blocks until a value arrives. This is deliberate — the synchronization isn't bolted on separately, it's built into the act of communicating, which is exactly the design Go's creators point to with the language's own slogan for this idea.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "csp-and-channels-s02-q1"
+      ]
+    },
+    {
+      "id": "csp-and-channels-s03",
+      "order": 3,
+      "sectionTitle": "Goroutines connected by channels",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Goroutines connected by channels versus goroutines sharing one mutable variable](assets/channels-vs-shared-memory.svg)",
+      "assets": [
+        {
+          "alt": "Goroutines connected by channels versus goroutines sharing one mutable variable",
+          "path": "assets/channels-vs-shared-memory.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "csp-and-channels-s04",
+      "order": 4,
+      "sectionTitle": "A producer/consumer pair",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "An unbounded synchronization point, expressed directly in the language:\n\n```go\nfunc producer(ch chan<- int) {\n    for i := 0; i < 5; i++ {\n        ch <- i           // blocks until a receiver is ready\n    }\n    close(ch)\n}\n\nfunc consumer(ch <-chan int) {\n    for v := range ch {  // blocks until a value arrives, exits on close\n        fmt.Println(v)\n    }\n}\n\nfunc main() {\n    ch := make(chan int)   // unbuffered channel\n    go producer(ch)\n    consumer(ch)\n}\n```\n\nNo shared variable exists between `producer` and `consumer` at all — the channel `ch` *is* the entire communication surface. The unbuffered channel forces a **synchronous handoff**: `producer`'s send blocks until `consumer` is actually ready to receive that specific value, which is a strong ordering guarantee with no separate lock needed.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "csp-and-channels-s04-q1"
+      ]
+    },
+    {
+      "id": "csp-and-channels-s05",
+      "order": 5,
+      "sectionTitle": "Buffered vs unbuffered channels",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Unbuffered channel | Buffered channel (capacity N) |\n|---|---|---|\n| Send blocks until | A receiver is actively ready to receive | Buffer has space (send returns immediately if not full) |\n| Guarantee | Synchronous handoff — sender knows the value was received | Sender only knows the value was queued, not received |\n| Use case | Strict ordering, rendezvous-style coordination | Decoupling producer/consumer speed differences, some slack |\n\nAn unbuffered channel is a **rendezvous**: both sides must be present at the same moment for the handoff to complete, which is a stronger guarantee than it looks — the sender genuinely knows the receiver got that value, not just that it was handed to a queue. A buffered channel trades that certainty for throughput, letting a producer run ahead of a slower consumer up to the buffer's capacity before it starts blocking.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "csp-and-channels-s05-q1"
+      ]
+    },
+    {
+      "id": "csp-and-channels-s06",
+      "order": 6,
+      "sectionTitle": "The select statement",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`select` lets a goroutine wait on **multiple channel operations at once**, proceeding with whichever one becomes ready first — the CSP equivalent of a multi-way blocking wait:\n\n```go\nselect {\ncase v := <-ch1:\n    fmt.Println(\"from ch1:\", v)\ncase v := <-ch2:\n    fmt.Println(\"from ch2:\", v)\ncase <-time.After(2 * time.Second):\n    fmt.Println(\"timeout — neither channel responded in time\")\ndefault:\n    fmt.Println(\"nothing ready right now, don't block\")\n}\n```\n\nThree distinct patterns live inside `select`: **fan-in** (waiting on several sources, taking whichever arrives), **timeouts** (racing a real channel against a timer channel — the standard Go idiom for \"don't wait forever\"), and **non-blocking checks** (the `default` case, returning immediately if nothing's ready instead of blocking). This single construct covers a surprising amount of real coordination logic that other models need several separate primitives for.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "csp-and-channels-s07",
+      "order": 7,
+      "sectionTitle": "\"Don't communicate by sharing memory\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Go's own stated mantra: **\"don't communicate by sharing memory; share memory by communicating.\"** It's worth unpacking because it's easy to nod along without absorbing the actual instruction.\n\nThe traditional shared-memory-plus-locks approach communicates *implicitly* — a lock protects some shared data, and \"communication\" between threads happens by one thread mutating memory and another eventually observing it, mediated by a lock neither piece of logic directly names. CSP inverts this: the data itself is *sent*, explicitly, through a channel that's a first-class, visible part of the code's structure — you can read the function signature (`chan<- int`) and know exactly what's being communicated and in which direction, without hunting for which lock protects which variable elsewhere in the codebase.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "csp-and-channels-s07-q1"
+      ]
+    },
+    {
+      "id": "csp-and-channels-s08",
+      "order": 8,
+      "sectionTitle": "Goroutine leaks",
+      "subTitle": "Blocked forever, nobody ever comes",
+      "type": "pitfall",
+      "markdown": "The CSP-specific failure mode, distinct from an actor's mailbox backpressure: a goroutine that's **blocked on a channel operation nobody will ever complete** — sending to a channel no one reads from anymore, or receiving from one no one will ever write to. That goroutine doesn't crash; it just sits there, forever, quietly consuming its stack memory and never getting cleaned up.\n\nThis happens constantly in real code: a goroutine spawned to send a result down a channel, but the receiving code took an early-return path (an error, a timeout via `select`) and never read from that channel — the sender is stuck sending into the void. Left unfixed at scale, this is a slow, silent memory leak that shows up as gradually climbing goroutine counts in production, not a crash. The fix is usually a buffered channel sized so the send never blocks, or an explicit `context.Context`-based cancellation the sender also selects on, so it can bail out instead of blocking forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "csp-and-channels-s08-q1"
+      ]
+    },
+    {
+      "id": "csp-and-channels-s09",
+      "order": 9,
+      "sectionTitle": "CSP channels vs actors, precisely",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | CSP channels (Go) | Actor model (Erlang/Akka) |\n|---|---|---|\n| Addressing | Anonymous — any goroutine holding the channel reference can send/receive | Addressed — a message targets a specific actor's mailbox by reference |\n| Communication object | A typed pipe (`chan int`), a first-class value | A message type delivered to a mailbox |\n| Failure mode | Goroutine leak — blocked forever on a channel nobody completes | Mailbox overflow — unbounded queue accepting messages faster than processed |\n| Fault isolation | No built-in supervision — a leaked goroutine isn't automatically restarted | Supervision trees restart failed actors automatically |\n\nThe practical takeaway: CSP is a better fit when you're modeling a *pipeline* of data flowing through stages (fan-out/fan-in worker patterns); actors are a better fit when you're modeling *independent, stateful entities* with their own identity and lifecycle (one actor per user session, per device, per room).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "csp-and-channels-s09-q1"
+      ]
+    },
+    {
+      "id": "csp-and-channels-s10",
+      "order": 10,
+      "sectionTitle": "Fan-out with goroutines and channels",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Use goroutines and channels to fan out work to N workers and collect results\" has a canonical shape worth knowing cold:\n\n```go\njobs := make(chan int, 100)\nresults := make(chan int, 100)\n\nfor w := 0; w < N; w++ {\n    go func() {\n        for j := range jobs {       // each worker pulls from the shared jobs channel\n            results <- process(j)\n        }\n    }()\n}\n\nfor _, j := range allJobs { jobs <- j }\nclose(jobs)\n\nfor i := 0; i < len(allJobs); i++ { fmt.Println(<-results) }\n```\n\nN worker goroutines all read from the *same* `jobs` channel — Go automatically distributes each job to whichever worker happens to be free, with no explicit load-balancing code needed, because a channel with multiple readers naturally does round-robin-ish distribution as a side effect of blocking receive semantics. `close(jobs)` after sending is what lets each worker's `range` loop terminate cleanly instead of blocking forever — skip it, and you've built exactly the goroutine leak the previous slide warned about.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

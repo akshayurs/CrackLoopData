@@ -1,0 +1,148 @@
+{
+  "id": "background-work-services-workmanager",
+  "title": "Background Work — Services & WorkManager",
+  "area": "mobile",
+  "group": "android",
+  "order": 7,
+  "slug": "background-work-services-workmanager",
+  "summary": "Services, foreground Services, and WorkManager are three different tools for three different jobs. Pick wrong and you either get killed early or drain battery you didn't need to.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "background-work-services-workmanager-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The cross-platform [why background work is throttled](battery-power-background-limits) principle has three concrete Android tools implementing it, each fitting a different job: a plain **Service** for work tied to the app being actively used, a **foreground Service** for long-running work the user needs to see is happening, and **WorkManager** for deferrable work the OS should schedule on its own terms.\n\nPicking the wrong one produces one of two failure modes: work that gets killed far earlier than expected, or work that runs immediately when it should have been deferred and batched, burning battery for no user benefit. This topic covers what each tool actually guarantees, and the two mistakes — using a bare Service where WorkManager belongs, and an unconstrained periodic worker — that account for most Android background-work bugs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "background-work-services-workmanager-s02",
+      "order": 2,
+      "sectionTitle": "Services, foreground Services, and WorkManager",
+      "subTitle": "Three tools, three jobs",
+      "type": "compare",
+      "markdown": "| | Service | Foreground Service | WorkManager |\n|---|---|---|---|\n| **Lifetime** | Tied loosely to the app; the OS can kill it under memory pressure with little warning | Survives much longer — the visible notification is the trade for that survival | Guaranteed to eventually run, even across reboots, but the OS controls exactly when |\n| **User visibility** | None required | Mandatory persistent notification | None required |\n| **Fits** | Short-lived work tied to the app being in active use | Long-running, user-initiated work the user should know is happening (music playback, an active download, live location tracking) | Deferrable work with flexible timing constraints (sync, cleanup, upload) |\n\nThe mandatory notification for a foreground Service isn't a UI nicety — it's the mechanism's actual safety valve: the OS grants it a much longer leash specifically because the user can see it's running and can act (force-stop it) if it's misbehaving, which is a very different trust model from invisible background work the user has no way to notice or intervene on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "background-work-services-workmanager-s02-q1"
+      ]
+    },
+    {
+      "id": "background-work-services-workmanager-s03",
+      "order": 3,
+      "sectionTitle": "Deciding which background tool fits a given task",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The decision reduces to three questions in sequence: **Does the user need to see this is happening right now?** If yes → foreground Service. **Does it need to run immediately, tied to the app currently being used, and finish quickly?** If yes → a plain Service (or, more often today, just a coroutine in the right scope, since a bare Service is increasingly a legacy choice for this case). **Can it be deferred, and does it need to survive the app being closed or the device rebooting?** If yes → WorkManager.\n\nGetting this wrong in the direction of using WorkManager for something that actually needs to run right now (like sending a message the user just typed) produces a visible delay, since WorkManager's whole design assumes the OS can defer execution. Getting it wrong in the direction of using a bare Service for genuinely deferrable work risks the OS killing it well before it finishes, since a plain Service has no special protection against the same background-execution limits covered in [battery/background limits](battery-power-background-limits).\n\n![Decision tree choosing Foreground Service, plain Service, or WorkManager](assets/background-work-decision-tree.svg)",
+      "assets": [
+        {
+          "alt": "Decision tree choosing Foreground Service, plain Service, or WorkManager",
+          "path": "assets/background-work-decision-tree.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    },
+    {
+      "id": "background-work-services-workmanager-s04",
+      "order": 4,
+      "sectionTitle": "Scheduling a deferrable upload with WorkManager constraints",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nclass UploadWorker(context: Context, params: WorkerParameters) :\n    CoroutineWorker(context, params) {\n    override suspend fun doWork(): Result {\n        return try {\n            uploadPendingFiles()\n            Result.success()\n        } catch (e: Exception) {\n            Result.retry()   // WorkManager handles backoff automatically\n        }\n    }\n}\n\nval constraints = Constraints.Builder()\n    .setRequiredNetworkType(NetworkType.UNMETERED)  // WiFi, not cellular data\n    .setRequiresCharging(true)\n    .build()\n\nval request = OneTimeWorkRequestBuilder<UploadWorker>()\n    .setConstraints(constraints)\n    .build()\n\nWorkManager.getInstance(context).enqueue(request)\n```\n\nDeclaring constraints instead of forcing an exact execution time is the whole point: this job runs whenever the OS finds a moment satisfying *both* constraints — plugged in and on WiFi — batching it efficiently with other apps' deferred work rather than waking the device specifically and only for this. `Result.retry()` hooks directly into WorkManager's built-in exponential backoff, so failure handling doesn't need to be hand-rolled per worker.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "background-work-services-workmanager-s04-q1"
+      ]
+    },
+    {
+      "id": "background-work-services-workmanager-s05",
+      "order": 5,
+      "sectionTitle": "Foreground Services and the user-visible notification they require",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A foreground Service is granted meaningfully more protection from being killed than a plain Service — closer to the priority of a visible app — but that protection is conditional on the mandatory persistent notification actually appearing, which is the platform's way of ensuring the user always has visibility into, and the ability to stop, work that's been given this elevated status.\n\nPlatforms have increasingly required declaring an explicit **foreground service type** (location, media playback, data sync, and others) matching what the work actually does, both to be transparent to the user about *why* an app is running a foreground Service and to let the OS apply type-appropriate policy — a data-sync foreground Service and a location-tracking one have different legitimate lifetimes and different scrutiny.\n\nThe trade-off worth stating plainly: a foreground Service is the right tool exactly when the user genuinely benefits from knowing work is ongoing (an active download, live navigation), and it's a misuse of the mechanism to reach for it purely as a way to dodge WorkManager's deferred-scheduling model for work the user doesn't actually need visibility into — that's using the escape hatch meant for genuine long-running visible work to route around the throttling that deferrable work is supposed to respect.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "background-work-services-workmanager-s05-q1"
+      ]
+    },
+    {
+      "id": "background-work-services-workmanager-s06",
+      "order": 6,
+      "sectionTitle": "Broadcast Receivers",
+      "subTitle": "Reacting to system-wide events",
+      "type": "concept",
+      "markdown": "A `BroadcastReceiver` responds to system-wide events — connectivity changed, device booted, battery low — that your app didn't itself trigger and needs to react to regardless of whether it's currently running. It's a reactive, event-driven complement to the proactive scheduling `WorkManager` provides: `WorkManager` runs your code at a time the OS decides fits its constraints; a `BroadcastReceiver` runs your code in response to something that already happened, system-wide.\n\nA common real pairing: a `BroadcastReceiver` listening for `CONNECTIVITY_CHANGED` that, on regaining connectivity, enqueues a `WorkManager` job to drain a queue of pending uploads that accumulated while offline — the receiver detects the *moment* connectivity returns, and hands off the actual work to `WorkManager` rather than doing the upload directly inside the receiver's own very short execution window (receivers are explicitly not meant for long-running work; they're meant to react and then hand off).\n\nRegistering for certain system-wide broadcasts (rather than app-specific ones) has been progressively restricted on newer Android versions specifically because unrestricted background broadcast listening was itself a battery and privacy concern — a pattern worth knowing given how central it once was to Android background-work design.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": []
+    },
+    {
+      "id": "background-work-services-workmanager-s07",
+      "order": 7,
+      "sectionTitle": "WorkManager's guarantees",
+      "subTitle": "What survives a reboot or process death",
+      "type": "concept",
+      "markdown": "`WorkManager`'s core promise is durability: an enqueued work request is persisted to an on-device database, not held only in memory, so it survives the app's process being killed and even a full device reboot — the OS reschedules and eventually runs it once its constraints are satisfiable again, with no code needed on your part to re-enqueue it after a restart.\n\nThis is the concrete difference from a plain coroutine or Service: a coroutine's work is gone the instant its scope is cancelled or the process dies, with nothing to bring it back. `WorkManager`'s guarantee specifically covers *that* it will eventually run — not *exactly when*; \"deferrable\" is baked into the contract, and constraints (network type, charging state) can delay execution indefinitely if they're never satisfied, which is the correct behavior for genuinely deferrable work but the wrong choice entirely for anything time-sensitive.\n\nThis durability is also why `WorkManager` is the right default for \"this absolutely must eventually happen\" work — a pending analytics event, a queued upload — where losing it to a process death or reboot would be a real correctness bug, not just a UX inconvenience.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "background-work-services-workmanager-s07-q1"
+      ]
+    },
+    {
+      "id": "background-work-services-workmanager-s08",
+      "order": 8,
+      "sectionTitle": "Using a bare Service for work that should be a WorkManager job",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team needs to sync data periodically in the background and reaches for a plain `Service`, started and left running, expecting it to keep working reliably over time. It works in a quick test and then intermittently fails in production, because a plain `Service` has no special exemption from the background-execution limits every app is subject to — it can be killed by the OS under memory pressure with comparatively little warning, and it doesn't survive a process death or reboot automatically the way `WorkManager`'s persisted work requests do.\n\nThis mistake often comes from `Service` simply being the older, more familiar API that predates `WorkManager`, so it's reached for by habit or from following outdated tutorials rather than because it's actually the right tool for genuinely deferrable, must-eventually-complete work.\n\nThe fix is recognizing that \"periodic background sync with no urgent user-visible deadline\" is exactly `WorkManager`'s intended use case — it gets the durability (persisted, survives reboot) and constraint-based scheduling (run on WiFi, while charging) that a bare `Service` was never designed to provide, without needing to hand-roll retry logic, persistence, or reboot handling yourself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "background-work-services-workmanager-s08-q1"
+      ]
+    },
+    {
+      "id": "background-work-services-workmanager-s09",
+      "order": 9,
+      "sectionTitle": "An unconstrained periodic worker that runs more than intended",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A periodic `WorkManager` job is scheduled with no constraints at all — no network type requirement, no charging requirement — reasoning that the work is lightweight enough not to matter. Without constraints, the OS will run it whenever its periodic interval is due and the device happens to be capable, which for a job that touches the network means it can run on a poor cellular connection, on limited mobile data, or right as the battery is nearly dead — exactly the conditions where that work is least welcome and most likely to fail or cost the user money on a metered plan.\n\nThis is compounded by a subtlety in `WorkManager`'s periodic scheduling: the platform doesn't guarantee the exact requested interval will be honored precisely — it can run somewhat later than requested to batch with other scheduled work — but it will still run as soon as constraints are satisfiable, so \"lightweight and infrequent\" doesn't automatically mean \"runs at ideal times\" without constraints actually saying what an ideal time looks like.\n\nThe fix is treating constraints as a required design decision for any periodic worker, not an optional tuning knob: even genuinely lightweight work should specify a sensible network type (unmetered if the payload is non-trivial, or explicitly \"any\" only if truly negligible) and consider a charging requirement for anything non-urgent, rather than defaulting to unconstrained and hoping the OS's own batching alone is sufficient protection.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "background-work-services-workmanager-s09-q1"
+      ]
+    }
+  ]
+}

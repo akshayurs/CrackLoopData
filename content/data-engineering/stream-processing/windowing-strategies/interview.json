@@ -1,0 +1,37 @@
+{
+  "topicId": "windowing-strategies",
+  "interviewQuestions": [
+    {
+      "id": "windowing-strategies-iq1",
+      "question": "What's the difference between tumbling, sliding, and session windows, and how would you pick between them?",
+      "answerMarkdown": "All three answer the same question — 'what finite subset of the stream does this aggregation run over' — but they draw the boundary differently. **Tumbling** windows are fixed-length and back-to-back, so every event belongs to exactly one window; good when the metric's own definition names a clock period, like 'errors per 5 minutes.' **Sliding** windows are also fixed-length, but a new one starts before the last ends, so a single event can belong to several windows at once; good when you need the same underlying window to update more frequently than its own length, like a 10-minute anomaly-detection window that refreshes every 30 seconds. **Session** windows have no fixed length at all — they close after a configured gap of inactivity, so length varies per key; good when the boundary is genuinely activity-driven, like a user's browsing session.\n\nMy actual decision rule: I look at how the metric is *defined*, not how it's easiest to compute. If someone says 'per 5-minute bucket,' that's tumbling. If they say 'smoothed, updated every 10 seconds,' that's sliding, and I'd flag the cost — a 10-minute window with a 10-second slide multiplies both state and output volume by 60x versus tumbling. If they say 'per session' or 'per visit,' that's session, full stop — a fixed window there produces a technically-computed but semantically wrong number.\n\n**Testing:** whether you connect window choice to the metric's actual definition rather than reciting three definitions.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "windowing-strategies-iq2",
+      "question": "A dashboard team asks you to make their 5-minute tumbling window metric update every 5 seconds instead. Walk through how you'd approach that request.",
+      "answerMarkdown": "I wouldn't just swap in a sliding window with a 5-second slide and call it done — I'd first ask what they're actually trying to see, because that request usually means one of two different things with very different costs.\n\nIf they want to **see the same 5-minute number more often**, that's a sliding window: keep the 5-minute length, set the slide to 5 seconds. But I'd immediately flag the cost — that's a 60x multiplier on both the state the engine holds (each event now lives in roughly 60 overlapping windows) and the result volume being emitted and written downstream. For a dashboard refreshing that fast, I'd ask whether the consumer can actually perceive a 5-second update, or whether 30 seconds would look identical to a human while cutting the multiplier by 6x.\n\nIf they actually want **a genuinely faster-reacting metric** — not the same trailing average sampled more often, but something that reacts to a spike within 5 seconds — a shorter tumbling window (say, 15-second tumbling) might serve the real need at a fraction of the cost of an expensive sliding configuration, at the price of a noisier number.\n\nEither way, I'd push back on the raw request and get to the underlying need first, because 'update every 5 seconds' is a UI requirement, not a windowing spec, and the two window designs that satisfy it literally have very different production costs.\n\n**Testing:** whether you push back and clarify a requirement instead of directly implementing the literal ask, and whether you can quantify the cost trade-off.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design judgment"
+    },
+    {
+      "id": "windowing-strategies-iq3",
+      "question": "How would you design session windowing for a product where 'session' isn't obviously time-gap-based — say, a multiplayer game where players might pause mid-match?",
+      "answerMarkdown": "I'd start from what 'session' actually means for that product, because the standard gap-timeout session window assumes silence means the session is over — which is true for browsing but can be false for a game where a player might legitimately go quiet for two minutes mid-match without the match being over.\n\nA few adjustments I'd consider layering onto the basic gap-based session window: **a longer or asymmetric gap** — tolerate a 2-minute pause but still close after, say, 15 minutes of silence, distinguishing 'thinking' from 'actually left.' **An explicit end signal** taking priority over the gap — a match-ended event should close the session immediately rather than waiting out the timeout, since the boundary is known exactly rather than inferred. **A maximum session length cap** — without one, a player who never explicitly ends and pings every few minutes could keep one session open indefinitely, which breaks any per-session aggregate that assumes sessions eventually close.\n\nThe general lesson I'd state explicitly: a gap timeout is a heuristic for 'this entity is done,' and it's worth checking whether your domain has a better, more precise signal for that same fact before defaulting to the generic session-window gap.\n\n**Testing:** whether you can adapt a standard pattern to a domain's actual semantics rather than applying it mechanically.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design judgment"
+    },
+    {
+      "id": "windowing-strategies-iq4",
+      "question": "Your sliding-window pipeline's state size and cluster cost both roughly tripled after a config change, with no traffic increase. What would you look for?",
+      "answerMarkdown": "The first thing I'd check is the ratio between window length and slide interval, because that ratio directly multiplies both state and output — it's the single most common cause of a sliding-window cost blowup with unchanged traffic.\n\nConcretely: a sliding window's state and result volume scale with window_length divided by slide_interval, since each event lives in that many overlapping windows simultaneously. If someone changed the slide from, say, 3 minutes to 1 minute on a 10-minute window, the multiplier went from roughly 3x to 10x — a real tripling-and-more, with zero change in actual traffic. I'd check the deploy history or config diff for exactly that kind of slide-interval change before looking anywhere else, since it explains the symptom precisely and matches 'no traffic increase.'\n\nIf the ratio genuinely didn't change, I'd look at whether the window length itself grew (more state held per window) or whether a new field got added to the aggregation that increased per-window state size — but I'd check the slide-interval ratio first since it's the textbook cause of exactly this symptom for a sliding window specifically.\n\n**Testing:** whether you can connect a config-level windowing decision to its concrete resource-cost consequence, which is the operational half of understanding sliding windows.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

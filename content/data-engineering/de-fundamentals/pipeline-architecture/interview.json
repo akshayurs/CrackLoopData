@@ -1,0 +1,37 @@
+{
+  "topicId": "pipeline-architecture",
+  "interviewQuestions": [
+    {
+      "id": "pipeline-architecture-iq1",
+      "question": "Walk me through the architecture of a data pipeline you've built, from source to serving.",
+      "answerMarkdown": "I'd frame it around the five stages every pipeline reduces to — source, ingestion, storage, transform, serving — and describe what sat in each, because that structure is what makes the answer legible instead of a tool-name list.\n\nFor a concrete example: the source was a production Postgres database plus a couple of third-party SaaS APIs. Ingestion was a CDC connector tailing Postgres's write-ahead log for the transactional data, and a scheduled pull for the APIs, since they didn't offer a change stream. Storage landed both as raw, partitioned Parquet files in S3 — unmodified, so we always had a clean copy to reprocess from. Transform ran as a set of dbt models inside the warehouse: staging models that cleaned and deduplicated, then mart models that joined everything into business-shaped tables. Serving was a BI tool reading the marts directly, plus a nightly export feeding a reverse-ETL sync back into a CRM.\n\nAn orchestrator — Airflow in this case — sequenced all of it: it knew ingestion had to finish before staging models could run, and staging before marts.\n\nWhat I'd emphasize if pushed further: we kept raw untouched specifically so a transform bug never meant re-extracting from a source that might have already changed underneath us.\n\n**Testing:** whether you can describe a real pipeline in terms of its architectural stages rather than a flat list of tool names.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "pipeline-architecture-iq2",
+      "question": "Why would you choose to land raw data in a staging layer before transforming it, rather than transforming directly from the source?",
+      "answerMarkdown": "The short answer: recoverability. A staging layer is a clean, unprocessed copy of what the source actually sent, and it's the thing you fall back to when something downstream goes wrong — which it eventually will.\n\nConcretely, say a transform has a subtle join bug that ships for two weeks before anyone notices a metric looks off. If I have a staging layer, I fix the transform and re-run it against the already-landed staging data — a same-day fix. If I transformed straight from source with no staging copy, my only recovery path is re-extracting from the source system, which may have since updated or deleted the exact rows I need, or may be an API with a limited lookback window. In the worst case, that data is simply gone.\n\nThe cost of adding staging is close to free — one extra table write in a pipeline that's already moving the data anyway. The cost of not having it only shows up the day you need it, and by then it's too late to add retroactively.\n\nI'd treat skipping staging as acceptable only for a genuinely disposable, one-off pipeline — never for anything a business dashboard or model depends on long-term.\n\n**Testing:** whether you understand staging as an insurance policy against transform bugs, not busywork.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Reliability"
+    },
+    {
+      "id": "pipeline-architecture-iq3",
+      "question": "What's the difference between push-down compute and moving data out to a separate engine like Spark to transform it, and when would you choose each?",
+      "answerMarkdown": "Push-down means the transform runs as SQL inside the system that already holds the data — the warehouse's own compute does the work, and nothing physically moves. Moving data to Spark means extracting it out, running the transform on a separate cluster, and loading results back in.\n\nI'd default to push-down whenever the data is already in a modern warehouse and the transform is expressible in SQL, which covers the large majority of dbt-style modeling work: joins, aggregations, window functions. It's simpler operationally — one fewer system to run and monitor — and the warehouse's engine is usually well-optimized for exactly this pattern.\n\nI'd reach for Spark when the transform genuinely needs something SQL can't express cleanly or can't do at the required scale: complex custom logic across unstructured data, certain ML feature engineering, or a join so large that moving it to a purpose-built distributed engine outperforms the warehouse's SQL execution. I'd also reach for it if the source data doesn't live in the warehouse yet — Spark is a natural fit for transforming data still sitting in a raw object-storage lake before it's loaded anywhere structured.\n\nThe rule of thumb: prefer push-down by default; justify Spark by a concrete capability or scale gap, not by habit.\n\n**Testing:** whether you can reason about compute placement as a real architectural decision rather than defaulting to whichever tool you know best.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "pipeline-architecture-iq4",
+      "question": "A downstream team's dashboard broke overnight after an upstream team silently renamed a column. How would you prevent this from recurring across a pipeline with many producer and consumer teams?",
+      "answerMarkdown": "The root cause is that the boundary between the two teams had no contract — the consumer's transform assumed a column name, and nothing forced the producer to check that assumption before changing it. I'd fix the process, not just this one column.\n\nConcretely, I'd introduce a **data contract** at each meaningful stage boundary: a documented, ideally machine-checked schema for any table or event stream with more than one consumer team. Practically that means a schema registry or a versioned schema file checked into the producer's repo, CI validation that a proposed change doesn't break the documented contract, and a required notice period — deprecate the old column, dual-write the new one for a sprint, then remove the old one — instead of a same-day rename.\n\nI'd also add automated tests on the consumer side: a dbt `not_null` or schema test that fails loudly the moment an expected column disappears, rather than silently producing nulls that only surface as a wrong number three dashboards downstream.\n\nOrganizationally, the real fix is ownership clarity: every table with external consumers needs a named owner and a documented way for a new consumer to register their dependency, so the producer team actually knows who to notify before changing anything.\n\n**Testing:** whether you can propose both the technical control (contracts, tests) and the process fix, not just patch the one broken column.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging & process"
+    }
+  ]
+}

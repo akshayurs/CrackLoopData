@@ -1,0 +1,174 @@
+{
+  "id": "interpreters-tree-walking-vs-bytecode",
+  "title": "Interpreters — Tree-Walking vs Bytecode",
+  "area": "languages-compilers",
+  "group": "compilers",
+  "order": 8,
+  "slug": "interpreters-tree-walking-vs-bytecode",
+  "summary": "Execution without ahead-of-time machine code: why walking the AST directly is slow, why compiling once to a compact bytecode fixes most of that, and the dispatch tricks that squeeze more speed out of the loop that drives it.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything through [code-generation](code-generation) and [compiler-optimizations](compiler-optimizations) assumed you're heading toward real machine code. Interpreters take a different exit off the pipeline entirely: execute the program directly from a higher-level representation, with no ahead-of-time machine-code generation step at all.\n\nTwo strategies dominate. **Tree-walking**: execute the AST directly, recursively evaluating each node every single time it runs. **Bytecode interpretation**: compile once to a compact, flat instruction set, then execute *that* in a simple loop, repeatedly, for as many times as the code actually runs.\n\nThe difference between them is almost entirely about **how much repeated work you pay for repeated execution** — and that's the through-line the rest of this topic follows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s02",
+      "order": 2,
+      "sectionTitle": "Tree-walking: execute the AST directly",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A tree-walking interpreter is the most direct possible way to execute a program: given the AST from [asts-and-semantic-analysis](asts-and-semantic-analysis), write a function that pattern-matches on node type and recursively evaluates children, combining their results according to what the node means. Evaluating `Add(node)` means: recursively evaluate `node.left`, recursively evaluate `node.right`, add the two results.\n\nThis is genuinely the simplest interpreter architecture to build — often literally a single recursive function with one case per AST node type — which is exactly why it's the natural first implementation for a new language, a scripting feature, or a config-language evaluator. Its simplicity is real; its performance is the topic's next slide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s03",
+      "order": 3,
+      "sectionTitle": "A tree-walk evaluating `2 + 3 * 4`",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Recursive call-stack trace of a tree-walking eval over 2 + 3 * 4](assets/tree-walk-recursion.svg)\n\nEvery single node visit is a real function call with real call overhead — this exact recursive walk happens again, from scratch, every single time this expression executes, whether that's once or a million times in a loop.",
+      "assets": [
+        {
+          "alt": "Recursive call-stack trace of a tree-walking eval over 2 + 3 * 4",
+          "path": "assets/tree-walk-recursion.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s04",
+      "order": 4,
+      "sectionTitle": "Why tree-walking is slow",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two costs compound on every single evaluation, not just once: **dispatch overhead** — figuring out which case to run for a given node type, typically a type check or virtual dispatch, paid again on every single visit to every single node, every single time that code runs — and **no reusable compiled form** — nothing about a previous evaluation of this exact subtree is remembered or reused; the next time execution reaches the same `if` branch or the same loop body, the interpreter walks the identical tree structure again from scratch, redoing the same dispatch decisions it already made.\n\nFor a loop that runs a million times, a tree-walker redoes the *entire* dispatch-and-recurse dance a million times over, on the exact same tree shape every time — work that's provably identical each iteration and provably re-derivable from something computed once, if only there were a form that let you compute it once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "interpreters-tree-walking-vs-bytecode-s04-q1"
+      ]
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s05",
+      "order": 5,
+      "sectionTitle": "Bytecode: compile once, execute the compact form",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A bytecode interpreter runs an extra step first: compile the AST into a flat sequence of simple, fixed-format instructions — the bytecode — once, before execution begins. Running the program then means executing *that* instruction sequence, repeatedly, for however many times control actually reaches it, instead of re-walking the tree.\n\nThe dispatch decision (\"what does this operation mean, what's its opcode\") gets made once, during compilation to bytecode, not once per execution. The instructions themselves are typically much cheaper to interpret than tree nodes: a flat opcode-plus-operands format the execution loop can decode with a simple lookup, rather than a tree node requiring recursive traversal and type dispatch on every visit.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "interpreters-tree-walking-vs-bytecode-s05-q1"
+      ]
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s06",
+      "order": 6,
+      "sectionTitle": "`PUSH 2, PUSH 3, ADD` and its execution",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```text\n; bytecode for 2 + 3\nPUSH 2\nPUSH 3\nADD\n\n; execution: a stack-based VM loop\nstack = []\nfor instr in bytecode:\n    match instr:\n        PUSH n: stack.push(n)\n        ADD:    b = stack.pop(); a = stack.pop(); stack.push(a + b)\n# stack == [5]\n```\n\nThe execution loop itself is almost embarrassingly simple: fetch the next instruction, look up what it means, act on the stack, repeat. That simplicity is the entire point — the *hard* work (figuring out that `2 + 3` means push, push, add) happened once, during compilation to bytecode; the loop that runs potentially millions of times is doing the cheapest possible thing per instruction.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "interpreters-tree-walking-vs-bytecode-s06-q1"
+      ]
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s07",
+      "order": 7,
+      "sectionTitle": "Dispatch techniques",
+      "subTitle": "Switch, computed-goto, direct-threaded",
+      "type": "concept",
+      "markdown": "The execution loop's inner dispatch — \"given this opcode, jump to the code that handles it\" — has several implementations with real, measurable performance differences, even though they all compute the identical result:\n\n- **Switch-based**: a plain `switch`/`match` on the opcode. Simple, portable, but a real CPU branch mispredict risk on every dispatch, since the branch target depends on data (the opcode) the CPU can't always predict well.\n- **Computed goto**: (a GCC/Clang extension, used by CPython's main interpreter loop) jump directly to a precomputed address for each opcode via a jump table, avoiding some of the switch's branching overhead.\n- **Direct-threaded code**: goes further — each bytecode instruction's slot directly stores the *address* of the handler code to execute, so dispatch is just \"jump to the address already sitting right here,\" no separate lookup table indirection needed at all.\n\nEach step down this list trades some portability or implementation complexity for measurably less dispatch overhead — real production interpreters (CPython, Lua's reference implementation) have moved along exactly this spectrum over their history specifically chasing this cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "interpreters-tree-walking-vs-bytecode-s07-q1"
+      ]
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s08",
+      "order": 8,
+      "sectionTitle": "Simple, slow vs more work, much faster",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Tree-walking | Bytecode | JIT |\n|---|---|---|---|\n| Upfront work | None — execute AST directly | Compile to bytecode once | Compile bytecode, then compile hot paths to native code |\n| Per-execution cost | Full dispatch + recursion, every time | Cheap opcode dispatch, every time | Near-native, once compiled |\n| Implementation complexity | Lowest | Moderate | Highest |\n| Typical use | Simple DSLs, config evaluators, first implementations | Python (CPython), Ruby (historically), Lua | V8 (JavaScript), the JVM's HotSpot, PyPy |\n\nThis is genuinely a spectrum of \"how much upfront work to trade for how much per-execution speed,\" the same spectrum [the-compilation-pipeline](the-compilation-pipeline) introduced with compiler vs interpreter vs JIT — bytecode interpretation is the practical middle ground almost every production language runtime that isn't fully ahead-of-time-compiled actually lands on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s09",
+      "order": 9,
+      "sectionTitle": "Assuming bytecode alone is \"fast enough\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Bytecode interpretation is a large, real improvement over tree-walking — but it's easy to overstate how far it goes. A bytecode VM still pays real per-instruction dispatch overhead on every single instruction, every single execution, forever — it just pays *less* of it than a tree-walker, because the dispatch decision itself got cheaper (opcode lookup versus tree traversal), not eliminated.\n\nThis is exactly the gap a JIT exists to close: a JIT-compiled hot path pays dispatch overhead **zero** times after compilation, because it's running actual native instructions with no interpretation loop involved at all. \"We switched to bytecode, so we're basically as fast as compiled code now\" is a common overclaim — bytecode is a real, worthwhile step, and it is not the same tier of performance as ahead-of-time or JIT-compiled native code, and conflating the two misleads exactly the kind of capacity-planning or performance conversation where the gap actually matters.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "interpreters-tree-walking-vs-bytecode-s09-q1"
+      ]
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s10",
+      "order": 10,
+      "sectionTitle": "Why a bytecode VM beats walking the AST",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The direct answer to \"why is a bytecode VM faster than directly walking the AST\": the expensive part of interpretation — figuring out what a piece of code means and how to execute it — happens exactly once, during compilation to bytecode, instead of being redone from scratch on every single execution of every single node.\n\nA tree-walker's per-node dispatch and recursive traversal is genuinely necessary work the *first* time a piece of code is understood — but a tree-walker has no way to remember that work and skip it on the next execution of the identical code, so a hot loop pays the full cost every iteration. Bytecode's flat, precompiled instruction stream is exactly that memory: dispatch decisions already made, structure already flattened, leaving the execution loop free to do the cheapest possible per-instruction work, repeatedly, at whatever speed the dispatch technique (switch, computed-goto, direct-threaded) allows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "interpreters-tree-walking-vs-bytecode-s10-q1"
+      ]
+    },
+    {
+      "id": "interpreters-tree-walking-vs-bytecode-s11",
+      "order": 11,
+      "sectionTitle": "Where this group's static half ends",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the natural end of this group's coverage of the *static* half of [the-compilation-pipeline](the-compilation-pipeline)'s compiler/interpreter/JIT spectrum — bytecode compilation is still a compile step, even though what it produces isn't native machine code. Everything about what happens to bytecode *while it's running* — the VM's execution model in depth, JIT compilation triggering on hot paths, how CPython and V8 actually implement their loops — is covered in the `runtimes` group, which picks up exactly where this topic's dispatch-technique discussion leaves off.\n\n[building-a-toy-language-tools](building-a-toy-language-tools) closes this group out from a different angle: the practical, hands-on question of what tools you'd actually reach for to build any of this yourself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

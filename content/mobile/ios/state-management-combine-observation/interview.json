@@ -1,0 +1,37 @@
+{
+  "topicId": "state-management-combine-observation",
+  "interviewQuestions": [
+    {
+      "id": "state-management-combine-observation-iq1",
+      "question": "When would you reach for ObservableObject and @Published instead of @State, and how do views actually consume it correctly?",
+      "answerMarkdown": "`@State` is for value-type data owned by exactly one view. The moment state needs to be a reference type — shared across several views, or owning its own logic like a network call — `ObservableObject` is the tool: mark the properties views care about `@Published`, and any mutation automatically notifies subscribed views to re-render.\n\nThe consumption side has a rule that trips people up: the view that **creates** the instance uses `@StateObject`, which ties the object's lifetime to the view's identity so it survives re-renders. A view that receives an already-created instance — passed down from a parent, or from the environment — uses `@ObservedObject` instead. Using `@ObservedObject` for an instance the view itself creates is the classic bug: on a re-render, the view can recreate a fresh object, silently resetting anything it held.\n\nA concrete example: a screen's own view model gets `@StateObject`; a shared session object injected via `.environmentObject()` gets `@EnvironmentObject` in the children that read it, since it's neither created there nor passed as a plain parameter.\n\n**Testing:** whether you know the ownership rule, not just that both wrappers 'observe' an object.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "state-management-combine-observation-iq2",
+      "question": "Design a search-as-you-type feature that hits a network API. What does the Combine pipeline look like, and what would you watch for?",
+      "answerMarkdown": "I'd wire the search text field to a `@Published var query: String`, and build the pipeline off its projected publisher, `$query`. The shape: `debounce` for maybe 300ms so I'm not firing a request on every keystroke, `removeDuplicates` so retyping the same text after a debounce window doesn't refetch, then `flatMap` (or `map` into a `Publishers.Switch`-style latest-wins pattern) into the actual network call, landing in a `sink` that assigns results to a `@Published var results`.\n\nThe subtlety worth naming: a naive `flatMap` into a network publisher doesn't automatically cancel a stale in-flight request when a newer query arrives — if request A for 'cat' is slow and request B for 'catalog' returns first, then A can land afterward and overwrite B's results with stale ones. The fix is `map` into the request publisher combined with `switchToLatest`, which cancels the previous inner publisher the moment a new value arrives upstream, guaranteeing only the latest query's response ever lands.\n\nI'd also make sure the `sink` captures `[weak self]` and the subscription is stored — an unstored `AnyCancellable` gets cancelled immediately, and a leaked one keeps the view model alive forever.\n\n**Testing:** whether you know the race-condition pitfall in flatMap-based network chains, which is the real senior-level gotcha here.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design"
+    },
+    {
+      "id": "state-management-combine-observation-iq3",
+      "question": "A screen with several ObservableObject view models feels janky during rapid data updates, but profiling shows the actual visible content barely changes. What's likely wrong and how does Observation help?",
+      "answerMarkdown": "My first suspicion is over-broad observation: `ObservableObject`'s `objectWillChange` fires whenever *any* `@Published` property mutates, and every view observing that object re-evaluates its `body` to check whether it needs to update — even if the specific property that view reads never changed. If a view model has a frequently-churning internal property (a retry counter, a cache timestamp) alongside the properties a view actually displays, every view watching that object pays a re-render check on every internal mutation.\n\nI'd confirm by checking which `@Published` properties are firing most often and cross-referencing against what each affected view's `body` actually reads — usually there's a mismatch, a view re-rendering for data it never uses.\n\nThe fix, without a big rewrite: migrate the view model to `@Observable` (the Observation framework). It tracks reads at the **property** level rather than firing on any change to the object, so a view reading only `total` stops re-rendering when `items` mutates. It also removes the `@Published` boilerplate and the `@StateObject`/`@ObservedObject` distinction on the consuming side — views just hold a plain property.\n\nIf a full migration isn't feasible immediately, splitting one large view model into smaller ones scoped to what each screen section actually reads gets a similar win under the old model.\n\n**Testing:** whether you can diagnose an observation-granularity problem instead of reaching for generic 'optimize the view' advice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "state-management-combine-observation-iq4",
+      "question": "Would you use Combine or async/await for a screen that loads a user's profile once when it appears?",
+      "answerMarkdown": "async/await, and it's not close. A one-shot load — fetch once, get one response, done — has no need for a publisher/subscriber pipeline: `let profile = try await api.fetchProfile(userId)` inside a `.task { }` modifier reads linearly, handles errors with plain `try`/`catch`, and needs no `AnyCancellable` to manage or accidentally leak.\n\nStanding up Combine for this adds real cost with no corresponding benefit: a `sink` closure to store, a cancellable to retain correctly, and error handling that's more awkward than a `catch` block. I've seen codebases wrap every network call in a Combine publisher out of habit from an earlier SwiftUI era, and it's almost always simplifiable to `async`/`await` now that structured concurrency is mature.\n\nWhere I'd still reach for Combine: anything genuinely stream-like — a value that changes multiple times over the object's lifetime (a live price ticker, search-as-you-type, a location publisher), or when I specifically need operators like `debounce`, `throttle`, or `combineLatest` across multiple independent sources that don't have a clean structured-concurrency equivalent without hand-rolling one.\n\nThe rule of thumb: one value, one time → async/await. Multiple values over time, or merging multiple sources → Combine.\n\n**Testing:** whether you can match the tool to the actual shape of the problem instead of defaulting to whichever one you learned first.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

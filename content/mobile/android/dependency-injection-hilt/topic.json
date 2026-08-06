@@ -1,0 +1,148 @@
+{
+  "id": "dependency-injection-hilt",
+  "title": "Dependency Injection with Hilt",
+  "area": "mobile",
+  "group": "android",
+  "order": 5,
+  "slug": "dependency-injection-hilt",
+  "summary": "Android's framework classes fight manual DI, so Hilt maps a component hierarchy onto Android's own lifecycles. Learn the annotations, scoping rules, and the two ways it breaks.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "dependency-injection-hilt-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Dependency injection as a principle is simple: give a class its dependencies from outside rather than having it construct them itself. On most platforms you can wire this up entirely with plain constructors. Android makes that harder than it sounds, because Activities and Fragments are **instantiated by the OS**, not by your own code — you never call `new MyActivity()` yourself, so there's no constructor call site to pass dependencies into.\n\n**Hilt** is Android's standard answer: a code-generation-based DI framework built on Dagger that maps a hierarchy of dependency \"components\" onto Android's own lifecycle scopes (Application, Activity, ViewModel), so injecting into a framework-instantiated class becomes declarative annotations instead of hand-written plumbing. This topic covers why manual DI is awkward here specifically, the core annotations, and the two failure modes — scope mismatches and circular graphs — that account for most Hilt errors.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "dependency-injection-hilt-s02",
+      "order": 2,
+      "sectionTitle": "Why Android's framework classes make manual DI awkward",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Manual (constructor-based) DI assumes you control object creation: `MyViewModel(repo: UserRepository)` — the caller decides what `repo` is and passes it in. Android breaks this assumption for anything the OS instantiates on your behalf. An Activity is created by the framework when it launches a component from an Intent; you never get a constructor call site to inject anything into, because there isn't one you write.\n\nBefore Hilt, teams handled this with a hand-rolled service locator pattern — a global-ish container that Activities pull dependencies *from* inside `onCreate`, rather than having them pushed *in* through a constructor. This works, but reintroduces some of what DI was meant to avoid: a class reaching out to grab what it needs (harder to see its dependencies at a glance, harder to substitute fakes in a test) rather than declaring them and having them supplied.\n\nHilt closes this gap specifically by generating the plumbing that lets a framework-instantiated Activity or Fragment still receive constructor-style (or field-style) injection, via annotations processed at compile time — you get the ergonomics of \"dependencies are declared and supplied,\" even though you never wrote the actual object-creation call site.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "dependency-injection-hilt-s02-q1"
+      ]
+    },
+    {
+      "id": "dependency-injection-hilt-s03",
+      "order": 3,
+      "sectionTitle": "Hilt's component hierarchy mapped to Android lifecycles",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Hilt generates a tree of DI \"components\" that mirrors Android's own containment hierarchy: an `ApplicationComponent` at the root, living as long as the process; an `ActivityComponent` nested under it, created when an Activity is created and destroyed with it; a `ViewModelComponent` and `FragmentComponent` nested further, tied to their respective owners. A dependency provided at a given level is visible to everything nested under it, but not the other way around — an Application-scoped dependency is reachable from any Activity, but an Activity-scoped one is invisible outside that specific Activity's subtree.\n\nThis mirroring is deliberate and is what makes scoping annotations (`@Singleton`, `@ActivityScoped`, `@ViewModelScoped`) meaningful: they tell Hilt which level of this tree should own a single shared instance of a given dependency, and the tree's own structure enforces that the instance's lifetime can never exceed the Android lifecycle it's tied to.\n\n![Hilt component scopes nested from ApplicationComponent down to FragmentComponent and ViewModelComponent](assets/hilt-component-scopes.svg)",
+      "assets": [
+        {
+          "alt": "Hilt component scopes nested from ApplicationComponent down to FragmentComponent and ViewModelComponent",
+          "path": "assets/hilt-component-scopes.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "dependency-injection-hilt-s04",
+      "order": 4,
+      "sectionTitle": "@Inject, @Module, and @Provides",
+      "subTitle": "The core annotations",
+      "type": "concept",
+      "markdown": "Three annotations cover most of what you'll actually write. `@Inject` on a constructor tells Hilt \"you can build this class yourself, here's what it needs\" — the simplest case, used for your own classes where you control the constructor. `@Module` marks an object whose job is to tell Hilt how to build things you *don't* control the constructor of — a third-party class, an interface with no concrete implementation Hilt could guess. Inside a module, `@Provides` (a function that returns the dependency, for things needing real construction logic) or `@Binds` (a simpler declaration mapping an interface to its implementation) tell Hilt exactly how to produce that type.\n\nThe practical split: your own repository/use-case classes almost always just get `@Inject constructor(...)` and need no module at all. A `Retrofit` instance, a `Room` database, or binding an interface like `UserRepository` to its concrete `UserRepositoryImpl` need a `@Module` with `@Provides`/`@Binds`, because Hilt has no way to know how to construct a `Retrofit` client or which implementation to pick for an interface without being told explicitly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "dependency-injection-hilt-s04-q1"
+      ]
+    },
+    {
+      "id": "dependency-injection-hilt-s05",
+      "order": 5,
+      "sectionTitle": "Scoping objects to Application, Activity, or ViewModel lifetime",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "By default, Hilt provides a **new instance** of a dependency every time it's injected — fine for a lightweight, stateless class, wasteful or outright wrong for something that should be shared, like a single `Retrofit` client or a single database connection pool. A scope annotation (`@Singleton` for Application-level, `@ActivityScoped`, `@ViewModelScoped`) tells Hilt to instead build the instance once per relevant component and hand back the *same* instance to every injection point within that component's lifetime.\n\nThe choice of scope should track what the dependency actually represents, not convenience: a network client or database — genuinely one shared resource for the whole app — belongs at `@Singleton`. Something that should be fresh per screen but shared across everything on that one screen (an Activity-level cache of screen-specific state) belongs at `@ActivityScoped`. Getting this wrong in the unscoped-when-it-should-be-shared direction usually just wastes memory or duplicates connections; getting it wrong in the scoped-too-broadly direction (an Activity-scoped dependency accidentally holding onto Activity-specific data but injected somewhere longer-lived) risks exactly the Context-leak pattern from the lifecycle topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "dependency-injection-hilt-s05-q1"
+      ]
+    },
+    {
+      "id": "dependency-injection-hilt-s06",
+      "order": 6,
+      "sectionTitle": "Injecting a repository into a ViewModel with Hilt",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetworkModule {\n    @Provides\n    @Singleton\n    fun provideRetrofit(): Retrofit =\n        Retrofit.Builder().baseUrl(BASE_URL).build()\n}\n\nclass UserRepository @Inject constructor(\n    private val api: UserApi  // built from the Retrofit instance above\n)\n\n@HiltViewModel\nclass ProfileViewModel @Inject constructor(\n    private val repo: UserRepository\n) : ViewModel() { /* ... */ }\n```\n\nNotice the chain: `Retrofit` is hand-built once via `@Provides` because Hilt can't construct it on its own; `UserRepository` needs no module at all, since it has an `@Inject` constructor and Hilt can build it directly, resolving its own `UserApi` dependency in turn; `ProfileViewModel` is marked `@HiltViewModel` (required for any ViewModel Hilt injects into) and simply declares it needs a `UserRepository` — Hilt resolves the entire chain automatically from these declarations, with no manual wiring code anywhere connecting them.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "dependency-injection-hilt-s07",
+      "order": 7,
+      "sectionTitle": "Manual DI vs Dagger vs Hilt",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Manual DI | Dagger | Hilt |\n|---|---|---|---|\n| **Boilerplate** | Lowest for small apps, grows unmanageably at scale | High — components/modules hand-written and wired | Low — Android-specific conventions and code-gen replace most manual wiring |\n| **Android lifecycle integration** | None — you build it yourself | Possible, but you design the component hierarchy yourself | Built-in — a standard hierarchy matching Activity/Fragment/ViewModel out of the box |\n| **Compile-time safety** | N/A | Yes — missing dependencies fail at compile time | Yes — same underlying guarantee, inherited from Dagger |\n| **Learning curve** | Low | Steep | Moderate — Hilt's opinionated conventions trade some flexibility for a much smaller amount to learn |\n\nHilt is built directly on top of Dagger — it doesn't replace Dagger's actual dependency-resolution engine, it wraps Dagger's general-purpose (and famously verbose) component system with Android-specific conventions and a standard component hierarchy so most apps never need to design their own component graph from scratch, which is where most of Dagger's steep learning curve actually came from. The trade-off is flexibility: Hilt's conventions cover the vast majority of Android apps well, but a genuinely unusual architecture might still need raw Dagger for full control.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "dependency-injection-hilt-s07-q1"
+      ]
+    },
+    {
+      "id": "dependency-injection-hilt-s08",
+      "order": 8,
+      "sectionTitle": "Injecting an Activity-scoped dependency into a longer-lived singleton",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A `@Singleton`-scoped class ends up with an `@ActivityScoped` dependency injected into it — Hilt's compiler will actually catch the most obvious version of this at compile time (it can detect that a shorter-lived scope can't be safely injected into a longer-lived one and fail the build), but subtler versions slip through, like an Application-scoped class holding a callback or listener that was registered by something Activity-scoped and never explicitly unregistered.\n\nWhen this does slip through, the effect is the familiar Context-leak pattern from the lifecycle topic, just introduced through DI wiring instead of a manually-written static field: the longer-lived object holds onto something tied to an Activity's lifetime, preventing that Activity from ever being garbage collected once it's actually destroyed.\n\nThe fix is respecting scope direction strictly: a dependency's scope should never be shorter-lived than something that holds a reference to it. If a `Singleton`-scoped class genuinely needs Activity-specific information, the right pattern is passing that information in as a method parameter at call time, not injecting an Activity-scoped object as a permanent field — the singleton should ask for what it needs when it needs it, not hold a standing reference to something scoped shorter than itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "dependency-injection-hilt-s08-q1"
+      ]
+    },
+    {
+      "id": "dependency-injection-hilt-s09",
+      "order": 9,
+      "sectionTitle": "A circular dependency graph Hilt can't resolve",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Class `A` requires a `B` in its constructor, and `B` requires an `A` — Hilt (like any constructor-injection DI framework) can't build either one first, because building `A` requires an already-built `B`, and building `B` requires an already-built `A`. This fails loudly at compile time with a dependency-cycle error, which is actually the better outcome — the alternative, a framework that silently allowed this, would need runtime lazy-initialization tricks that mask a real design smell.\n\nA true circular dependency between two classes is almost always a sign the responsibilities are split wrong — two classes that each fundamentally need the other to function usually means they're actually one cohesive unit of behavior artificially separated, or a piece of shared logic that both depend on should be extracted into its own third class that neither `A` nor `B` needs the other for.\n\nThe fix is refactoring, not working around the cycle: extract the shared responsibility into a new class `C` that both `A` and `B` depend on independently, breaking the mutual dependency entirely, or, if the interaction is genuinely event-based rather than a direct call dependency, replace the direct reference with a callback/event-listener pattern that doesn't require either class to hold a hard reference to the other's fully-constructed instance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "dependency-injection-hilt-s09-q1"
+      ]
+    }
+  ]
+}

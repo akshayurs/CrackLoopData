@@ -1,0 +1,37 @@
+{
+  "topicId": "stateful-stream-processing",
+  "interviewQuestions": [
+    {
+      "id": "stateful-stream-processing-iq1",
+      "question": "What role does state play in a streaming pipeline, and how does checkpointing keep it safe?",
+      "answerMarkdown": "State is what lets the current event's processing depend on previous events — a running count, an unmatched half of a join, or the set of IDs already seen for dedup. Anything that requires remembering something across events, rather than just looking at the one in front of it, needs state.\n\nThe risk is that state normally lives in memory or a local disk on one worker, so a crash would wipe it out and force a full restart from the beginning — potentially hours of reprocessing for a job with accumulated state. **Checkpointing** solves that by periodically taking a durable, consistent snapshot of all state together with the input offset that snapshot corresponds to, and writing it somewhere that survives the worker dying.\n\nOn a crash, the engine reloads the last checkpoint and resumes from the recorded offset, so it only redoes the small window of work since that checkpoint — typically seconds, if the checkpoint interval is tuned well — instead of everything since the job started.\n\nThe interval itself is a trade-off: more frequent checkpoints mean less to redo on a crash, but checkpointing has its own I/O overhead that eats into steady-state throughput. Production intervals commonly land in the 10-second to 1-minute range.\n\n**Testing:** whether you understand checkpointing as the mechanism that makes state durable, not just a vague 'it saves progress' answer.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "stateful-stream-processing-iq2",
+      "question": "A stream-stream join between impressions and clicks is running fine, but its state size keeps climbing month over month even though traffic is flat. What would you check?",
+      "answerMarkdown": "Flat traffic but climbing state almost always means something is preventing state from ever being released, not that more data is genuinely being retained per unit time. My first check would be whether the join has an explicit, enforced **join window** — 'match within 1 hour' — or whether it's effectively unbounded, silently holding every unmatched impression forever waiting for a click that may never come.\n\nConcretely I'd look at: **the actual match rate** — if only 95% of impressions ever get a matching click, the other 5% pile up in state indefinitely without an expiry, and that 5%-per-day compounds into a large, ever-growing tail. **Whether the join window is actually being enforced by the engine**, versus just documented as a business rule — a config that specifies a window but a job that was deployed before that config was added won't retroactively expire old state. **Clock skew or a watermark stall** — if the join's watermark isn't advancing properly (a stalled partition, from earlier in this group), the engine may not even recognize that an impression is old enough to give up on.\n\nOnce I find where state should have expired but didn't, the fix is either enforcing the join window's TTL correctly or, if there's a genuine backlog of unmatched events, purging by age directly.\n\n**Testing:** whether you can trace an operational symptom — slow state growth — back to a missing or misconfigured expiry, the most common real-world cause.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "stateful-stream-processing-iq3",
+      "question": "How would you decide between an in-memory and a disk-backed state backend for a new stateful job?",
+      "answerMarkdown": "I'd start with a rough size calculation before picking either default. Take the expected state size: number of keys times per-key state size times retention — for example, a dedup set at 10,000 events/sec with a 16-byte key and a 24-hour TTL is roughly 10,000 × 86,400 × 16 bytes, about 14 GB of raw key data before storage overhead. If that comfortably fits in a worker's available RAM with headroom for growth, I'd default to in-memory for the lower latency and simpler checkpointing.\n\nIf the number is close to or exceeds available RAM — which is common for long-retention dedup sets, wide join buffers, or high-cardinality per-key aggregations — I'd move to a disk-backed backend like an embedded key-value store, accepting slower per-access latency in exchange for capacity that scales with disk rather than RAM, and often better incremental checkpointing since the data is already persisted.\n\nI'd also revisit this decision whenever the TTL or cardinality assumptions change — a dedup window that grows from 1 hour to 24 hours is roughly a 24x increase in expected state size, which can flip the right answer from in-memory to disk-backed on its own.\n\n**Testing:** whether you reason from an actual size estimate rather than picking a backend by default or by familiarity.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "stateful-stream-processing-iq4",
+      "question": "Why is 'we checkpoint our state' not by itself a sufficient answer to 'is this pipeline exactly-once'?",
+      "answerMarkdown": "Because checkpointing state alone only guarantees the *internal* computation survives a crash correctly — it says nothing about whether the offset that checkpoint corresponds to is consistent with it, or whether the sink receiving results is idempotent. Both of those matter just as much.\n\nTwo concrete gaps: if the state snapshot and the committed source offset aren't taken **atomically together**, recovery can either replay events the state already reflects — double-counting — or skip events the state never saw — a silent gap. Correct checkpointing has to make state and offset consistent as one atomic unit, not two independently-timed writes.\n\nSecond, even a perfectly consistent checkpoint only protects the computation up to the moment it hands a result to the sink. If the sink itself isn't idempotent or transactional, a retried write after a crash can still duplicate the *output*, even though the internal state was recovered flawlessly. 'Exactly-once' has to hold end-to-end — source offset, internal state, and sink write all consistent together — and checkpointing state is only the middle piece of that chain.\n\nI'd want to see all three pieces named explicitly before agreeing a pipeline is genuinely exactly-once, which is exactly what the next topic in this group builds out.\n\n**Testing:** whether you see checkpointing as necessary but not sufficient for an end-to-end guarantee, rather than treating the two as synonyms.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

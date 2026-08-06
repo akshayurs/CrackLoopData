@@ -1,0 +1,37 @@
+{
+  "topicId": "distributed-joins-at-scale",
+  "interviewQuestions": [
+    {
+      "id": "distributed-joins-at-scale-iq1",
+      "question": "Explain the difference between a shuffle join and a broadcast join, and how Spark decides which to use.",
+      "answerMarkdown": "Shuffle join redistributes both sides of the join by key across the cluster so matching rows land on the same executor, then sorts and merges them there. It's general-purpose — works for any table sizes — but pays the shuffle's network, disk, and serialization cost on both sides.\n\nBroadcast join skips that entirely when one side is small: it copies the small table's full contents to every executor's memory, so each executor can join it locally against its own already-resident slice of the large table, with zero shuffle of the large side at all.\n\nSpark decides using a cost-based estimate from table statistics — if the smaller side's estimated size is under a configurable threshold (`spark.sql.autoBroadcastJoinThreshold`, often 10MB by default), it broadcasts; otherwise it falls back to shuffle join. The catch is that this estimate depends on statistics staying current — if `ANALYZE TABLE` hasn't run recently on a table that's grown significantly, the optimizer can make the wrong call based on stale information.\n\n**Testing:** whether you understand both the mechanics of each strategy and the actual signal (statistics) driving the choice between them.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "distributed-joins-at-scale-iq2",
+      "question": "A join that used to run in 2 minutes now takes 25 minutes, with no code changes. How would you investigate?",
+      "answerMarkdown": "My first move is `.explain()` on the query to see which join strategy actually ran — `BroadcastHashJoin` or `SortMergeJoin` show up directly in the physical plan. If it's now doing a sort-merge join where I'd expect (or remember) a broadcast, that's the immediate suspect: a dimension table that used to be small enough to broadcast has likely grown past the threshold, or the catalog statistics are stale and the optimizer is making the wrong call either way.\n\nConcretely, I'd check the actual current size of the smaller-looking table against what the catalog's statistics claim — if the real size has grown well past the broadcast threshold but the stats haven't been refreshed, `ANALYZE TABLE` fixes it going forward. If the table genuinely grew past what should ever be broadcast, the fix is different — accept the shuffle join, or look at whether the query genuinely needs the full table joined versus a filtered subset.\n\nI'd also check for skew in the join key independently of the strategy question — a shuffle join with a newly-skewed key can produce this exact symptom (fine before, suddenly slow) if the data distribution changed, not just table size. Both causes look similar from the outside (\"job got slower with no code change\") but need different fixes, so I'd confirm which one it actually is before touching anything.\n\n**Testing:** whether you can systematically narrow down between a stats-staleness problem and a skew problem rather than guessing at a fix.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "distributed-joins-at-scale-iq3",
+      "question": "When would you manually override the optimizer with a broadcast hint, and what's the risk of doing so?",
+      "answerMarkdown": "I'd reach for an explicit broadcast hint when I know, from actual measurement, that a table is small enough to broadcast safely, but the optimizer isn't choosing to — usually because catalog statistics are missing or stale for that table, or because the table sits just over the default threshold even though it would broadcast cheaply in practice.\n\nThe hint (`broadcast(df)` in the DataFrame API, or a `/*+ BROADCAST(table) */` SQL hint) forces the strategy regardless of what the optimizer's own estimate says. That's exactly the risk: it's a forceful override, not a suggestion, so if my size assumption is wrong — the table is actually bigger than I think, or it grows unexpectedly over time without me revisiting the hint — every executor tries to hold a full copy in memory and you get out-of-memory failures, which is a worse failure mode than the slow shuffle join you were trying to avoid.\n\nSo I'd only use a hardcoded broadcast hint on a table I'm confident stays small by nature — a static lookup table, a small reference dimension — and I'd prefer fixing the underlying statistics (`ANALYZE TABLE`) over a permanent hint wherever the size is more likely to drift, since that keeps the optimizer making the right call automatically as the data changes, rather than me needing to remember to revisit a hardcoded override.\n\n**Testing:** whether you understand the hint as a targeted, riskier override rather than a general performance switch to flip whenever a join feels slow.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "distributed-joins-at-scale-iq4",
+      "question": "You need to join two large tables on a key where one value accounts for 40% of all rows on both sides. How would you approach this?",
+      "answerMarkdown": "A plain shuffle join here concentrates 40% of both tables' data onto whichever single task handles that one key — that task will take vastly longer than every other task in the stage, and the stage doesn't finish until it does. Broadcasting won't save me either, since both sides are large; this is a genuine skewed-join problem, not a size problem.\n\nMy approach: split the join into two parts. First, filter out the skewed key from both tables and join the remainder normally — that part runs fine with even task distribution, since the pathological key is gone. Second, handle the skewed key's rows separately — depending on the actual row counts on each side for that one key, sometimes the skewed key's slice on one side is itself small enough to broadcast against the skewed key's slice on the other side, even though the tables overall are both large. Union the two results back together at the end.\n\nIf isolating the key isn't practical — say, several keys are skewed, not just one — I'd fall back to salting: append a random sub-key to the join key on both sides consistently, spreading each skewed key's rows across several sub-partitions instead of one, then the join naturally distributes more evenly. I'd also check whether Spark's adaptive query execution is enabled, since modern Spark versions can detect and handle some skewed joins automatically at runtime, reducing how much of this I need to hand-engineer.\n\n**Testing:** whether you can design an isolate-and-recombine or salting strategy for a genuinely large-large skewed join, not just recite that salting exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

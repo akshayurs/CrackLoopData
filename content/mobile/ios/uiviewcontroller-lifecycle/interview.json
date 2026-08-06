@@ -1,0 +1,37 @@
+{
+  "topicId": "uiviewcontroller-lifecycle",
+  "interviewQuestions": [
+    {
+      "id": "uiviewcontroller-lifecycle-iq1",
+      "question": "What's the difference between viewDidLoad and viewWillAppear, and how do you decide what goes in each?",
+      "answerMarkdown": "The difference is frequency and frame reliability. **viewDidLoad** fires exactly once per controller instance, right after the view hierarchy is created — but before Auto Layout has resolved real frames, so anything reading `bounds` there can see stale or zero values. **viewWillAppear** fires every single time the screen is about to become visible, including return visits from a pushed screen, and frames are much closer to final by then.\n\nMy rule of thumb: **viewDidLoad** gets one-time structural setup — creating subviews, wiring delegates, static configuration that never changes for the life of the instance. **viewWillAppear** gets anything that can go stale between visits — refreshing a list after the user edited an item on a detail screen and popped back, re-checking a toggle's state, restarting an animation.\n\nThe bug I've actually seen from getting this backwards: a list fetched only in `viewDidLoad` shows stale data forever after the first load, because nothing re-triggers it on return visits — moving the fetch to `viewWillAppear` fixes it immediately.\n\n**Testing:** whether you understand the *why* behind the split, not just which method name to say first.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "uiviewcontroller-lifecycle-iq2",
+      "question": "You're computing a corner radius or gradient sizing based on a view's frame inside viewDidLoad, and it's consistently wrong on first launch but correct after a rotation. What's happening and how do you fix it?",
+      "answerMarkdown": "This is the classic lifecycle-vs-layout timing bug. `viewDidLoad` runs after the view hierarchy exists in memory but **before** Auto Layout has actually resolved frames — so `bounds`/`frame` at that point reflects whatever was set at init, often zero or an intrinsic content size, not the real on-screen size. Rotation works 'by accident' because it forces a fresh layout pass that happens to run after frames are correct, masking the underlying timing bug rather than fixing it.\n\nThe fix is to move the sizing logic into `viewWillLayoutSubviews` or `viewDidLayoutSubviews`, which fire specifically after the layout engine has settled real frames. The catch: those callbacks can fire many times — on rotation, keyboard show/hide, size class changes — so I guard the expensive part (recreating a `CAGradientLayer`, say) behind a check that the frame actually changed, otherwise I'm redoing work every layout pass for no reason.\n\nIf I need this pattern often, I'll wrap it in a small `UIView` subclass that overrides `layoutSubviews()` instead of putting frame-dependent logic in the controller at all — it keeps the concern where the geometry actually lives.\n\n**Testing:** whether you can diagnose a timing bug from symptoms rather than just knowing the lifecycle order in the abstract.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "uiviewcontroller-lifecycle-iq3",
+      "question": "How would you build a custom container view controller — say, a card-swiping interface with several child controllers — and what lifecycle pitfalls should you watch for?",
+      "answerMarkdown": "I'd add each card as a child via `addChild(_:)`, add its `view` as a subview, and finish with `didMove(toParent:)` — that sequence is what tells UIKit the containment relationship exists, which matters for things like status bar and trait propagation, not just for organizing code.\n\nThe pitfall that bites custom containers specifically: UIKit only **auto-forwards** appearance transitions (`viewWillAppear`, etc.) for its own built-in containers like `UINavigationController` and `UITabBarController`. For a hand-rolled container, I need to either accept automatic forwarding (fine for simple always-visible children) or, if only one card is 'appearing' at a time, set `shouldAutomaticallyForwardAppearanceMethods` to `false` and call `beginAppearanceTransition`/`endAppearanceTransition` on each child myself as it becomes the active card. Skip this and a card's `viewWillAppear` either never fires or fires for a card that isn't actually visible.\n\nThe second pitfall is memory: every child the parent holds is a strong reference in `children`, so when a card is genuinely done (swiped away permanently), I call `willMove(toParent: nil)`, remove its view, then `removeFromParent()` — skip any step and the child outlives its usefulness.\n\n**Testing:** whether you've actually built containment by hand, versus only ever consuming UIKit's built-in containers.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "uiviewcontroller-lifecycle-iq4",
+      "question": "How do you pass data forward when pushing a screen, and back when popping — and what's the most common memory bug in the backward direction?",
+      "answerMarkdown": "Forward is the easy direction: set properties on the new controller directly before pushing it, since it hasn't appeared yet — no lifecycle callback needed, just plain initialization.\n\nBackward is where teams reach for either a closure property or a delegate protocol on the pushed controller, called right before it pops. I lean toward a closure for a simple one-shot callback (`onSave: ((Item) -> Void)?`) since it avoids defining a whole protocol for one method, and a delegate when the relationship is longer-lived or has multiple methods.\n\nThe common bug: if the closure captures `self` (the presenting controller) strongly, and the presenting controller also holds the pushed controller strongly — which it does, implicitly, via the navigation stack until it's popped — you've built a retain cycle for the lifetime both controllers are on the stack together. It usually resolves itself once the pop happens and the stack drops its reference, so it's often invisible unless the screen is pushed and left mid-flow repeatedly, at which point memory visibly climbs. The fix is `[weak self]` in the closure, same discipline as any other escaping closure.\n\n**Testing:** whether you default to safe closure/delegate patterns and can spot the specific retain-cycle shape this creates.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Patterns"
+    }
+  ]
+}

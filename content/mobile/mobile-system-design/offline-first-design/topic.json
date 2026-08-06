@@ -1,0 +1,161 @@
+{
+  "id": "offline-first-design",
+  "title": "Offline-First Design",
+  "area": "mobile",
+  "group": "mobile-system-design",
+  "order": 2,
+  "slug": "offline-first-design",
+  "summary": "Designing so the app is fully usable with no network — local database as the real source of truth, the server as a sync target, and optimistic UI that shows a change before the server confirms it.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "offline-first-design-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Most web-style thinking treats the network as the default and offline as an edge case to handle gracefully. **Offline-first** inverts that: the local database is the app's real source of truth, the UI always reads from it, and the network's job is to keep that local store in sync in the background — not to be on the critical path of every screen render.\n\nGet this right and a subway commuter with zero signal can still browse their data, add an item, and see it reflected instantly; the sync catches up the moment connectivity returns. Get it wrong and every screen has a loading spinner waiting on a network call that may never arrive, and the app is effectively unusable exactly when the phone is in someone's pocket, not connected.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "offline-first-design-s02",
+      "order": 2,
+      "sectionTitle": "Offline-first vs offline-tolerant",
+      "subTitle": "a real distinction",
+      "type": "concept",
+      "markdown": "\"Offline-tolerant\" apps show a cached screen and an error banner when the network drops — the network is still the primary path, offline is a degraded fallback state. **Offline-first** apps are architected so the network is never on the critical path for reading or writing at all: every screen renders from the local database regardless of connectivity, and writes go to the local database first, full stop.\n\nThe distinction isn't cosmetic. An offline-tolerant app's write action (\"add to cart\") typically fails outright with no connection. An offline-first app's write action always succeeds locally and immediately — the sync to the server is a separate, decoupled concern that happens whenever connectivity allows. That difference is what determines whether a user notices they're offline at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "offline-first-design-s02-q1"
+      ]
+    },
+    {
+      "id": "offline-first-design-s03",
+      "order": 3,
+      "sectionTitle": "Local database as source of truth",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![UI reading and writing the local database directly while an independent sync engine talks to the server](assets/offline-first-architecture.svg)",
+      "assets": [
+        {
+          "alt": "UI reading and writing the local database directly while an independent sync engine talks to the server",
+          "path": "assets/offline-first-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "offline-first-design-s04",
+      "order": 4,
+      "sectionTitle": "Optimistic UI",
+      "subTitle": "showing a change before the server confirms it",
+      "type": "concept",
+      "markdown": "**Optimistic UI** applies a user's action to the local state (and renders it) immediately, before the server has actually acknowledged it — the UI assumes success and corrects course only if the server later disagrees. Tapping 'like' on a post shows the filled heart instantly; the actual API call happens in the background.\n\nThis is what makes an app feel instant rather than laggy, and it's the direct UI-level consequence of local-database-as-source-of-truth: since the UI already reads from local state, applying the change there first is the natural default, not extra work. The part teams under-invest in is what happens when the server eventually says no — a design that only handles the happy path (server always agrees) isn't actually optimistic UI, it's just UI that hasn't been tested against a rejection yet.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "offline-first-design-s04-q1"
+      ]
+    },
+    {
+      "id": "offline-first-design-s05",
+      "order": 5,
+      "sectionTitle": "An optimistic update with a rollback path",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nsuspend fun likePost(postId: String) {\n    val previous = localDb.getPost(postId)\n    localDb.updatePost(postId) { it.copy(liked = true, likeCount = it.likeCount + 1) }\n    // UI already re-rendered with the optimistic state by this point\n\n    try {\n        api.likePost(postId)\n    } catch (e: ApiException) {\n        localDb.updatePost(postId) { previous }   // roll back to the pre-optimistic state\n        showError(\"Couldn't like post — try again\")\n    }\n}\n```\n\nThe pattern has three parts, and skipping any one of them is the common bug: snapshot the pre-change state, apply the optimistic change immediately, and roll back to the snapshot (not just \"undo the specific field\") if the server rejects it — a rollback that doesn't restore the exact previous state can leave the local data in a state that never actually existed on the server or the client.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "offline-first-design-s05-q1"
+      ]
+    },
+    {
+      "id": "offline-first-design-s06",
+      "order": 6,
+      "sectionTitle": "Queuing writes made while offline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A write made with no connectivity at all can't even attempt an API call — it needs to land in a **write queue** (often just a table in the local database: pending operations with a type, payload, and timestamp) that a background sync process drains once connectivity returns.\n\nThe queue needs to preserve ordering where order matters (editing a document twice offline should replay as two edits in the original order, not applied out of order or collapsed incorrectly) and needs an **idempotency key** per queued operation so a retry after a partial failure (the request succeeded server-side but the response was lost) doesn't double-apply. This is the same idempotent-retry discipline any distributed system needs for at-least-once delivery, applied to a client's outbox instead of a server's message queue.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "offline-first-design-s06-q1"
+      ]
+    },
+    {
+      "id": "offline-first-design-s07",
+      "order": 7,
+      "sectionTitle": "Offline-first vs cache-then-network vs network-only",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Network-only | Cache-then-network | Offline-first |\n|---|---|---|---|\n| Read path | always hits network, no local fallback | shows cache instantly, refreshes from network | always reads local database; network updates it in the background |\n| Write path | fails immediately with no connection | usually fails immediately, same as network-only | always succeeds locally; queued and synced when possible |\n| Full offline usability | none | read-only, stale | full read AND write |\n| Implementation complexity | lowest | moderate | highest — needs sync engine, conflict handling, write queue |\n\nMost apps don't need full offline-first: a content-heavy read app might be well served by cache-then-network alone, reserving offline-first's real complexity (queued writes, conflict resolution) for apps where offline **writing** — not just reading — is a genuine product requirement, like a field-work app or a notes app.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "offline-first-design-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: stale data with no visible indicator",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "An offline-first app showing local data with genuinely no signal about staleness — no 'last synced X minutes ago,' no offline indicator — sets users up to act on data that's actually out of date without realizing it, which is worse for trust than a visible 'you're offline, this may be stale' banner would be.\n\nThe fix isn't reverting to network-only's instant-failure honesty; it's making the local-first model's staleness **visible** — a small sync-status indicator, a 'last updated' timestamp on data that's meaningfully time-sensitive (a live inventory count, a price), and a distinct visual state for 'currently offline, showing last-synced data' versus 'online and current.' The goal is a user who's fully informed, not one who's simply never shown a spinner.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "offline-first-design-s08-q1"
+      ]
+    },
+    {
+      "id": "offline-first-design-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: an optimistic update with no rollback",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Shipping optimistic UI without a tested rollback path is a very common half-implementation: the happy path (server agrees) works great in every demo, because demos rarely simulate a rejection. In production, a server-side validation failure, a conflict, or a permissions change since the client last synced all produce a rejection the client has to handle — and if there's no rollback, the UI is left showing a state that never actually existed on the server, silently diverging from reality until the next full sync (if one ever happens) corrects it.\n\nThe fix is treating the rejection path as a first-class scenario in both implementation and testing — deliberately simulate a server rejection in QA (a feature flag or a debug menu option that forces a failure response) rather than only testing against a server that always says yes, which is exactly the blind spot that lets this ship.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "offline-first-design-s09-q1"
+      ]
+    },
+    {
+      "id": "offline-first-design-s10",
+      "order": 10,
+      "sectionTitle": "The senior nuance: offline-first is a product decision, not just an engineering one",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mid-level answer treats offline-first as a pure architecture choice. A senior answer knows it changes real product behavior that needs explicit buy-in: what does \"delete\" mean when offline (a local tombstone that syncs later, potentially undone by another device's concurrent edit)? What happens when the same record is edited on two devices while both were offline? Those aren't purely technical questions — they're product decisions about what correctness means for this specific data, and [Data Synchronization & Conflict Resolution](data-sync-conflict-resolution) covers the concrete strategies for resolving them once the product has decided what 'correct' looks like.\n\nThe practical takeaway: don't build offline-first's write queue and sync engine before the product and engineering have explicitly agreed on the conflict-resolution behavior for the app's specific data — building the mechanism first and discovering the product requirement afterward usually means rebuilding the mechanism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

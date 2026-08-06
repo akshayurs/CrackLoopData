@@ -1,0 +1,37 @@
+{
+  "topicId": "spark-dataframes-catalyst",
+  "interviewQuestions": [
+    {
+      "id": "spark-dataframes-catalyst-iq1",
+      "question": "Why does the DataFrame API generally outperform equivalent RDD code, even though they run on the same engine?",
+      "answerMarkdown": "It comes down to visibility. A DataFrame operation like `filter` or `select` is a declarative description of intent that Catalyst, Spark's optimizer, can inspect, reorder, and rewrite before anything executes — it can push a filter down into the storage layer, prune unused columns, and choose a physical join strategy based on real statistics. An RDD transformation is a reference to an arbitrary function; Spark has no way to see what's inside it, so none of that rewriting is possible.\n\nConcretely, filtering a Parquet table on one column while selecting three others: the DataFrame version gets rewritten so only those three columns and the matching rows are ever read off disk. The RDD equivalent has to read every row and every column into memory first, then apply the equivalent logic inside opaque Python code, because Spark can't see into the lambda to push anything down.\n\nThe two APIs run on the same cluster, same executors — the performance gap isn't about different infrastructure, it's entirely about how much the planner can see and optimize before execution starts.\n\n**Testing:** whether you can explain the performance gap mechanistically — via optimizer visibility — rather than as a vague \"DataFrames are just faster\" claim.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "spark-dataframes-catalyst-iq2",
+      "question": "How would you diagnose why a Spark job using only the DataFrame API is unexpectedly slow?",
+      "answerMarkdown": "My first move is `.explain()` on the query, because the DataFrame API being optimizable is a capability, not a guarantee that optimization actually happened for this specific query. I'd look at the physical plan for two specific things: `PushedFilters` — is the filter I expect actually showing up there, or is it empty — and the read schema — is it only reading the columns the query actually needs.\n\nIf either of those looks wrong, the most common cause in my experience is a UDF sitting in the middle of the pipeline. A UDF is opaque to Catalyst exactly like an RDD lambda, so wrapping even a small piece of logic in one can block pushdown and code generation for everything around it — the query still returns correct results, it just runs several times slower than it should, with no error to point at.\n\nThe fix is usually straightforward once found: replace the UDF with Spark's built-in functions if an equivalent exists (most string/date/math logic does), which restores visibility to Catalyst. If the logic genuinely needs a UDF, I'd isolate it to the smallest possible slice of the pipeline so only that piece loses optimization, rather than letting it sit upstream of operations that would otherwise benefit from pushdown.\n\n**Testing:** whether you know to verify with .explain() rather than assume, and can name the UDF-blocking-pushdown failure mode specifically.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "spark-dataframes-catalyst-iq3",
+      "question": "Walk me through what Catalyst actually does between you writing a DataFrame query and Spark executing it.",
+      "answerMarkdown": "Three phases, roughly. First, your code becomes an **unresolved logical plan** — syntactically valid, but table and column references aren't yet checked against real schemas. Catalyst resolves those references against the catalog, producing a **resolved logical plan**.\n\nSecond, rule-based rewrites turn that into an **optimized logical plan** — this is where predicate pushdown (moving filters as close to the data source as possible) and projection pushdown (dropping unused columns) get applied, along with other rewrites like constant folding or reordering filters ahead of joins when it's safe to do so.\n\nThird, Catalyst generates one or more **physical plans** — concrete choices of algorithm, like which join strategy (broadcast vs shuffle) to use for a given join, based on estimated table sizes — and a cost model picks the cheapest one. That physical plan is what actually gets compiled (via whole-stage code generation) and handed to executors as tasks.\n\nWhat I find worth emphasizing: none of this happens if you wrap logic in a UDF partway through, because Catalyst can't rewrite what it can't see inside.\n\n**Testing:** whether you understand this as a real staged compilation process, not just \"Spark makes it faster somehow.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Internals"
+    },
+    {
+      "id": "spark-dataframes-catalyst-iq4",
+      "question": "When, if ever, would you choose the RDD API over DataFrames for a new pipeline?",
+      "answerMarkdown": "Rarely, and only for a specific, nameable reason — not as a general comfort-zone default. The DataFrame API's optimizer benefit is large enough that I'd need a concrete gap the DataFrame API can't fill.\n\nThe cases I'd actually reach for RDDs: a custom partitioning scheme tied to a specific downstream system's key layout that the DataFrame partitioning API doesn't expose cleanly, or an algorithm that's naturally expressed over arbitrary graph or object structures rather than rows and columns — some graph algorithms fit this better as RDD operations over adjacency structures than as repeated DataFrame joins.\n\nEven then, I'd isolate the RDD logic to the narrowest possible slice of the pipeline and convert straight back to a DataFrame afterward, rather than writing a whole job in RDDs. That keeps the optimizer's benefit for everything before and after the one piece that genuinely needed low-level control, instead of losing it for the whole pipeline because one stage needed something unusual.\n\n**Testing:** whether you treat RDD usage as a deliberate, scoped exception rather than a habit, and can articulate a real technical reason rather than familiarity or preference.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "concurrency-gcd-structured-concurrency",
+  "interviewQuestions": [
+    {
+      "id": "concurrency-gcd-structured-concurrency-iq1",
+      "question": "Explain how you'd move expensive work off the main thread and safely update the UI when it's done — compare the GCD way and the structured concurrency way.",
+      "answerMarkdown": "Both approaches solve the same problem: UIKit and SwiftUI only render safely from the main thread, so expensive work has to happen elsewhere and hop back.\n\nUnder GCD, that's explicit: `DispatchQueue.global(qos: .userInitiated).async { ... }` to do the work, then `DispatchQueue.main.async { ... }` inside it to touch the UI. It's simple and universally supported, but nothing stops you from forgetting the second hop — that mistake only shows up at runtime, sometimes intermittently.\n\nUnder structured concurrency, I mark the UI-owning type `@MainActor` and write the expensive call as a plain `await someAsyncCall()` from inside an `async` method. Execution suspends at the `await`, runs the work, and resumes back on the main actor automatically — no manual dispatch, and critically, the compiler **enforces** the main-actor requirement at compile time rather than only at runtime. If I try to touch that type's state from a non-main-actor context, it won't compile.\n\nFor new code I default to the structured approach specifically for that compile-time guarantee. I still reach for GCD constructs like dispatch groups or barriers for a few things that don't have a clean async equivalent yet, and for interop with older completion-handler-only APIs.\n\n**Testing:** whether you understand the safety trade-off, not just that both 'move work off main.'",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-iq2",
+      "question": "A screen intermittently crashes with a main-thread assertion, but only in production and only for some users. How would you approach debugging this?",
+      "answerMarkdown": "Intermittent and production-only points toward a race that depends on timing — most likely a background completion handler touching UI state directly, where the crash only manifests when that closure happens to fire while the view is in a particular state (mid-transition, or after the view has already been dismissed).\n\nFirst I'd grep for every `DispatchQueue.global` or third-party SDK completion handler in that screen's code path and check whether each one hops back to main before touching any `UIView`, `@Published` property, or Core Data managed object (which has its own thread-confinement rule, separate from the UI one). I'd specifically suspect any handler added later by a different engineer than the one who wrote the main flow — mismatched assumptions about who owns the main-thread hop are a common source of this exact bug.\n\nTo catch it locally, I'd enable the **Main Thread Checker** in the scheme's diagnostics — it turns silent off-main UI touches into an immediate, loud crash with a stack trace, in debug builds, rather than the intermittent production symptom.\n\nThe longer-term fix, if the class involved is UI-facing, is migrating it to `@MainActor` so the compiler catches any future regression of this kind before it ships, instead of relying on the checker catching it in testing.\n\n**Testing:** whether you can connect an intermittent symptom to a specific, checkable root cause and know the actual tooling (Main Thread Checker) rather than just saying 'add more dispatch calls.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-iq3",
+      "question": "You need to download five images concurrently and only proceed once all five finish, or bail out if any fails. How would you implement this with structured concurrency, and why is it better than a GCD DispatchGroup?",
+      "answerMarkdown": "I'd use `withThrowingTaskGroup`: add one child task per download inside the group, then iterate `for try await image in group` to collect results as they complete. If any child throws, the group propagates that error and — this is the key part — automatically cancels every other still-running child task rather than leaving them to finish pointlessly in the background.\n\n```swift\nlet images = try await withThrowingTaskGroup(of: UIImage.self) { group in\n    for url in urls { group.addTask { try await download(url) } }\n    var results: [UIImage] = []\n    for try await img in group { results.append(img) }\n    return results\n}\n```\n\nA `DispatchGroup` gives you the 'wait for all to finish' half of this for free (`group.wait()` or `notify`), but the 'cancel the rest on failure' half is entirely manual — you'd need a shared flag every closure checks, and there's no compiler help ensuring every closure actually checks it. The task group's cancellation is structural: it's tied to the group's own scope, so it can't be forgotten the way a manual flag check can.\n\nThe other real advantage: cancellation composes. If the *caller* of this whole function is itself cancelled, that cancellation propagates down into the task group automatically, cancelling all five downloads — no GCD equivalent does that for free.\n\n**Testing:** whether you know structured concurrency's actual advantage is automatic, composable cancellation, not just nicer syntax.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design"
+    },
+    {
+      "id": "concurrency-gcd-structured-concurrency-iq4",
+      "question": "What's actor reentrancy, and why doesn't marking a class as an actor fully eliminate race conditions?",
+      "answerMarkdown": "An actor guarantees that its own mutable state is only accessed by one task **at a time** — that removes classic data races, where two threads write to the same memory simultaneously and corrupt it. What it doesn't remove is a **logic race across a suspension point**. If an actor method does a check, then hits an `await` (calling another async function), then acts on that check afterward, another call to the same actor can run entirely in the gap created by that `await` — because the first call has voluntarily suspended and yielded control.\n\nThe canonical example is a bank balance: `guard balance >= amount`, then `await logTransaction()`, then `balance -= amount`. Two concurrent `withdraw` calls can both pass the guard before either one decrements, because the `await` in between lets the second call run against the same balance the first one already validated. No raw memory got corrupted — the actor's isolation held the whole time — but the invariant ('never withdraw more than the balance') still broke.\n\nThe fix is either avoiding suspension between check and mutation (do the logging after decrementing, or use a non-async logging path), or re-validating the invariant immediately after the `await`, treating it the same way you'd treat any check-then-act race in a lock-based system.\n\n**Testing:** whether you understand actors as removing data races specifically, not concurrency bugs generally — a distinction many candidates miss.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Concurrency"
+    }
+  ]
+}

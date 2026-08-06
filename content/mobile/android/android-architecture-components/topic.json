@@ -1,0 +1,161 @@
+{
+  "id": "android-architecture-components",
+  "title": "Android Architecture Components — MVVM in Practice",
+  "area": "mobile",
+  "group": "android",
+  "order": 3,
+  "slug": "android-architecture-components",
+  "summary": "ViewModel, StateFlow, and the Repository pattern are Android's concrete answer to MVVM. Learn why ViewModel exists, unidirectional data flow, and where MVVM diverges from MVI.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "android-architecture-components-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "MVVM as a pattern is old and platform-agnostic. What's Android-specific is *which* framework classes implement it: `ViewModel` survives the [Activity rotation](activity-fragment-lifecycle) that would otherwise destroy your presentation logic along with the view, `StateFlow`/`LiveData` expose observable UI state, and the Repository pattern hides where data actually comes from behind one API.\n\nThis topic is the concrete Android wiring: why `ViewModel` exists at all, how data flows from a data source through a repository to a `ViewModel` to a Compose screen, and the two classic mistakes — a `ViewModel` holding a View reference, and a `ViewModel` talking to a network client directly. General MVVM/pattern theory lives in Object-Oriented Design; this is its Android implementation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "android-architecture-components-s02",
+      "order": 2,
+      "sectionTitle": "Why Android needed ViewModel",
+      "subTitle": "Surviving configuration changes",
+      "type": "concept",
+      "markdown": "Before `ViewModel` existed, surviving a rotation meant manually saving and restoring everything through `onSaveInstanceState`'s Bundle — fine for a scroll position, painful and error-prone for a screen's full presentation state: loaded data, in-flight network calls, form validation state. Every screen reinvented its own ad hoc survival mechanism, inconsistently.\n\n`ViewModel` solves this structurally: Android retains the **same `ViewModel` instance** across an Activity being destroyed and recreated specifically for a configuration change, handing the new Activity instance the same `ViewModel` rather than creating a fresh one. From the `ViewModel`'s perspective, nothing happened — it never received a destroy callback for the rotation at all, because there wasn't one.\n\nThe scoping mechanism that makes this work: a `ViewModel` is retrieved through a `ViewModelProvider` tied to a scope (the Activity, a Fragment, the nav graph) — as long as that scope's underlying owner survives the recreation (which it does for a config change, but not for the user genuinely navigating away and the scope being cleared), the same `ViewModel` instance comes back.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "android-architecture-components-s02-q1"
+      ]
+    },
+    {
+      "id": "android-architecture-components-s03",
+      "order": 3,
+      "sectionTitle": "The MVVM data flow",
+      "subTitle": "View, ViewModel, Repository, data source",
+      "type": "diagram",
+      "markdown": "A request flows down and data flows back up through four layers, each with one job: the **View** (a Composable or Activity/Fragment) renders state and forwards user actions, knowing nothing about where data comes from; the **ViewModel** holds UI state and business logic, calling into a Repository and exposing the result as observable state; the **Repository** is the single source of truth for a given kind of data, deciding whether to serve from a local cache/database or fetch from the network, hiding that decision from everything above it; and the **data source** (a Room database, a network API client) does the actual I/O.\n\nEach layer only talks to the one directly below it — the View never touches the Repository or a network client directly, and the ViewModel never touches a raw `Retrofit` client or DAO directly, only the Repository's clean interface. That discipline is what makes each layer independently testable: a ViewModel's tests can inject a fake Repository with no real database or network involved at all.\n\n![View to ViewModel to Repository layer stack with local DB and network branches](assets/mvvm-layer-stack.svg)",
+      "assets": [
+        {
+          "alt": "View to ViewModel to Repository layer stack with local DB and network branches",
+          "path": "assets/mvvm-layer-stack.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "android-architecture-components-s04",
+      "order": 4,
+      "sectionTitle": "LiveData vs StateFlow for exposing UI state",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | LiveData | StateFlow |\n|---|---|---|\n| **Lifecycle awareness** | Built-in — automatically stops delivering updates to a stopped Activity/Fragment | None built-in — needs `repeatOnLifecycle` or an equivalent collector to get the same safety |\n| **Kotlin coroutines integration** | Limited, needs conversion helpers | Native — built on Kotlin Flow |\n| **Operators (map, combine, etc.)** | Limited | Full Flow operator set |\n| **Threading model** | Main-thread-focused by design | Works naturally with structured concurrency and any dispatcher |\n\n`LiveData` was purpose-built early specifically to solve the lifecycle-awareness problem — stop emitting to a destroyed observer automatically — before Kotlin coroutines were as central to Android as they are now. `StateFlow` doesn't have that safety built in, which is exactly why collecting it needs to go through `repeatOnLifecycle(Lifecycle.State.STARTED)` (or a similar lifecycle-scoped collector) to avoid observing UI state while the screen is stopped. Most current Android architecture guidance favors `StateFlow` for its coroutine-native ergonomics, provided the lifecycle-safe collection pattern is applied consistently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "android-architecture-components-s04-q1"
+      ]
+    },
+    {
+      "id": "android-architecture-components-s05",
+      "order": 5,
+      "sectionTitle": "The Repository pattern",
+      "subTitle": "Hiding data sources behind one API",
+      "type": "concept",
+      "markdown": "A Repository exposes a clean, data-shape-focused API (`getUser(id): Flow<User>`) and internally decides where that data actually comes from — a local Room cache, a network call, or some combination (serve cached data immediately, then refresh from network and emit an updated value) — without the caller needing to know or care which.\n\nThis matters concretely for offline support and caching strategy: the ViewModel that calls `getUser(id)` doesn't change at all whether the Repository is currently serving purely from cache, purely from network, or implementing a full offline-first sync strategy — that decision lives entirely inside the Repository and can evolve independently. It also matters for testing: a fake Repository that returns canned data lets every `ViewModel` test run with zero real I/O, fast and deterministic.\n\nThe common anti-pattern to watch for: a Repository that's really just a thin pass-through wrapper around a single network call with no actual caching or source-of-truth logic — that's not wrong exactly, but it means the pattern's real value (hiding a genuine multi-source decision) isn't being used yet, and the abstraction is currently just ceremony until a second data source is added.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "android-architecture-components-s05-q1"
+      ]
+    },
+    {
+      "id": "android-architecture-components-s06",
+      "order": 6,
+      "sectionTitle": "A ViewModel exposing StateFlow consumed by Compose",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nclass ProfileViewModel(private val repo: UserRepository) : ViewModel() {\n    private val _uiState = MutableStateFlow<UiState>(UiState.Loading)\n    val uiState: StateFlow<UiState> = _uiState.asStateFlow()\n\n    fun loadUser(id: String) {\n        viewModelScope.launch {\n            _uiState.value = UiState.Loading\n            _uiState.value = try {\n                UiState.Success(repo.getUser(id))\n            } catch (e: Exception) {\n                UiState.Error(e.message)\n            }\n        }\n    }\n}\n\n@Composable\nfun ProfileScreen(viewModel: ProfileViewModel) {\n    val state by viewModel.uiState.collectAsStateWithLifecycle()\n    when (state) {\n        is UiState.Loading -> LoadingSpinner()\n        is UiState.Success -> ProfileContent(state.user)\n        is UiState.Error -> ErrorMessage(state.message)\n    }\n}\n```\n\nNote the private mutable backing property (`_uiState`) exposed publicly only as an immutable `StateFlow` — this is a deliberate encapsulation pattern: only the ViewModel itself can push new state; every consumer can only read it. `collectAsStateWithLifecycle()` handles the lifecycle-safety `StateFlow` needs, collecting only while the screen is at least `STARTED`.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "android-architecture-components-s07",
+      "order": 7,
+      "sectionTitle": "Single source of truth and unidirectional data flow",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Single source of truth** means exactly one place owns the authoritative current value of a piece of state — for UI state, that's the `ViewModel`'s exposed `StateFlow`; nothing else should hold a competing, independently-mutable copy that could drift out of sync with it. **Unidirectional data flow** is the discipline that keeps it that way: state flows one direction, down from ViewModel to View; events flow the other direction, up from View to ViewModel as function calls, never as a View directly mutating shared state.\n\nTogether these eliminate a whole class of bugs where two parts of the UI disagree about the current state because each mutated its own copy independently — a bug that's structurally common in the classic View system (a fragment mutates a shared object directly, an Activity reads a stale copy) and structurally prevented here, because the View literally has no mutation path into the state at all, only a read path and an event-dispatch path.\n\nThe discipline extends up the stack too: the Repository is the single source of truth for *data* (deciding cache-vs-network), and the ViewModel is the single source of truth for *UI state* built from that data — each layer owns exactly one thing authoritatively, and nothing above or below it duplicates that ownership.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "android-architecture-components-s07-q1"
+      ]
+    },
+    {
+      "id": "android-architecture-components-s08",
+      "order": 8,
+      "sectionTitle": "MVVM vs MVI on Android",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | MVVM (as typically implemented) | MVI |\n|---|---|---|\n| **State shape** | Often several independent observable properties | One single immutable state object per screen |\n| **Updates** | Each property updated somewhat independently | Every update replaces the whole state object via a pure reduce function |\n| **Predictability** | Good, but partial-state updates can leave transient inconsistent combinations | Very high — impossible to observe a partial update; state changes atomically |\n| **Boilerplate** | Lower | Higher — every user action becomes an explicit Intent/Action type |\n\nThe MVVM code shown earlier is already close to MVI in spirit — one `StateFlow<UiState>` with a sealed class covering `Loading`/`Success`/`Error` is a single state object, just without MVI's additional discipline of routing every user action through an explicit typed \"intent\" that a pure reducer function turns into the next state. Teams that find themselves accumulating several independent `StateFlow` properties on one `ViewModel` (`isLoading`, `error`, `data`, each updated separately) are drifting toward the inconsistent-partial-state problem MVI's single-state-object discipline exists specifically to prevent, and often benefit from consolidating into one sealed state type even without adopting full MVI.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "android-architecture-components-s09",
+      "order": 9,
+      "sectionTitle": "Holding a View reference inside a ViewModel",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A `ViewModel` is given a direct reference to a View or an Activity/Fragment — commonly to call a method on it directly, or passed in during construction for convenience — and stores it in a field. Because a `ViewModel` is designed to **outlive** the Activity across a configuration change (that's its entire purpose), holding a reference to a specific Activity or View instance means holding onto an object that gets destroyed and recreated while the `ViewModel` itself survives, producing exactly the Context-leak pattern covered in the lifecycle topic, just with the `ViewModel` as the static-field equivalent.\n\nConcretely: after a rotation, the old Activity is destroyed, but the `ViewModel`'s stale reference to it prevents garbage collection of that entire destroyed Activity's object graph, and any code path that still calls a method on that stale reference risks touching a destroyed, no-longer-attached View.\n\nThe fix is architectural, not a patch: a `ViewModel` should only expose observable state and functions the View calls — it should never hold a reference back to the View at all. If a `ViewModel` seems to need to directly command a View (show a toast, trigger a one-time navigation event), model that as a one-shot event the View observes and reacts to, not as the `ViewModel` reaching up and calling into the View directly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 88,
+      "mcqIds": [
+        "android-architecture-components-s09-q1"
+      ]
+    },
+    {
+      "id": "android-architecture-components-s10",
+      "order": 10,
+      "sectionTitle": "A ViewModel calling a network client directly instead of a repository",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A `ViewModel` constructs or is injected with a raw `Retrofit` service interface and calls it directly for data, skipping the Repository layer entirely. It works, and it's genuinely faster to write for a single simple screen — right up until the app needs offline support, caching, or a second data source for the same data, at which point that logic has to be threaded through every `ViewModel` that bypassed the Repository, rather than added in one place.\n\nThe deeper cost shows up in testing: a `ViewModel` that talks directly to a network client can't be unit-tested without either a real network call or mocking the network client's exact interface in every test — brittle and coupled to an implementation detail. A `ViewModel` that talks to a Repository interface can be tested with a trivial fake that returns canned data, completely decoupled from how that data is actually fetched.\n\nThe general principle this violates: the `ViewModel` should depend on an abstraction for data access, not a concrete data-source implementation, so the concrete implementation (network today, network-plus-cache tomorrow) can change without touching every `ViewModel` that uses it — this is the same dependency-inversion idea covered generally in Object-Oriented Design, applied specifically to Android's data layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "android-architecture-components-s10-q1"
+      ]
+    }
+  ]
+}

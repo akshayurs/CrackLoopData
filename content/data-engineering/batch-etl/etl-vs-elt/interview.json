@@ -1,0 +1,37 @@
+{
+  "topicId": "etl-vs-elt",
+  "interviewQuestions": [
+    {
+      "id": "etl-vs-elt-iq1",
+      "question": "What's the difference between ETL and ELT, and why did ELT become the default architecture?",
+      "answerMarkdown": "The letters describe when transformation happens relative to loading. ETL transforms in a separate engine before the data ever reaches the warehouse, so the warehouse typically only ever sees the final, polished result. ELT loads raw data first, unmodified, and transforms it afterward using the warehouse's own compute — usually via SQL models, often managed with dbt.\n\nELT became the default once cloud warehouses like Snowflake and BigQuery made compute cheap and elastic. The old reason to avoid transforming in the warehouse — scarce, expensive, fixed compute on an on-premise appliance — mostly disappeared, so ELT's structural advantages had nothing offsetting them anymore: raw data is always available for reprocessing, there's one fewer system to operate since the warehouse itself does double duty, and push-down compute means no data has to move to get transformed.\n\nThe concrete payoff I'd point to: if a transform has a bug, ELT lets you rewrite the SQL and re-run it against data already sitting in the warehouse. ETL, having never loaded raw data, often means re-extracting from the source — which may no longer have the exact data you need.\n\nI wouldn't say ELT always wins though — there are real cases, mainly compliance-driven masking before data lands, where ETL's order is the actual requirement, not a limitation.\n\n**Testing:** whether you understand the trade-off behind the acronyms, not just which one is trendier.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "etl-vs-elt-iq2",
+      "question": "A teammate says \"we should always use ELT, ETL is outdated.\" How would you respond?",
+      "answerMarkdown": "I'd push back gently, because ELT being the right default for most workloads doesn't make ETL universally outdated — there are cases where ETL's core property, transforming before load, is exactly what the requirement demands.\n\nThe clearest example is compliance: if a field like a raw SSN or unmasked payment detail must never exist unmasked inside the warehouse, you have no choice but to mask or drop it before the data is loaded — that's ETL by definition, and ELT's land-raw-first default is precisely the thing you can't afford in that case. I've also seen it matter for genuinely small pipelines, where standing up a warehouse just to hold an interim raw copy is more infrastructure than a handful of tables actually needs — a lightweight script that extracts, transforms, and loads directly can be simpler to operate end to end.\n\nI'd frame my pushback constructively: \"ELT is the right default for us because we're not under that compliance constraint and our data volume justifies a warehouse — but let's be able to name the reason each time, rather than treating it as a rule with no exceptions.\" That keeps the team defaulting sensibly while staying able to recognize the specific cases where the default doesn't apply.\n\n**Testing:** whether you can hold a nuanced position instead of treating architecture choices as absolute rules.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "etl-vs-elt-iq3",
+      "question": "You've inherited a legacy ETL pipeline that only ever loaded transformed output, and now a new requirement needs a raw field that was dropped during the original transform. How would you handle this, and how would you prevent it from recurring?",
+      "answerMarkdown": "First, I'd check whether the source system still has the data — if it's recent and the source retains history, I might be able to re-extract just for the missing field. If the source has since purged, updated, or overwritten those rows, that data may simply be gone, and I'd say that plainly rather than pretending there's always a clean recovery path.\n\nFor the immediate fix, assuming the source still has it, I'd add a step to extract that specific field going forward and backfill what I can recover from the source's current state, being explicit with stakeholders about what history is unrecoverable.\n\nFor preventing recurrence, I'd change the pipeline's habit, not necessarily its full architecture — I don't need to migrate the whole thing to ELT to get the benefit that matters here. I'd add a raw landing step: dump an untransformed copy of extracted data into cheap object storage or a staging table, in addition to whatever the existing ETL transform produces. That's a small addition that borrows ELT's raw-retention property without requiring a full re-architecture, and it means the next unanticipated requirement doesn't repeat this same painful gap.\n\nI'd also flag this as a pattern worth checking across other legacy pipelines in the same system, since if one ETL job was built this way, others likely were too.\n\n**Testing:** whether you can both fix the immediate problem honestly and propose a durable structural fix.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    },
+    {
+      "id": "etl-vs-elt-iq4",
+      "question": "How would you design a pipeline that needs to redact PII before it lands in the warehouse, while still getting ELT's benefits for everything else?",
+      "answerMarkdown": "I'd design this as a hybrid rather than treating it as a strict either/or. The PII fields specifically need ETL's property — transformed (masked, tokenized, or dropped) before load — because that's the actual compliance requirement: the raw value must never exist unmasked in the warehouse. Everything else in the same record can follow ELT's normal pattern.\n\nConcretely: at ingestion, I'd run a lightweight transform step that only touches the sensitive fields — hash or tokenize a customer's SSN, for instance — while passing every other field through completely unmodified. The result lands in the warehouse's raw layer looking almost identical to a pure ELT raw load, except the sensitive fields are already irreversibly masked. From that point on, the rest of the pipeline — staging models, curated marts — behaves exactly like standard ELT: SQL transforms running inside the warehouse, full raw-retention benefits for every non-sensitive field, easy reprocessing if a downstream transform has a bug.\n\nI'd also keep the tokenization mapping (if reversible tokenization is needed for a legitimate business purpose) in a separate, tightly access-controlled system — never alongside the general-purpose warehouse — so the masking step actually holds up under an audit, not just in intent.\n\nThis gets the compliance requirement satisfied at the one place it's non-negotiable, without giving up ELT's operational simplicity for the 95% of the data that isn't sensitive.\n\n**Testing:** whether you can design a real hybrid instead of forcing an all-or-nothing architecture choice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied design"
+    }
+  ]
+}

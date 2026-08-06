@@ -1,0 +1,37 @@
+{
+  "topicId": "app-lifecycle-process-model",
+  "interviewQuestions": [
+    {
+      "id": "app-lifecycle-process-model-iq1",
+      "question": "Walk me through what happens to an app's process when the user backgrounds it and the phone later needs memory.",
+      "answerMarkdown": "The process moves down a ladder: **active → background → suspended → killed**, and each step is triggered by something concrete, not a timer alone.\n\nBackgrounding happens the instant the user leaves — home button, app switch, an incoming call taking focus. The app is still a live process at that point, just invisible, and it gets a short execution budget to wrap up critical work: flush a write, cancel an in-flight request, save a checkpoint. Once that budget runs out, or the OS decides to save power, the process is frozen — suspended — with zero code running, just a memory snapshot sitting there.\n\nIf memory pressure keeps rising, a low-memory killer walks the suspended and background processes ranked by recency and importance, and reclaims the least valuable ones first. No warning callback fires for this — you can't rely on cleanup code running at the moment of the kill itself, only on cleanup you already did on the way into background.\n\nComing back: if the process was only suspended, the OS just unfreezes it — instant, feels like nothing happened. If it was killed, the app has to cold-start — new process, fresh init, and it has to reconstruct the screen from whatever it saved to durable storage before the kill.\n\n**Testing:** whether you understand this as an OS-driven resource reclamation model rather than a simple pause/resume, and specifically that the kill step is silent and irreversible from the app's side.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "app-lifecycle-process-model-iq2",
+      "question": "A user reports that a multi-step form they were filling out sometimes resets to blank when they switch apps and come back. How would you debug this?",
+      "answerMarkdown": "I'd start from the fact this is almost certainly a process-death-without-restoration bug, not a random UI glitch, because the symptom — data present, then gone — is the exact signature of a killed process reopening with no saved state.\n\nFirst I'd reproduce deliberately rather than by switching apps and hoping: force-kill the app via the OS developer option right after backgrounding, then relaunch from the icon. If the form is blank, the bug is confirmed and reproducible on demand, which matters because it almost never reproduces on a high-RAM dev device under normal use.\n\nThen I'd check what's actually being persisted before backgrounding. The common root cause is that form state lives only in memory — a screen-level object or ViewModel — with nothing written to durable storage on the way to background. The fix isn't \"catch the crash,\" there is no crash; it's proactively serializing the minimum needed (field values, current step index) to a saved-state mechanism before the process can be killed, and checking for that saved state on cold start before rendering the default blank form.\n\nI'd also check *when* the save happens — saving only in a lifecycle callback that assumes it always fires with time to spare is itself a bug, since the OS can suspend more abruptly under high memory pressure than a comfortable dev environment ever shows.\n\n**Testing:** whether you connect a vague user report to the specific mechanism (uninstrumented state restoration) and know how to force-reproduce a bug that's invisible on a dev device.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "app-lifecycle-process-model-iq3",
+      "question": "Why do cold start, warm start, and hot start get measured and optimized separately instead of as one \"launch time\" metric?",
+      "answerMarkdown": "Because they're bottlenecked by completely different work, so a fix for one does nothing for the others — lumping them into one number hides which problem you actually have.\n\nCold start pays for spawning a process, running static initializers, setting up dependency graphs, and rendering the first frame from nothing. The fix is app-init work: defer non-critical initialization off the startup path, lazy-init singletons, trim what runs before first frame.\n\nWarm start skips the process spawn and static init — the process is alive — but the UI hierarchy for the current screen was torn down and has to be rebuilt. The fix is cheap view/composable construction and avoiding expensive layout work on that rebuild path.\n\nHot start does neither: process and UI are both alive, it's a pure resume. If hot start is slow, the bug is almost always something naively re-running on every foreground transition — a refetch, a re-layout — that should be conditional on actual staleness.\n\nAt one company-scale example: shaving 200ms off cold start required trimming DI graph construction, while the same 200ms on hot start turned out to be an analytics SDK re-initializing on every resume — same symptom, unrelated fix. Measuring them together would have hidden that the second one was even a bug.\n\n**Testing:** whether you understand that \"launch time\" is not one problem, and can reason about where in the process/UI lifecycle a given optimization actually applies.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Performance"
+    },
+    {
+      "id": "app-lifecycle-process-model-iq4",
+      "question": "As a staff engineer reviewing a new feature, what lifecycle-related questions would you ask before approving it?",
+      "answerMarkdown": "I'd frame it as one question repeated across every piece of state the feature introduces: **what happens to this if the process dies right now, and does the user notice?**\n\nConcretely I'd walk through: what state does this feature hold only in memory, and is any of it something the user would consider \"their work\" if lost — a draft, a selection, progress through a flow? If yes, is there an explicit save point before backgrounding, or are we relying on the process happening to survive?\n\nNext, does the feature do anything in the background-execution window — a network call, a write — and does it handle being cut off mid-operation rather than assuming it always completes? A write that isn't idempotent or atomic and gets interrupted by a suspend is a data-corruption risk, not just a UX one.\n\nI'd also ask whether anything assumes background time passes like foreground time — a countdown timer, a \"last refreshed 30 seconds ago\" freshness check — since a suspend-then-resume can make elapsed time jump by hours with zero code running in between, and naive freshness logic breaks silently on that.\n\nFinally: has restoration actually been tested with a forced kill, not just an app-switch? If the answer is no, I'd block on that before sign-off, because this exact gap is the most common lifecycle regression that ships.\n\n**Testing:** whether you proactively design for process death as a normal event rather than reviewing for it reactively after a bug report.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Design Review"
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+{
+  "id": "the-jvm-deep-dive",
+  "title": "The JVM Deep Dive",
+  "area": "languages-compilers",
+  "group": "runtimes",
+  "order": 4,
+  "slug": "the-jvm-deep-dive",
+  "summary": "A concrete walk through one real runtime, end to end: how a class gets loaded and linked, what lives in each JVM memory area, and how HotSpot's C1/C2 JIT tiers turn bytecode into native speed while your program is already running.",
+  "level": "advanced",
+  "slideCount": 13,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "the-jvm-deep-dive-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything in `what-a-runtime-provides`, `bytecode-and-virtual-machines`, and `just-in-time-compilation` was general. This topic makes it concrete with one real runtime: the **JVM**, specifically Oracle/OpenJDK's **HotSpot** implementation.\n\nThree threads run through this topic: how a class gets from a `.class` file to something you can call (class loading), where different kinds of data actually live in memory (heap, stack, metaspace), and how HotSpot's specific two-tier JIT (C1, C2) turns hot bytecode into native code.\n\nThe target interview question this whole topic answers: **\"explain what happens from `java Main` to your first line of output.\"**",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "the-jvm-deep-dive-s02",
+      "order": 2,
+      "sectionTitle": "Class loading: three phases",
+      "subTitle": "Loading, linking, initialization",
+      "type": "concept",
+      "markdown": "Getting a `.class` file ready to use is three distinct phases, not one step:\n\n- **Loading** — finding the bytecode (from the classpath, a JAR, a network resource) and creating an in-memory `Class` object for it.\n- **Linking** — itself three sub-steps: **verify** (bytecode safety checks — `bytecode-and-virtual-machines` covers why this matters), **prepare** (allocate memory for static fields, set to default values), **resolve** (turn symbolic references to other classes/methods into direct references, which can happen lazily).\n- **Initialization** — running static initializers and static field assignments, in source order, the first time the class is actively used (not merely referenced).\n\nThat last distinction matters: referencing `Foo.class` doesn't initialize `Foo`; calling `Foo.someStaticMethod()` does. This is why a `NoClassDefFoundError` can appear on a *later* line than where the class was first mentioned.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "the-jvm-deep-dive-s02-q1"
+      ]
+    },
+    {
+      "id": "the-jvm-deep-dive-s03",
+      "order": 3,
+      "sectionTitle": "The classloader delegation hierarchy",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Classloaders form a parent-delegating chain, and each loader asks its parent first before trying to load a class itself: **bootstrap** (loads core `java.lang.*` classes from the JDK, written in native code) → **platform** (loads other JDK modules) → **application** (loads your classpath/JAR classes).\n\nThis delegation exists so your application code can't accidentally shadow `java.lang.Object` with a class of your own — the bootstrap loader always gets first crack at core classes, so a rogue `java.lang.String` on your classpath is silently ignored in favor of the JDK's real one.\n\n![Bootstrap, Platform, and Application classloaders delegating requests up to the parent first](assets/classloader-delegation.svg)",
+      "assets": [
+        {
+          "alt": "Bootstrap, Platform, and Application classloaders delegating requests up to the parent first",
+          "path": "assets/classloader-delegation.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "the-jvm-deep-dive-s04",
+      "order": 4,
+      "sectionTitle": "JVM memory areas",
+      "subTitle": "Where things actually live",
+      "type": "compare",
+      "markdown": "| Area | What lives there | Shared across threads? |\n|---|---|---|\n| **Heap** | Objects, arrays — everything `new` creates | Yes |\n| **Per-thread stack** | Local variables, method call frames, return addresses | No — one per thread |\n| **Metaspace** | Class metadata: method bytecode, field/method info, constant pool | Yes |\n\nThe heap is what `tracing-gc-mark-sweep-and-compact` and `generational-and-concurrent-gc` (`memory-gc` group) manage. The per-thread stack is why a thread's local variables are automatically thread-safe without any locking — no other thread can even see them. Metaspace replaced the older \"PermGen\" region specifically because PermGen had a fixed size that classloading-heavy apps (lots of dynamic proxies, application servers redeploying WARs) would exhaust; metaspace grows using native memory instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "the-jvm-deep-dive-s04-q1"
+      ]
+    },
+    {
+      "id": "the-jvm-deep-dive-s05",
+      "order": 5,
+      "sectionTitle": "Heap space vs metaspace exhaustion",
+      "subTitle": "Two different OutOfMemoryErrors",
+      "type": "pitfall",
+      "markdown": "`java.lang.OutOfMemoryError: Java heap space` and `java.lang.OutOfMemoryError: Metaspace` look similar and get fixed completely differently — confusing them wastes real debugging time.\n\n- **Heap space** exhaustion means your objects — live data, caches, collections — don't fit. The fix is usually `-Xmx` tuning, finding a memory leak (objects that should be garbage but are still referenced), or reducing retained data.\n- **Metaspace** exhaustion means class *metadata* doesn't fit — commonly caused by loading too many classes, often from a classloader leak (a web app redeployed repeatedly without its old classloader and classes ever being collected, because something still references them). The fix is `-XX:MaxMetaspaceSize` tuning or, more often, finding what's holding old classloaders alive.\n\nThrowing more heap at a metaspace leak does nothing — they're separate memory regions with separate failure causes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "the-jvm-deep-dive-s05-q1"
+      ]
+    },
+    {
+      "id": "the-jvm-deep-dive-s06",
+      "order": 6,
+      "sectionTitle": "HotSpot's JIT tiers, concretely",
+      "subTitle": "C1 and C2",
+      "type": "concept",
+      "markdown": "`just-in-time-compilation` described tiering in general terms; HotSpot's concrete implementation is two named compilers:\n\n- **C1 (\"client\")** — compiles quickly, applies straightforward optimizations, and inserts extra profiling instrumentation into the compiled code so the runtime keeps learning about the method even after it's no longer interpreted.\n- **C2 (\"server\")** — compiles slowly but aggressively: inlining, loop unrolling, escape analysis, speculative devirtualization — using the richer profile data C1's instrumented code collected.\n\nModern HotSpot actually runs **five sub-tiers** (interpreter, C1 with no profiling, C1 with light profiling, C1 with full profiling, C2), escalating a method through them as evidence accumulates that it's worth the next tier's cost. The name \"tiered compilation\" refers to this whole ladder, not just \"C1 then C2.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "the-jvm-deep-dive-s06-q1"
+      ]
+    },
+    {
+      "id": "the-jvm-deep-dive-s07",
+      "order": 7,
+      "sectionTitle": "Invocation and back-edge counters, concretely",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "HotSpot's default thresholds (tunable via `-XX:CompileThreshold` and related flags, though the exact defaults shift across JDK versions) are roughly: a method crossing several thousand invocations, or a loop crossing several thousand back-edges, becomes compilation-eligible.\n\nThe two counters are tracked independently and can fire at different times for the same method — a method called once with a million-iteration loop inside it hits the back-edge threshold almost immediately without ever approaching the invocation threshold, which is exactly why loop-heavy code gets optimized fast even in short-lived programs, while a method called millions of times with a trivial body needs the invocation counter instead.\n\nCounters decay over time (they're periodically halved) so a method that was briefly hot and then goes cold doesn't stay artificially marked as a compilation candidate forever.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "the-jvm-deep-dive-s08",
+      "order": 8,
+      "sectionTitle": "Reading a live PrintCompilation trace",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Running a hot method with `-XX:+PrintCompilation` shows tiering happen in real time:\n\n```\n     87    1       3       Fib::fib (18 bytes)\n    103    2       4       Fib::fib (18 bytes)\n    412    3       4       Fib::fib (18 bytes)   made not entrant\n    415    4       4       Fib::fib (18 bytes)\n```\n\nColumn 1 is elapsed milliseconds, column 3 is the tier. `fib` reaches tier 3 (C1, fully profiled) at 87ms, then tier 4 (C2) at 103ms — evidence tiered compilation escalated it fast because it's a hot recursive method. At 412ms the compiled version is invalidated (\"made not entrant\") — likely a deoptimization — and a fresh compile lands 3ms later. Seeing this pattern repeat for the same method under real load is a genuine signal to investigate call-site type stability, not benchmarking noise.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "the-jvm-deep-dive-s08-q1"
+      ]
+    },
+    {
+      "id": "the-jvm-deep-dive-s09",
+      "order": 9,
+      "sectionTitle": "Escape analysis: a C2-specific trick",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "One of C2's aggressive optimizations worth knowing by name: **escape analysis**. If C2 can prove an allocated object never \"escapes\" the method — never gets stored somewhere else, returned, or passed to unanalyzable code — it can skip heap allocation entirely and keep the object's fields as local variables (**scalar replacement**), or elide a lock on it entirely if it's never shared (**lock elision**).\n\nThis is why a small helper object allocated and immediately discarded inside a hot loop — the pattern many style guides discourage as \"wasteful allocation\" — sometimes costs nothing at all once C2 optimizes it away. It's not guaranteed (any code path that lets the object escape defeats the analysis), which is why relying on it rather than just measuring is a mistake, but it explains a real class of \"this allocation-heavy code is faster than expected\" surprises.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "the-jvm-deep-dive-s10",
+      "order": 10,
+      "sectionTitle": "Startup cost, end to end",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Put the whole pipeline together and the JVM's cold-start cost stops being mysterious:\n\n1. Native launcher starts, JVM initializes heap regions and thread infrastructure.\n2. Bootstrap classloader loads and links core `java.lang.*` classes (each one goes through load → verify → prepare → resolve → initialize).\n3. Application classloader loads your `Main` class the same way.\n4. `main` runs — interpreted, tier 0.\n5. Hot methods climb C1's sub-tiers as invocation/back-edge counters accumulate, eventually reaching C2 if they stay hot.\n\nEvery step here is a real, measurable cost — this is the concrete mechanism behind `what-a-runtime-provides`'s claim that \"the runtime does real work before your code runs,\" not a hand-wave.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "the-jvm-deep-dive-s11",
+      "order": 11,
+      "sectionTitle": "Metaspace leaks in practice",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A classic production incident: an application server redeploys a web app repeatedly (a common pattern in dev/staging), and metaspace usage climbs with every redeploy until it exhausts.\n\nThe mechanism: redeploying should let the old classloader — and every class it loaded — become garbage. But if *anything* still references the old classloader (a thread that wasn't shut down, a static field in a shared library holding a reference, a JDBC driver registered globally and never deregistered), the whole old class graph stays reachable and metaspace never shrinks.\n\nThis is a GC problem wearing a classloading costume: it's not that metaspace \"doesn't get collected,\" it's that something is keeping it reachable. Heap dump analysis tools that trace \"what's keeping this classloader alive\" are the actual fix — restarting the app server masks the symptom without finding the leak.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "the-jvm-deep-dive-s11-q1"
+      ]
+    },
+    {
+      "id": "the-jvm-deep-dive-s12",
+      "order": 12,
+      "sectionTitle": "Compare: JVM vs the next runtime",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | JVM (HotSpot) | Preview of what's different elsewhere |\n|---|---|---|\n| Bytecode format | Class files, stack-based | CLR's IL is also stack-based; V8 has no persistent bytecode file at all |\n| JIT tiers | C1 (fast) then C2 (aggressive) | RyuJIT: quick JIT then optimized tier — same idea, different names |\n| Class metadata | Metaspace (native memory) | .NET uses a similar metadata model per assembly |\n| GC | Multiple collectors (G1, ZGC, Shenandoah) — `memory-gc` | CLR has its own generational GC, covered in `the-clr-and-dotnet-runtime` |\n\nThe next topic takes the CLR through the same lens deliberately, so the compare is concrete rather than abstract.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "the-jvm-deep-dive-s13",
+      "order": 13,
+      "sectionTitle": "Answering \"what happens from java Main\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A complete answer to \"explain what happens from `java Main` to your first line of output\" hits five beats:\n\n1. **Launch** — native launcher starts the JVM, which initializes heap/thread infrastructure.\n2. **Bootstrap/platform/application classloaders** load core JDK classes, then yours, delegating up the hierarchy.\n3. **Class loading's three phases** — load, link (verify/prepare/resolve), initialize — run for each class as it's actively used.\n4. **Execution starts interpreted** at tier 0, with invocation/back-edge counters ticking.\n5. **Tiered JIT compilation** promotes hot methods through C1's sub-tiers and eventually C2, using profile data collected along the way.\n\nName all five and you've answered at staff-candidate depth; naming only \"the JVM interprets bytecode\" is the junior version of the same answer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

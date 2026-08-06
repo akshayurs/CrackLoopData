@@ -1,0 +1,174 @@
+{
+  "id": "design-mobile-client-chat-app",
+  "title": "Designing a Mobile Client — Chat/Messaging App",
+  "area": "mobile",
+  "group": "mobile-system-design",
+  "order": 6,
+  "slug": "design-mobile-client-chat-app",
+  "summary": "A worked case study synthesizing the group: message send/receive, the offline queue, delivery receipts, and real-time updates for a chat client — the pattern a real design-a-messaging-app interview follows.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "design-mobile-client-chat-app-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Design a chat app's mobile client\" is one of the most common mobile system design prompts precisely because it exercises nearly everything in this group at once: offline-first writes, sync and conflict handling, real-time delivery, and a data model with genuine subtlety (message state isn't just sent/received, it's a small state machine).\n\nThis topic works through the problem as an interview actually unfolds — framing, architecture, the specific mechanics of send/receive/receipts, and the two failure modes ('sent' before the server confirms, and duplicate messages from a retried send) that separate a candidate who's thought this through from one reciting buzzwords.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-chat-app-s02",
+      "order": 2,
+      "sectionTitle": "Framing the problem",
+      "subTitle": "what 'design a chat client' is really asking",
+      "type": "concept",
+      "markdown": "Before architecture, clarify scope out loud — this is itself part of what a senior candidate demonstrates. \"Design a chat app\" could mean: 1:1 messaging only, or also group chats; text-only, or media attachments; does it need to work fully offline (compose and queue while offline) or just tolerate brief connectivity drops; is end-to-end encryption in scope.\n\nFor this topic, the scope is: 1:1 text messaging, offline-capable sending, real-time receiving when connected, and delivery/read receipts — deliberately not group chat's fan-out complexity or E2E encryption's key-management surface, which are each substantial enough to be their own discussion. Stating this scope explicitly in an interview, rather than silently picking one interpretation, avoids solving the wrong problem for ten minutes before anyone notices.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "design-mobile-client-chat-app-s02-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-chat-app-s03",
+      "order": 3,
+      "sectionTitle": "The chat client's architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Chat client architecture with the local message database as the source of truth between the outgoing queue and the real-time sync channel](assets/chat-client-architecture.svg)",
+      "assets": [
+        {
+          "alt": "Chat client architecture with the local message database as the source of truth between the outgoing queue and the real-time sync channel",
+          "path": "assets/chat-client-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-chat-app-s04",
+      "order": 4,
+      "sectionTitle": "Sending a message",
+      "subTitle": "optimistic insert, queue, server ack",
+      "type": "concept",
+      "markdown": "The send path, applying [Offline-First Design](offline-first-design) directly: the moment the user taps send, insert the message into the local database immediately with a `pending` state, and render it right away — this is optimistic UI, and it's what makes sending feel instant regardless of connectivity. The message simultaneously enters the outgoing queue.\n\nThe queue attempts the actual network send (immediately if connected, whenever connectivity returns if not), and on server acknowledgment, updates the message's local state from `pending` to `sent` — a real state transition the UI reflects (a single checkmark, commonly). The message's local ID (generated client-side, before the server has ever seen it) is what the send request's idempotency key is built from, which matters directly for the duplicate-message pitfall later in this topic.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-chat-app-s04-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-chat-app-s05",
+      "order": 5,
+      "sectionTitle": "Receiving messages",
+      "subTitle": "a persistent connection vs push-triggered fetch",
+      "type": "concept",
+      "markdown": "Two mechanisms, often used together: a **persistent connection** (WebSocket, or a platform-specific always-on channel) delivers new messages to the client in real time while the app is foregrounded and connected — the lowest-latency path, and what makes a chat feel 'live.' When the app is backgrounded or the connection isn't maintained (background execution limits make a persistent connection unreliable to hold indefinitely), a **push notification** (APNs/FCM) serves as a trigger: it wakes the app briefly to fetch the actual message content via a regular API call, rather than carrying the full message payload in the push itself (which has real size limits and reliability caveats).\n\nThe combination covers both states correctly: real-time while active, notified-then-fetched while backgrounded — and both paths ultimately write into the same local database the UI reads from, so the UI logic doesn't need to know which path delivered a given message.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-chat-app-s05-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-chat-app-s06",
+      "order": 6,
+      "sectionTitle": "Delivery and read receipts",
+      "subTitle": "modeling per-message state",
+      "type": "concept",
+      "markdown": "A message's state is a small, ordered machine, not a single boolean: `pending` (queued locally, not yet sent) → `sent` (server has it) → `delivered` (recipient's device has received it) → `read` (recipient has actually viewed it). Each transition is driven by a distinct event — `delivered` typically comes from the recipient's client acknowledging receipt back to the server, which relays it to the sender; `read` comes from the recipient's client detecting the message entered their viewport, again relayed back.\n\nModeling this as a genuine, ordered state machine (rather than several independent booleans that could theoretically be set out of order) matters because the UI's checkmark rendering depends on being able to trust the state never regresses — a message shown as `read` should never flicker back to `sent` because of an out-of-order network event, which a proper state machine with defined valid transitions prevents by construction.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-chat-app-s06-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-chat-app-s07",
+      "order": 7,
+      "sectionTitle": "Handling offline",
+      "subTitle": "queuing outgoing messages and replaying on reconnect",
+      "type": "concept",
+      "markdown": "Messages composed with no connectivity go straight into the outgoing queue in `pending` state — the UI shows them immediately, indistinguishable in the conversation view from a message that's already syncing, aside from the state indicator. The queue itself needs to survive an app restart (backed by the local database, not held only in memory) since a user might compose several messages offline, close the app, and reopen it hours later expecting them to still be waiting to send.\n\nOrder matters for a queue of messages to the same conversation — they should send in the order composed, not an arbitrary order a naive parallel-retry implementation might produce, since 'reordering someone's sent messages' is a very visible bug in a chat UI specifically. A sequential drain (send message 1, wait for ack, then send message 2) is simpler and correctness-safe by construction; a parallelized drain needs explicit sequencing logic to preserve order, which is real added complexity for a marginal latency win in the common case.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-chat-app-s08",
+      "order": 8,
+      "sectionTitle": "A message's local state machine",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nenum class MessageState { PENDING, SENT, DELIVERED, READ, FAILED }\n\nfun applyStateUpdate(current: MessageState, incoming: MessageState): MessageState {\n    val order = listOf(PENDING, SENT, DELIVERED, READ)\n    val currentIdx = order.indexOf(current)\n    val incomingIdx = order.indexOf(incoming)\n\n    return when {\n        incoming == MessageState.FAILED -> incoming\n        incomingIdx > currentIdx -> incoming      // only ever move forward\n        else -> current                            // ignore out-of-order regressions\n    }\n}\n```\n\nThis is the concrete implementation of the state-machine discipline from the receipts slide: an incoming state update is applied only if it's strictly *later* in the sequence than the message's current state, so a `delivered` event arriving after a `read` event (a real possibility given network reordering) doesn't visibly regress the UI's checkmark backward.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-chat-app-s09",
+      "order": 9,
+      "sectionTitle": "Server-authoritative vs peer-to-peer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For this scope, server-authoritative is the clear right default, echoing the general trade-off from [Data Synchronization & Conflict Resolution](data-sync-conflict-resolution): the server is the one place that assigns a canonical order to messages in a conversation, mediates delivery when the recipient isn't currently connected, and is the natural place to store message history for a new device logging into the same account.\n\nPeer-to-peer direct device connection (relevant for some specialized cases like proximity-based or fully decentralized messaging apps) trades away all of that centralized coordination for the ability to work with zero server involvement — a real but much narrower use case than mainstream chat apps target, and one that reintroduces the conflict-resolution complexity of peer-to-peer sync discussed in the sync topic, without a central arbiter to fall back on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "design-mobile-client-chat-app-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: showing 'sent' before the server has accepted it",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A subtle but real UX/correctness bug: showing a message's single checkmark ('sent') the instant it's inserted locally, rather than only once the server has actually acknowledged it. This conflates the `pending` and `sent` states, and it matters because a user who sees 'sent' and then closes the app before the actual network send completes (particularly on a flaky connection) may believe a message went out that never actually left the device.\n\nThe fix is keeping the two states visually and logically distinct — a clock or single greyed-out check for `pending`, a solid checkmark only after genuine server acknowledgment for `sent` — and specifically testing this distinction under simulated poor connectivity (a network condition profile with high latency or intermittent drops), not just on a fast, stable test network where the gap between the two states is too brief to ever notice as a bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "design-mobile-client-chat-app-s10-q1"
+      ]
+    },
+    {
+      "id": "design-mobile-client-chat-app-s11",
+      "order": 11,
+      "sectionTitle": "Pitfall: no de-duplication, so a retried send shows twice",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The chat-specific version of the idempotency bug from [Data Synchronization & Conflict Resolution](data-sync-conflict-resolution): a send request that times out client-side (no response received) but actually succeeded server-side, followed by a naive retry with no idempotency key, results in the recipient seeing the same message **twice** — a real, visible, embarrassing bug for a messaging product specifically, since duplicated messages are immediately obvious to users in a way many other duplicate-write bugs aren't.\n\nThe fix is the client-generated local message ID from the send-path slide, used as the idempotency key on every send attempt including retries — the server recognizes a retry bearing an ID it's already processed and returns the existing message's server-assigned ID/timestamp rather than creating a second record. Testing this specifically requires simulating a timeout-after-success scenario (not just a clean failure), which is exactly the scenario a happy-path test suite tends to miss.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "design-mobile-client-chat-app-s11-q1"
+      ]
+    }
+  ]
+}

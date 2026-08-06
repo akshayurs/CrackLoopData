@@ -1,0 +1,159 @@
+{
+  "id": "cluster-resource-management",
+  "title": "Cluster Resource Management",
+  "area": "data-engineering",
+  "group": "big-data-frameworks",
+  "order": 7,
+  "slug": "cluster-resource-management",
+  "summary": "Every Spark job needs machines before it needs tuning, and where those machines come from — and how they're shared with everyone else's jobs — shapes real-world reliability as much as any optimizer setting.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "cluster-resource-management-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything in this group so far assumed executors already exist. This topic covers where they actually come from: the **cluster manager**, the layer that allocates machines to a Spark application before a single [driver-to-executor task](spark-architecture) can be scheduled.\n\nThree cluster managers dominate in practice — standalone, YARN, and Kubernetes — and the choice between static and dynamic allocation shapes how a job behaves on a cluster it shares with other work, which is the normal case in any real organization, not the exception.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "cluster-resource-management-s02",
+      "order": 2,
+      "sectionTitle": "The cluster manager's job",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When a Spark application starts, its driver asks the cluster manager for resources — a number of executors, with a given amount of memory and cores each. The cluster manager's job is to find machines with that capacity available, launch the executor processes on them, and hand control back to the driver once they're ready.\n\nThis is a genuinely separate concern from everything Spark itself does — Spark doesn't know or care how the physical machines were found, only that executors showed up with the resources it asked for. That separation is what lets the same Spark application run unmodified on a laptop (standalone, one machine), an on-prem Hadoop cluster (YARN), or a cloud Kubernetes cluster, with only the resource-request layer changing underneath it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "cluster-resource-management-s02-q1"
+      ]
+    },
+    {
+      "id": "cluster-resource-management-s03",
+      "order": 3,
+      "sectionTitle": "Standalone vs YARN vs Kubernetes",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Standalone | YARN | Kubernetes |\n|---|---|---|---|\n| What it is | Spark's own built-in, simple cluster manager | Hadoop's general-purpose resource negotiator | The general-purpose container orchestrator |\n| Typical setting | Small clusters, testing, simple dedicated Spark deployments | On-prem or cloud Hadoop ecosystems running many frameworks besides Spark | Cloud-native deployments already standardized on Kubernetes for everything |\n| Sharing with non-Spark work | Limited — mostly Spark-only clusters | Strong — YARN was built to multiplex many frameworks on shared hardware | Strong — any containerized workload can share the same cluster |\n| Executor unit | A plain OS process | A YARN container | A Kubernetes pod |\n\nThe underlying Spark execution model — driver, executors, stages, tasks — doesn't change across any of these. What changes is how executors get provisioned and how the cluster is shared with everything else running on it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "cluster-resource-management-s03-q1"
+      ]
+    },
+    {
+      "id": "cluster-resource-management-s04",
+      "order": 4,
+      "sectionTitle": "Static vs dynamic allocation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Static allocation** requests a fixed number of executors for the entire lifetime of the application — simple and predictable, but wasteful if the workload's actual resource needs vary a lot over the job's runtime (a heavy shuffle stage followed by a light final aggregation, still holding the same executor count throughout).\n\n**Dynamic allocation** lets Spark request more executors when there's a backlog of pending tasks and release executors back to the cluster manager when they've been idle for a while. This fits variable or bursty workloads well — and matters a lot on a genuinely shared cluster, where executors you're not using are executors someone else's job is waiting on.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "cluster-resource-management-s04-q1"
+      ]
+    },
+    {
+      "id": "cluster-resource-management-s05",
+      "order": 5,
+      "sectionTitle": "A Spark job requesting pods from Kubernetes",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "On Kubernetes, each executor is a pod, requested and scheduled the same way any other containerized workload would be — the Spark driver talks to the Kubernetes API to request executor pods, and the Kubernetes scheduler places them on nodes with available capacity, subject to the same resource requests/limits any other pod would declare.\n\n![Spark driver requesting Kubernetes schedule executor pods across worker nodes](assets/k8s-executor-scheduling.svg)",
+      "assets": [
+        {
+          "alt": "Spark driver requesting Kubernetes schedule executor pods across worker nodes",
+          "path": "assets/k8s-executor-scheduling.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    },
+    {
+      "id": "cluster-resource-management-s06",
+      "order": 6,
+      "sectionTitle": "Dynamic allocation fighting other tenants",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Dynamic allocation sounds like a pure win — use only what you need, release the rest. On a shared cluster with several teams' jobs competing for the same pool, it can backfire: a job scales up aggressively during a burst, another job's dynamic allocation scales up at the same moment for its own burst, and both jobs end up fighting over the same limited executor pool, with the cluster manager's scheduler forced to arbitrate.\n\nThe result can be worse than static allocation in this specific scenario — instead of each job holding a predictable, fair share, both jobs oscillate: scale up, get partially starved by the other's scale-up, scale back down, repeat. This is a genuine operational failure mode, not a hypothetical — it shows up specifically on clusters with multiple concurrent dynamic-allocation jobs and no additional fairness mechanism layered on top.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "cluster-resource-management-s06-q1"
+      ]
+    },
+    {
+      "id": "cluster-resource-management-s07",
+      "order": 7,
+      "sectionTitle": "Resource requests, limits, and OOM-killed executors",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "On Kubernetes specifically, an executor pod declares a resource **request** (what it's guaranteed) and a **limit** (the hard ceiling it can never exceed). If an executor's actual memory use exceeds its limit, Kubernetes kills the pod outright — an **OOM-killed executor** — rather than letting it degrade gracefully the way a process running out of a soft memory budget elsewhere might.\n\nUnder-provisioning the limit relative to what a task genuinely needs — say, sizing for the median partition when the job has real skew, and a straggler task's oversized partition blows past the limit — causes exactly this failure. This is the general Kubernetes resource-management model applied to Spark specifically: getting requests and limits right for executor pods is the same discipline as for any other containerized workload, just with Spark's particular memory usage patterns (shuffle buffers, cached data) as the thing being sized for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "cluster-resource-management-s07-q1"
+      ]
+    },
+    {
+      "id": "cluster-resource-management-s08",
+      "order": 8,
+      "sectionTitle": "Queueing and fair-share scheduling",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "On a cluster with many concurrent jobs and finite capacity, some jobs will queue — waiting for executors to become available — rather than starting immediately. Cluster managers offer scheduling policies to make this queueing predictable and fair rather than first-come-first-served chaos: YARN's **capacity scheduler** carves the cluster into named queues with guaranteed minimum shares; its **fair scheduler** dynamically balances resources across running jobs so no single job starves the rest indefinitely.\n\nWithout an explicit fairness policy, a cluster's default behavior tends toward whichever job asked first (or asked biggest) crowding out everyone else — which is exactly the failure mode a properly configured queue or fair-share policy exists to prevent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "cluster-resource-management-s09",
+      "order": 9,
+      "sectionTitle": "The senior framing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior mental model treats \"get more executors\" as always available on request. A senior mental model treats cluster capacity as a genuinely shared, finite resource with real contention — a job's dynamic allocation settings, queue assignment, and resource limits aren't just its own job's configuration, they're a statement about how it behaves toward every other job sharing the same cluster.\n\nThe interview-relevant version: if a shared cluster is having reliability problems (jobs oscillating, OOM-kills, queueing that never resolves), the fix is often in scheduling policy and resource limit configuration, not in any individual job's Spark code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "cluster-resource-management-s10",
+      "order": 10,
+      "sectionTitle": "Closing this group",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This group started with MapReduce's disk-bound model and ended with the resource-provisioning layer underneath modern Spark deployments. The throughline: distributed compute's real cost centers are data movement (shuffle) and resource contention (scheduling), far more than raw per-row computation — the specific mechanisms differ across MapReduce, Spark, and the cluster managers that provision either, but that underlying cost structure is the thing worth carrying forward into any distributed system you work with next.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "id": "kotlin-coroutines-flow",
+  "title": "Kotlin Coroutines & Flow",
+  "area": "mobile",
+  "group": "android",
+  "order": 4,
+  "slug": "kotlin-coroutines-flow",
+  "summary": "Suspend functions replace callback hell, structured concurrency ties every coroutine to a scope that can cancel it, and Flow extends the same idea to streams of values over time.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "kotlin-coroutines-flow-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Before coroutines, async Android code meant nested callbacks — a network call's callback triggering another callback, each with its own error handling, none of them composing cleanly and all of them leaking if the screen was destroyed mid-flight. Coroutines replace that with code that *reads* sequentially while still being fully asynchronous underneath.\n\nThe two ideas that make this safe rather than just convenient: **structured concurrency**, which ties every coroutine to a scope that can cancel it as a unit (no more \"forgot to cancel this callback\" leaks), and **`Flow`**, which extends the same suspend-function model to a stream of values over time rather than a single result. This topic covers both, plus `Dispatchers` and the classic mistakes — `GlobalScope` leaks and blocking the main dispatcher.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-coroutines-flow-s02",
+      "order": 2,
+      "sectionTitle": "Suspend functions",
+      "subTitle": "Pausable code without callback hell",
+      "type": "concept",
+      "markdown": "A function marked `suspend` can pause its execution at a suspension point (typically an async operation like a network call) and resume later, without blocking the thread it was running on while paused — the thread is freed up to do other work, and the coroutine machinery resumes execution on some thread once the awaited result is ready.\n\nThe practical payoff over callbacks: you write `val result = fetchUser(id)` as if it were a plain synchronous call, and the compiler transforms it under the hood into the equivalent of a callback-based state machine — but you never see that transformation; you read and write straight-line code that happens to be async. Error handling composes the same way regular exceptions do (`try`/`catch` around a suspend call), instead of every callback needing its own separate success/failure branch threaded through by hand.\n\nCrucially, `suspend` alone doesn't run anything concurrently — calling a suspend function from another suspend function just chains the pausing/resuming sequentially. Actual concurrency (two things happening at once) requires launching separate coroutines, which is where scopes come in next.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-coroutines-flow-s02-q1"
+      ]
+    },
+    {
+      "id": "kotlin-coroutines-flow-s03",
+      "order": 3,
+      "sectionTitle": "A coroutine suspending and resuming on a dispatcher",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Tracing one coroutine through a network call: it starts running on some thread from its dispatcher's thread pool, reaches a suspension point (the network call), and instead of blocking that thread, the coroutine's state is saved and the thread is released back to the pool to do other work. When the network response arrives, the coroutine is resumed — not necessarily on the *same* thread, but on some available thread from the same dispatcher — continuing exactly where it left off with the result in hand.\n\nThis is the structural difference from a blocking call: a blocked thread sits idle, doing nothing, unable to serve any other work until the blocking call returns; a suspended coroutine releases its thread entirely during the wait, letting that thread serve other coroutines in the meantime. A dispatcher with a handful of threads can juggle thousands of concurrently-suspended coroutines precisely because \"suspended\" doesn't mean \"holding a thread hostage.\"\n\n![Timeline of a coroutine suspending on Thread A and resuming on Thread B while Thread A runs other work](assets/coroutine-suspend-timeline.svg)",
+      "assets": [
+        {
+          "alt": "Timeline of a coroutine suspending on Thread A and resuming on Thread B while Thread A runs other work",
+          "path": "assets/coroutine-suspend-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-coroutines-flow-s04",
+      "order": 4,
+      "sectionTitle": "Structured concurrency",
+      "subTitle": "Why every coroutine needs a scope",
+      "type": "concept",
+      "markdown": "Every coroutine launches inside a `CoroutineScope`, and that scope is what makes cancellation and cleanup reliable rather than something you manually track: cancel the scope, and every coroutine launched inside it — including any children they've launched — is cancelled as a unit, recursively, with no coroutine able to silently outlive the scope that spawned it.\n\nThis is the direct fix for the classic callback-era leak: a network callback with no natural way to say \"the screen that requested this is gone, stop caring about the result\" would keep running (and potentially crash trying to update a destroyed view) regardless of what happened to the screen. A coroutine launched in a scope tied to that screen's lifecycle gets cancelled automatically the moment the scope is cancelled — no manual bookkeeping, no \"did I remember to cancel this\" checklist.\n\nThe rule this enables: **a coroutine's lifetime should never be able to exceed the lifetime of whatever logically owns it.** Structured concurrency isn't an optional style choice — it's what makes that guarantee actually enforceable by the compiler and runtime rather than a convention someone has to remember.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "kotlin-coroutines-flow-s04-q1"
+      ]
+    },
+    {
+      "id": "kotlin-coroutines-flow-s05",
+      "order": 5,
+      "sectionTitle": "viewModelScope and lifecycleScope",
+      "subTitle": "Scopes tied to Android lifecycles",
+      "type": "concept",
+      "markdown": "Android provides two ready-made scopes that plug structured concurrency directly into the platform's own lifecycle: `viewModelScope`, automatically cancelled when the `ViewModel`'s `onCleared()` fires (the screen is genuinely gone, not just rotated — recall that `ViewModel` survives rotation, so `viewModelScope` does too), and `lifecycleScope`, tied to an Activity/Fragment/View's own `Lifecycle` and cancelled when that lifecycle is destroyed.\n\nThe choice between them tracks where the work conceptually belongs: business logic and data fetching that should survive a rotation belongs in `viewModelScope`, launched from the `ViewModel`; something genuinely tied to the View itself — an animation, a one-off UI-only effect — belongs in `lifecycleScope`, launched from the Activity/Fragment/Composable's lifecycle owner.\n\nUsing the wrong one produces two different bugs: launching a network fetch in `lifecycleScope` means it gets cancelled and has to restart from scratch on every rotation (the exact bug `ViewModel` was meant to prevent); launching a View-only animation in `viewModelScope` means it can keep running against a View that's already been destroyed by rotation, since `viewModelScope` doesn't know or care about the View's own destroy/recreate cycle at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-coroutines-flow-s06",
+      "order": 6,
+      "sectionTitle": "Dispatchers.Main vs IO vs Default",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Dispatcher | Backed by | Use for |\n|---|---|---|\n| **Main** | The single UI thread | Touching Views, updating Compose state — anything that must run on the UI thread |\n| **IO** | A larger, elastic thread pool | Network calls, disk/database I/O — work that spends most of its time waiting, not computing |\n| **Default** | A thread pool sized to CPU core count | CPU-bound work — sorting, parsing, heavy computation |\n\nThe distinction between `IO` and `Default` is about **what the work is actually bottlenecked by**, not vague \"heaviness.\" A network call spends nearly all its wall-clock time waiting on a response, not consuming CPU, so `IO`'s larger, elastic pool can host many more concurrent waiting operations than CPU cores would otherwise allow. A JSON-parsing pass or a large sort genuinely consumes CPU the whole time, so `Default`'s core-count-sized pool avoids oversubscribing actual CPU resources. Running CPU-bound work on `IO` doesn't crash anything, but it defeats the pool sizing that makes each dispatcher efficient for its intended workload — `withContext(Dispatchers.Default)` for a heavy computation, `withContext(Dispatchers.IO)` for a blocking I/O call, switching back implicitly to whatever dispatcher called them once the `withContext` block returns.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "kotlin-coroutines-flow-s06-q1"
+      ]
+    },
+    {
+      "id": "kotlin-coroutines-flow-s07",
+      "order": 7,
+      "sectionTitle": "Flow vs a single suspend function",
+      "subTitle": "Streams vs one-shot results",
+      "type": "concept",
+      "markdown": "A `suspend fun getUser(id): User` gives you exactly one value, once, and completes. A `Flow<User>` can emit **zero, one, or many values over time**, and doesn't complete until the producer decides it's done (or is cancelled) — the natural fit for anything that changes over time: a database query result that should update automatically as the underlying table changes, a sequence of location updates, a WebSocket's incoming messages.\n\n`Flow` reuses the exact same suspend-function machinery underneath — it's cold by default (nothing runs until someone actually collects it, and a fresh run starts per collector unless explicitly shared) and fully participates in the same structured-concurrency and cancellation model as any other coroutine work, which is what makes collecting one inside `viewModelScope`/`lifecycleScope` behave the way you'd expect: cancel the scope, and Flow collection stops with it.\n\nThe rule of thumb: if a caller needs \"the current value, right now, once,\" a suspend function is the right, simpler tool. If a caller needs \"keep me updated as this changes,\" reach for `Flow` — using `Flow` for something that's genuinely one-shot just adds unnecessary collection/completion ceremony around a value that was never going to change again.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-coroutines-flow-s07-q1"
+      ]
+    },
+    {
+      "id": "kotlin-coroutines-flow-s08",
+      "order": 8,
+      "sectionTitle": "Collecting a Flow safely with repeatOnLifecycle",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nclass ProfileFragment : Fragment() {\n    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {\n        viewLifecycleOwner.lifecycleScope.launch {\n            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {\n                viewModel.uiState.collect { state ->\n                    render(state)   // only runs while the view is at least STARTED\n                }\n            }\n        }\n    }\n}\n```\n\n`repeatOnLifecycle` automatically restarts the enclosed block every time the lifecycle re-enters the target state (`STARTED`) and cancels it when the lifecycle drops below it — so collection pauses cleanly when the screen is stopped (backgrounded) and resumes cleanly when it's started again, rather than either leaking a collector that keeps running against a stopped screen, or requiring the collector to be manually restarted by hand.\n\nThe `viewLifecycleOwner` (not the Fragment's own lifecycle) matters specifically for Fragments — its lifecycle tracks the *view's* lifecycle, which is shorter-lived than the Fragment object's own lifecycle when the Fragment goes onto the back stack, exactly the split-lifecycle distinction from the Activity/Fragment lifecycle topic.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "kotlin-coroutines-flow-s09",
+      "order": 9,
+      "sectionTitle": "Launching a coroutine in GlobalScope and leaking work",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`GlobalScope.launch { ... }` launches a coroutine tied to the entire application's lifetime, not to any screen, `ViewModel`, or lifecycle — it's the structured-concurrency equivalent of the `GlobalScope`-shaped hole the whole system was designed to close. It's tempting exactly when you want something to \"just run and not get cancelled,\" which is precisely the reasoning that produces a leak.\n\nThe concrete failure: a network call launched in `GlobalScope` from a screen the user has since left keeps running regardless, potentially updating state (or worse, a View reference) that no longer exists or no longer means anything, and there's no natural cancellation point tied to anything the user actually did — the coroutine simply runs until it finishes or the process dies, with nothing to stop it early.\n\nThe fix is almost always using the scope that actually matches the work's intended lifetime: `viewModelScope` for anything that should survive rotation but die with the screen, `lifecycleScope` for anything View-tied, or an explicitly application-scoped `CoroutineScope` you create and manage deliberately (rare, and usually reserved for genuine app-lifetime background work like a persistent sync process) rather than reaching for `GlobalScope` as a default escape hatch whenever a more specific scope feels inconvenient to thread through.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-coroutines-flow-s09-q1"
+      ]
+    },
+    {
+      "id": "kotlin-coroutines-flow-s10",
+      "order": 10,
+      "sectionTitle": "Blocking the main dispatcher with a synchronous call inside a coroutine",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A coroutine launched on `Dispatchers.Main` calls a genuinely blocking function — a synchronous file read, a legacy blocking network client, a `Thread.sleep` — directly, with no `withContext(Dispatchers.IO)` around it. Because the call isn't a `suspend` function that yields the thread, it blocks the actual UI thread for its entire duration, freezing the whole app's rendering and input handling, potentially long enough to trigger the OS's own \"app not responding\" watchdog.\n\nThis mistake is easy to make specifically because coroutines make async code *look* sequential — it's tempting to assume any code written inside a coroutine is automatically non-blocking, when in fact only genuine suspension points (calls to `suspend` functions that properly yield) release the thread. A regular blocking function call inside a coroutine blocks exactly as hard as it would anywhere else; coroutines don't retroactively make blocking code non-blocking.\n\nThe fix is always explicit: any genuinely blocking call has to be wrapped in `withContext(Dispatchers.IO)` (or `Default` for CPU-bound blocking work) to move it off the main thread before it runs, and ideally replaced with a real suspend-based API if one exists, rather than relying on a wrapper every call site has to remember.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "kotlin-coroutines-flow-s10-q1"
+      ]
+    },
+    {
+      "id": "kotlin-coroutines-flow-s11",
+      "order": 11,
+      "sectionTitle": "Kotlin's async model in the bigger picture",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Suspend functions, structured concurrency, and dispatchers are Kotlin's specific implementation of ideas that show up across languages under different names: suspend functions are a form of coroutine, a general async-programming concept implemented differently in Python's `async`/`await`, JavaScript's `Promise`-based async functions, and Go's goroutines with channels — all attacking the same problem of expressing concurrency without either blocking threads or falling into callback-nesting.\n\nWhat's specifically strong about Kotlin's version, and worth being able to articulate: structured concurrency isn't bolted on as a convention (as it often is in callback- or Promise-based systems, where cancellation is opt-in and easy to forget) — it's the default shape of how coroutines are launched, since every `launch`/`async` requires a scope, making \"this leaked because nobody remembered to cancel it\" much harder to write by accident.\n\nThe general async-model theory — cooperative scheduling, cancellation semantics, how this compares across languages — lives in Languages & Compilers; this topic is Kotlin and Android's concrete, opinionated implementation of that theory.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    }
+  ]
+}

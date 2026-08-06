@@ -1,0 +1,174 @@
+{
+  "id": "code-generation",
+  "title": "Code Generation",
+  "area": "languages-compilers",
+  "group": "compilers",
+  "order": 6,
+  "slug": "code-generation",
+  "summary": "Turning optimized IR into real machine instructions: matching IR patterns to hardware instructions, squeezing unlimited virtual registers into a handful of real ones, and honoring the calling convention that makes function calls actually work.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "code-generation-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[intermediate-representations](intermediate-representations) and [compiler-optimizations](compiler-optimizations) leave you with clean, optimized IR — flat instructions, SSA form, unlimited virtual registers. None of that is real machine code yet. Code generation is the back end's final stage: pick actual target instructions for each IR operation (**instruction selection**), decide which of a small, fixed set of physical registers holds each value (**register allocation**), and honor the target's rules for how function calls actually pass arguments and return values (**calling conventions**).\n\nEvery one of these steps is genuinely constrained by real hardware limits the IR didn't have to care about: a CPU has maybe 16-32 general-purpose registers, not the unlimited virtual registers IR code assumes, and it has a fixed set of actual instructions, not an abstract \"add these two things\" operation. This topic is where those constraints finally bite.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "code-generation-s02",
+      "order": 2,
+      "sectionTitle": "Instruction selection",
+      "subTitle": "Matching IR patterns to real instructions",
+      "type": "concept",
+      "markdown": "IR operations are simple and uniform by design; real instruction sets are neither. A single target instruction often does the work of several IR operations at once — an `x86` addressing mode can compute `base + index*scale + offset` as part of a *single* load instruction, work that would otherwise take three or four separate IR-level add/multiply steps.\n\n**Instruction selection** is the pattern-matching problem of recognizing which chunks of IR correspond to which available machine instructions, and picking the combination that's fewest instructions, or fastest, or smallest — target-dependent tradeoffs that a compiler's cost model decides. Missing an available fused instruction and emitting three separate ones instead isn't wrong, just slower — instruction selection quality is a real, measurable source of performance difference between compilers targeting the identical IR and the identical CPU.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "code-generation-s02-q1"
+      ]
+    },
+    {
+      "id": "code-generation-s03",
+      "order": 3,
+      "sectionTitle": "Tiling an expression tree into instructions",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Instruction selection tiling an IR tree to a fused addressing-mode instruction versus a chain of separate ones](assets/instruction-selection-tiling.svg)\n\nThe pattern-matching framing is literal: instruction selection algorithms tile the IR tree (or DAG) with instruction patterns the way you'd tile a floor with differently-shaped tiles, picking the tiling that covers the most IR with the fewest, cheapest instructions.",
+      "assets": [
+        {
+          "alt": "Instruction selection tiling an IR tree to a fused addressing-mode instruction versus a chain of separate ones",
+          "path": "assets/instruction-selection-tiling.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "code-generation-s04",
+      "order": 4,
+      "sectionTitle": "Register allocation",
+      "subTitle": "Unlimited virtual registers, a handful of real ones",
+      "type": "concept",
+      "markdown": "IR code freely invents a new virtual register (or SSA temporary) for every value — there's no limit, because the IR doesn't model real hardware. A real CPU has a small, fixed set of physical registers (commonly 16-32 general-purpose ones). **Register allocation** decides which physical register holds which virtual value at each point in the program, and it has to do this correctly even though many more virtual values exist simultaneously than there are physical registers to hold them.\n\nThe key insight that makes this tractable: two virtual registers can safely share one physical register **as long as their live ranges never overlap** — if value A is dead (never used again) before value B is even created, they can't conflict, and reusing the same physical slot for both is completely safe.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "code-generation-s04-q1"
+      ]
+    },
+    {
+      "id": "code-generation-s05",
+      "order": 5,
+      "sectionTitle": "Graph coloring: the intuition",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Register allocation is commonly framed as **graph coloring**: build an **interference graph** where each node is a virtual register and an edge connects two virtual registers whose live ranges overlap (they're simultaneously live at some point, so they genuinely can't share a physical register). Coloring the graph with *k* colors, such that no two connected nodes get the same color, directly corresponds to assigning *k* physical registers such that no two conflicting values collide.\n\nGraph coloring is NP-hard in general, so real allocators use good heuristics (Chaitin-style iterative coloring, or the faster linear-scan approach used by many JITs where compile-time speed matters more than allocation optimality) rather than an exact solver — a JIT compiling code while a program is already running can't afford to spend seconds proving an optimal coloring exists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "code-generation-s05-q1"
+      ]
+    },
+    {
+      "id": "code-generation-s06",
+      "order": 6,
+      "sectionTitle": "Spilling: when there aren't enough colors",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "If the interference graph genuinely needs more colors than there are physical registers — more values are simultaneously live than the hardware has registers for — some value has to give up its register entirely. **Spilling** stores that value to memory (the stack) instead, loading it back whenever it's needed and storing it again after each update.\n\nThis is a real, measurable performance cost: a spilled value pays a memory access (tens of cycles, potentially, versus roughly one for a register) on every use where a register-resident value would have been essentially free. Spilling is why a function with a very large number of simultaneously-live locals can run slower than the same *logic* written with fewer live values at once — the allocator has strictly less room to work with, and something has to lose its register.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "code-generation-s06-q1"
+      ]
+    },
+    {
+      "id": "code-generation-s07",
+      "order": 7,
+      "sectionTitle": "Calling conventions",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **calling convention** is the target/platform-specific contract for how a function call actually works at the machine level: which registers hold the first few arguments (versus which get passed on the stack once you run out of argument registers), which register holds the return value, which registers the callee is required to preserve (**callee-saved**) versus free to clobber (**caller-saved**), and how the stack pointer and return address move.\n\nThis matters because it's the one place code generation has to agree with code it didn't generate — every function call crosses a boundary where the calling convention is the *only* shared contract between caller and callee, whether both were compiled by the same compiler, a different compiler, or hand-written assembly. Get it wrong and the bug shows up as corrupted values in a completely unrelated-looking place, often much later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "code-generation-s07-q1"
+      ]
+    },
+    {
+      "id": "code-generation-s08",
+      "order": 8,
+      "sectionTitle": "One expression, register by register",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```text\n; compiling: result = (a + b) * c\n; assume a, b, c already in memory; x86-like assembly, System V-ish convention\n\nMOV  R1, [a]      ; load a\nMOV  R2, [b]      ; load b\nADD  R1, R1, R2   ; R1 = a + b  (R2 now dead, its register is free to reuse)\nMOV  R2, [c]      ; load c into the now-free R2\nMUL  R1, R1, R2   ; R1 = (a + b) * c\nMOV  [result], R1 ; store\n```\n\nNotice `R2` gets reused for `c` right after `b`'s value is no longer needed — this is register allocation's live-range reasoning made concrete: `b`'s virtual register and `c`'s virtual register don't interfere (b is dead before c is created), so the allocator correctly assigns them the same physical register, `R2`, with no correctness cost.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "code-generation-s08-q1"
+      ]
+    },
+    {
+      "id": "code-generation-s09",
+      "order": 9,
+      "sectionTitle": "Ignoring the calling convention when hand-writing assembly",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Hand-writing or inlining assembly inside otherwise compiler-generated code is a common source of subtle corruption, and the calling convention is almost always why: if hand-written code clobbers a caller-saved register the surrounding compiled code assumed was still valid on return, or fails to preserve a callee-saved register the caller is depending on, the corruption doesn't show up at the assembly itself — it shows up later, wherever the compiler-generated code next reads that register expecting its old value.\n\nThis is a real production bug pattern, not a theoretical concern: inline assembly blocks that don't declare which registers they clobber (most assemblers/compilers have explicit syntax for this — GCC's extended `asm` clobber list, for instance) are a classic source of \"works in this build, breaks in that one\" bugs, because the compiler's own register allocation around the inline block depends entirely on accurate information about what the block actually touches.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "code-generation-s10",
+      "order": 10,
+      "sectionTitle": "Why one more local variable slowed the hot loop down",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the direct answer to \"why did adding one more local variable slow this hot loop down\": every additional simultaneously-live value inside a loop body is one more node in the interference graph the register allocator has to color, and a loop's inner body is exactly where register pressure matters most, because it runs many times.\n\nIf the loop was already using every available physical register, one more live value tips the allocator into spilling — some value (possibly not even the new one; the allocator's spill heuristic picks whichever choice is cheapest overall) now lives in memory instead of a register, and every use of that spilled value inside the loop pays a memory access instead of a register read, multiplied by however many iterations the loop runs. A single added variable, purely by changing register pressure, can measurably slow down a hot loop with no other code path affected at all — which is exactly the kind of surprising regression that sends someone digging into generated assembly to find the actual cause.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "code-generation-s11",
+      "order": 11,
+      "sectionTitle": "The back end's job, in one sentence",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Code generation's whole job is honoring constraints the IR was deliberately designed to ignore: a fixed instruction set, a small fixed register count, and a contract for crossing function-call boundaries safely. [compiler-optimizations](compiler-optimizations) makes the IR better before this stage runs; this stage is what finally turns that IR into something a CPU can actually execute.\n\nThe register-pressure story on this page is a preview of the theme running through the rest of the back end: optimizations that look purely beneficial on the IR (inlining, unrolling — covered next) can increase register pressure enough to trigger spilling, which is exactly why \"more optimized IR\" and \"faster final code\" aren't always the same claim.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

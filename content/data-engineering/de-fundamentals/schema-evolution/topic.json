@@ -1,0 +1,159 @@
+{
+  "id": "schema-evolution",
+  "title": "Schema Evolution & Serialization",
+  "area": "data-engineering",
+  "group": "de-fundamentals",
+  "order": 5,
+  "slug": "schema-evolution",
+  "summary": "How schemas change safely in a pipeline without breaking every consumer at once, and the compatibility rules that formalize what \"safe\" actually means.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "schema-evolution-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Schemas are not static — a source adds a field, renames one, or changes a type, usually without asking the pipeline downstream for permission. **Schema evolution** is the discipline of making that change safe instead of a 2am incident.\n\nThe core idea is precise, not vague: a change is safe if every existing consumer can keep working without redeploying, and every new consumer can read old data without special-casing it. Formats like Avro and Protobuf, paired with a schema registry, exist specifically to enforce that.\n\nThis is the topic that separates \"the pipeline broke because someone changed a field\" from \"the pipeline kept running because the change was checked before it shipped.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "schema-evolution-s02",
+      "order": 2,
+      "sectionTitle": "Why schemas change",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Schema drift isn't an edge case — it's the default state of any system with more than one team touching it over time. The common triggers:\n\n- **New fields** — a product team adds `referral_source` to the signup event because marketing asked for it.\n- **Renamed fields** — `user_id` becomes `userId` during a naming-convention cleanup.\n- **Type changes** — a `price` field moves from an integer (cents) to a decimal (dollars), or a `status` field that was always `\"active\"`/`\"inactive\"` gains a third value.\n- **Removed fields** — a deprecated field is finally dropped from the source event.\n\nNone of these are wrong for the team making the change — they're normal software evolution. The problem is purely that a consumer three hops downstream, who has never met the producer team, is depending on the old shape without either team knowing it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "schema-evolution-s02-q1"
+      ]
+    },
+    {
+      "id": "schema-evolution-s03",
+      "order": 3,
+      "sectionTitle": "Backward, forward, and full compatibility",
+      "subTitle": "Defined precisely",
+      "type": "concept",
+      "markdown": "These three terms get thrown around loosely; the precise definitions matter because they describe *different guarantees*:\n\n- **Backward compatible** — a **new** schema can read data written with the **old** schema. Safe to deploy a new consumer before old-schema data is gone.\n- **Forward compatible** — an **old** schema can read data written with the **new** schema. Safe to deploy a new producer before every consumer has upgraded.\n- **Full compatible** — both directions hold. Producers and consumers can each upgrade in any order, at any time, independently.\n\nThe direction matters: backward compatibility protects you when your consumers lag behind a schema change; forward compatibility protects you when your producers ship before consumers do. In a system with many independently-deployed consumers, full compatibility is usually the target — you can't control everyone's upgrade order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "schema-evolution-s03-q1"
+      ]
+    },
+    {
+      "id": "schema-evolution-s04",
+      "order": 4,
+      "sectionTitle": "A schema registry mediating compatibility",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A **schema registry** is a service that stores every version of every schema and checks a proposed new version against the compatibility rule the topic has configured, before the producer is allowed to publish with it.\n\n![Producer publishes to a schema registry that accepts or rejects, consumer fetches schema by ID](assets/schema-registry-gate.svg)\n\nThe registry is what turns compatibility from a manual review process into an automatic gate — a producer literally cannot publish a breaking change if the registry is configured to reject it, which is a much stronger guarantee than a code-review policy.",
+      "assets": [
+        {
+          "alt": "Producer publishes to a schema registry that accepts or rejects, consumer fetches schema by ID",
+          "path": "assets/schema-registry-gate.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "schema-evolution-s05",
+      "order": 5,
+      "sectionTitle": "Avro vs Protobuf vs JSON Schema for evolution",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Avro | Protobuf | JSON Schema |\n|---|---|---|---|\n| **Evolution mechanism** | Field defaults + reader/writer schema resolution | Numbered fields; unknown fields ignored | Schema is descriptive, not enforced at serialization |\n| **Enforcement point** | Registry-checked at write time (with Confluent-style registries) | Compile-time via generated code; registry optional | Runtime validation only, often skipped |\n| **Typical ecosystem** | Kafka / Hadoop-era data pipelines | gRPC services, cross-language APIs | REST APIs, config validation |\n| **Strictness by default** | High — registry can hard-block incompatible changes | Medium — relies on convention (never reuse a field number) | Low — nothing stops a producer from violating its own schema |\n\nAvro and Protobuf both get their safety from structural rules — defaults and numbered fields respectively — enforced automatically. JSON Schema describes a contract but, without external tooling, doesn't stop anyone from breaking it, which is why it's a weaker fit for high-stakes pipeline data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "schema-evolution-s05-q1"
+      ]
+    },
+    {
+      "id": "schema-evolution-s06",
+      "order": 6,
+      "sectionTitle": "Safe changes vs breaking changes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The compatibility rules translate into a short, memorizable list:\n\n**Generally safe:**\n- Adding an **optional** field with a default value.\n- Adding a new value to an enum, if consumers are built to ignore unknown values.\n\n**Generally breaking:**\n- Removing a field a consumer still reads.\n- Renaming a field (structurally, this is remove + add — old readers can't find the old name, new readers get nothing from old data).\n- Changing a field's type incompatibly (int to string is not a safe widening; int to long usually is).\n- Adding a **required** field with no default — old data simply doesn't have it, and there's nothing to fill it with.\n\nThe common thread: safe changes are ones where a reader that doesn't know about the change can still make sense of the data. Breaking changes are ones where either the old reader chokes on new data, or the new reader has no sensible way to fill in what old data is missing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "schema-evolution-s07",
+      "order": 7,
+      "sectionTitle": "Adding a required field, breaking everyone at once",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A common, entirely well-intentioned mistake: a team adds a new field, marks it required because \"every new event should have it,\" and ships. Every consumer still running the old schema, and every piece of historical data, instantly fails to deserialize — because a required field with no default has no value to fall back to when it's missing.\n\nThe fix that looks the same on the surface but isn't: add the field as **optional with a default** (even if the eventual intent is to make it required once every producer and every piece of historical data genuinely has it). This is backward compatible immediately, and lets you migrate to \"effectively required\" gradually — enforce it at the application layer once you've confirmed, via monitoring, that it's actually always present.\n\nThe general lesson: \"required\" is a business-logic concept you enforce in code and validation; the schema's compatibility rules care only about whether old and new data can both still be read.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "schema-evolution-s07-q1"
+      ]
+    },
+    {
+      "id": "schema-evolution-s08",
+      "order": 8,
+      "sectionTitle": "An Avro schema evolving with a default value",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Version 1 of an order-event schema, and a backward-compatible version 2 that adds a field:\n\n```json\n// v1\n{\n  \"type\": \"record\",\n  \"name\": \"OrderEvent\",\n  \"fields\": [\n    { \"name\": \"order_id\", \"type\": \"string\" },\n    { \"name\": \"amount\", \"type\": \"double\" }\n  ]\n}\n\n// v2 — adds discount_code with a default, so old data (which has no\n// discount_code) still deserializes cleanly under the new schema\n{\n  \"type\": \"record\",\n  \"name\": \"OrderEvent\",\n  \"fields\": [\n    { \"name\": \"order_id\", \"type\": \"string\" },\n    { \"name\": \"amount\", \"type\": \"double\" },\n    { \"name\": \"discount_code\", \"type\": [\"null\", \"string\"], \"default\": null }\n  ]\n}\n```\n\nA reader using v2 encountering a v1-written record fills `discount_code` with `null` automatically — no crash, no missing-field exception. That's backward compatibility, mechanically, not just as a policy statement.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "schema-evolution-s08-q1"
+      ]
+    },
+    {
+      "id": "schema-evolution-s09",
+      "order": 9,
+      "sectionTitle": "Handling drift from sources you don't control",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Registries and compatibility rules work well when you control both producer and consumer. Often you don't — a third-party API changes its response shape with a changelog nobody on your team reads, or an upstream team in a different org ships a change without notice.\n\nPractical defenses: validate incoming data against an expected schema at ingestion time and fail loudly (or quarantine the batch) rather than let a shape change silently propagate; store raw payloads so you can always see exactly what arrived, even if your typed model didn't expect it; and treat every field type from an external source as best-effort, not guaranteed — coerce defensively rather than assuming the contract you were told about is the contract you'll actually get.\n\nThe honest framing: with an external source, you're not preventing drift, you're detecting it fast and containing the blast radius when it happens.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "schema-evolution-s10",
+      "order": 10,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Schema evolution is the mechanical backbone of the data contracts idea from [Pipeline Architecture Patterns](pipeline-architecture) — a contract without an enforcement mechanism is a promise; a schema registry with a compatibility rule is the promise made automatically checkable.\n\nIt also underlies Change Data Capture, later in this curriculum: a CDC stream tailing a production database has to survive the source database's own schema migrations without breaking every downstream consumer, and the same backward/forward vocabulary applies there directly.\n\nThe one thing worth carrying forward above all: pick a compatibility mode deliberately, at the topic or table level, before the first breaking change happens by accident — retrofitting a compatibility policy after several consumers already depend on undocumented behavior is far more painful than setting it up front.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    }
+  ]
+}

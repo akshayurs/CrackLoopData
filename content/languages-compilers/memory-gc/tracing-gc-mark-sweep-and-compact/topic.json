@@ -1,0 +1,187 @@
+{
+  "id": "tracing-gc-mark-sweep-and-compact",
+  "title": "Tracing Garbage Collection: Mark-Sweep & Mark-Compact",
+  "area": "languages-compilers",
+  "group": "memory-gc",
+  "order": 4,
+  "slug": "tracing-gc-mark-sweep-and-compact",
+  "summary": "The core tracing-GC algorithm: define garbage as unreachable from a root set, find it by graph traversal, and reclaim it — at the cost of a pause the mutator has to wait through.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Tracing garbage collection answers the reachability question that reference counting can't: instead of counting how many pointers aim at an object, it starts from a known-live **root set** — the stack, global variables, CPU registers — and traces every pointer reachable from there. Anything not touched by that trace is, by definition, garbage: nothing in the running program can ever reach it again.\n\nThis is why cycles are a non-problem for tracing GC — a cycle with no path from any root is simply never marked, full stop, no special case needed. The cost is that tracing requires a global pass over live objects, and the running program (the **mutator**) generally has to pause while that pass happens, so nothing gets mutated mid-trace.\n\nMark-sweep and mark-compact are the two classic ways to act on what the trace finds. Almost every production collector — the JVM's, .NET's, V8's — is a descendant of this family.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s02",
+      "order": 2,
+      "sectionTitle": "Reachability, not reference count",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The **root set** is the small set of memory locations the runtime knows are definitely live without having to ask anyone: local variables on every thread's stack, static/global variables, and anything currently sitting in a CPU register. Everything else in the heap is live *only if* it's reachable by following pointers starting from a root.\n\nAn object is **garbage** precisely when no chain of pointers from any root reaches it — not when its reference count says zero, which is a completely different (and, as the previous topic covered, occasionally wrong) test. A two-object cycle with a dangling reference from outside dropped is unreachable from every root the instant that outside reference goes, and a reachability trace correctly sees that immediately, with no special-casing.\n\nThis reframing — from \"count references\" to \"can I reach you\" — is the single idea that makes tracing GC strictly more capable than refcounting, at the cost of needing a global pass to answer it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "tracing-gc-mark-sweep-and-compact-s02-q1"
+      ]
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s03",
+      "order": 3,
+      "sectionTitle": "Mark, then sweep",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A heap graph during the mark phase highlighting reachable objects from the roots, and the sweep phase removing the rest](assets/mark-sweep-phases.svg)\n\nMark is a graph traversal (depth-first or breadth-first) starting at every root simultaneously and following every outgoing pointer, marking each object visited. Sweep is a separate, simple pass over the entire heap: anything not marked gets added back to the free list. Sweep doesn't move anything — it just gives back what wasn't marked.",
+      "assets": [
+        {
+          "alt": "A heap graph during the mark phase highlighting reachable objects from the roots, and the sweep phase removing the rest",
+          "path": "assets/mark-sweep-phases.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s04",
+      "order": 4,
+      "sectionTitle": "The mark phase as pseudocode",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```text\nmark(obj):\n    if obj is null or obj.marked:\n        return                      # already visited, avoids infinite loop on cycles\n    obj.marked = true\n    for each reference field r in obj:\n        mark(r)                     # recurse into everything this object points to\n\n# entry point:\nfor root in root_set:\n    mark(root)\n```\n\nThis is plain DFS over the object graph, with the `obj.marked` check doing double duty: it's the visited-set that makes DFS terminate, and it's also what correctly handles cycles — a cycle just gets marked once and the recursion naturally stops re-entering it. No special cycle logic is needed anywhere in this code, which is the concrete payoff of reasoning about reachability instead of counts.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "tracing-gc-mark-sweep-and-compact-s04-q1"
+      ]
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s05",
+      "order": 5,
+      "sectionTitle": "Why the mutator has to stop",
+      "subTitle": "Stop-the-world",
+      "type": "concept",
+      "markdown": "Mark has to walk a *consistent* snapshot of the object graph — if the running program mutates a pointer mid-trace (say, nulling out the one reference the collector hasn't visited yet while it's still busy tracing a different branch), the collector can lose track of something that's actually still live and free it while it's in use. That's a correctness bug, not a performance one.\n\nThe simplest fix, and the one **stop-the-world** collectors use, is to pause every application thread for the entire mark-and-sweep pass, so the graph genuinely can't change underneath the trace. This is simple to reason about and simple to implement, and it's exactly what shows up as a latency spike in a service's metrics — a pause proportional to how much live data there is to trace.\n\nConcurrent and incremental collectors (covered in [generational-and-concurrent-gc](generational-and-concurrent-gc)) exist specifically to relax this — trace while the mutator keeps running, using extra bookkeeping to catch the mutations that would otherwise break correctness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "tracing-gc-mark-sweep-and-compact-s05-q1"
+      ]
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s06",
+      "order": 6,
+      "sectionTitle": "Mark-sweep's fragmentation problem",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sweep reclaims dead objects in place — it doesn't move the survivors. After several collection cycles in a program with mixed object lifetimes, the heap ends up looking exactly like the fragmentation problem from [manual-memory-management](manual-memory-management): plenty of total free space, scattered into gaps between surviving objects, none individually large enough for the next big allocation request.\n\nThe collector correctly reclaimed every dead object; the layout is still bad. This is mark-sweep's specific weakness — it solves the *counting* problem tracing GC exists to solve, but inherits the *layout* problem that any allocator with scattered frees has.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s07",
+      "order": 7,
+      "sectionTitle": "Mark-compact's fix: slide the survivors together",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Mark-compact runs the same mark phase, then instead of merely deleting unmarked objects in place, it physically **slides every live object toward one end of the heap**, closing every gap left by the dead ones. The result is one large contiguous free region instead of many small scattered ones — fragmentation is structurally impossible right after a compaction.\n\nThe catch: moving an object means every pointer that referenced its old address has to be updated to its new address, which means the collector has to find and rewrite every such pointer — a genuinely more expensive pass than sweep's simple \"add to free list.\" This is exactly why the algorithm names carry a real trade-off: mark-sweep is cheaper per collection but leaves fragmentation; mark-compact is more expensive per collection but the heap stays tidy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "tracing-gc-mark-sweep-and-compact-s07-q1"
+      ]
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s08",
+      "order": 8,
+      "sectionTitle": "What a pause actually costs",
+      "subTitle": "The numbers",
+      "type": "concept",
+      "markdown": "Pause time is roughly proportional to how much data the collector has to touch, and the two phases scale differently: **mark** cost scales with the size of the **live** heap — every reachable object gets visited, however small the total heap is. **Sweep** cost scales with the size of the **whole** heap, because it has to walk every slot to check whether it was marked, live or not.\n\nA rough intuition some production collectors use as a sizing rule: a heap that's mostly garbage (say, 90% dead at collection time) has a cheap mark phase — only 10% of the heap gets visited — but sweep still walks the full heap. That asymmetry is a big part of why generational collectors (next topic) try to shrink the region a *minor* collection has to sweep, rather than sweeping the whole heap every time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "tracing-gc-mark-sweep-and-compact-s08-q1"
+      ]
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s09",
+      "order": 9,
+      "sectionTitle": "\"Has a GC\" doesn't mean \"never leaks\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Tracing GC's guarantee is narrow and specific: it will reclaim any object that is truly unreachable from every root. It says nothing at all about objects that are technically still reachable but that the program will never actually use again.\n\nA static `HashMap` that things get added to and never removed from, a listener registered with an event bus that never unsubscribes, an ever-growing cache with no eviction policy — every one of these is a perfectly legitimate, reachable chain from a root all the way to the leaked data, and the collector correctly leaves it alone, because from its point of view nothing is wrong. This is a **logical leak**: the programmer forgot to drop a reference, not a bug in the collector.\n\n\"We have a GC, so we can't leak\" is one of the most common false beliefs junior engineers on managed-language teams carry into production incidents.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "tracing-gc-mark-sweep-and-compact-s09-q1"
+      ]
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s10",
+      "order": 10,
+      "sectionTitle": "Mark-sweep vs mark-compact vs refcounting",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Mark-sweep | Mark-compact | Refcounting |\n|---|---|---|---|\n| Handles cycles | Yes | Yes | No (needs backstop) |\n| Fragmentation | Yes, accumulates | No, self-healing | Depends on the allocator |\n| Cost model | Mark ~ live set, sweep ~ whole heap | Mark + moving every survivor | Small cost per reference op |\n| Pause | One stop-the-world pass | Longer stop-the-world pass | None (if acyclic) |\n\nThe honest summary: tracing GC trades away per-operation cost and determinism for correctness on cycles and (with compaction) tidy layout, paid for in a pause whose length scales with live data. There's no dominant strategy here — each cell in this table is a real production system's deliberate choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s11",
+      "order": 11,
+      "sectionTitle": "Diagnosing a pause spike after caching more objects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The direct answer to \"why did GC pauses spike after we cached more objects\": mark cost scales with the **live** heap, and a bigger cache directly increases how much data is reachable at collection time — you handed the tracer strictly more work to do on every single pass, whether or not the cache is ever hit.\n\nWhat I'd actually check, in order: how much did the live-heap size grow (a heap dump or `jstat`/GC log before and after the cache change tells you directly); is the added data actually mark-phase-expensive (a deeply nested object graph costs more to trace per byte than a flat array of primitives, because there are more pointers to follow); and whether the cache has any eviction policy at all, or whether it's actually a slow leak dressed up as a cache.\n\nThe fix is rarely \"tune the collector\" first — it's usually bounding what's held live: an LRU eviction policy, weak references for cache values so the collector can reclaim them under memory pressure, or moving the cache off-heap entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "tracing-gc-mark-sweep-and-compact-s12",
+      "order": 12,
+      "sectionTitle": "Where production collectors go from here",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Plain mark-sweep and mark-compact are correct but naive: every collection traces and possibly moves the *entire* live heap, which doesn't scale to the multi-gigabyte heaps and sub-10ms latency targets real services need.\n\nProduction collectors keep the same core trace-from-roots idea and add two big optimizations on top: **generational** collection, which exploits the fact that most objects die young to make the common collection cheap and small, and **concurrent/incremental** collection, which relaxes stop-the-world by tracing alongside the running program instead of pausing it entirely. [generational-and-concurrent-gc](generational-and-concurrent-gc) covers both — they're the difference between the algorithm you just learned and what the JVM or .NET actually run.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "id": "structured-concurrency",
+  "title": "Structured Concurrency",
+  "area": "languages-compilers",
+  "group": "concurrency-models",
+  "order": 6,
+  "slug": "structured-concurrency",
+  "summary": "The modern discipline of scoping concurrent work to a lexical block so it can't outlive or leak past its caller — a different axis from every other topic in this group, and the one that finally makes cancellation and error propagation actually reliable.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "structured-concurrency-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every model so far in this group — threads, async/await, actors, CSP, lock-free — answers \"how do multiple things run and coordinate.\" **Structured concurrency** answers a different question entirely: \"when does concurrent work actually finish, and who's responsible if it doesn't?\"\n\nThe core idea, borrowed directly from structured *programming*'s insight (a block has one entry and one exit, so control flow is locally reasoned-about): a concurrent scope shouldn't exit until every task it spawned has finished or been cancelled. This one discipline — applicable regardless of whether you're using threads, async/await, or anything else underneath — is what finally makes cancellation and error propagation genuinely reliable instead of \"usually works.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "structured-concurrency-s02",
+      "order": 2,
+      "sectionTitle": "The problem: unstructured async",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before structured concurrency became a named discipline, the common pattern was **unstructured**: spawn a task (a thread, a promise, a coroutine) and just... let it run, with no code anywhere that owns tracking whether it finished, what happens if it throws, or what happens if the code that spawned it is no longer interested in the result.\n\nThis is exactly the shape of the goroutine-leak and mailbox-overflow problems from earlier in this group, generalized: unstructured concurrency doesn't just risk one specific failure mode, it removes the *scaffolding* that would let you reason about task lifetime at all. \"Fire and forget\" isn't a design choice here — it's the default outcome of not having a structure that forces you to decide otherwise.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "structured-concurrency-s02-q1"
+      ]
+    },
+    {
+      "id": "structured-concurrency-s03",
+      "order": 3,
+      "sectionTitle": "Owned children vs a detached task",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Structured concurrency scope waiting on all children versus an orphaned unstructured task](assets/structured-vs-unstructured.svg)",
+      "assets": [
+        {
+          "alt": "Structured concurrency scope waiting on all children versus an orphaned unstructured task",
+          "path": "assets/structured-vs-unstructured.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "structured-concurrency-s04",
+      "order": 4,
+      "sectionTitle": "The core rule",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**A concurrent scope doesn't exit until every child task it spawned has either finished or been explicitly cancelled.** That's the entire rule, and everything else in this topic is a consequence of it.\n\nThis converts \"did I remember to track this task\" from a per-call-site discipline problem (exactly the kind of thing that gets forgotten under deadline pressure) into a structural guarantee enforced by the scope construct itself — you cannot exit the block early and leave a child running, because the language/library machinery won't let the scope's exit complete until its children are accounted for. It's the same category of guarantee `the-actor-model` makes about state isolation, applied to a completely different problem: task lifetime instead of data races.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "structured-concurrency-s04-q1"
+      ]
+    },
+    {
+      "id": "structured-concurrency-s05",
+      "order": 5,
+      "sectionTitle": "A structured-concurrency block in code",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Kotlin's `coroutineScope` is a clean, direct expression of the rule:\n\n```kotlin\nsuspend fun fetchDashboard(): Dashboard = coroutineScope {\n    val user = async { fetchUser() }\n    val posts = async { fetchPosts() }\n    val stats = async { fetchStats() }\n    // coroutineScope will NOT return until all three complete\n    Dashboard(user.await(), posts.await(), stats.await())\n}\n```\n\nThe three `async` calls all start concurrently — this is the same fan-out win `async-await-and-cooperative-concurrency` covered — but the containing `coroutineScope` block is the load-bearing part: it cannot return until `user`, `posts`, and `stats` have all completed, one way or another. There's no code path out of this function that leaves one of them still running unaccounted for; the scope itself won't allow it.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "structured-concurrency-s06",
+      "order": 6,
+      "sectionTitle": "Cancellation propagation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because every child is owned by its parent scope, cancelling the parent has an obvious, automatic consequence: **every child gets cancelled too**, recursively, with no separate bookkeeping required to make that happen.\n\nThis solves a problem that's genuinely hard to get right manually: in unstructured code, cancelling \"the operation\" usually means remembering every task that operation spawned and cancelling each one individually — miss one, and it keeps running, doing work nobody wants anymore, possibly holding resources or making further downstream calls on behalf of a request that's already been abandoned. Structured concurrency makes this the *default* behavior of the scope itself rather than something every call site has to remember to implement correctly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "structured-concurrency-s06-q1"
+      ]
+    },
+    {
+      "id": "structured-concurrency-s07",
+      "order": 7,
+      "sectionTitle": "Error propagation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The same ownership structure fixes error handling too. If one child task throws, a structured scope surfaces that failure to the scope itself (which typically cancels the sibling children and propagates the exception to the caller) — instead of the exception vanishing inside a detached task with nothing watching it, which is exactly what happens in unstructured \"fire and forget\" code: an exception thrown inside an unawaited promise/future is silently swallowed unless something explicitly attached an error handler to that specific task.\n\nThis is the structural fix for a real, common bug: a background task's failure that nobody ever finds out about, because nothing in the code was ever positioned to receive it. Structured concurrency guarantees *something* is always watching, because the scope itself is that something.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "structured-concurrency-s07-q1"
+      ]
+    },
+    {
+      "id": "structured-concurrency-s08",
+      "order": 8,
+      "sectionTitle": "The 30-second zombie",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The classic symptom this whole topic exists to fix: a request gets cancelled — the client disconnected, a timeout fired — and yet the server keeps doing background work related to that request for another 30 seconds, consuming CPU and possibly making further downstream calls, for a result nobody will ever read.\n\nThe root cause is almost always a \"fire and forget\" background task spawned during that request's handling — a task that was never made a structural child of the request's own scope, so cancelling the request has no way to reach it. It's still running because nothing ever told it to stop, and nothing *could* tell it to stop, because it was never owned by anything that knew the request had ended.\n\nThe fix, in structured-concurrency terms, is exactly the rule from earlier: make that background task a child of the request-handling scope (or an explicitly-scoped child with its own well-defined lifetime), so cancelling the request scope automatically cancels it too, instead of leaving it orphaned and running.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "structured-concurrency-s08-q1"
+      ]
+    },
+    {
+      "id": "structured-concurrency-s09",
+      "order": 9,
+      "sectionTitle": "Unstructured futures vs structured scopes",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Unstructured futures/promises | Structured concurrency |\n|---|---|---|\n| Task ownership | Implicit, or none — whoever holds the reference, if anyone | Explicit — every task belongs to exactly one scope |\n| Cancellation propagation | Manual — you track and cancel each task yourself | Automatic — cancelling the scope cancels all children |\n| Error propagation | Can be silently swallowed if unawaited | Guaranteed to surface to the scope |\n| Raw power/flexibility | Higher — nothing stops you from detaching a task on purpose | Lower — genuinely detached background work needs an explicit, separate top-level scope |\n\nThe trade is the same shape as everywhere else in this group: structured concurrency gives up some raw flexibility (you can't *accidentally* fire-and-forget anymore) in exchange for a guarantee (task lifetime is always accounted for) — the same power, contained lifetime, as the topic's own framing puts it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "structured-concurrency-s09-q1"
+      ]
+    },
+    {
+      "id": "structured-concurrency-s10",
+      "order": 10,
+      "sectionTitle": "Where this connects next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Structured concurrency is deliberately orthogonal to every model earlier in this group — it's a discipline about task *lifetime*, applicable whether the underlying execution is threads, async/await coroutines, or (with more friction) actors and CSP goroutines. Java's structured concurrency API and Kotlin's coroutine scopes are the concrete implementations most likely to come up by name in an interview.\n\n`comparing-concurrency-models` closes this group by putting every model — including the lifetime discipline this topic adds on top of any of them — side by side against the same real-world design question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

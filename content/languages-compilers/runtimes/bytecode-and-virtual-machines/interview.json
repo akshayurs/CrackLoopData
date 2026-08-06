@@ -1,0 +1,37 @@
+{
+  "topicId": "bytecode-and-virtual-machines",
+  "interviewQuestions": [
+    {
+      "id": "bytecode-and-virtual-machines-iq1",
+      "question": "What does `javap -c` actually show you, and why does the JVM use a stack machine?",
+      "answerMarkdown": "`javap -c` disassembles a `.class` file's bytecode into readable instructions — the actual portable format the JVM executes, one level below the Java source. For `int add(int a, int b) { return a + b; }` you'd see `iload_1; iload_2; iadd; ireturn`: push local 1, push local 2, pop both and push their sum, pop and return.\n\nThat four-instruction sequence for one `+` is the signature of a **stack-based VM**: there are no register operands, so every value has to be explicitly pushed before an instruction can consume it. The JVM chose this design (as did .NET's CLR) because it keeps the instruction set small and the bytecode compact — no operand fields naming which register to use — at the cost of more instructions per operation than a register machine like Dalvik would need for the same code.\n\nI'd also flag that this stack-based encoding barely matters for hot-path performance, because HotSpot's JIT compiles frequently-executed methods to native code using its own internal representation — the stack-vs-register choice mostly shows up in interpreted speed and file size, not steady-state throughput.\n\n**Testing:** whether you can read real bytecode and connect it back to the design choice behind it, not just recite \"stack machine\" as a fact.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "bytecode-and-virtual-machines-iq2",
+      "question": "Why did Android's Dalvik VM use register-based bytecode instead of copying the JVM's stack model?",
+      "answerMarkdown": "It comes down to the constraint Android was actually solving for: memory and storage footprint on early mobile hardware, not developer ergonomics. A stack-based instruction like the JVM's `iadd` needs surrounding push/pop instructions to get its operands onto the stack; a register-based instruction like `add r3, r1, r2` names its operands directly, so the same logical operation takes fewer instructions and a smaller encoded size.\n\nThat difference compounds across an entire `.dex` file — fewer instructions per method, smaller binaries, less to page into memory on a device with a fraction of a desktop's RAM. Dalvik (and its successor ART) also merged all classes into one shared `.dex` file rather than many separate `.class` files, for the same footprint reasons.\n\nI'd push back on the idea that register-based is just \"better\" — it's a trade against instruction *encoding size* (register operands take more bits per instruction) for fewer *instructions*, and it shifts register allocation work onto the compiler ahead of time. On a server JVM where footprint matters less than JIT throughput, the stack model's simplicity was the right call for its era and constraints.\n\n**Testing:** whether you can name the actual constraint (mobile memory footprint) behind a design choice instead of treating it as an arbitrary VM detail.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "bytecode-and-virtual-machines-iq3",
+      "question": "Bytecode verification exists — what is it actually protecting against, and could a JVM skip it?",
+      "answerMarkdown": "Verification checks that a `.class` file's bytecode is structurally sound before any of it executes: operand stack depths stay balanced across every instruction, types match at each operation, jump targets land on real instruction boundaries, and access modifiers like `private` are respected. It runs whether the class came from your own build or a random JAR pulled off the network.\n\nThe reason it can't just be skipped for trusted-looking code: the JVM's safety guarantees — no wild pointer arithmetic, no reading past an array, no calling a private method from outside its class — are enforced partly by the compiler and partly by this runtime check, and a hand-crafted or corrupted `.class` file bypasses the compiler entirely. Historically this was the actual security boundary for Java applets running untrusted code inside a browser; without verification, a malicious `.class` file could construct bytecode the *compiler* would never emit but the VM would happily execute unchecked.\n\nSkipping it would trade a real safety boundary for a small amount of class-loading latency — usually a bad trade, which is why even performance-sensitive JVMs verify by default and only expose narrow escape hatches (like `-Xverify:none`, deprecated for exactly this reason) rather than removing the check.\n\n**Testing:** whether you understand verification as a security boundary against untrusted bytecode, not just a compiler formality.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "bytecode-and-virtual-machines-iq4",
+      "question": "Your team is embedding a scripting language in a resource-constrained IoT device. Would you reach for a stack-based or register-based bytecode VM, and why?",
+      "answerMarkdown": "I'd lean register-based, for the same reason Dalvik did on early Android: on a constrained device, instruction count and encoded bytecode size translate directly into memory footprint and flash storage usage, and register-based bytecode needs fewer instructions per operation because operands are named directly instead of pushed and popped.\n\nConcretely, Lua's register-based VM is a real precedent here — it's specifically known for a small, embeddable footprint, which is exactly the profile an IoT device needs. A stack-based design like the JVM's would cost more instructions for the same logic, and the JVM itself is not remotely designed to run in a footprint an IoT device can afford (it assumes a full heap, JIT infrastructure, and megabytes of core classes).\n\nThe trade I'd flag going in: register-based bytecode has a larger per-instruction encoding (it carries register operand bits) and pushes register-allocation complexity onto the compiler, which is a fine trade for a small embedded compiler but adds real complexity if I were building the toolchain from scratch. I'd also make sure whatever VM I pick has no JIT dependency, since a JIT's own memory and compilation overhead can outweigh its benefit on a device this constrained — a lean interpreter loop over register bytecode may be the whole story.\n\n**Testing:** whether you can apply the stack-vs-register trade-off to a concrete constraint instead of only reciting it abstractly.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied design"
+    }
+  ]
+}

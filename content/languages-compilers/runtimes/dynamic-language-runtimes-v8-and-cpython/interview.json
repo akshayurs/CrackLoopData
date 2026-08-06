@@ -1,0 +1,37 @@
+{
+  "topicId": "dynamic-language-runtimes-v8-and-cpython",
+  "interviewQuestions": [
+    {
+      "id": "dynamic-language-runtimes-v8-and-cpython-iq1",
+      "question": "Why doesn't multithreading speed up this CPU-bound Python function?",
+      "answerMarkdown": "Because CPython's Global Interpreter Lock allows only one thread to execute Python bytecode at any given instant, no matter how many cores the machine has. Spreading a CPU-bound loop across four `threading.Thread` instances doesn't run four instructions in parallel — it takes turns running one thread's bytecode at a time, so you get roughly the same total throughput, sometimes worse once you factor in lock-handoff overhead.\n\nThe distinction that matters: the GIL specifically blocks *Python bytecode execution* in parallel, not threads existing or waiting. If the workload were I/O-bound instead — waiting on a socket or file read — CPython releases the GIL for the duration of that blocking call, so ten threads waiting on slow network calls genuinely overlap their waiting time. The GIL is a non-issue there.\n\nFor genuine CPU-bound parallelism, I'd reach for `multiprocessing` — separate OS processes, each with its own interpreter and GIL, giving real parallelism at the cost of inter-process communication overhead — or push the hot loop into a C extension or vectorized library (NumPy) that releases the GIL while it runs its own native code.\n\nI'd frame the fix as \"pick the tool for the workload shape,\" not \"threading is broken in Python\" — it's not, for the job it's actually suited to.\n\n**Testing:** whether you know the GIL's precise scope (bytecode execution, not I/O) and can name the correct fix, not just recite \"GIL bad.\"",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "dynamic-language-runtimes-v8-and-cpython-iq2",
+      "question": "What are V8 hidden classes, and how do they make JavaScript property access fast despite the language being dynamically typed?",
+      "answerMarkdown": "A hidden class (V8 also calls them \"shapes\" or \"maps\") is an internal descriptor V8 attaches to an object recording which properties it has and at what memory offset — effectively recovering the fixed layout a statically-typed compiler would have known ahead of time, but built dynamically by observing how the object was actually constructed.\n\nThe trick is that most objects created by the same code path end up with the same properties added in the same order, so V8 can assign them a *shared* hidden class instead of building a bespoke layout per object. Once two objects share a hidden class, a property access on either one becomes a fixed-offset read instead of a general-purpose lookup.\n\nThis pairs with inline caches at each call site: the call site remembers the hidden class it last saw and skips straight to the cached offset if the next object matches, falling back progressively (monomorphic → polymorphic → megamorphic) as more distinct shapes show up.\n\nThe practical gotcha I'd flag: construction order matters. `{x:1, y:2}` and `{y:2, x:1}` can end up with *different* hidden classes even though the final properties are identical, because the hidden class is built incrementally as properties are added — which is why consistent object construction (same properties, same order, ideally in a constructor) is a real, measurable V8 performance practice, not folklore.\n\n**Testing:** whether you understand hidden classes as an optimization built from observed behavior, and can name the concrete pitfall that defeats them.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "dynamic-language-runtimes-v8-and-cpython-iq3",
+      "question": "If the GIL is such a well-known bottleneck, why hasn't CPython just removed it?",
+      "answerMarkdown": "Because removing it isn't free — it's a trade against reference counting, CPython's core memory-management mechanism. Every Python object's refcount is incremented and decremented constantly, on nearly every operation; without the GIL, each of those updates would need to be atomic or separately locked to stay correct under real multithreading, and that overhead applied everywhere is expensive and was, for decades, judged not worth it relative to what removing the GIL would buy for typical (often I/O-bound, or single-threaded CPU-bound with multiprocessing available) workloads.\n\nThat calculus has genuinely shifted. Python 3.13 introduced an experimental **free-threaded build** (PEP 703) that removes the GIL, using biased reference counting and other techniques to make per-object refcount updates cheap without a global lock. It's opt-in and still maturing — C extensions written against the old GIL-holding assumptions need updates to be thread-safe without it, which is the real adoption blocker, not the CPython core team being unaware of the problem.\n\nSo the honest framing: the GIL wasn't an oversight, it was a deliberate simplicity/performance trade that's now being actively unwound, with the transition cost concentrated in the C-extension ecosystem rather than the interpreter itself.\n\n**Testing:** whether you know this is an active, moving area rather than reciting the GIL as a permanent, unchangeable fact.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "dynamic-language-runtimes-v8-and-cpython-iq4",
+      "question": "You profile a hot JavaScript function in a Node.js service and find it's much slower than an apparently similar function elsewhere in the codebase. Where would 'inconsistent object shapes' fit into your debugging process?",
+      "answerMarkdown": "I'd treat it as one specific, checkable hypothesis rather than the first thing I reach for — profile first, then match the symptom to the mechanism. The signature I'd look for is a function that takes a polymorphic set of objects as input and does property access on them in a hot loop, where the objects were constructed differently across call sites — some with an optional field present, some without, or the same fields added in different orders.\n\nTo confirm, I'd use `--trace-deopt` and V8's own tooling (`d8`'s `%GetOptimizationStatus`, or `node --allow-natives-syntax`) or a profiler like Chrome DevTools' flame chart specifically looking for deoptimization events on that function, and check whether the call site handling the property access has gone megamorphic — meaning it's seen too many distinct hidden classes and fallen back to slow generic lookup on every call.\n\nThe fix, once confirmed, is usually construction consistency: build objects of the same conceptual type through the same code path (a constructor or factory function) so they always get the same shape, or explicitly initialize optional fields to a sentinel value like `null` rather than omitting them — which keeps the shape stable even when a value is absent.\n\nI'd be careful not to over-apply this: most JS performance problems are algorithmic, not shape-related, so I'd only chase this once profiling data (not intuition) points at property access as the actual hot spot.\n\n**Testing:** whether you can apply hidden-class theory to a realistic debugging workflow, in the right order, rather than jumping straight to a niche V8 mechanism.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Debugging"
+    }
+  ]
+}

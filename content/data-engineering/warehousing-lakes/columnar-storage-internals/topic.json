@@ -1,0 +1,174 @@
+{
+  "id": "columnar-storage-internals",
+  "title": "Columnar Storage Internals",
+  "area": "data-engineering",
+  "group": "warehousing-lakes",
+  "order": 2,
+  "slug": "columnar-storage-internals",
+  "summary": "Columnar layout is only the starting point. Compression, per-column statistics, and column pruning are what actually turn 'read fewer columns' into 'read a fraction of the bytes' at query time.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "columnar-storage-internals-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Warehouse Fundamentals](warehouse-fundamentals) introduced columnar storage as the reason warehouses scan fast. This topic goes underneath that headline: the concrete on-disk techniques — row groups, column chunks, per-column statistics, compression, and predicate pushdown — that turn \"only read the columns you need\" into \"skip most of the bytes on disk entirely.\"\n\nBy the end, you should be able to explain not just that columnar storage is fast, but *which specific mechanism* is doing the work for a given query — because different query shapes lean on different ones.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-storage-internals-s02",
+      "order": 2,
+      "sectionTitle": "Column-per-chunk vs row-per-record",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **row-oriented** file stores each record's full set of columns contiguously — record 1's every column, then record 2's every column, and so on. A **column-oriented** file inverts this: all values for column A across every record sit together, then all of column B's values, and so on.\n\nThe practical effect is about what you're forced to read. In a row layout, reading any single column means reading past every other column of every row along the way — there's no way to skip them, because they're interleaved on disk. In a column layout, a query touching one column reads a contiguous run of just that column's bytes, and never touches the others at all.\n\nThis single layout decision is the foundation everything else in this topic builds on — compression, statistics, and pruning all work *because* columns are stored together, not despite it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "columnar-storage-internals-s02-q1"
+      ]
+    },
+    {
+      "id": "columnar-storage-internals-s03",
+      "order": 3,
+      "sectionTitle": "Row groups, column chunks, and stats",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Real columnar file formats (Parquet, ORC) add one more layer: a large file is split into **row groups** — horizontal slices of, say, a million rows each — and within each row group, data is stored as **column chunks**, one contiguous block per column. Each column chunk carries lightweight **statistics**: its min value, max value, and sometimes a null count, computed at write time.\n\nThose stats are what makes predicate pushdown (a few slides ahead) possible — a query engine can check a row group's min/max for a filtered column *before* reading any of its actual data, and skip the entire row group if the filter can't possibly match.\n\n![A Parquet file split into row groups, each divided into column chunks with min/max/null-count stats](assets/row-groups-column-chunks.svg)",
+      "assets": [
+        {
+          "alt": "A Parquet file split into row groups, each divided into column chunks with min/max/null-count stats",
+          "path": "assets/row-groups-column-chunks.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-storage-internals-s04",
+      "order": 4,
+      "sectionTitle": "Compression techniques",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Storing a column's values contiguously has a second benefit beyond selective reads: similar values sitting next to each other compress far better than the same values scattered across different rows' worth of other columns. Three techniques do most of the work:\n\n- **Dictionary encoding** — for a low-cardinality column (a `status` field with 5 possible values), store each distinct value once in a dictionary and replace every occurrence with a small integer reference. A million-row `status` column can shrink to a handful of bytes plus a tiny dictionary.\n- **Run-length encoding (RLE)** — for a column with long runs of the same value (a sorted `date` column, or a mostly-constant flag), store \"value X, repeated N times\" instead of X written N times.\n- **Delta encoding** — for a column of increasing or slowly-changing numbers (a sorted ID or timestamp column), store the *difference* from the previous value instead of the full value, since differences are usually much smaller numbers.\n\nWhich technique applies depends on the column's actual data shape, and most formats pick automatically per column rather than requiring you to choose.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "columnar-storage-internals-s04-q1"
+      ]
+    },
+    {
+      "id": "columnar-storage-internals-s05",
+      "order": 5,
+      "sectionTitle": "Predicate pushdown via min/max stats",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Predicate pushdown** means moving a query's filter condition as close to the data as possible, ideally before any of the actual data is read. With per-row-group min/max stats in place, a query like `WHERE order_date >= '2024-06-01'` can be evaluated against each row group's stored *stats* first: if a row group's max `order_date` is `2024-05-15`, the engine knows with certainty no row in that group can match, and skips reading it entirely — no decompression, no scan, nothing.\n\nThis is a coarse filter — it operates at row-group granularity, so a row group can still get scanned even if only one row inside it happens to match — but coarse is exactly what makes it cheap: checking a handful of pre-computed stats per row group costs almost nothing compared to actually scanning the group's data.\n\nThe effectiveness of predicate pushdown depends heavily on whether the filtered column's values are somewhat *sorted or clustered* within the data — a column whose values are randomly scattered across every row group will have similar min/max ranges everywhere, so almost nothing gets skipped. This is exactly the property that partitioning and clustering, covered later in this group, are designed to create on purpose.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "columnar-storage-internals-s05-q1"
+      ]
+    },
+    {
+      "id": "columnar-storage-internals-s06",
+      "order": 6,
+      "sectionTitle": "Column pruning",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Column pruning** is the simplest of the mechanisms here: the query engine looks at which columns the query actually references and reads only those column chunks, skipping every other column entirely — not filtering them out after reading, but never reading their bytes off disk (or out of object storage) in the first place.\n\nThis is a direct, mechanical consequence of the columnar layout from earlier: because each column's data is a separate contiguous chunk, \"don't read column X\" is a real, free skip, not a computation the engine has to do after fetching the data. A query referencing 3 of a table's 50 columns reads roughly 3/50ths of the table's bytes, all else equal.\n\nColumn pruning and predicate pushdown are independent and compound: pruning cuts bytes read based on *which columns* a query needs; pushdown cuts bytes read based on *which row groups* can't match a filter. A well-written query benefits from both simultaneously.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "columnar-storage-internals-s06-q1"
+      ]
+    },
+    {
+      "id": "columnar-storage-internals-s07",
+      "order": 7,
+      "sectionTitle": "SELECT col vs SELECT *",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The difference column pruning makes is visible directly in a query plan's bytes-scanned metric:\n\n```sql\n-- Table `events` has 60 columns, 500 GB total on disk\n\nSELECT event_id, revenue\nFROM events\nWHERE event_date = '2024-06-01';\n-- Reads roughly (2/60) of the table's column data\n-- for the matching row groups: a few GB, not hundreds\n\nSELECT *\nFROM events\nWHERE event_date = '2024-06-01';\n-- Reads all 60 columns' data for the matching row groups:\n-- tens of GB, ~30x more bytes than the query above\n```\n\nBoth queries can benefit equally from predicate pushdown on `event_date` — that part of the cost reduction is identical. The gap between them is purely column pruning: the first query touches 2 columns' worth of bytes, the second touches all 60. On a warehouse billed by bytes scanned, this is a direct, visible line item, not an abstraction — `SELECT *` habits carried over from OLTP development are one of the most common sources of warehouse cost surprises.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-storage-internals-s08",
+      "order": 8,
+      "sectionTitle": "Wide tables with rarely-used columns",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A table accumulates columns over years — every team that ever needed \"just one more field\" added one, and now a table has 300 columns, most touched by fewer than 1% of queries. Nobody removes columns, because doing so risks breaking some report or job nobody remembers depends on it.\n\nColumn pruning limits the *damage* of this — a query touching 5 of 300 columns still only reads those 5 — but it doesn't make the wide table free. Storage cost scales with total columns stored regardless of how often they're queried, and any query that does need `SELECT *` (an export job, an ad hoc debug query, a poorly-written ETL step) pays for all 300 columns' worth of bytes every time it runs.\n\nThe fix isn't purely technical — it's periodically auditing which columns are actually queried (most warehouses can report per-column read frequency) and either archiving genuinely unused columns to a separate table or, at minimum, being deliberate about which queries are allowed to run `SELECT *` against a table that wide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "columnar-storage-internals-s08-q1"
+      ]
+    },
+    {
+      "id": "columnar-storage-internals-s09",
+      "order": 9,
+      "sectionTitle": "Late materialization",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "A naive columnar query engine still has to eventually reconstruct full rows to hand back to the query's `SELECT` clause or apply a multi-column condition — the question is *when* it does that reconstruction. **Late materialization** delays rebuilding full rows for as long as possible: apply filters against individual column chunks first, and only assemble the small set of surviving rows into full records at the very end, right before returning results.\n\nThe alternative — reconstructing full rows early, then filtering — throws away much of columnar storage's advantage, because you've paid the cost of assembling rows (including columns the filter doesn't even need) before you know most of them will be discarded.\n\nConcretely: for `SELECT name FROM users WHERE age > 65 AND country = 'US'`, a late-materializing engine filters `age` and `country` as isolated column scans, intersects the surviving row positions, and only then reads `name` for that small surviving set — never touching most of `name`'s bytes at all, and never assembling a full row for anyone who gets filtered out.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "columnar-storage-internals-s09-q1"
+      ]
+    },
+    {
+      "id": "columnar-storage-internals-s10",
+      "order": 10,
+      "sectionTitle": "Rough compression numbers",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "To anchor the compression discussion concretely: a low-cardinality categorical column (a `status` field with 5 values) stored raw might take 8 bytes per row; dictionary-encoded, it can shrink to under 1 byte per row plus a negligible fixed dictionary cost — an 8x-plus reduction on that column alone. A sorted timestamp column under delta encoding commonly compresses 4-10x compared to storing full timestamps, since consecutive differences are small numbers.\n\nAggregate effect across a realistic analytical table: production columnar formats commonly report **overall compression ratios of 3-10x** versus uncompressed row-oriented storage, varying heavily by how many low-cardinality or sorted columns the table has. A table with mostly high-cardinality, unsorted, unique-per-row values (like random UUIDs) compresses far less well, because none of the three techniques from earlier in this topic have much to exploit.\n\nThis is why schema and data-shape decisions — sorting a table by a commonly-filtered column, choosing a dictionary-friendly type for a status field — have a real, measurable effect on both storage cost and scan speed, not just theoretical tidiness.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "columnar-storage-internals-s11",
+      "order": 11,
+      "sectionTitle": "Where this leads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This topic covered the mechanisms that make a single scan efficient. The next topic in this track that builds on it directly, Partitioning & Clustering for Query Performance, covers how to physically organize a table's data so those same mechanisms — predicate pushdown especially — get to skip *even more* before a scan even starts, by making sure the values a query filters on are actually clustered together rather than scattered randomly across row groups.\n\nCarry forward the throughline: column pruning, compression, and predicate pushdown are all different ways of answering the same question — how much of this table's bytes can we avoid touching at all — and every one of them works better when the data on disk is organized with query patterns in mind, not just written in arrival order.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

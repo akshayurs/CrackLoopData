@@ -1,0 +1,37 @@
+{
+  "topicId": "stack-vs-heap-allocation",
+  "interviewQuestions": [
+    {
+      "id": "stack-vs-heap-allocation-iq1",
+      "question": "What's the actual difference between stack and heap allocation?",
+      "answerMarkdown": "The stack is memory tied to function calls, freed automatically when a call returns; the heap is a general pool for anything that needs a lifetime independent of any one call.\n\nConcretely: every call pushes a **frame** holding its locals, and popping that frame on return reclaims everything in it in one instruction — no bookkeeping, because the compiler already knows the frame's exact size. The heap has no equivalent structural trigger. When you `malloc` or `new` something, the allocator has to search for free space and remember how big the block is, and *nothing* automatically decides when to give it back — that decision has to come from somewhere else: a manual `free`, a reference count hitting zero, a GC pass, or a borrow checker proving no one needs it anymore.\n\nThat cost difference is real, not academic — a stack push is roughly a pointer decrement; a heap allocation is commonly 10-100x more expensive once you count the allocator's bookkeeping and worse cache locality from jumping around a heap instead of staying on one hot stack page.\n\nSo the practical rule I use: default to the stack for anything call-local and fixed-size, and reach for the heap only when a value's lifetime genuinely needs to outlive its creating call.\n\n**Testing:** whether you understand the mechanism (frame lifetime vs no structural lifetime) or just recite \"stack is fast, heap is slow\" without knowing why.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "stack-vs-heap-allocation-iq2",
+      "question": "Why is this recursive function blowing the stack, and how would you fix it?",
+      "answerMarkdown": "I'd first confirm it's actually a stack overflow — check the crash for a segfault at a suspiciously round recursion depth, or a language-specific `StackOverflowError`/`RecursionError` — then look for one of two causes: the recursion has no reachable base case, or the base case is fine but the input is simply deep enough to exceed the stack's fixed budget (typically 1-8 MB per thread).\n\nEach call adds a frame whether or not the language optimizes anything, and frames add up fast: even a lean 64-byte frame times 100,000 calls is 6.4 MB, already near a default limit. Deep recursion over user-controlled input — parsing a deeply nested JSON blob, walking an unbalanced tree, recursing per character of a long string — is the classic production trigger, because it's fine in dev with small test data and breaks on the input size nobody tested.\n\nThe fix depends on what's available: if the language guarantees tail-call elimination and the recursion is genuinely tail-recursive, restructure it so the compiler reuses the frame instead of growing it. If not — and most mainstream languages don't guarantee this — rewrite the recursion as an explicit loop with your own heap-allocated stack (a `Vec`/`ArrayList` you push and pop), which trades a fixed stack budget for the much larger heap.\n\n**Testing:** whether you can connect a crash symptom back to the stack's fixed size and propose a concrete fix, not just recognize the term \"stack overflow.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "stack-vs-heap-allocation-iq3",
+      "question": "If Java hides the stack/heap distinction from the programmer, why do performance-sensitive JVM engineers still care about it?",
+      "answerMarkdown": "Because \"hidden from the programmer\" doesn't mean \"doesn't happen\" — it means the JIT decides instead of you, and you can still influence and verify that decision.\n\nEvery `new` in Java source reads as a heap allocation, but the JIT runs escape analysis and will stack-allocate (or fully eliminate) an object it can prove never escapes the method — never returned, never stored in a field, never passed somewhere that outlives the call. That's the difference between an allocation that costs real GC pressure and one that costs nothing at runtime, and it can flip based on small code changes: wrapping an object in a lambda that captures it, or storing it in a collection even briefly, can make it \"escape\" and force a real heap allocation where an equivalent-looking method didn't.\n\nThis is exactly why hot-path Java code avoids unnecessary object wrapping (boxing primitives, small helper objects passed around) in tight loops — not because the *syntax* looks like a heap allocation, but because it's much more likely to actually become one. Engineers profiling allocation-heavy code check JIT logs (`-XX:+PrintEscapeAnalysis` historically, or just allocation profiling) to confirm the JIT is doing what they expect rather than assuming it.\n\nSo the mental model still matters — it just moved from \"decide where this lives\" to \"write code the escape analyzer can actually prove is safe to stack-allocate.\"\n\n**Testing:** whether you understand escape analysis as a real, code-shape-sensitive optimization rather than assuming managed languages made the stack/heap distinction irrelevant.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production nuance"
+    },
+    {
+      "id": "stack-vs-heap-allocation-iq4",
+      "question": "You're reviewing a C code review and see a function that returns the address of a local variable. What do you flag, and how do you explain it to someone who says \"it worked when I tested it\"?",
+      "answerMarkdown": "I'd flag it as a dangling-pointer bug regardless of whether it crashed in their test, because the memory it points to is invalid the instant the function returns — the frame holding that local is popped and its stack space is free for reuse.\n\nThe \"but it worked\" reaction is exactly the trap: nothing has necessarily overwritten that stack slot yet, so reading the returned pointer immediately after the call often still shows the old value. It's undefined behavior, not a guarantee — the very next function call, interrupt handler, or even a different code path in the same function can reuse that exact stack address and stomp the value, and the failure shows up somewhere completely unrelated to the actual bug, which is what makes this class of bug expensive to debug in production.\n\nThe explanation that lands with people: \"working in your test\" and \"correct\" are different claims. The C compiler mostly won't stop you (some will warn, none are required to error), so this compiles fine, looks fine in a debugger for one frame, and is still wrong.\n\nThe fix: if the value needs to outlive the call, heap-allocate it and have the caller own the free, or return by value so the caller gets its own copy on its own frame — never return the address of anything declared local.\n\n**Testing:** whether you can distinguish \"appeared to work\" from \"is correct,\" a real interview signal for junior C/C++ candidates.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Code review"
+    }
+  ]
+}

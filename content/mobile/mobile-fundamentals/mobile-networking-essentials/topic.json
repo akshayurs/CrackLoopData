@@ -1,0 +1,174 @@
+{
+  "id": "mobile-networking-essentials",
+  "title": "Mobile Networking Essentials",
+  "area": "mobile",
+  "group": "mobile-fundamentals",
+  "order": 3,
+  "slug": "mobile-networking-essentials",
+  "summary": "A mobile radio has a cost model HTTP fundamentals don't cover. Learn why every request wakes hardware, how to pick an API style, and how to survive a flaky connection.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "mobile-networking-essentials-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A server making an HTTP call pays for bytes and latency. A mobile client making the same call pays for something extra: **waking up radio hardware that was asleep to save battery**. That single fact reshapes how you design a mobile client's networking layer.\n\nThis topic covers what's specific to being *on a phone* — the radio's cost model, caching to avoid redundant wakeups, surviving a connection that drops mid-request, and choosing an API style that fits a client with limited, expensive bandwidth. The HTTP and TCP fundamentals themselves live in Computer Networks; assume you already know how a [TCP connection](tcp-connection-management) is established and torn down.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "mobile-networking-essentials-s02",
+      "order": 2,
+      "sectionTitle": "Why mobile networking isn't just \"HTTP but on a phone\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three properties make a mobile client fundamentally different from a backend service calling another backend service: the connection is **unreliable** (subways, elevators, weak signal), the bandwidth is **variable and asymmetric** (a great connection can drop to none in seconds), and every request has a **battery cost beyond its bytes**, because the radio has to be powered up to send it.\n\nA backend-to-backend design assumes a stable, cheap, always-on link and optimizes for throughput. A mobile client has to assume the opposite by default: any request can fail mid-flight, connectivity can vanish between two calls in the same function, and \"just retry immediately\" can drain a battery for no benefit if the radio is the bottleneck, not the server.\n\nEvery decision in this topic — batching, caching, retry policy — traces back to designing for that unreliable, expensive link instead of a data-center one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "mobile-networking-essentials-s02-q1"
+      ]
+    },
+    {
+      "id": "mobile-networking-essentials-s03",
+      "order": 3,
+      "sectionTitle": "The radio state machine",
+      "subTitle": "Why a network call has a cost beyond bytes",
+      "type": "concept",
+      "markdown": "A cellular radio isn't simply \"on\" or \"off.\" It idles in a low-power state to save battery, and every network request has to first **ramp it up** to a high-power active state — a process that costs real, measurable energy and takes on the order of hundreds of milliseconds, independent of how small the actual request is.\n\nAfter the request completes, the radio doesn't drop back to idle immediately — it stays ramped up for a **tail time** (on the order of several seconds) in case another request comes soon, because ramping is expensive enough that it's cheaper to idle-hot than to ramp twice.\n\nThe consequence: a 1KB request and a 1MB request cost roughly the same in radio energy if they're isolated, because the ramp-up dominates. Ten separate 1KB requests spread over a minute cost far more battery than the same 10KB sent in one batch, because each one either pays a fresh ramp-up or extends the expensive tail.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "mobile-networking-essentials-s03-q1"
+      ]
+    },
+    {
+      "id": "mobile-networking-essentials-s04",
+      "order": 4,
+      "sectionTitle": "Batching and coalescing to save radio wakeups",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The direct consequence of the radio's cost model: **fewer, larger requests beat many small ones**, even at identical total bytes.\n\nCommon techniques: coalescing several independent calls that fire close together into one batched request (a list screen that would otherwise fetch each row's detail separately); debouncing rapid-fire triggers like a search-as-you-type field so it fires once after typing pauses instead of per keystroke; and deferring non-urgent calls (analytics, prefetch) to piggyback on a window when the radio is already active for something else.\n\nThe visual is a timeline: ten isolated 1KB spikes each with their own ramp-up-and-tail cost, versus the same 10KB sent as one spike — the second timeline's total \"radio-on\" area is a fraction of the first's, even though the bytes transferred are identical.\n\n![Ten isolated radio spikes compared to one batched request with the same total bytes and less radio-on time](assets/request-batching-radio.svg)",
+      "assets": [
+        {
+          "alt": "Ten isolated radio spikes compared to one batched request with the same total bytes and less radio-on time",
+          "path": "assets/request-batching-radio.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "mobile-networking-essentials-s05",
+      "order": 5,
+      "sectionTitle": "REST vs GraphQL vs gRPC for a mobile client",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Style | Mobile fit | Main strength | Main cost |\n|---|---|---|---|\n| **REST** | Good default | Simple, cacheable via HTTP semantics, easy to debug | Over/under-fetching without care; N+1 calls for nested data |\n| **GraphQL** | Strong for varied screens | Client asks for exactly the fields it needs in one round trip | Harder HTTP-level caching; more client/server complexity |\n| **gRPC** | Strong for high-frequency, low-latency | Binary payloads, HTTP/2 multiplexing, strict typed contracts | Weaker browser support (irrelevant for native), steeper tooling |\n\nGraphQL directly answers the batching problem from the last slide: instead of a list screen firing one REST call per item's details, one GraphQL query asks for exactly the nested fields needed across the whole list in a single round trip. gRPC's binary framing and multiplexed streams matter most for chatty, high-frequency mobile-to-backend traffic like real-time telemetry. REST remains the right default when your data shape is simple and HTTP-level caching (below) is doing real work for you.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "mobile-networking-essentials-s05-q1"
+      ]
+    },
+    {
+      "id": "mobile-networking-essentials-s06",
+      "order": 6,
+      "sectionTitle": "Client-side caching layers",
+      "subTitle": "Memory, disk, HTTP cache headers",
+      "type": "concept",
+      "markdown": "A mobile client should treat the network as the *last* resort, not the first, and that means stacking caches: an in-memory cache for the current session (fastest, gone on process death), a disk cache for data that should survive a relaunch (a local database or file cache, per the [storage options](local-storage-options) topic), and respecting the server's own **HTTP cache headers** (`Cache-Control`, `ETag`) so a request that hasn't changed doesn't even need a full response body — a conditional `304 Not Modified` still costs a radio wakeup, but far fewer bytes.\n\nThe read order that matters: check memory, then disk, then network — each miss falls through to the next, more expensive tier. Getting this wrong in either direction is common: skipping memory cache and hitting disk on every scroll frame stutters the UI; skipping disk cache and hitting network on every launch wastes both radio and time the disk cache would have served instantly.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "mobile-networking-essentials-s07",
+      "order": 7,
+      "sectionTitle": "Retry, backoff, and idempotency on flaky connections",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A failed mobile request is often not a real failure — it's a brief signal gap. **Retrying is correct**, but retrying safely requires two disciplines together.\n\nFirst, **exponential backoff with jitter**: retry after 1s, then ~2s, then ~4s, each with a small random offset, rather than immediately or on a fixed interval — an immediate retry into a still-congested or still-dropped connection just wastes another radio wakeup, and thousands of clients retrying on the exact same fixed schedule after an outage can synchronize into a retry storm that re-takes down the server that just recovered.\n\nSecond, **only retry idempotent operations safely by default** — a `GET` or a `PUT` with a full resource state is safe to repeat; a `POST` that creates a new order is not, because a retry after a response was lost in transit (not actually failed server-side) can create a duplicate. The fix for non-idempotent operations is an **idempotency key**: the client generates a unique ID per logical operation and sends it with every retry, so the server can recognize and no-op a duplicate.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "mobile-networking-essentials-s07-q1"
+      ]
+    },
+    {
+      "id": "mobile-networking-essentials-s08",
+      "order": 8,
+      "sectionTitle": "Detecting and reacting to connectivity changes",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Both platforms provide a connectivity observer (`ConnectivityManager`/`NWPathMonitor`-style APIs) that reports not just \"online or offline\" but connection *type* — WiFi, cellular, metered vs unmetered — which matters because a large sync you'd happily run on WiFi might be exactly wrong to run on a user's limited cellular data plan.\n\nThe pattern to build toward: queue work that needs connectivity rather than firing it blindly and handling the failure after the fact. When the observer reports connectivity restored, drain the queue; when it reports a change to a metered connection, defer large transfers until WiFi returns unless the user explicitly opted in.\n\nA subtlety worth knowing: \"connected\" from these APIs means *associated with a network*, not \"has working internet\" — a phone connected to a WiFi network with no internet access, or a captive portal login page, still reports connected. Don't treat that signal as a guarantee a request will succeed; treat it as a heuristic for when to *attempt* one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": []
+    },
+    {
+      "id": "mobile-networking-essentials-s09",
+      "order": 9,
+      "sectionTitle": "Certificate pinning",
+      "subTitle": "What it buys you and what it breaks",
+      "type": "concept",
+      "markdown": "Standard TLS trusts any certificate signed by a certificate authority in the device's trust store. **Certificate pinning** narrows that: the app hardcodes which specific certificate (or public key) it will accept for your backend, rejecting anything else — even a technically valid cert from a compromised or coerced CA.\n\nWhat it defends against: a man-in-the-middle attack using a rogue or mis-issued certificate, and inspection by corporate/government network proxies that install their own trusted root CA on a device.\n\nWhat it breaks: your **own** ability to rotate certificates without a coordinated app release — pin the wrong thing or forget to ship a backup pin before rotating, and you lock out every installed copy of your app from talking to your backend at once. It also breaks legitimate debugging proxies (useful for QA) unless you explicitly exempt debug builds. Most teams pin the CA's public key rather than the leaf certificate, and always ship at least one backup pin, specifically to survive a routine cert rotation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "mobile-networking-essentials-s09-q1"
+      ]
+    },
+    {
+      "id": "mobile-networking-essentials-s10",
+      "order": 10,
+      "sectionTitle": "One network call per list item instead of batching",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A list screen renders 20 rows, and each row's view model independently fetches its own detail data on bind. On a fast WiFi connection in the office this feels instant. On a real user's cellular connection, it's 20 separate radio wakeups (or 20 requests queued behind connection limits) for data that could have been one batched call or one GraphQL query.\n\nThis pattern — sometimes called client-side N+1, mirroring the classic database N+1 — is easy to miss in development because local testing rarely simulates real-world radio and latency conditions. It shows up in production as a list screen that's mysteriously slow to fully populate and burns noticeably more battery than screens with equivalent data volume.\n\nThe fix is almost always available at the API layer: a bulk-fetch endpoint, or restructuring the request so the list's initial payload already includes what each row needs, rather than each row asking again.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": []
+    },
+    {
+      "id": "mobile-networking-essentials-s11",
+      "order": 11,
+      "sectionTitle": "Retrying a non-idempotent request and double-charging a user",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A checkout screen sends a \"place order\" `POST`. The response is lost to a brief connectivity drop — the server actually processed it and charged the card — and a naive retry policy resends the same `POST`, creating a second order and a second charge.\n\nThis is the sharpest version of the idempotency problem because the failure is invisible to the client: from the app's point of view, the request simply timed out, indistinguishable from \"never reached the server.\" A retry policy that treats all requests as safely repeatable will occasionally double-execute exactly the operations where that's most costly to the user.\n\nThe fix isn't \"don't retry checkout\" — flaky connections are real and users shouldn't have to manually resubmit. It's generating an idempotency key client-side before the first attempt and sending it on every retry of that logical operation, so the server can recognize a duplicate and return the original result instead of executing twice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "mobile-networking-essentials-s11-q1"
+      ]
+    }
+  ]
+}

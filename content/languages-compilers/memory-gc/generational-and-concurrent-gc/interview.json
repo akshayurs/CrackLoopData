@@ -1,0 +1,37 @@
+{
+  "topicId": "generational-and-concurrent-gc",
+  "interviewQuestions": [
+    {
+      "id": "generational-and-concurrent-gc-iq1",
+      "question": "What's the difference between a minor GC and a major GC, and why does that split exist?",
+      "answerMarkdown": "The split exists because of an empirical observation: most objects die almost immediately after they're allocated, and the ones that survive tend to keep surviving. That's the weak generational hypothesis, and it means you don't need to scan the whole heap to find most of the garbage — you need to scan wherever the recently allocated objects are.\n\n**Minor GC** collects only the young generation, a small region every new allocation lands in. Because it's small and mostly garbage by the time it's collected, a minor GC is fast — typically single-digit milliseconds — and runs frequently. Objects that survive a few minor collections get promoted into the **old generation**.\n\n**Major (full) GC** collects the old generation, and its cost scales with however much long-lived data the application actually holds — no small-region trick applies there. This is the pause that shows up in a p99 latency graph as a real spike, because there's no hard bound on old-generation size the way there is on the young generation.\n\nThe practical upshot: almost all GC tuning conversations reduce to \"how do we make major GCs happen less often, and touch less data when they do\" — sizing the young generation so short-lived objects have time to die before promotion, and keeping the old generation's live set as lean as the application allows.\n\n**Testing:** whether you can connect the generational split to the empirical reason it exists, not just name the two GC types.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "generational-and-concurrent-gc-iq2",
+      "question": "Our p99 latency has 200ms GC pauses — what would you look at first?",
+      "answerMarkdown": "Measurement before any tuning flag — GC logs, not guesses, because the fix is completely different depending on what those logs show.\n\nFirst thing I pull: pause type and duration directly from the GC log (`-Xlog:gc` on the JVM or equivalent). 200ms squarely points at a major/full GC, not a minor one, since minor GCs are bounded by the small young generation and rarely get anywhere near that.\n\nSecond: old-generation occupancy trend across several major GCs. If it's climbing toward the heap ceiling over time, that's either a genuine logical leak — something reachable from a root that the application forgot it's still holding, a cache with no eviction, a listener that never unsubscribed — or **premature promotion**: a high-churn cache or similar pattern where objects survive just long enough to get promoted before they'd otherwise die, defeating the young generation's whole job.\n\nThird: if occupancy is stable and pauses are still long, the old generation's live set is simply large for what the current collector algorithm was designed to handle in one stop-the-world pass — that's a collector mismatch, not a leak, and the fix is switching to a concurrent, low-pause collector (G1, ZGC, Shenandoah) rather than tuning flags on the existing one.\n\nOnly after I know which of those three it is do I reach for an actual fix — eviction policy, young-gen sizing, or a collector swap.\n\n**Testing:** whether you diagnose before prescribing, and can name the specific signals (occupancy trend, promotion rate) rather than a generic \"tune the GC\" answer.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "generational-and-concurrent-gc-iq3",
+      "question": "Your team wants to switch from a throughput-optimized collector to ZGC to fix tail latency. What trade-off would you flag before signing off?",
+      "answerMarkdown": "That \"low pause\" and \"low cost\" are different claims, and ZGC (like Shenandoah) buys its near-zero pause by doing far more work concurrently — which shows up as real CPU and memory overhead the team needs to budget for, not eliminate.\n\nConcretely: concurrent marking still has to trace the whole live set, it just does it on background threads racing the mutator instead of during a pause, and every mutator thread pays a small but constant cost on relevant pointer writes (barriers) to keep that trace correct while the program keeps running. On a container with a tight CPU limit, that background collector work competes directly with request-handling threads for cores — so total throughput can measurably drop even though no single request sees a visible pause. Memory overhead is real too, since some low-pause collectors need extra headroom to support concurrent compaction safely.\n\nSo the honest framing for the team: this trade makes sense if the workload is latency-sensitive enough that a 200ms tail spike is worse than a few percent lower steady-state throughput — which is true for most request-serving APIs — but it's not a free upgrade, and I'd want a load test on the actual production CPU limits before rolling it out broadly, not just a staging benchmark with headroom the prod containers don't have.\n\n**Testing:** whether you understand concurrent GC's cost model well enough to flag a real trade-off instead of treating a collector switch as an unconditional win.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "generational-and-concurrent-gc-iq4",
+      "question": "How would you explain a write barrier to someone who's never heard the term, and why does it matter for both generational and concurrent GC?",
+      "answerMarkdown": "A write barrier is a small piece of extra code the compiler inserts on certain pointer writes — not something you write yourself, and usually just a few instructions — that records information the collector needs later, because splitting the heap or letting the mutator run alongside the collector both break an assumption a simple tracer relies on.\n\nIn a **generational** collector, the assumption that breaks is: a minor GC only traces the young generation, but an old-generation object can hold a pointer into it. Without recording that cross-generational write, the minor GC would have no way to know the young object is reachable, and could free something still live. The write barrier logs \"this old object now points into young\" so the minor GC treats it as an extra root.\n\nIn a **concurrent** collector, the assumption that breaks is: the pointer graph stays still during the trace. It doesn't — the mutator is actively running. A write barrier here (often paired with tricolor marking — white/grey/black) catches a mutator write that would otherwise let a fully-traced (\"black\") object gain a reference to something not yet traced (\"white\"), which without the barrier could get incorrectly collected mid-pass.\n\nBoth cases are the same underlying move: give up a clean, static assumption (single region, frozen mutator) for speed, and pay for it with a small, constant tax on every relevant write instead of a large periodic one.\n\n**Testing:** whether you can explain the mechanism concretely enough to show you understand *why* it's needed, not just that the term exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanism"
+    }
+  ]
+}

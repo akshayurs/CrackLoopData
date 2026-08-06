@@ -1,0 +1,159 @@
+{
+  "id": "transform-patterns-dbt",
+  "title": "Transformation Patterns & dbt-Style Modeling",
+  "area": "data-engineering",
+  "group": "batch-etl",
+  "order": 4,
+  "slug": "transform-patterns-dbt",
+  "summary": "Modeling transformations as a version-controlled, tested DAG of SQL inside the warehouse, instead of a pile of ad hoc scripts nobody can safely change.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "transform-patterns-dbt-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Once raw data lands in a warehouse (the ELT pattern from earlier in this group), the transformation step is almost always **SQL**. The question dbt answers is: how do you write hundreds of interdependent SQL transforms without it turning into an unmaintainable pile of scripts nobody trusts?\n\nThe answer is treating transformation like software: a **DAG** of named, testable, documented models, checked into version control, with dependencies declared rather than guessed. dbt (data build tool) is the dominant implementation of this idea, though the pattern itself — SQL as a dependency graph — matters more than the specific tool.\n\nThis is the layer most analytics engineers and a large share of data engineers spend their day in, and it's a near-guaranteed interview topic for any warehouse-centric role.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "transform-patterns-dbt-s02",
+      "order": 2,
+      "sectionTitle": "Transformation as a DAG of SQL models",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In this pattern, each transformation step is a **model** — a single `SELECT` statement, saved as a `.sql` file, that dbt compiles and runs as a `CREATE TABLE`/`CREATE VIEW` (or an insert/merge for incremental models). A model can reference other models by name (`{{ ref('stg_orders') }}`), and dbt uses those references to build a dependency graph automatically — you never write \"run this after that\" scheduling logic by hand.\n\nThe payoff over ad hoc scripts: dependencies are declared in the code itself, so dbt can compute the correct run order, parallelize independent branches, and — critically — tell you exactly which downstream models are affected before you change an upstream one, because the graph already knows.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "transform-patterns-dbt-s02-q1"
+      ]
+    },
+    {
+      "id": "transform-patterns-dbt-s03",
+      "order": 3,
+      "sectionTitle": "A model DAG",
+      "subTitle": "Sources → staging → intermediate → marts",
+      "type": "diagram",
+      "markdown": "![dbt layered DAG: sources to staging to intermediate to marts](assets/dbt-layers.svg)\n\nThis mirrors the raw/staging/curated layering from [Pipeline Architecture Patterns](pipeline-architecture) almost exactly — staging models clean without changing meaning, intermediate models combine, and marts are the final business-shaped output. The naming convention (`stg_`, `int_`, `fct_`/`dim_`) is a dbt community convention, not a hard requirement, but it's worth recognizing on sight.",
+      "assets": [
+        {
+          "alt": "dbt layered DAG: sources to staging to intermediate to marts",
+          "path": "assets/dbt-layers.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "transform-patterns-dbt-s04",
+      "order": 4,
+      "sectionTitle": "Materializations",
+      "subTitle": "View vs table vs incremental vs ephemeral, and the cost/freshness trade-off",
+      "type": "concept",
+      "markdown": "A **materialization** is how dbt physically builds a model, and the choice trades compute cost against freshness and query speed:\n\n- **View** — a SQL view, no data physically stored. Always reflects the latest upstream data, costs nothing to \"build,\" but every query against it re-runs the underlying SQL, which can be slow for complex models.\n- **Table** — a full `CREATE TABLE AS SELECT`, rebuilt completely on every run. Fast to query, but rebuilding a huge table from scratch every run gets expensive as data grows.\n- **Incremental** — only processes new or changed rows since the last run, merging them into an existing table. Fast to run and query, but more complex to write correctly (this is where idempotency, covered next in this group, becomes essential).\n- **Ephemeral** — not built as a database object at all; inlined as a subquery into whatever references it. Useful for a small, reusable snippet that doesn't deserve its own table.\n\nThe practical default: view for small/cheap models, table for models queried often that don't need incremental logic, incremental once the underlying data is large enough that a full rebuild is genuinely expensive.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "transform-patterns-dbt-s04-q1"
+      ]
+    },
+    {
+      "id": "transform-patterns-dbt-s05",
+      "order": 5,
+      "sectionTitle": "An incremental model with a merge strategy",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A dbt incremental model, showing the pattern that only processes new/changed rows:\n\n```sql\n-- models/fct_orders.sql\n{{\n  config(\n    materialized='incremental',\n    unique_key='order_id',\n    incremental_strategy='merge'\n  )\n}}\n\nSELECT\n  order_id,\n  customer_id,\n  order_total,\n  updated_at\nFROM {{ ref('stg_orders') }}\n\n{% if is_incremental() %}\n  -- only process rows newer than what's already in this table\n  WHERE updated_at > (SELECT max(updated_at) FROM {{ this }})\n{% endif %}\n```\n\n`is_incremental()` is false on the first run (or a full-refresh), so it builds the whole table. On every subsequent run, it's true, and the model only selects rows newer than what's already there — then dbt merges those rows into the existing table using `order_id` as the unique key, so a re-processed row updates in place rather than duplicating.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "transform-patterns-dbt-s06",
+      "order": 6,
+      "sectionTitle": "Testing transformations",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "dbt treats data quality checks as first-class **tests**, run as part of the same workflow as the transforms themselves:\n\n- **Generic tests** — `not_null`, `unique`, `relationships` (a foreign key actually exists in the referenced table), `accepted_values` (a column only contains an expected set of values). Declared in YAML, applied to any column in seconds.\n- **Custom/singular tests** — a `.sql` file encoding a business rule specific to your data (\"an order's line items should always sum to its total\"), which fails the run if any row violates it.\n\nRunning these on every deploy, and ideally in CI before a change merges, is what turns \"we think the transform is correct\" into \"we verified it,\" and it's the difference between finding a broken assumption in a pull request versus finding it because a VP asked why a number looks wrong.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "transform-patterns-dbt-s06-q1"
+      ]
+    },
+    {
+      "id": "transform-patterns-dbt-s07",
+      "order": 7,
+      "sectionTitle": "Documentation and lineage as a byproduct",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because every model's dependencies are declared in code (`ref()` calls), dbt can generate a full **lineage graph** — which raw sources feed which staging models, which feed which marts — automatically, without anyone maintaining a separate diagram that inevitably goes stale.\n\nDocumentation follows the same pattern: descriptions for models and columns live in YAML next to the SQL, and `dbt docs generate` builds a searchable site from them. The key property: because docs live beside the code that implements them, a PR that changes a model's logic is the natural place to also update its description — documentation decays far slower when it's not a separate system someone has to remember to visit.\n\nThis is the practical foundation under \"data as a product\" from earlier in this curriculum: a consumer can actually look up what a table means and where it comes from, instead of asking in a chat channel and hoping someone remembers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "transform-patterns-dbt-s08",
+      "order": 8,
+      "sectionTitle": "An incremental model drifting from a full refresh",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A subtle, common bug: an incremental model's logic quietly diverges from what a `--full-refresh` would produce, because incremental and full-build code paths aren't actually identical — a filter or edge case handled one way in the incremental branch and differently (or not at all) in the full-build branch.\n\nConcretely: an incremental model that only ever inserts new rows, with no logic to handle a source row being *deleted*, will keep stale rows forever incrementally, while a full refresh (which rebuilds from scratch) would naturally exclude them. Nobody notices until someone runs a full refresh for an unrelated reason and the row counts don't match, with no clear explanation why.\n\nThe defense: periodically run a full refresh in a non-production environment and diff the row counts and key aggregates against the incremental table's current state. Divergence is a signal the incremental logic has a gap — treat it as a bug to fix, not a discrepancy to shrug off, because it means the two code paths have quietly stopped agreeing on what \"correct\" looks like.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "transform-patterns-dbt-s08-q1"
+      ]
+    },
+    {
+      "id": "transform-patterns-dbt-s09",
+      "order": 9,
+      "sectionTitle": "Transform-in-warehouse vs transform-in-cluster",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | SQL/dbt in the warehouse | Spark in a cluster |\n|---|---|---|\n| **Compute location** | Warehouse's own engine (push-down) | Separate distributed cluster |\n| **Language** | SQL (with Jinja templating in dbt) | Python/Scala, with SQL support |\n| **Best fit** | Joins, aggregations, standard business modeling | Custom logic, ML feature engineering, data not yet in the warehouse |\n| **Operational footprint** | One fewer system — reuses warehouse compute | A cluster to provision, size, and monitor separately |\n\nThe default for most ELT-style transformation work is SQL/dbt, precisely because it needs no separate infrastructure and most business logic is expressible as joins and aggregations. Spark earns its place specifically when the logic genuinely can't be SQL, or the data isn't warehouse-resident yet — this is the same push-down-compute logic from earlier in this group, applied concretely to tool choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "transform-patterns-dbt-s09-q1"
+      ]
+    },
+    {
+      "id": "transform-patterns-dbt-s10",
+      "order": 10,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This topic's DAG-of-SQL pattern is the concrete mechanism most ELT pipelines use to go from raw data to curated marts. It also sets up the next two topics in this group directly: **workflow orchestration**, which schedules dbt runs alongside ingestion and everything else in the pipeline, and **idempotency**, which is exactly the property an incremental model's merge logic has to get right to be safely re-runnable.\n\nThe interview-ready summary: dbt (or an equivalent) turns transformation into software — version-controlled, tested, documented, with dependencies the tool computes rather than a human remembering. That's the actual value being asked about when someone says \"we use dbt,\" not the specific product name.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

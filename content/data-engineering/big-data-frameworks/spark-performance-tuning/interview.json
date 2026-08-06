@@ -1,0 +1,37 @@
+{
+  "topicId": "spark-performance-tuning",
+  "interviewQuestions": [
+    {
+      "id": "spark-performance-tuning-iq1",
+      "question": "Walk me through your process when someone tells you the Spark job is slow?",
+      "answerMarkdown": "I don't touch configuration first — I open the Spark UI and let it tell me what's actually happening. First, which stage takes the longest wall-clock time. Within that stage, I check shuffle read/write size relative to input size: large relative shuffle means it's shuffle-bound, and I'd check the physical plan next to see if the join or scan strategy that ran matches what I'd expect.\n\nSecond, I check the task duration distribution for that stage. A handful of tasks running far longer than the median is skew, not a capacity problem — and skew has a specific fix (salting, isolating the key, or verifying adaptive query execution's skew handling actually triggered), not \"add more machines.\"\n\nThird, I check spilled bytes per stage. Nonzero and growing spill means a task's memory allocation is undersized for its data, which points at executor memory sizing or repartitioning, not overall cluster size.\n\nOnly after ruling out shuffle, skew, and spill do I consider the job genuinely compute- or capacity-bound, where adding executors is the right call. Reversing that order — reaching for more machines first — is the single most common wasted effort I see in Spark tuning.\n\n**Testing:** whether you have an actual diagnostic sequence, not a list of tuning knobs you'd try at random.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "spark-performance-tuning-iq2",
+      "question": "What does Adaptive Query Execution change about how much manual tuning a Spark job needs?",
+      "answerMarkdown": "AQE lets Spark revise its plan mid-execution using real, observed data statistics instead of committing entirely to estimates made before any data was touched. Concretely, it can switch a shuffle join to a broadcast join if the actual shuffled size turns out smaller than expected, coalesce too-small shuffle partitions automatically, and detect and split a skewed partition without me writing salting logic by hand.\n\nThat reduces, but doesn't eliminate, manual tuning. I still verify it worked — checking `.explain()` for the strategy that actually ran, or the UI for whether AQE's skew handling fired — rather than assuming it caught every case. AQE's skew detection has thresholds and triggers of its own; a moderate skew might not trigger automatic handling while still being bad enough to hurt a job's runtime, so I wouldn't stop checking for skew manually just because AQE is enabled.\n\nI'd frame it to a team as: AQE handles the common, clean cases well and is worth having on by default, but understanding shuffle, skew, and join strategy is still necessary to diagnose the cases AQE doesn't catch, or to explain why AQE's automatic fix didn't apply here.\n\n**Testing:** whether you see AQE as a real but partial safety net, not a reason to stop understanding the underlying mechanics.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Tooling"
+    },
+    {
+      "id": "spark-performance-tuning-iq3",
+      "question": "A stage shows growing spilled bytes across recent runs, and someone proposes just adding more executors. Do you agree?",
+      "answerMarkdown": "Not without checking first, and probably not as the primary fix even after checking. Spill means a task's allotted memory is undersized for the data it's handling — Spark writes the overflow to disk to keep going rather than crash, and that disk I/O is the actual slowdown. Adding more executors increases parallelism (more tasks can run at once) but doesn't necessarily increase the memory available to any *individual* task, so if the per-task data volume stays the same, each task can still spill exactly as much as before, just with more of them running in parallel — net job time might improve somewhat from added parallelism, but the underlying spill problem is untouched.\n\nWhat actually addresses spill is either giving each executor more memory (so each task's allotted share grows) or repartitioning to shrink how much data lands on each task in the first place — more, smaller partitions spread the same total data across more tasks, each with a smaller working set.\n\nI'd push back specifically on \"more executors\" as the first move, and propose checking whether the fix should be more memory per executor or more partitions, based on whether the cluster already has spare capacity to add executors to versus whether it needs the existing capacity reshaped.\n\n**Testing:** whether you can distinguish \"more parallelism\" from \"more memory per unit of work,\" which are not the same fix for a spill problem.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "spark-performance-tuning-iq4",
+      "question": "How would you decide between few large executors and many small executors for a given Spark workload?",
+      "answerMarkdown": "I'd start from what the workload actually needs rather than a fixed rule. Few large executors mean less per-JVM overhead and simpler coordination, but a single executor failure loses more in-flight work, and very large executors can hit diminishing returns from garbage-collection contention once core count per executor gets too high — a common practical ceiling is around 4-5 cores per executor before that contention starts dominating.\n\nMany small executors are more resilient to any single failure and spread GC pressure across more, smaller heaps, but you pay more total JVM startup and coordination overhead, and very small executors can struggle if a task's working set (say, one partition during a shuffle) doesn't comfortably fit in that executor's smaller memory allocation.\n\nConcretely, for a job that does heavy caching and large joins, I'd lean toward moderately-sized executors with enough memory per executor to hold a meaningfully large partition, rather than many tiny ones that would spill constantly. For a job that's mostly narrow transformations with light memory needs, many smaller executors give better fault isolation with little downside. Either way, I'd treat my starting configuration as a hypothesis to measure and adjust, not a final answer — actual shuffle size and spill behavior from a real run tells you more than a formula does.\n\n**Testing:** whether you can reason about this trade-off situationally rather than reciting a single \"best practice\" number as if it applies universally.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

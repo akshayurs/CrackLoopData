@@ -1,0 +1,37 @@
+{
+  "topicId": "the-jvm-deep-dive",
+  "interviewQuestions": [
+    {
+      "id": "the-jvm-deep-dive-iq1",
+      "question": "Explain what happens from `java Main` to your first line of output.",
+      "answerMarkdown": "Five real phases happen before your `println` shows up. First, the native `java` launcher starts the JVM process, which sets up its heap regions, thread infrastructure, and JIT compiler threads. Second, the bootstrap classloader loads core JDK classes (`java.lang.Object` and friends), then the application classloader loads your `Main` class — each delegating up the hierarchy first so you can't accidentally shadow a core class.\n\nThird, each class that gets used goes through three linking phases: verify (bytecode safety checks), prepare (default values for static fields), resolve (turning symbolic references into direct ones), followed by initialization — running static initializers in source order — the first time the class is *actively* used, not just referenced.\n\nFourth, `main` starts executing, interpreted, at tier 0 — HotSpot doesn't compile anything before it has evidence a method is worth compiling. Fifth, if any part of your code runs enough (invocation or loop back-edge counters crossing a threshold), the tiered JIT promotes it through C1's sub-tiers and, if it stays hot, escalates to C2 using the profile data C1 collected.\n\nThe honest short version: startup is dominated by classloading and interpretation, and by the time your program has been running for a few seconds, hot paths have often already reached native speed.\n\n**Testing:** whether you can walk the full pipeline in order, or only name \"the JVM interprets bytecode\" and stop there.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "the-jvm-deep-dive-iq2",
+      "question": "What's the difference between a `Java heap space` OutOfMemoryError and a `Metaspace` OutOfMemoryError, and how would your fix differ?",
+      "answerMarkdown": "They're exhaustion of two entirely separate memory regions, and treating them the same wastes debugging time. Heap space holds the actual objects your program creates — every `new`, every collection entry, every cached value. Metaspace holds class *metadata* — bytecode, the constant pool, field and method descriptors — for every loaded class.\n\nFor heap space, I'd look for a memory leak first (objects that logically should be garbage but are still referenced — often via a cache with no eviction, or a listener registered and never removed), then consider `-Xmx` tuning only once I've ruled out an actual leak. Throwing more heap at a genuine leak just delays the crash.\n\nFor metaspace, the almost-always cause in production is a **classloader leak**: something is still holding a reference to an old classloader — a background thread that outlived a redeploy, a static field in a shared library, a JDBC driver registered globally and never deregistered — which keeps that classloader's entire class graph reachable, so none of those classes' metadata can ever be reclaimed. I'd pull a heap dump and trace what's rooting the old classloader, not just bump `-XX:MaxMetaspaceSize`.\n\nThe key point I'd make explicit: these aren't the same problem with two names — confusing them means applying the wrong fix and the error recurring.\n\n**Testing:** whether you understand these as distinct memory regions with distinct root causes, or treat 'OutOfMemoryError' as one generic bucket.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "the-jvm-deep-dive-iq3",
+      "question": "How does tiered compilation actually decide a method is worth compiling, and why track two separate counters?",
+      "answerMarkdown": "HotSpot tracks an invocation counter (calls) and a back-edge counter (loop iterations, incremented on every backward jump to a loop start) independently per method, and crossing a threshold on either one — not both — makes it compilation-eligible.\n\nThe reason they're separate: a method called once from `main` but containing a million-iteration loop needs the back-edge counter to fire, since the invocation counter would sit at 1 forever. Conversely, a tiny method called ten million times from all over the codebase needs the invocation counter, since it may have no loop at all. Tracking only one would miss one of these two very real hot-code shapes.\n\nOnce a threshold fires, the method escalates through HotSpot's sub-tiers — interpreter, C1 unprofiled, C1 lightly profiled, C1 fully profiled, C2 — each stage cheaper to reach and gathering better data for the next. Counters also decay over time (periodically halved), so a method that was briefly hot during startup and then goes cold doesn't stay permanently flagged as a compile candidate, wasting compiler-thread time on code nobody's calling anymore.\n\nI'd frame the design goal as: compile effort should track *actual, sustained* hotness, measured two different ways because hot code comes in two different shapes.\n\n**Testing:** whether you know the mechanism has two independent triggers and can explain why one alone wouldn't suffice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "the-jvm-deep-dive-iq4",
+      "question": "A junior engineer says allocating small helper objects inside a hot loop is always wasteful and should be avoided. How would you respond?",
+      "answerMarkdown": "I'd say it's a reasonable default instinct but not universally true on the JVM, because of **escape analysis** — one of C2's aggressive optimizations. If C2 can prove an allocated object never escapes the method (never stored elsewhere, returned, or passed somewhere unanalyzable), it can skip heap allocation entirely and keep the object's fields as plain local variables — scalar replacement — or elide a lock on it if it's provably never shared.\n\nSo a small object allocated and discarded entirely within a hot loop body sometimes costs *nothing* once C2 has compiled that method, because there's no allocation left in the compiled code at all. This explains a real class of \"why is this allocation-heavy version just as fast\" surprises people run into.\n\nThat said, I wouldn't tell them to rely on it. Escape analysis is not guaranteed — any code path that lets the reference leak (storing it in a field, passing it to a method C2 can't fully analyze, even certain reflection use) defeats it silently, with no compiler warning. So my actual guidance: write the clear version first, and if allocation shows up as a real cost in profiling, verify with `-XX:+PrintEscapeAnalysis` or JIT-aware profiling rather than either avoiding allocation reflexively or assuming escape analysis will always save you.\n\n**Testing:** whether you know a specific, real JIT optimization by name and can also state its limits, rather than either blanket rule (\"always avoid allocation\" or \"the JIT handles it\").",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

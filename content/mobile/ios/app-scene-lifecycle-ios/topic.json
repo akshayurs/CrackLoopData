@@ -1,0 +1,161 @@
+{
+  "id": "app-scene-lifecycle-ios",
+  "title": "App & Scene Lifecycle on iOS",
+  "area": "mobile",
+  "group": "ios",
+  "order": 1,
+  "slug": "app-scene-lifecycle-ios",
+  "summary": "UIKit's concrete app-state delegate callbacks and multi-scene/multi-window handling — the five states, who owns them, and the two mistakes that get apps rejected or killed.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "app-scene-lifecycle-ios-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "iOS doesn't let your app run forever in the background the way a server process does. The OS is the landlord: it decides when your app is on screen, when it's frozen in memory, and when it gets evicted entirely to free RAM for whatever the user opened next.\n\nThe **app lifecycle** is the set of states iOS moves your process through, and the **delegate callbacks** are the only hooks you get to react — save data before you're suspended, stop a network call before you're killed, resume smoothly when the user comes back.\n\nGet this wrong and the failure mode is invisible until it isn't: a user switches apps mid-edit, comes back, and their work is gone. This topic is the exact state machine and the two callbacks candidates misuse most.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s02",
+      "order": 2,
+      "sectionTitle": "The five app states",
+      "subTitle": "not running → suspended",
+      "type": "concept",
+      "markdown": "UIKit tracks your process in exactly five states:\n\n- **Not running** — never launched, or terminated by the system or user.\n- **Inactive** — running in the foreground but not receiving events (a phone call banner just dropped in, or you're mid-transition).\n- **Active** — foreground, receiving events, the normal running state.\n- **Background** — off screen but still executing code, on borrowed time.\n- **Suspended** — off screen, frozen in memory, executing nothing. The OS can evict a suspended app at any moment with zero warning.\n\nThe transitions matter more than the states themselves: every app spends most of its life cycling **active → inactive → background → suspended** and back, not living in one state.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "app-scene-lifecycle-ios-s02-q1"
+      ]
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s03",
+      "order": 3,
+      "sectionTitle": "The state machine and its callbacks",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Each transition fires a specific delegate method, and the method name literally tells you what's about to happen:\n\n- Launch → `applicationDidFinishLaunching`\n- Active → Inactive → `applicationWillResignActive`\n- Inactive → Background → `applicationDidEnterBackground`\n- Background → Suspended → nothing fires; the OS just freezes you\n- Suspended/Background → Active → `applicationWillEnterForeground` then `applicationDidBecomeActive`\n\nThe naming pattern (`will`/`did`) is a promise about ordering: `will` callbacks run *before* the state changes and can still touch UI; `did` callbacks confirm the change already happened.\n\n![App and Scene lifecycle state machine with delegate callbacks labeling each transition](assets/app-scene-state-machine.svg)",
+      "assets": [
+        {
+          "alt": "App and Scene lifecycle state machine with delegate callbacks labeling each transition",
+          "path": "assets/app-scene-state-machine.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "app-scene-lifecycle-ios-s03-q1"
+      ]
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s04",
+      "order": 4,
+      "sectionTitle": "AppDelegate vs SceneDelegate",
+      "subTitle": "who owns what since multi-window",
+      "type": "compare",
+      "markdown": "iOS 13 split responsibilities that used to all live in `AppDelegate`, because iPad supports multiple windows of the same app running at once — one `AppDelegate` per process, but one `SceneDelegate` **per window**.\n\n| Owns | AppDelegate | SceneDelegate |\n|---|---|---|\n| Process launch, push registration | Yes | No |\n| A single window's UI lifecycle | No | Yes |\n| Per-scene state (foreground/background) | No | Yes (`sceneDidBecomeActive`, etc.) |\n| Shared services (analytics, DB setup) | Yes | No |\n\nThe process-level callbacks (`applicationDidFinishLaunching`) still exist and still matter for one-time setup. But foreground/background transitions on a multi-window iPad app happen **per scene** — one window can background while another stays active, so the old single-callback mental model from iOS 12 and earlier no longer describes reality.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "app-scene-lifecycle-ios-s04-q1"
+      ]
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s05",
+      "order": 5,
+      "sectionTitle": "Saving state before background",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "`applicationDidEnterBackground` (or its scene equivalent) is your last reliable checkpoint before iOS may suspend or kill you without further notice. Do the save synchronously and fast — you get seconds, not minutes.\n\n```swift\nfunc applicationDidEnterBackground(_ application: UIApplication) {\n    // Flush anything the user would be upset to lose.\n    draftStore.saveSynchronously()\n\n    // Persist enough to restore the screen the user was on.\n    UserDefaults.standard.set(currentScreenID, forKey: \"lastScreen\")\n}\n```\n\nThe key discipline: don't defer this to a background task expecting more time later. Treat `didEnterBackground` as your only guaranteed shot — anything async you kick off here can be cut short.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s06",
+      "order": 6,
+      "sectionTitle": "Background execution time",
+      "subTitle": "the seconds you get before suspension",
+      "type": "concept",
+      "markdown": "Entering the background does not mean instant suspension. iOS grants a **background execution window** — historically around 30 seconds via `beginBackgroundTask(expirationHandler:)` — to finish something short: flush a cache, upload a pending write, close a file handle cleanly.\n\nRun past that window and the system doesn't ask nicely — it terminates the process. Register an expiration handler and actually cancel your work inside it; a background task that never calls `endBackgroundTask` looks like a hang to the OS and gets your app penalized in future scheduling.\n\nFor real ongoing background work — location tracking, VoIP, audio — you need a declared **background mode** (`UIBackgroundModes` in Info.plist), which is a different, longer-lived mechanism than the expiring grace window every app gets for free.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "app-scene-lifecycle-ios-s06-q1"
+      ]
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s07",
+      "order": 7,
+      "sectionTitle": "State restoration across termination",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A suspended app can be silently killed by the OS to reclaim memory — the user never sees a crash, they just re-open the app later and it's cold-launched. **State restoration** is what makes that invisible: you persist enough to reconstruct the screen the user was on, and restore it on the next launch instead of dropping them at the home screen.\n\nUIKit's scene-based restoration works off an `NSUserActivity` you keep updated as the user navigates, plus your own persisted data (the draft text, the scroll position, the selected tab). On relaunch, `scene(_:willConnectTo:options:)` receives that activity and you rebuild the UI from it.\n\nThe distinction that matters: state restoration reconstructs **UI and navigation position**; it is not a substitute for actually persisting the user's data, which is a separate, more durable store.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s08",
+      "order": 8,
+      "sectionTitle": "Pitfall: trusting applicationWillTerminate",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A recurring bug: doing critical cleanup — a final save, closing a database connection — in `applicationWillTerminate` and assuming it always runs.\n\nIt doesn't. `applicationWillTerminate` only fires when the app is terminated **while still running in the foreground or a background task**. The far more common death is a **suspended** app getting silently evicted for memory pressure, or the device rebooting — neither of which calls `applicationWillTerminate` at all.\n\nThe fix: never treat termination as your save point. Save incrementally as state changes, and treat `applicationDidEnterBackground` as the last checkpoint you can rely on. If your data integrity depends on a callback that Apple's own docs say is \"not always called,\" that's the bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "app-scene-lifecycle-ios-s08-q1"
+      ]
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: unbounded background work",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The second recurring bug: kicking off a long task — a large upload, an image-processing loop — from `applicationDidEnterBackground` with no time budget in mind.\n\nWithout a `beginBackgroundTask` wrapper and expiration handler, that work simply gets cut off mid-execution when the grace window closes, often leaving data in a half-written state (a file truncated, a request sent but never marked complete). Worse, some teams discover this only in production, because in Xcode's debugger the process stays alive indefinitely and the bug never reproduces locally.\n\nThe fix is to size the work to the budget: chunk it, checkpoint progress so a resume picks up where it left off, and for anything that can't fit in seconds, hand it to `BGTaskScheduler` instead of fighting the foreground-background window.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "app-scene-lifecycle-ios-s09-q1"
+      ]
+    },
+    {
+      "id": "app-scene-lifecycle-ios-s10",
+      "order": 10,
+      "sectionTitle": "The senior nuance: multi-scene reality",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer stops at \"active, inactive, background, suspended.\" A senior answer accounts for **multiple scenes existing independently**: on iPad, one window can be active while a second sits backgrounded, and your shared state (a singleton cache, a database connection pool) has to tolerate being accessed from a scene that just resumed while another is mid-teardown.\n\nThe practical consequence: don't gate app-wide setup (analytics init, DB migrations) behind a scene-level callback — that runs once per window, not once per process. And when testing lifecycle bugs, don't just background/foreground the app in the simulator; on a real device, lock the screen, take a call, and let the app sit backgrounded for several minutes to actually hit suspension and eviction, which the simulator doesn't faithfully reproduce.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

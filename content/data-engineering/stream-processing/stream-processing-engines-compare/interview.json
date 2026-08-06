@@ -1,0 +1,37 @@
+{
+  "topicId": "stream-processing-engines-compare",
+  "interviewQuestions": [
+    {
+      "id": "stream-processing-engines-compare-iq1",
+      "question": "What's the real trade-off between micro-batch and true per-event streaming engines?",
+      "answerMarkdown": "The core trade is latency floor versus fault-tolerance simplicity. A micro-batch engine slices the stream into small, fixed-interval batches and processes each one like a tiny batch job — its latency floor is bounded below by that interval, since an event genuinely hasn't been processed until its batch runs, but it inherits a batch engine's simpler, well-proven recovery model: if a batch fails, just rerun that batch. A true per-event engine processes each record immediately with no batch boundary, pushing the latency floor down to single-digit milliseconds, but its recovery has to rely on finer-grained checkpointing and resuming mid-stream from an exact offset, which is a more sophisticated mechanism to get right.\n\nThroughput used to favor micro-batch more clearly — batching amortizes per-record overhead — but that gap has narrowed a lot as continuous engines have matured; it's a smaller factor today than the latency floor difference, which stays closer to fundamental.\n\nSo the real decision question is: what's the actual latency budget? If it's hundreds of milliseconds to seconds, micro-batch gets you there with a simpler, more mature fault-tolerance story. If it's tens of milliseconds or less, you need a continuous engine and have to accept its more involved recovery model.\n\n**Testing:** whether you can name the trade-off precisely — latency floor vs. recovery model — rather than just listing engine names.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "stream-processing-engines-compare-iq2",
+      "question": "How would you decide whether a new streaming requirement actually needs a dedicated streaming engine at all, versus a scheduled batch job?",
+      "answerMarkdown": "I'd start by getting a concrete number for the latency budget, not a vibe. Ask: what breaks, and how, if this result is 10 minutes stale instead of instant? A lot of 'we need real-time' requests, when pushed on, actually mean 'we need this reasonably fresh, on the order of minutes to hours' — which a scheduled batch job running every 15 minutes or hourly satisfies completely, at a fraction of the operational cost of always-on streaming infrastructure.\n\nIf the answer reveals a genuinely tight budget — a fraud check that has to complete before a checkout page times out, an alert that's useless five minutes late — then streaming is actually warranted, and I'd move to deciding between micro-batch and per-event based on exactly how tight that number is.\n\nThe mistake I actively watch for is choosing streaming because it's the more sophisticated-sounding architecture, not because the requirement demands it. Streaming infrastructure has real, ongoing operational cost — checkpoint tuning, always-on compute, more subtle failure modes than 'the batch job didn't run, rerun it' — and that cost should be justified by an actual latency number, not assumed as a default for anything called 'real-time.'\n\n**Testing:** whether you push back on an ambiguous 'real-time' requirement and ground the architecture decision in a concrete number.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design judgment"
+    },
+    {
+      "id": "stream-processing-engines-compare-iq3",
+      "question": "Your team already runs Spark for batch ETL. A new requirement needs near-real-time processing at a few-hundred-millisecond latency budget. Would you reach for Spark's streaming mode or a dedicated continuous engine?",
+      "answerMarkdown": "I'd check the actual number against Spark's micro-batch model before assuming ecosystem fit wins. A few-hundred-millisecond budget is right at or below the typical batch-interval floor for a micro-batch engine — Spark's streaming mode processes in small batches on an interval, and getting that interval down to genuinely match a 200-300ms end-to-end budget, including the processing time inside each batch, is tight but not always impossible depending on the exact workload and cluster.\n\nSo this is a real trade-off, not an obvious call either way. In favor of staying on Spark: the team already knows the framework, the batch and streaming APIs share a programming model, and there's no new cluster to operate or new skills to build. Against it: if the batch interval genuinely can't be pushed low enough to hit the budget reliably, no amount of familiarity closes that gap — a dedicated continuous engine's fundamentally lower latency floor becomes the deciding factor.\n\nI'd actually benchmark rather than guess — run the real workload's micro-batch interval down as far as it reasonably goes and measure end-to-end latency under realistic load, then decide based on whether it clears the budget with margin. If it's close but not comfortable, I'd lean toward the dedicated engine, since 'just barely meets the SLA in testing' rarely survives a traffic spike in production.\n\n**Testing:** whether you weigh ecosystem familiarity against a hard latency number instead of defaulting to either 'always use what we have' or 'always use the fastest thing.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "stream-processing-engines-compare-iq4",
+      "question": "What operational risks come with choosing a true per-event continuous engine that a micro-batch engine mostly avoids?",
+      "answerMarkdown": "The main risk cluster is around checkpointing and state, because a continuous engine's fault tolerance depends entirely on getting that right, whereas a micro-batch engine's simpler 'rerun the failed batch' model sidesteps most of it. Concretely: checkpoint interval tuning becomes a live operational concern — too infrequent and a crash loses more progress and takes longer to recover; too frequent and checkpointing overhead eats into the very throughput and latency you chose this engine for. State backend sizing matters more too, since a continuous engine typically holds more live, actively-mutating state than a micro-batch engine that can afford to rebuild more from scratch on each batch.\n\nThere's also a subtler risk: continuous engines are more sensitive to a single slow or stalled partition, because there's no batch boundary providing a natural point to isolate and retry just the affected slice — a stall can propagate through the pipeline's watermark and hold back results across the board, similar to the slow-partition problem covered earlier in this group, but with less of a natural 'just rerun this one batch' recovery path available.\n\nNone of this makes continuous engines the wrong choice when the latency budget genuinely demands them — it means the operational bar for running one well is higher, and a team should go in expecting to invest in checkpoint tuning and state-size monitoring as ongoing work, not a one-time setup step.\n\n**Testing:** whether you understand the operational cost side of the latency win, not just the latency number itself.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

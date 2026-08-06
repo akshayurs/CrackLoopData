@@ -1,0 +1,45 @@
+{
+  "topicId": "jwt-tokens",
+  "interviewQuestions": [
+    {
+      "id": "jwt-tokens-iq1",
+      "question": "Walk me through the structure of a JWT and what the signature actually protects.",
+      "answerMarkdown": "A JWT is three base64url-encoded segments joined by dots: `header.payload.signature`. The header names the signing algorithm. The payload holds the claims — standard ones like `sub` for the subject and `exp` for expiry, plus whatever custom claims the app needs, like roles. The signature is computed over the header and payload using a server-held secret or private key.\n\nThe detail that trips people up: the header and payload are only **encoded**, not encrypted — anyone holding the token, including the end user, can decode and read every claim directly, no key needed. Paste any JWT into jwt.io and you'll see this instantly. The signature protects **integrity** — you can't alter the claims without invalidating the signature — not **confidentiality**. Those are genuinely different guarantees, and conflating them is the most common JWT misconception I run into.\n\nThe practical consequence: never put anything sensitive in a JWT payload expecting it to stay hidden from the bearer. If you need confidentiality too, that's what JWE (encrypted JWTs) is for, though most systems don't need it — if the claims need to be hidden from whoever holds the token, that's often a sign they belong server-side instead.\n\n**Testing:** whether you can name integrity versus confidentiality precisely, rather than treating a JWT as generically 'secure.'",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "jwt-tokens-iq2",
+      "question": "Compare session cookies and JWT as authentication mechanisms. When would you choose one over the other?",
+      "answerMarkdown": "They make opposite architectural bets. Sessions keep a meaningless pointer client-side and the actual state server-side; JWT makes the token itself the self-contained, signed source of truth, verifiable without any server-side lookup.\n\nThat inversion cuts both ways. **Revocation**: a session is one delete away from being dead; a pure stateless JWT is valid until its `exp` claim says otherwise, with no server-side record to invalidate early — you have to reintroduce state (a blocklist, a token-version check) to fix that, which undercuts the statelessness that was the whole point. **Cross-service verification**: sessions need every verifying service to reach a shared store; JWT lets each service verify independently with a public key, which is the real payoff in a distributed system. **Client storage**: session cookies have mature, well-understood attributes (`HttpOnly`, `SameSite`); JWT has no fully safe storage option — `localStorage` is XSS-exposed, a cookie reintroduces CSRF concerns, in-memory-only loses the token on refresh.\n\nMy actual answer: a single monolithic web app with no cross-service auth need and a real requirement for instant logout should default to sessions — JWT buys little there and costs a real revocation headache. A multi-service architecture where several backends need to authenticate the same request independently is where JWT earns its complexity.\n\n**Testing:** whether you present this as a genuine trade-off rather than picking a side as 'strictly better.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "jwt-tokens-iq3",
+      "question": "Your system uses stateless JWT access tokens. How would you handle needing to immediately revoke a compromised user's access?",
+      "answerMarkdown": "I'd start from the honest fact that pure stateless JWTs have no early-revocation mechanism at all — the token is valid until `exp`, and there's no server-side record to delete, because avoiding exactly that lookup was the design's whole point. Any fix trades back some statelessness.\n\nThree real approaches, in order of how much statelessness they sacrifice: **short access-token lifetimes** (minutes) combined with a revocable refresh token — this doesn't give instant revocation, but bounds the exposure window tightly, and revoking the refresh token stops new access tokens from being minted. **A server-side blocklist** of revoked token IDs, checked on every verification — this gives true instant revocation but reintroduces the exact per-request lookup JWT was meant to eliminate. **Token versioning** — a `tokenVersion` claim compared against a per-user version stored server-side, bumped on revocation — a lighter-weight lookup than a full blocklist, but still a lookup.\n\nFor a genuinely urgent compromise (a leaked admin account), I'd reach for the blocklist or version-bump approach despite the cost, since instant matters more than statelessness in that specific case — then rely on the short-lived access token pattern as the steady-state default the rest of the time.\n\n**Testing:** whether you understand this isn't a solved problem with one canonical answer, and can reason about the trade-off explicitly rather than reciting 'use a blocklist' without the cost.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Revocation"
+    },
+    {
+      "id": "jwt-tokens-iq4",
+      "question": "Where should a JWT be stored on the client, and why is there no clean answer?",
+      "answerMarkdown": "There genuinely isn't a fully safe option — each choice trades one vulnerability class for another, and I'd walk through all three rather than pretending one is simply correct.\n\n`localStorage` is the easiest to implement and the most dangerous: it's readable by any JavaScript running on the page, including an XSS payload, and unlike a cookie there's no `HttpOnly` equivalent — one XSS bug anywhere on the site exfiltrates every stored token. An `HttpOnly` cookie blocks that JavaScript access, closing the XSS-theft path, but now the token is attached to requests automatically, reopening the CSRF concerns from earlier in this group — it needs `SameSite` and CSRF tokens layered back on, the same defenses session cookies require. Keeping the token in memory only — a JS variable, never persisted — is the most XSS-resistant option since there's nothing sitting in storage to read, but the token vanishes on page refresh, forcing a refresh-token round-trip on every reload, with real UX cost.\n\nMy actual recommendation: `HttpOnly` cookie plus the full CSRF defense stack, because CSRF's defenses (`SameSite=Lax`, tokens) are mature and well-understood, whereas an XSS bug against `localStorage` is a much more silent, total compromise with no equivalent mitigation layer available at the storage level.\n\n**Testing:** whether you can articulate the specific risk each option reintroduces, rather than naming a single 'best practice' storage location.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Client-side storage"
+    },
+    {
+      "id": "jwt-tokens-iq5",
+      "question": "What was the `alg: none` JWT vulnerability, and what's the general lesson for anyone implementing JWT verification today?",
+      "answerMarkdown": "The bug: some early or misconfigured JWT libraries read the signing algorithm from the token's *own* header and used whatever it said to decide how to verify. The JWT spec includes `alg: none` for legitimate niche cases meaning 'unsigned,' and a vulnerable verifier would accept that and skip signature verification entirely — letting an attacker hand-craft any payload at all, like `{\"sub\": \"admin\", \"role\": \"admin\"}`, with zero signature required, and have it accepted as genuine. A related variant let an attacker resign a token using the server's own *public* key as if it were an HMAC secret, exploiting verifiers that didn't cleanly separate asymmetric and symmetric verification paths.\n\nThe fix, and the general lesson: **the verifier must decide the expected algorithm in advance, server-side, and never take that decision from the token being verified.** Trusting untrusted input to specify how it should be checked is the exact same category of mistake as trusting a client-supplied role or client-side-only access control elsewhere in this space — you never let the thing you're validating tell you how to validate it.\n\nThis was a disclosed, patched vulnerability across most major JWT libraries around 2015, and modern libraries default to safe behavior — but I'd still explicitly pin the algorithm in any verification code I write, because relying on a library's current defaults being safe forever is itself a fragile assumption.\n\n**Testing:** whether you know this specific, historically significant class of bug and can generalize its lesson beyond JWT.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Implementation security"
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+{
+  "id": "slowly-changing-dimensions",
+  "title": "Slowly Changing Dimensions",
+  "area": "data-engineering",
+  "group": "analytics-modeling",
+  "order": 3,
+  "slug": "slowly-changing-dimensions",
+  "summary": "Customers move, tiers change, prices update — and old facts still need to see the dimension value that was true when they happened. SCD types are how you decide whether to keep history or overwrite it.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "slowly-changing-dimensions-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A customer moves from Chicago to Denver. Do your last year's sales facts now say every one of those historical orders shipped from Denver? If your dimension table just overwrites the city column, yes — and that's silently rewriting history.\n\n**Slowly Changing Dimension (SCD)** techniques are the deliberate answer to \"what happens to a fact when the dimension it points to changes.\" There are three common strategies — overwrite, keep full history, or keep limited history — and picking the wrong one for a given attribute is one of the most common analytics-modeling mistakes in production warehouses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "slowly-changing-dimensions-s02",
+      "order": 2,
+      "sectionTitle": "The problem, precisely",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A dimension attribute changes — a customer's tier upgrades from Silver to Gold, a product's price changes, an employee changes department. The fact table doesn't change; it still references the same `customer_id`. The question is what that key should resolve to when you join a historical fact against the dimension.\n\nTwo very different needs collide here: sometimes you want \"what is this customer's tier *right now*\" (a current-state lookup), and sometimes you want \"what was this customer's tier *at the time of that order*\" (a point-in-time lookup, needed for correct historical reporting). A dimension design that only supports one of these breaks the other.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "slowly-changing-dimensions-s02-q1"
+      ]
+    },
+    {
+      "id": "slowly-changing-dimensions-s03",
+      "order": 3,
+      "sectionTitle": "SCD Type 1 — overwrite",
+      "subTitle": "No history kept",
+      "type": "concept",
+      "markdown": "**Type 1** is the simplest option: when an attribute changes, update the row in place. The customer's city column changes from Chicago to Denver, and that's it — one row, current value, no trace of the old one.\n\nThis is correct when you genuinely only care about the current value — a typo correction in a customer's name, a fixed data-entry error, or any attribute where \"what it used to say\" has no analytical meaning. It's also the cheapest to implement: a plain `UPDATE` statement, no extra columns, no extra rows.\n\nThe cost is exactly what it sounds like: every historical fact that joins to this dimension now sees the current value, whether or not that was true when the fact happened.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "slowly-changing-dimensions-s04",
+      "order": 4,
+      "sectionTitle": "SCD Type 2 — full history",
+      "subTitle": "New row per change, with effective dates",
+      "type": "concept",
+      "markdown": "**Type 2** keeps every version of a dimension row, distinguished by effective-date columns and a current-flag. When the customer's tier changes from Silver to Gold, you don't update the existing row — you close it out (`effective_end_date = today`, `is_current = false`) and insert a brand-new row (`effective_start_date = today`, `is_current = true`) with a new **surrogate key**.\n\nThe fact table's foreign key must point at the surrogate key of the row that was current *at the time the fact happened* — not at a stable natural key like `customer_id`. That's the mechanism that makes point-in-time-correct joins possible: an old order still joins to the old row, with the old tier, because it was written with that row's surrogate key at load time.\n\nThis is the default choice whenever \"what was true back then\" genuinely matters for reporting — which, for most business-meaningful attributes, it does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "slowly-changing-dimensions-s04-q1"
+      ]
+    },
+    {
+      "id": "slowly-changing-dimensions-s05",
+      "order": 5,
+      "sectionTitle": "One customer, three historical rows",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A Type 2 dimension for a single customer who changed tier twice: three rows, same `customer_id`, three different surrogate keys, non-overlapping effective-date ranges, and exactly one row flagged `is_current = true`.\n\n![Three SCD Type 2 rows for the same customer with contiguous effective date ranges](assets/scd2-rows.svg)",
+      "assets": [
+        {
+          "alt": "Three SCD Type 2 rows for the same customer with contiguous effective date ranges",
+          "path": "assets/scd2-rows.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "slowly-changing-dimensions-s06",
+      "order": 6,
+      "sectionTitle": "Implementing Type 2 with a merge",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A Type 2 load is usually a single `MERGE` (or `UPSERT`) against the dimension: match on the natural key, detect a changed tracked attribute, and either insert a new version or update in place if nothing tracked changed.\n\n```sql\nMERGE INTO dim_customer AS target\nUSING staged_customer AS source\nON target.customer_id = source.customer_id AND target.is_current = true\nWHEN MATCHED AND target.tier <> source.tier THEN\n  UPDATE SET effective_end_date = CURRENT_DATE, is_current = false\nWHEN NOT MATCHED THEN\n  INSERT (customer_id, tier, effective_start_date, effective_end_date, is_current)\n  VALUES (source.customer_id, source.tier, CURRENT_DATE, NULL, true);\n```\n\nIn practice this runs as two steps in most warehouses — close out the changed current row, then insert the new version — because a single `MERGE` can't easily both update one row and insert a fresh one for the same match. The logic above is the shape; the exact SQL varies by engine.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "slowly-changing-dimensions-s06-q1"
+      ]
+    },
+    {
+      "id": "slowly-changing-dimensions-s07",
+      "order": 7,
+      "sectionTitle": "SCD Type 3 — limited history",
+      "subTitle": "Previous-value columns",
+      "type": "concept",
+      "markdown": "**Type 3** is a middle ground: instead of new rows, add a `previous_tier` column alongside `current_tier`. One row per customer, always — but it remembers exactly one prior state.\n\nIt's cheap and keeps the table small, but it only remembers the *immediately previous* value — a second change overwrites the \"previous\" slot, losing the value before that. It also doesn't support point-in-time joins against arbitrary historical facts the way Type 2 does; it's really for \"compare current vs previous\" reporting, not full history.\n\nType 3 fits a narrow case: an attribute that changes rarely, where only a one-step-back comparison is ever needed — a \"previous address\" field for a one-time migration reconciliation, for example.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "slowly-changing-dimensions-s08",
+      "order": 8,
+      "sectionTitle": "Choosing the cheapest right answer",
+      "subTitle": "Type 1 vs 2 vs 3",
+      "type": "compare",
+      "markdown": "| Type | Keeps | Fact joins see | Cost | Use when |\n|---|---|---|---|---|\n| **1** | Nothing — overwrite | Always current value | Cheapest | The old value has no analytical meaning (typo fix) |\n| **2** | Full history, new row per change | The value true at the time of the fact | Higher storage, surrogate-key joins | Historical accuracy matters (tier, price, address) |\n| **3** | One prior value only | Current, plus one \"previous\" column | Low, but limited | Only a one-step-back comparison is ever needed |\n\nThe decision is per-attribute, not per-table — a single dimension can mix strategies, tracking `name` as Type 1 but `tier` as Type 2, if that's genuinely what each attribute needs.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "slowly-changing-dimensions-s08-q1"
+      ]
+    },
+    {
+      "id": "slowly-changing-dimensions-s09",
+      "order": 9,
+      "sectionTitle": "Joining to the current row by mistake",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Even with a correctly built Type 2 dimension, it's easy to rewrite history at query time: joining a historical fact to the dimension using `WHERE is_current = true` instead of the surrogate key the fact was originally loaded with.\n\nThat query silently reports every historical order under the customer's *current* tier — as if the customer had always been Gold, when half those orders happened while they were Silver. The fact table did its job correctly by storing the point-in-time surrogate key at load time; the bug is entirely in a query that ignores that key and re-resolves to \"current\" instead.\n\nThe fix is discipline, not schema: always join facts to dimensions on the surrogate key that was stored at fact-load time, and reserve `is_current = true` for dimension-only \"as of today\" queries, never for joins through a fact table.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "slowly-changing-dimensions-s09-q1"
+      ]
+    },
+    {
+      "id": "slowly-changing-dimensions-s10",
+      "order": 10,
+      "sectionTitle": "Type 2 at real scale",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Type 2 history has a real storage cost that's easy to underestimate: a dimension with 10 million entities and an average of 3 changes each over its lifetime is a 30-million-row table, not 10 million. For a slowly-changing attribute this is manageable; for one that changes daily, it isn't — Type 2 on a rapidly-changing attribute is a design smell, not a scaling solution.\n\nThat's the actual meaning of \"slowly\" in slowly changing dimension: the technique assumes changes are infrequent relative to the fact volume. An attribute that changes every few minutes — a live account balance, a real-time status flag — doesn't belong in a Type 2 dimension at all; it belongs in the fact table itself, or in a separate mechanism entirely, because tracking it as dimension history would multiply row counts far faster than the data is actually useful.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "slowly-changing-dimensions-s11",
+      "order": 11,
+      "sectionTitle": "The senior tell",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior answer to \"how do you handle dimension changes\" is \"Type 2, always, to be safe.\" A senior answer names the attribute and the reporting need first: \"tier and price get Type 2 because finance needs point-in-time-correct history; name typos get Type 1 because there's no analytical reason to keep the wrong spelling around.\"\n\nThe skill being tested isn't knowing the three SCD types exist — it's knowing that the choice is per-attribute, driven by whether historical accuracy for that specific attribute is worth its storage and join-complexity cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

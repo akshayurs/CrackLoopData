@@ -1,0 +1,174 @@
+{
+  "id": "lock-free-programming-and-stm",
+  "title": "Lock-Free Programming & Software Transactional Memory",
+  "area": "languages-compilers",
+  "group": "concurrency-models",
+  "order": 5,
+  "slug": "lock-free-programming-and-stm",
+  "summary": "Alternatives to blocking locks for shared-memory concurrency — compare-and-swap-based structures that never block, the ABA problem that makes them notoriously hard to get right, and STM's optimistic-transaction alternative.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "lock-free-programming-and-stm-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This topic returns to `threads-and-the-shared-memory-model`'s world — actual shared, mutable memory, not actors or channels — and asks a narrower question: is a blocking lock the only way to coordinate access to it?\n\n**Lock-free programming** answers no: hardware provides an atomic **compare-and-swap (CAS)** instruction, and you can build real data structures on top of it that never block a thread waiting for a lock. **Software Transactional Memory (STM)** takes a different angle on the same goal — wrap updates in optimistic, retryable transactions instead of hand-rolling CAS loops.\n\nBoth exist because locks have real, well-documented costs — contention, priority inversion, deadlock risk under composition — that this topic opens with before showing the alternatives.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-stm-s02",
+      "order": 2,
+      "sectionTitle": "Why avoid locks at all",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Three concrete costs locks carry that motivate looking elsewhere:\n\n- **Contention.** Under heavy load, threads pile up waiting for the same lock, and throughput can collapse well before CPU utilization looks maxed out — waiting threads aren't doing useful work, they're just blocked.\n- **Priority inversion.** A low-priority thread holding a lock a high-priority thread needs effectively makes the high-priority thread wait on the low-priority one — a real, historically infamous bug class (it grounded the Mars Pathfinder rover, briefly, in 1997).\n- **Deadlock risk under composition.** Two locks acquired in inconsistent orders across different code paths can deadlock, and this risk *compounds* as more locking code gets composed together — a correctness property that doesn't scale well with codebase size.\n\nNone of this means locks are bad — most code should still just use them, correctly, via `operating-systems/concurrency-sync`'s primitives. This topic covers what's available for the narrower set of cases where lock costs are genuinely unacceptable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "lock-free-programming-and-stm-s02-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-stm-s03",
+      "order": 3,
+      "sectionTitle": "Compare-and-swap",
+      "subTitle": "The atomic primitive underneath",
+      "type": "concept",
+      "markdown": "**Compare-and-swap (CAS)** is a single hardware-level atomic instruction with the shape: \"if this memory location still holds the value I expect, write my new value; otherwise, do nothing and tell me it failed.\" It's implemented directly in hardware (the CPU guarantees the check-and-write happens as one indivisible step), which is exactly what makes it usable as a building block with no lock involved at all.\n\nEvery lock-free data structure in this topic is, underneath, a loop that reads the current value, computes what the new value *should* be, and calls CAS to try to install it — retrying from the read if CAS reports the value changed underneath it. No thread ever blocks waiting for another thread to finish something; a thread that loses a CAS race simply retries immediately.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "lock-free-programming-and-stm-s03-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-stm-s04",
+      "order": 4,
+      "sectionTitle": "A lock-free stack push",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![CAS retry loop for a lock-free stack push, retrying on failure](assets/cas-retry-loop.svg)",
+      "assets": [
+        {
+          "alt": "CAS retry loop for a lock-free stack push, retrying on failure",
+          "path": "assets/cas-retry-loop.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-stm-s05",
+      "order": 5,
+      "sectionTitle": "A CAS-based counter and stack push, in code",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The retry loop pattern, made concrete for both a counter and a stack push:\n\n```java\n// Lock-free counter — no lock, just retry on CAS failure\nAtomicInteger counter = new AtomicInteger(0);\nint old, next;\ndo {\n    old = counter.get();\n    next = old + 1;\n} while (!counter.compareAndSet(old, next));\n\n// Lock-free stack push — same shape, on a linked node\nNode newNode = new Node(value);\nNode oldTop;\ndo {\n    oldTop = top.get();\n    newNode.next = oldTop;\n} while (!top.compareAndSet(oldTop, newNode));\n```\n\nBoth follow the identical shape: read, compute, CAS, retry on failure. Under low contention this loop almost never retries — it's essentially free. Under high contention, many threads can retry repeatedly, which is the lock-free trade made concrete: no thread ever *blocks*, but a thread can still do wasted, retried work under contention.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "lock-free-programming-and-stm-s05-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-stm-s06",
+      "order": 6,
+      "sectionTitle": "The ABA problem",
+      "subTitle": "\"Unchanged\" doesn't mean \"nothing happened\"",
+      "type": "concept",
+      "markdown": "CAS checks whether a memory location **still holds the same value** — not whether it was untouched since you last read it. That gap is the **ABA problem**: a location holds value A, another thread changes it to B and then back to A before your CAS runs, and your CAS succeeds because the value \"looks unchanged\" — even though something real happened in between that your logic never accounted for.\n\nThis is genuinely dangerous in structures with reused memory: a node gets popped off a lock-free stack, freed, and a *new* node happens to get allocated at the same memory address before your CAS runs — your CAS sees the same *pointer value* and succeeds, but it's now pointing at completely different data. The fix is usually a **tagged pointer** (bundling a version counter alongside the pointer, so the CAS compares both the address and a monotonically increasing tag) or a double-width CAS operation that checks both atomically.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "lock-free-programming-and-stm-s06-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-stm-s07",
+      "order": 7,
+      "sectionTitle": "Software Transactional Memory",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**STM** wraps a block of shared-state updates in a **transaction**: the block runs optimistically, tracking every read and write it makes, and at the end checks whether any of the memory it touched was concurrently modified by another transaction. If nothing conflicted, the transaction **commits** its changes atomically. If something did conflict, the whole transaction is discarded and **retried** from the start, transparently.\n\nThe appeal is composability: unlike locks, where combining two lock-protected operations into one atomic unit is genuinely hard (you have to reason about lock ordering across both), nesting or combining two STM transactions into a larger one is often just... wrapping them together, because the retry-on-conflict machinery handles the composition automatically. Clojure's `ref`/`dosync` and Haskell's STM monad are the most cited production-grade implementations.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "lock-free-programming-and-stm-s07-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-stm-s08",
+      "order": 8,
+      "sectionTitle": "Lock-free programming is notoriously hard to get right",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "This isn't a minor caveat — it's the central practical fact about this whole topic. Lock-free code requires reasoning about interleavings that a lock-based approach's mutual exclusion would have made impossible by construction, plus subtleties a single-threaded mental model never surfaces at all: memory reordering (a CPU or compiler can reorder operations that don't have an explicit ordering dependency between them, unless a memory barrier forbids it), the ABA problem, and torn reads on multi-word data that CAS alone can't atomically protect.\n\nThe honest, senior-level guidance: writing correct lock-free data structures from scratch is a specialist skill, not a routine engineering task, and most teams should reach for a well-tested, already-correct implementation (`java.util.concurrent`'s lock-free collections, Rust's `crossbeam`, and similar) rather than hand-rolling CAS loops for a new use case — the subtle bugs here (rarely reproducible, timing-dependent, wrong under specific memory-reordering conditions a given test machine's architecture might not even expose) are exactly the kind that survive code review and ship to production undetected.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "lock-free-programming-and-stm-s08-q1"
+      ]
+    },
+    {
+      "id": "lock-free-programming-and-stm-s09",
+      "order": 9,
+      "sectionTitle": "Locks vs lock-free vs STM",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Locks | Lock-free (CAS-based) | STM |\n|---|---|---|---|\n| Blocking | Yes — a thread waits for the lock | No — a thread retries instead of waiting | No — a transaction retries instead of waiting |\n| Composability | Poor — combining locked operations risks deadlock | Poor — combining CAS loops is genuinely hard | Good — transactions compose by wrapping |\n| Correctness difficulty | Moderate (deadlock/ordering risk) | High (ABA, memory reordering, torn reads) | Moderate (retry overhead, but conceptually simpler) |\n| Overhead under low contention | Low | Very low | Moderate (transaction bookkeeping) |\n| Overhead under high contention | High (threads block and queue) | Can be high (repeated wasted retries) | Can be high (repeated wasted retries) |\n\nNone of these three wins universally — this table is exactly what `comparing-concurrency-models` generalizes to the whole group in its closing synthesis.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-stm-s10",
+      "order": 10,
+      "sectionTitle": "Why reach for a CAS loop instead of a mutex",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A senior answer to \"why would you reach for a CAS loop instead of just wrapping this in a mutex\" names the specific situation where it's actually justified, not \"because it's faster\":\n\n- **A single, simple shared value** (a counter, a single pointer swap) where the update logic is trivially expressible as a CAS retry loop — the classic sweet spot, and exactly what `AtomicInteger`/`AtomicReference` exist for.\n- **Extremely high contention where lock queuing itself becomes the bottleneck** — many threads doing tiny amounts of work per critical section, where lock acquisition overhead dominates over the actual work.\n- **Hard real-time or interrupt-context code** where blocking is unacceptable — you cannot risk a thread sleeping indefinitely waiting for a lock a preempted holder won't release soon enough.\n\nFor anything more complex than a single atomic value — multiple related fields that must stay consistent together — a mutex is very often the *more correct* choice: it's easier to reason about, easier to review, and the performance difference frequently doesn't matter enough to justify the correctness risk. \"Reach for a mutex first, profile, then consider lock-free only for a proven, narrow hot spot\" is the honest default.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "lock-free-programming-and-stm-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Lock-free programming and STM are both still fundamentally shared-memory models — they don't remove sharing the way actors or CSP do, they change *how* threads coordinate around the sharing. `structured-concurrency` addresses a different axis entirely (task lifetime and cancellation, not data-race coordination) and applies equally whether the underlying coordination is locks, lock-free structures, or STM.\n\n`comparing-concurrency-models` closes the loop, putting shared-memory approaches (this topic and `threads-and-the-shared-memory-model`) directly against the no-shared-state models (`the-actor-model`, `csp-and-channels`) on the same design question.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

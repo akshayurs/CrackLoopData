@@ -1,0 +1,37 @@
+{
+  "topicId": "auto-layout-adaptive-ui",
+  "interviewQuestions": [
+    {
+      "id": "auto-layout-adaptive-ui-iq1",
+      "question": "How does Auto Layout actually work under the hood, and why does that make ambiguous layouts possible?",
+      "answerMarkdown": "Every constraint is a linear equation relating two views' attributes — `view1.attribute = multiplier × view2.attribute + constant`. Auto Layout collects all the equations affecting a view and hands them to a constraint solver (Cassowary) that resolves them simultaneously into concrete frames.\n\nThat framing directly explains ambiguity: if the equations you've provided don't fully pin down a view's x, y, width, and height, the system is **under-determined** — there are multiple mathematically valid solutions, and the solver picks one without guaranteeing it's the same one every time. That's what an ambiguous layout actually is, not a bug in Auto Layout itself but an incomplete spec from the developer.\n\nThe flip side is over-determination: too many required constraints that can't all hold simultaneously triggers the 'unable to satisfy constraints' runtime warning, and Auto Layout breaks the lowest-priority one among the conflicting set to resolve it — which is why priorities exist at all, as an explicit tie-breaking mechanism for exactly this case.\n\nIn practice I treat any ambiguous-layout or unsatisfiable-constraint warning as a real bug immediately, because the visible symptom (a view jumping between positions, or overflowing its container) can be intermittent and device-specific, making it easy to under-prioritize until a user reports it.\n\n**Testing:** whether you understand Auto Layout as a solver, which explains its edge cases, versus treating it as a black box.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "auto-layout-adaptive-ui-iq2",
+      "question": "You're building a settings row with a label on the left and a fixed-size icon on the right, and the label needs to truncate under a long localized string while the icon stays a constant size. How do you set this up?",
+      "answerMarkdown": "The layout itself is simple — pin the icon's width and height explicitly, pin the label's leading edge to the row and its trailing edge to the icon's leading edge with a gap, and let the label's height come from its intrinsic content size. The part that actually needs care is what happens when the row is too narrow for both at full size, which localization guarantees will happen eventually (German and Finnish strings run notably longer than English).\n\nThat's where **content compression resistance** matters: I'd set the icon's horizontal compression resistance higher than the label's (or leave the icon's at the default `.required` and lower the label's), so when space runs out, the label is the one that shrinks and truncates, not the icon getting squished into an unrecognizable shape. Without an explicit priority difference, both views are equally willing to compress, and which one visually breaks first is left to the solver's internal tie-breaking rather than my actual design intent.\n\nI'd also use `.lineBreakMode = .byTruncatingTail` on the label explicitly and test with a long pangram-style string in the layout preview, not just the shortest English label, since that's the failure mode that doesn't show up until localization or a long username actually ships.\n\n**Testing:** whether you know content hugging/compression priorities are the actual mechanism for this, not just 'add more constraints.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "auto-layout-adaptive-ui-iq3",
+      "question": "How would you build a single view controller's layout that looks meaningfully different on iPhone versus iPad — say, a master-detail layout that's a single column on iPhone but side-by-side on iPad — without duplicating the whole screen?",
+      "answerMarkdown": "I'd lean on size classes rather than device checks. The framework-level answer for master-detail specifically is `UISplitViewController`, which already handles collapsing to a single column on compact-width and showing both panes side by side on regular-width — I'd use that rather than hand-rolling the size-class branching myself where possible.\n\nFor layout details that need custom handling — spacing, whether a sidebar is always visible versus a slide-over — I'd vary constraints directly in Interface Builder's 'vary for traits' feature per size-class combination, or in code, react to `traitCollectionDidChange` and swap between two sets of pre-defined `NSLayoutConstraint` arrays (never mutate constants ad hoc in that callback; deactivate one full set and activate the other, so the state is always consistent).\n\nThe part I'd explicitly avoid is checking `UIDevice.current.userInterfaceIdiom == .pad` as the branch condition — that ties the logic to a specific device family rather than the actual available space, and breaks the moment iPad gains a compact-width mode (Slide Over, or a resized window in visionOS-style multitasking) or a future device blurs the phone/tablet line. Size class is the actual signal that matches 'how much horizontal space do I have,' which is the real question.\n\n**Testing:** whether you reach for size classes and the framework-provided split view controller instead of ad hoc device checks.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Architecture"
+    },
+    {
+      "id": "auto-layout-adaptive-ui-iq4",
+      "question": "A layout that worked fine in testing starts clipping content behind the Dynamic Island on newer iPhones. What's the likely bug and the fix?",
+      "answerMarkdown": "This is almost always a safe-area bug: something in the layout is pinned to the raw `view`'s edges (`view.topAnchor`, `view.leadingAnchor`) instead of `view.safeAreaLayoutGuide`, so content extends into the region the Dynamic Island, notch, or status bar occupies. It commonly worked fine in testing because the team tested primarily on an older device or simulator without that specific inset, or because the affected view happened to sit low enough on those devices to avoid the overlap by coincidence.\n\nThe fix is switching the relevant top (and often leading/trailing, for landscape home-indicator insets) constraints to anchor against `safeAreaLayoutGuide` instead of the view directly. I'd also check for any hardcoded top-offset constant that was tuned to 'look right' on one device — that's the same class of bug as a hardcoded pixel width, just vertical, and safe area insets already vary between device families, so a constant tuned for one guesses wrong for others.\n\nTo catch this class of bug before it ships, I'd specifically include a device with a Dynamic Island and one without in the test matrix for any screen with content near the top or bottom edge, since it's exactly the kind of regression that a single simulator model won't surface.\n\n**Testing:** whether you can diagnose a real-world layout regression from symptoms to the specific safe-area root cause.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "id": "partitioning-clustering",
+  "title": "Partitioning & Clustering for Query Performance",
+  "area": "data-engineering",
+  "group": "warehousing-lakes",
+  "order": 6,
+  "slug": "partitioning-clustering",
+  "summary": "Predicate pushdown only helps if the data is actually organized so filters can eliminate large chunks. Partitioning and clustering are how you deliberately create that organization, instead of hoping for it.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "partitioning-clustering-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Columnar Storage Internals](columnar-storage-internals) noted that predicate pushdown only eliminates row groups whose values are actually clustered — a filter on randomly-scattered data can't skip much. **Partitioning** and **clustering** are the deliberate techniques for making that clustering happen, so the mechanisms from that topic have something real to work with.\n\nThis topic covers splitting a table into partitions by a column (commonly date), ordering data within partitions via clustering keys, and the two failure modes — a partition scheme that doesn't match query patterns, and simply having too many partitions — that turn this optimization into an active liability.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-clustering-s02",
+      "order": 2,
+      "sectionTitle": "Partitioning",
+      "subTitle": "Splitting a table by column into physical units",
+      "type": "concept",
+      "markdown": "**Partitioning** splits a table into separate physical units based on the value of one (or a few) columns — most commonly a date, since \"all of today's data\" or \"all of June\" is both a common filter and a natural physical grouping. Each partition is a distinct set of files, typically organized under its own directory or logical grouping.\n\nThe payoff is direct: a query filtering `WHERE order_date = '2024-06-01'` against a table partitioned by `order_date` doesn't need row-group-level min/max stats to skip irrelevant data — it can skip entire partitions (potentially thousands of files) before even opening a single one, because the partition scheme itself, not just per-file statistics, tells the engine which physical units can possibly match.\n\nThis is coarser-grained but cheaper than predicate pushdown's per-row-group stats check — partition pruning happens at the metadata/catalog level, often without even listing the files inside partitions that don't match.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "partitioning-clustering-s02-q1"
+      ]
+    },
+    {
+      "id": "partitioning-clustering-s03",
+      "order": 3,
+      "sectionTitle": "A query pruning to one partition",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture a table partitioned by date, with a separate partition directory for each day. A query filtering to a single day's data goes straight to that one partition's files, never touching the others at all.\n\n![A date-partitioned table where a query only scans the matching partition folder, skipping the rest](assets/partition-pruning.svg)",
+      "assets": [
+        {
+          "alt": "A date-partitioned table where a query only scans the matching partition folder, skipping the rest",
+          "path": "assets/partition-pruning.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-clustering-s04",
+      "order": 4,
+      "sectionTitle": "Clustering and sort keys",
+      "subTitle": "Ordering data within a partition",
+      "type": "concept",
+      "markdown": "Partitioning handles the coarse split; **clustering** (or sort keys, depending on the platform's terminology) handles ordering *within* each partition — physically sorting or grouping rows by one or more additional columns so that a range filter on those columns is efficient even inside a single partition's files.\n\nThis matters because a partition can still be large — a single day's partition on a high-volume table might be many gigabytes across many files — and a filter on a second column (say, `customer_region` within a date partition) benefits from that column's values being clustered together rather than scattered randomly across the partition's files. Clustering achieves this by physically sorting data (at write time, or via a periodic re-clustering operation) so a file's min/max range for the clustering key is narrow and distinct from its neighbors — exactly what makes the predicate-pushdown stats from the previous topic actually selective.\n\nThe relationship in one line: partitioning decides which files a query has to consider at all; clustering decides how effectively predicate pushdown can skip *within* those files once partition pruning has already narrowed the field.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "partitioning-clustering-s04-q1"
+      ]
+    },
+    {
+      "id": "partitioning-clustering-s05",
+      "order": 5,
+      "sectionTitle": "WHERE clause alignment and cost",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The same table, two queries, wildly different cost, purely from whether the filter aligns with the partition key:\n\n```sql\n-- Table `events` partitioned by event_date\n\n-- Aligned: filters directly on the partition column\nSELECT COUNT(*) FROM events\nWHERE event_date = '2024-06-01';\n-- Scans exactly one partition's files\n\n-- Not aligned: filters on a derived expression over the partition column\nSELECT COUNT(*) FROM events\nWHERE EXTRACT(MONTH FROM event_date) = 6;\n-- Many engines can't prune partitions from this expression —\n-- scans every partition and evaluates the expression per row\n```\n\nThe second query is logically similar (roughly \"June's events\") but wrapping the partition column in a function frequently defeats partition pruning entirely, because the engine would have to evaluate that expression against every partition's possible date range to determine if it could match — which many query planners simply don't do, falling back to scanning everything. Filtering directly on the raw partition column, or using an explicit range (`event_date BETWEEN '2024-06-01' AND '2024-06-30'`), reliably prunes; wrapping it in a function often doesn't.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "partitioning-clustering-s05-q1"
+      ]
+    },
+    {
+      "id": "partitioning-clustering-s06",
+      "order": 6,
+      "sectionTitle": "Over-partitioning",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team partitions a table by `(date, hour, customer_id)` reasoning that more granular partitions mean more pruning opportunities. With thousands of customers and 24 hours a day, this produces an enormous number of tiny partitions — many holding only a handful of rows.\n\nThe cost shows up in metadata overhead, not query logic: every partition, no matter how small, has metadata the engine has to track and consult — listing files, reading partition-level stats, planning around each one. With enough partitions, the time and resources spent on that metadata bookkeeping can exceed the time spent actually reading data, especially for queries that touch many partitions at once (a report spanning a month, across all customers, hits every one of those thousands of tiny units).\n\nThe fix is choosing partition granularity based on **expected partition size**, not maximum theoretical pruning — a reasonable target is partitions in the hundreds of megabytes to low gigabytes range, which usually means partitioning by a coarser unit (date alone, or date plus a low-cardinality dimension) and letting clustering, not partitioning, handle the finer-grained ordering.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "partitioning-clustering-s06-q1"
+      ]
+    },
+    {
+      "id": "partitioning-clustering-s07",
+      "order": 7,
+      "sectionTitle": "Choosing a partition key",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A good partition key balances three considerations, and they can pull against each other:\n\n- **Cardinality** — too few distinct values means partitions are too large to prune effectively; too many means the over-partitioning problem from the previous slide. Date is popular precisely because it usually lands in a workable middle range.\n- **Query patterns** — the partition key should match how queries actually filter, not just what seems like a natural business dimension. A table almost always queried by date but partitioned by customer region gets none of partitioning's benefit for the queries that actually run.\n- **Data skew** — if one partition value (one specific customer, one region) accounts for a disproportionate share of the data, that partition becomes oversized relative to the others regardless of the key's overall cardinality, creating an uneven \"hot partition\" that dominates scan time for queries touching it.\n\nThe practical process: look at your actual query logs before choosing, not just the schema's most intuitive-looking column — the right partition key is an empirical question about how the table is queried, not a modeling preference.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "partitioning-clustering-s07-q1"
+      ]
+    },
+    {
+      "id": "partitioning-clustering-s08",
+      "order": 8,
+      "sectionTitle": "Same word, different layer",
+      "subTitle": "Storage partitioning vs compute shuffle partitioning",
+      "type": "concept",
+      "markdown": "\"Partitioning\" in this topic refers to physical data layout on storage — which files exist and how they're grouped on disk. There's a completely different use of the same word in distributed compute engines: **shuffle partitioning**, which is how an in-flight query redistributes data across worker nodes during execution (for a join or aggregation that needs matching keys on the same worker) — covered in [Partitioning & Shuffle](partitioning-and-shuffle) in the Big Data Frameworks group.\n\nThese are genuinely unrelated mechanisms that happen to share terminology: storage partitioning is a persistent, on-disk property of a table that affects every query against it; shuffle partitioning is a transient, per-query runtime decision about how to move data between workers during one execution. A table's storage partition count has no direct relationship to how many shuffle partitions a query against it uses.\n\nBeing explicit about which one you mean — \"storage partition\" vs \"shuffle partition\" — avoids a genuinely common confusion when these topics come up together in a conversation or an interview.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "partitioning-clustering-s08-q1"
+      ]
+    },
+    {
+      "id": "partitioning-clustering-s09",
+      "order": 9,
+      "sectionTitle": "A worked sizing decision",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Put the trade-offs on a concrete table: 500 GB/day of event data, queried almost exclusively by date range, occasionally filtered further by a `event_type` column with about 20 distinct values.\n\nPartitioning by date alone gives roughly 500 GB partitions — comfortably in the hundreds-of-MB-to-GB target range per file once split across reasonably-sized files within the partition, and every date-range query prunes cleanly. Adding `event_type` as a second partition column would create 20x more, much smaller partitions (~25 GB each, still fine, but now 20x the partition metadata to track for a column that's only an *occasional* filter, not the primary one) — a case where clustering by `event_type` *within* the date partition, rather than partitioning by it, gets most of the pruning benefit for that occasional filter without the metadata cost of 20x more partitions.\n\nThe general pattern this illustrates: partition by the column that's filtered on almost every query; cluster by columns that are filtered often but not universally.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-clustering-s10",
+      "order": 10,
+      "sectionTitle": "Where this leads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Partitioning and clustering are the physical-organization half of query performance; the last topic in this group, Warehouse Cost & Performance Optimization, covers the remaining levers — materialized views, caching, and right-sizing compute — that work alongside a well-organized table, plus the operational discipline of monitoring where cost actually comes from.\n\nCarry forward the core relationship from this topic: partitioning decides which files a query even considers; clustering decides how efficiently it can skip within those files; and both exist purely to give predicate pushdown and column pruning, from Columnar Storage Internals, something real to work with. None of this is automatic — it's a deliberate physical design decision that has to track actual query patterns, not just table schema.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    }
+  ]
+}

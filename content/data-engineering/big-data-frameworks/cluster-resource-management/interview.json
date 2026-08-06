@@ -1,0 +1,37 @@
+{
+  "topicId": "cluster-resource-management",
+  "interviewQuestions": [
+    {
+      "id": "cluster-resource-management-iq1",
+      "question": "What does a cluster manager actually do, and why does Spark need one at all?",
+      "answerMarkdown": "A cluster manager is the layer that finds and allocates physical resources — executors, with a given memory and core count — to a Spark application, before Spark's own driver/executor/task machinery can start doing anything. When a driver process starts up, it asks the cluster manager for a set of executors; the cluster manager finds machines with capacity, launches the executor processes there, and hands them back to the driver.\n\nSpark needs this because it deliberately doesn't want to own resource provisioning itself — that's a genuinely separate, hard problem, especially on a cluster shared with other applications and frameworks. By delegating it, the same Spark application runs unmodified across very different environments: standalone on a single dedicated machine or small cluster, YARN on an on-prem Hadoop deployment sharing hardware with other frameworks, or Kubernetes on a cloud-native cluster where everything is a container.\n\nThe practical upshot: understanding cluster resource management is understanding a layer below Spark's own execution model — it explains why a job might queue before it even starts, or get killed for exceeding a limit, for reasons that have nothing to do with the Spark code itself.\n\n**Testing:** whether you understand cluster resource management as a distinct layer Spark delegates to, not part of Spark's own execution engine.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "cluster-resource-management-iq2",
+      "question": "When would you choose static allocation over dynamic allocation for a Spark job on a shared cluster?",
+      "answerMarkdown": "I'd lean static when the job's resource needs are genuinely stable across its runtime, or when predictability matters more than efficiency — a job with a fixed SLA that needs to know exactly what capacity it has, rather than compete for scaling decisions at runtime.\n\nThe less obvious reason: on a cluster shared with other dynamic-allocation jobs, I've seen dynamic allocation backfire specifically because of interaction between jobs — two jobs bursting at the same time can end up oscillating against each other, each scaling up, getting partially starved by the other's simultaneous scale-up, and scaling back down, in a way that's actually worse than if both had just held a predictable static share. In that specific shared-cluster scenario, static allocation with a properly sized, guaranteed share can be more reliable than dynamic allocation's theoretical efficiency gain.\n\nWhere I'd still prefer dynamic: workloads with genuinely bursty or uneven resource needs across stages — a heavy shuffle followed by a light aggregation — where the efficiency gain of scaling down during the light stage is real and there isn't a strong contention problem with other jobs on the same pool.\n\n**Testing:** whether you know dynamic allocation isn't a strictly-better default, and can name the specific multi-tenant failure mode where static allocation is actually the safer choice.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "cluster-resource-management-iq3",
+      "question": "A Spark job on Kubernetes keeps having executors OOM-killed, even though the overall cluster has plenty of free memory. How do you debug and fix this?",
+      "answerMarkdown": "The \"cluster has free memory but pods still die\" detail is the key clue — it tells me this is a per-pod resource limit problem, not a cluster capacity problem. Kubernetes enforces the memory limit set on each executor pod as a hard ceiling; exceeding it gets that specific pod killed regardless of how much memory is sitting unused on other nodes.\n\nMy first check is whether the job has data skew — if the executor memory limit was sized for a typical partition, but one task's partition is dramatically larger due to a skewed key, that one executor blows past its limit while every other executor stays comfortably under theirs. I'd check the job's task duration and shuffle-read-size distribution for exactly this pattern before assuming it's a general under-provisioning issue.\n\nIf it's genuinely skew, the fix is addressing the skew itself (salting, isolating the key, or verifying adaptive query execution's skew handling is enabled and actually triggering) rather than just raising the memory limit for every executor, which wastes memory on the many executors that never needed it and might still not be enough for a sufficiently pathological skew. If it's not skew — if the limit is simply undersized for the job's normal working set — then raising the per-pod limit is the right fix, sized from an actual measured partition size rather than a guess.\n\n**Testing:** whether you can connect an OOM-kill symptom on Kubernetes specifically to skew versus general under-provisioning, and pick the fix that matches which one it actually is.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "cluster-resource-management-iq4",
+      "question": "How would you set up scheduling on a cluster shared by multiple teams' Spark jobs, to prevent one team's job from starving everyone else?",
+      "answerMarkdown": "I wouldn't rely on default first-come-first-served behavior, because without an explicit fairness policy, whichever job asks first (or asks biggest) tends to crowd out everyone else — that's the default failure mode on a genuinely shared cluster, not an edge case.\n\nOn YARN, I'd set up either the capacity scheduler, carving the cluster into named queues with guaranteed minimum shares per team, or the fair scheduler, which dynamically balances resources across running jobs so no single one monopolizes the pool indefinitely. Which one depends on the organization's needs — capacity queues suit teams that want a predictable, contractually guaranteed minimum; fair scheduling suits a more fluid environment where jobs come and go and a simple dynamic balance is good enough.\n\nI'd also specifically watch for the dynamic-allocation interaction problem — if multiple teams' jobs all use dynamic allocation on the same shared pool with no queue structure on top, they can oscillate against each other during simultaneous bursts. Layering queue-based guarantees underneath dynamic allocation, rather than leaving every job to negotiate for the same undifferentiated pool, is what actually prevents that.\n\nThe broader point I'd make to whoever's asking: this is a scheduling-policy and capacity-planning problem, not something any individual job's Spark code can fix on its own.\n\n**Testing:** whether you can propose a concrete scheduling policy rather than just naming that fair scheduling exists.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

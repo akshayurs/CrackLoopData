@@ -1,0 +1,161 @@
+{
+  "id": "deserialization-ssrf",
+  "title": "Insecure Deserialization & SSRF",
+  "area": "security",
+  "group": "appsec",
+  "order": 7,
+  "slug": "deserialization-ssrf",
+  "summary": "Two failure classes that share one root cause: trusting the shape of input you don't control. Deserialization gadget chains can escalate straight to remote code execution; SSRF tricks your own server into fetching what an attacker wants.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "deserialization-ssrf-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "This closing topic pairs two categories that look unrelated but share one root cause: **trusting the shape of input you don't control**.\n\n**Insecure deserialization** trusts that a serialized blob only reconstructs harmless data — until an attacker crafts one that reconstructs a chain of method calls leading to code execution. **SSRF** trusts that a URL or hostname a user supplies is just a destination to fetch — until an attacker points it at your own internal network instead.\n\nBoth are advanced because they require understanding what's happening *underneath* a seemingly simple operation: deserializing an object, or making an HTTP request. Get comfortable with both mechanisms, because they're exactly the kind of \"how does this actually work under the hood\" question that separates a mid-level from a senior security conversation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "deserialization-ssrf-s02",
+      "order": 2,
+      "sectionTitle": "Why deserialization can escalate to code execution",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Serialization** turns an in-memory object into bytes (for storage or transport); **deserialization** reverses that. The danger appears when a deserializer doesn't just reconstruct plain data — it can reconstruct *any object the language's runtime knows how to build*, including objects whose constructors or destructors have side effects.\n\nIn languages like Java and Python (via `pickle`), deserializing untrusted bytes can trigger arbitrary method calls **as a side effect of rebuilding the object graph** — the deserializer doesn't need a separate \"execute this code\" instruction, because reconstructing certain objects *is* executing code, by the language's own design. An attacker who controls the serialized bytes controls which objects get reconstructed, and therefore which code paths run.\n\nThis is qualitatively different from a normal parsing bug: you're not exploiting a flaw in the deserializer, you're using it exactly as designed, on input it wasn't supposed to trust.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "deserialization-ssrf-s02-q1"
+      ]
+    },
+    {
+      "id": "deserialization-ssrf-s03",
+      "order": 3,
+      "sectionTitle": "Gadget chains, at a glance",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **gadget** is any class already present on the classpath (or import path) whose method — often triggered automatically during deserialization, like Java's `readObject` or Python's `__reduce__` — does something an attacker can (ab)use: read a file, run a command, make a network call. A **gadget chain** links several gadgets together, where the side effect of reconstructing one object feeds into triggering the next, until the chain reaches something genuinely dangerous, like a full shell command execution.\n\nThe attacker doesn't need a vulnerability in *your* code at all — they need a gadget chain built entirely from classes already present in your application's own dependencies (a common library everyone happens to include). Tools like `ysoserial` for Java catalog dozens of known gadget chains across popular libraries specifically so a pentester (or attacker) can generate a working payload without hand-building one.\n\nThis is why deserialization vulnerabilities are so hard to fully audit: the dangerous code was never written by you, it was already sitting in a dependency, waiting to be chained.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "deserialization-ssrf-s03-q1"
+      ]
+    },
+    {
+      "id": "deserialization-ssrf-s04",
+      "order": 4,
+      "sectionTitle": "Safer alternatives: schema-validated formats",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The fix for deserialization risk isn't a smarter deserializer — it's using a format that structurally **cannot** reconstruct arbitrary objects in the first place.\n\n- **JSON, with strict, schema-validated parsing.** A JSON parser that only ever produces primitives (strings, numbers, booleans), lists, and maps — never arbitrary application classes — has no gadget-chain surface, because there's no mechanism to reconstruct a class with executable side effects. Validate the resulting structure against an explicit schema afterward, rather than trusting whatever shape arrives.\n- **Protocol Buffers and similar typed formats** go further: the schema is defined up front, and the decoder only ever produces instances of the exact message types declared in that schema.\n- **Avoid \"native\"/polymorphic deserializers for untrusted input entirely** — Java's `ObjectInputStream`, Python's `pickle`, and similarly flexible object-graph deserializers were designed for trusted, same-application data (caching your own objects), not for parsing bytes that crossed a trust boundary.\n\nThe underlying principle echoes [injection](injection-attacks): don't try to sanitize a dangerous mechanism, remove the mechanism's capability to be dangerous.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "deserialization-ssrf-s04-q1"
+      ]
+    },
+    {
+      "id": "deserialization-ssrf-s05",
+      "order": 5,
+      "sectionTitle": "Server-Side Request Forgery",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**SSRF** tricks a server into making an HTTP (or other network) request to a destination the attacker chose, rather than one the application intended — using the server's own network position and credentials to reach places the attacker couldn't reach directly.\n\nA common feature shape: \"fetch a preview of this URL\" (an image proxy, a webhook validator, a link-unfurler for a chat app). The server dutifully fetches whatever URL it's given. If it's given `https://example.com/cat.jpg`, that's the intended use. If it's given `http://169.254.169.254/latest/meta-data/iam/security-credentials/`, it just fetched the **cloud provider's instance metadata endpoint** — a link that's normally only reachable from inside that specific server, and that can hand back the server's own IAM credentials.\n\nThe attacker never touches that internal endpoint directly; they can't, from outside the network. They make *your* server do it on their behalf, which is exactly what makes SSRF dangerous — it inherits the server's network position and, often, its cloud credentials.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "deserialization-ssrf-s05-q1"
+      ]
+    },
+    {
+      "id": "deserialization-ssrf-s06",
+      "order": 6,
+      "sectionTitle": "SSRF reaching a cloud metadata endpoint",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![An attacker outside the VPC uses a trusted app server as a proxy to reach the cloud metadata service and retrieve IAM credentials](assets/ssrf-metadata-fetch.svg)\n\nThe diagram's point: the trust boundary that protects the metadata endpoint is *network position*, not authentication — anything inside the VPC can reach it with no credentials at all, which is fine when only your own servers are inside, and catastrophic once your own server can be tricked into fetching on an attacker's behalf.",
+      "assets": [
+        {
+          "alt": "An attacker outside the VPC uses a trusted app server as a proxy to reach the cloud metadata service and retrieve IAM credentials",
+          "path": "assets/ssrf-metadata-fetch.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "deserialization-ssrf-s07",
+      "order": 7,
+      "sectionTitle": "Deserialization risk vs plain JSON parsing risk",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Native object deserialization (Java `ObjectInputStream`, Python `pickle`) | Schema-validated JSON parsing |\n|---|---|---|\n| **What it can reconstruct** | Any class the runtime can build, including ones with executable side effects | Only primitives, lists, and maps by default |\n| **Attacker's leverage** | Gadget chains built from classes already on the classpath, no app bug needed | Must find a separate application-level bug (like [injection](injection-attacks)) to escalate — parsing itself grants nothing |\n| **Typical worst case** | Remote code execution from the parsing step alone | Malformed or unexpected data, caught by schema validation |\n| **Appropriate for** | Trusted, same-application data only (internal caching) | Any data crossing a trust boundary |\n\nThe risk isn't \"deserialization is bad\" in general — it's specifically **polymorphic, arbitrary-object deserialization applied to untrusted input**. Deserializing your own trusted cache data with `pickle` is fine; deserializing a user-uploaded file with it is a remote-code-execution risk waiting to be found.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "deserialization-ssrf-s07-q1"
+      ]
+    },
+    {
+      "id": "deserialization-ssrf-s08",
+      "order": 8,
+      "sectionTitle": "Deserializing untrusted data with a \"native\" deserializer",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The recurring mistake behind most real-world deserialization CVEs: reaching for the language's built-in, most flexible deserializer — because it's the path of least resistance and \"just works\" for any object — on data that crossed a trust boundary.\n\n```python\n# Vulnerable: pickle reconstructs arbitrary objects, including ones\n# whose __reduce__ method executes code as a side effect of unpickling\nimport pickle\nuser_session = pickle.loads(request_body)  # request_body is attacker-controlled\n\n# Safer: JSON only ever produces primitives, lists, and maps\nimport json\nuser_session = json.loads(request_body)\n```\n\nThe swap looks trivial, and that's the point — it usually is a small code change, but it's rarely made until *after* a CVE or pentest finding, because `pickle.loads()` \"just works\" during development against your own trusted test data, and the risk only materializes once the input source becomes attacker-controlled, often long after the original code was written for a completely different, trusted use case.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "deserialization-ssrf-s08-q1"
+      ]
+    },
+    {
+      "id": "deserialization-ssrf-s09",
+      "order": 9,
+      "sectionTitle": "Defending SSRF beyond \"validate the URL\"",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "A junior SSRF defense is a blocklist: reject URLs containing `169.254`, `localhost`, `127.0.0.1`. A senior defense recognizes why that's incomplete and layers real controls:\n\n- **DNS rebinding bypasses hostname blocklists.** A URL can point to a hostname that resolves to a public IP at validation time and a private IP at request time — the check and the fetch are two different DNS lookups, and an attacker controlling the DNS record exploits that gap.\n- **Redirects bypass an initial-URL check.** A URL that passes validation can respond with a redirect to an internal address; the fetching code needs to validate *every* hop, not just the first.\n- **IPv6 and alternate encodings bypass literal-string blocklists** — `127.0.0.1` has equivalent forms (decimal, octal, IPv6-mapped) that a naive string match misses entirely.\n- **The robust fix is network-level, not string-level**: run the fetch through an isolated network segment or proxy that has no route to internal services at all, so even a successful bypass of the application-level check has nowhere to reach. Pair that with an **allowlist** of expected destination domains where the feature's scope permits one — allowlists degrade far more gracefully than blocklists.\n\nThe same lesson as blocklists in [injection](injection-attacks) and [XSS](xss): enumerating what's dangerous never catches everything; removing the *capability* does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    },
+    {
+      "id": "deserialization-ssrf-s10",
+      "order": 10,
+      "sectionTitle": "Closing this group",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This closes the Application Security group. Across all seven topics, one idea kept recurring: nearly every category here is some version of **code and data — or trust and input — merging where they shouldn't**, and the durable fix is always structural separation, never a smarter filter. Parameterized queries, context-aware encoding, CSRF tokens, ownership checks, schema-validated parsing — different mechanisms, same shape.\n\nThe next group, Authentication & Authorization, shifts from \"is this input safe\" to \"is this identity real, and is what it's allowed to do correctly modeled\" — starting with Authentication Fundamentals.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    }
+  ]
+}

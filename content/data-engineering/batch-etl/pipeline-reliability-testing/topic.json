@@ -1,0 +1,159 @@
+{
+  "id": "pipeline-reliability-testing",
+  "title": "Pipeline Reliability & Testing",
+  "area": "data-engineering",
+  "group": "batch-etl",
+  "order": 7,
+  "slug": "pipeline-reliability-testing",
+  "summary": "Catching bad data and broken jobs before they reach a dashboard or a downstream team — because a pipeline that runs green can still be silently wrong.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "pipeline-reliability-testing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything else in this group made a pipeline's *jobs* reliable — orchestration sequences them correctly, idempotency makes retries safe. None of that guarantees the *data* is correct. A perfectly idempotent job with zero orchestrator errors can load a table with half its rows missing, or with a schema-drifted column silently full of nulls, and every dashboard downstream will look confidently, plausibly wrong.\n\nThis topic is about catching that class of failure — the ones where nothing crashes, nothing retries, and the first signal is a human noticing a number looks off, hours or days later.\n\nAs the closing topic of this group, it also ties the whole set of ideas together: reliability isn't one technique, it's job-level health (orchestration), write-level safety (idempotency), and data-level correctness (this topic) all needing to hold simultaneously.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-reliability-testing-s02",
+      "order": 2,
+      "sectionTitle": "What can fail in a pipeline",
+      "subTitle": "Late data, schema drift, silent data loss, logic bugs",
+      "type": "concept",
+      "markdown": "A useful taxonomy of failure modes, because each needs a different kind of check to catch:\n\n- **Late data** — a source that usually delivers by 6am delivers at 11am one day; anything downstream that assumed 6am now runs on incomplete data.\n- **Schema drift** — a column silently changes type or disappears (covered in depth in [Schema Evolution & Serialization](schema-evolution)), and a job that doesn't validate its input keeps running, just wrong.\n- **Silent data loss** — a filter condition, a join, or an API pagination bug drops rows without erroring — the job \"succeeds\" having processed less than it should have.\n- **Logic bugs** — the transform's business logic itself is wrong (an incorrect join key, an off-by-one in a date range), producing a plausible but incorrect number.\n\nNone of these throw an exception. That's the unifying thread, and it's why job-success monitoring alone is structurally insufficient.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "pipeline-reliability-testing-s02-q1"
+      ]
+    },
+    {
+      "id": "pipeline-reliability-testing-s03",
+      "order": 3,
+      "sectionTitle": "Data quality checks as tests",
+      "subTitle": "Freshness, volume, null-rate, distribution",
+      "type": "concept",
+      "markdown": "The fix is running checks against the *data itself*, not just the job's exit code, as part of the pipeline's normal operation:\n\n- **Freshness** — is the most recent row's timestamp within the expected SLA? Catches late data and silently-stopped upstream feeds.\n- **Volume** — did roughly the expected number of rows load, compared to a historical baseline (e.g., within 20% of the trailing 7-day average)? Catches silent data loss and duplicate-inflation both.\n- **Null-rate** — has the percentage of nulls in a critical column jumped compared to its usual rate? Catches schema drift and upstream data-quality regressions.\n- **Distribution** — has a numeric column's mean, or a categorical column's value distribution, shifted unexpectedly? Catches subtler logic bugs that volume and null-rate checks miss entirely.\n\nEach check answers a version of \"does this data look like data that's usually correct,\" which is a fundamentally different question than \"did the job exit with status zero.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "pipeline-reliability-testing-s03-q1"
+      ]
+    },
+    {
+      "id": "pipeline-reliability-testing-s04",
+      "order": 4,
+      "sectionTitle": "Where checks sit in the DAG",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Data quality checks placed between pipeline stages, halting downstream on failure](assets/checks-between-stages.svg)\n\nThe pattern worth noting: checks aren't bolted onto the end of the pipeline — they sit *between* stages, so a bad batch is caught as early as possible and never reaches the stages (and the humans) that depend on it being good.",
+      "assets": [
+        {
+          "alt": "Data quality checks placed between pipeline stages, halting downstream on failure",
+          "path": "assets/checks-between-stages.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-reliability-testing-s05",
+      "order": 5,
+      "sectionTitle": "SLAs and alerting",
+      "subTitle": "What to page on vs what to just log",
+      "type": "concept",
+      "markdown": "Not every failed check deserves the same response, and getting this wrong in either direction is costly: alert on everything and the team ignores alerts entirely (alert fatigue); alert on nothing and a real incident sits unnoticed for days.\n\nA workable split: a check tied to a documented **SLA** — \"this table is complete by 6am, 99% of days\" — pages someone when it fails, because a stakeholder is depending on that specific guarantee. A check that's informative but not SLA-backed — a mild volume dip within normal variance — logs a warning that shows up in a daily digest or a monitoring dashboard, without waking anyone up.\n\nThe discipline this requires: decide the severity of each check *when you write it*, not reactively after the first time it either cries wolf or fails silently. A check with no assigned severity tends to default to \"ignored\" in practice, which defeats the purpose of having it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-reliability-testing-s06",
+      "order": 6,
+      "sectionTitle": "A pipeline that \"succeeds\" while loading zero rows",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The failure that most directly motivates this whole topic: a source API's authentication token expires, so every request returns an empty result set instead of an error — no exception is thrown, the job's extract step \"successfully\" processes zero rows, the transform step runs on zero rows and \"successfully\" produces zero output, and the orchestrator reports the whole DAG green.\n\nA job-success-only monitoring setup sees a clean run. A volume check would have caught this instantly — zero rows against a baseline of tens of thousands is an obvious anomaly — but only if a volume check existed and was configured to actually alert on this specific table.\n\nThis is the single clearest argument for data-level checks over job-level monitoring alone: the job did exactly what it was told, correctly, and the result was still completely wrong. \"No errors\" and \"correct\" are different claims, and conflating them is how this exact incident keeps recurring across different teams and different pipelines.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "pipeline-reliability-testing-s06-q1"
+      ]
+    },
+    {
+      "id": "pipeline-reliability-testing-s07",
+      "order": 7,
+      "sectionTitle": "Circuit-breaking a pipeline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Circuit-breaking** means a failed check doesn't just alert — it actively halts downstream stages from running on the bad data, the same way a circuit breaker cuts power rather than letting a fault propagate.\n\nConcretely: if the freshness or volume check after `load_raw` fails, the orchestrator should mark every downstream task as blocked rather than letting `transform_staging` and `transform_marts` run on a bad batch and produce equally bad, but now further-propagated, output. This is a direct application of dependency-aware scheduling from [Workflow Orchestration](workflow-orchestration) — a check is just another task in the DAG, and downstream tasks depend on it succeeding exactly like they'd depend on any other task.\n\nWithout circuit-breaking, a data-quality failure and a job failure behave very differently: a job failure naturally blocks downstream tasks (they were never eligible to run), while a data-quality issue on a job that technically \"succeeded\" would let everything downstream run anyway, unless the check is wired in as an actual dependency, not just an informational side-check.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "pipeline-reliability-testing-s07-q1"
+      ]
+    },
+    {
+      "id": "pipeline-reliability-testing-s08",
+      "order": 8,
+      "sectionTitle": "Testing a dbt model vs a Spark job vs an orchestrator DAG",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | dbt model | Spark job | Orchestrator DAG |\n|---|---|---|---|\n| **What's tested** | Output data (not_null, unique, relationships, custom SQL assertions) | Transformation logic, usually with unit tests on functions plus data assertions on output | Task sequencing, retry behavior, alerting configuration |\n| **Typical tool** | dbt's built-in test framework | pytest + a local/sample Spark session, or a dedicated data-quality library (Great Expectations, Deequ) | The orchestrator's own testing utilities, or integration tests that trigger a real DAG run against sample data |\n| **Runs when** | Every dbt run, often gated in CI before merge | CI on code change; data assertions on every production run | CI for DAG structure; production monitoring for actual behavior |\n\nThe common thread across all three: testing data pipelines means testing both the *code* (does the logic do what it should, checkable in CI against sample data) and the *data* (does the actual production output look right, checkable only against real data in production).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "pipeline-reliability-testing-s08-q1"
+      ]
+    },
+    {
+      "id": "pipeline-reliability-testing-s09",
+      "order": 9,
+      "sectionTitle": "Observability as a cross-cutting concern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Everything in this topic — freshness, volume, null-rate, distribution checks, SLA-based alerting — is really one discipline: **data observability**, the ability to know your pipeline's health without having to be told by an angry stakeholder.\n\nIt's cross-cutting rather than owned by one stage, because a freshness problem might originate in extraction, a volume problem in a broken join during transform, and a distribution shift in either — the checks need to sit at every seam, not just at the end. This is exactly the deeper, systems-level version of the idea covered concretely at the metric-and-alert level here, and a future Observability for Data Pipelines topic in the Data Quality & Governance group covers lineage-aware anomaly detection and incident response at a level beyond individual checks.\n\nThe closing frame for this whole group: a pipeline is only as trustworthy as its weakest untested assumption, and the checks in this topic are how you find out which assumptions those are before a stakeholder does.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "pipeline-reliability-testing-s10",
+      "order": 10,
+      "sectionTitle": "Carrying this forward",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This closes the arc of the Batch Processing & ETL group: extraction gets data out safely, CDC solves the delete/load problems query-based extraction can't, dbt-style transformation turns raw data into modeled tables through a testable DAG, orchestration sequences and retries all of it reliably, idempotency makes those retries and backfills safe, and this topic's checks catch the failures that pass every job-level signal while still being wrong.\n\nThe interview-ready synthesis, if asked to describe a reliable pipeline end to end: it's not one property, it's all of these holding at once — and the strongest answer names which layer a given failure mode would be caught at, rather than describing reliability as one undifferentiated good practice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

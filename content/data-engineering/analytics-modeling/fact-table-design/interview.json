@@ -1,0 +1,37 @@
+{
+  "topicId": "fact-table-design",
+  "interviewQuestions": [
+    {
+      "id": "fact-table-design-iq1",
+      "question": "What's the difference between additive, semi-additive, and non-additive measures, and why does the distinction matter?",
+      "answerMarkdown": "It's about which aggregations produce a real answer. Additive measures — revenue, quantity, bytes transferred — sum correctly across every dimension the fact table has, no exceptions. Semi-additive measures, like an account balance or inventory level, sum correctly across most dimensions but not across time, because they represent a snapshot level rather than accumulated activity. Non-additive measures, like a conversion rate or profit margin, are ratios that can't be summed across any dimension at all.\n\nThe reason it matters is that SQL doesn't stop you from doing the wrong thing. `SUM(account_balance)` runs fine and returns a plausible-looking number — it's just wrong, because it treats repeated snapshots of the same money as new money each time. A customer holding $10,000 for a month doesn't have $310,000; they have $10,000, observed 31 times.\n\nIn practice this changes how I design the table: I document, right next to each measure column, what aggregation is valid — SUM for additive, AVG or end-of-period for semi-additive, recompute-from-components for non-additive. That one line of documentation is cheaper than the wrong dashboard it prevents.\n\n**Testing:** whether you know SQL's silence isn't validation — a query running successfully doesn't mean the aggregation is correct.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "fact-table-design-iq2",
+      "question": "A dashboard reports total inventory value for the quarter by summing a daily inventory snapshot. Finance says the number is way too high. What's going on, and how would you fix it?",
+      "answerMarkdown": "My first hypothesis, before looking at anything else, is that inventory level is semi-additive and someone summed it across time — that's the single most common cause of an inflated, too-high total in exactly this shape. Inventory on hand is a level, not an event: if you're holding roughly the same 1,000 units for 90 days and you sum the daily snapshot, you get a total that implies 90,000 units moved through, when really the same 1,000 sat there the whole quarter.\n\nI'd confirm by pulling the query and checking for `SUM(inventory_qty)` grouped only by product, without a time filter collapsing to one row — if the group-by includes date at all and then a second aggregation sums across those dates, that's the bug.\n\nThe fix depends on what the business actually wants: if it's \"average inventory held during the quarter,\" that's `AVG()` across the daily snapshots. If it's \"inventory value as of quarter-end,\" that's a single snapshot row filtered to the last day, not an aggregation at all. I'd push back on \"total inventory for the quarter\" as a phrase, because summing a level over time isn't a real quantity — I'd get finance to specify which of those two questions they actually meant.\n\n**Testing:** whether you can trace a wrong number back to a semi-additive aggregation mistake and translate the business ask into the correct query shape.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "fact-table-design-iq3",
+      "question": "How would you design a fact table to track an order's full lifecycle — placed, shipped, delivered — for operational reporting on fulfillment time?",
+      "answerMarkdown": "I'd use an accumulating-snapshot fact table: one row per order, with a column for each milestone's timestamp — `placed_at`, `shipped_at`, `delivered_at` — starting mostly NULL and filled in as the order progresses. That gives a single row per order that directly answers \"how long did fulfillment take\" as `delivered_at - placed_at`, without joining across separate event rows.\n\nThe part that's easy to underestimate is that this breaks the append-only pattern most fact tables rely on — the same row gets updated multiple times as the order moves forward, so the load needs a reliable way to find \"the row for order 4021\" (a unique key on order ID) and update it idempotently, so a retried pipeline run doesn't corrupt an order that's mid-lifecycle.\n\nI'd also add a derived \"current stage\" column and think about orders that get stuck — if `shipped_at` is filled but `delivered_at` has been NULL for two weeks, that's worth surfacing as an anomaly rather than silently sitting in the table looking like a normal in-progress order. That monitoring angle connects directly into the data-pipeline-observability practices this area covers elsewhere — freshness and volume checks apply just as much to a stalled lifecycle row as to a missing batch load.\n\n**Testing:** whether you know accumulating snapshots exist and can name the operational cost (update support, idempotency, stall detection) that comes with them.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design"
+    },
+    {
+      "id": "fact-table-design-iq4",
+      "question": "What's a factless fact table, and can you give a real reason you'd build one?",
+      "answerMarkdown": "A factless fact table records that an event happened, with no numeric measure at all — just the dimension keys. \"Student attended class\" is a row of `student_id`, `class_id`, `date_id`, and nothing to sum; the implicit measure is the count of rows.\n\nThe real reason I'd reach for one is modeling **coverage** — the set of things that were *eligible* to happen, whether or not they did. Take a promotions system: you have a fact table of redemptions, which only shows what customers actually redeemed. Without a second, factless table recording every customer/promotion pair that *qualified* for an offer, you can never answer \"what fraction of eligible customers redeemed this promo\" — you only ever see the numerator, never the denominator.\n\nConcretely, I built one of these for an eligibility funnel: a factless fact of every user who qualified for a feature flag, joined against an activity fact of who actually engaged. That comparison — eligible-but-inactive — was the whole point of the analysis, and it's structurally invisible without the coverage table existing as its own fact.\n\n**Testing:** whether you understand that factless facts solve a coverage/denominator problem, not just \"a table with no numbers.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

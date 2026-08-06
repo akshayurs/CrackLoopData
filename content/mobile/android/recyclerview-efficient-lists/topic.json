@@ -1,0 +1,148 @@
+{
+  "id": "recyclerview-efficient-lists",
+  "title": "RecyclerView & Efficient Lists",
+  "area": "mobile",
+  "group": "android",
+  "order": 6,
+  "slug": "recyclerview-efficient-lists",
+  "summary": "The ViewHolder pattern recycles views instead of inflating them, and DiffUtil updates a list without rebinding everything. Learn both, plus where naive list code quietly costs performance.",
+  "level": "intermediate",
+  "slideCount": 9,
+  "estReadMinutes": 8,
+  "slides": [
+    {
+      "id": "recyclerview-efficient-lists-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Inflating a view from XML — parsing the layout, building the object tree — is expensive relative to how fast a list needs to scroll. `RecyclerView`'s entire design centers on avoiding that cost as much as possible: it inflates a small number of views once and **recycles** them as the user scrolls, rebinding new data into the same view objects rather than creating fresh ones.\n\nThis topic covers the `ViewHolder` pattern that makes recycling possible, `DiffUtil` for updating a list's contents without a full rebind of everything, how this compares to Compose's `LazyColumn`, and pagination. The classic performance mistakes — `notifyDataSetChanged()` for small updates and decoding images synchronously on the main thread — both directly undercut the recycling model this topic explains.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "recyclerview-efficient-lists-s02",
+      "order": 2,
+      "sectionTitle": "The ViewHolder pattern",
+      "subTitle": "Why recycling views beats inflating them",
+      "type": "concept",
+      "markdown": "Without recycling, a list of 1,000 items scrolling past would need to inflate 1,000 views over the scroll — expensive layout XML parsing and object construction repeated far more than the screen can ever show at once, since only a handful of rows are visible at any given moment.\n\n`RecyclerView`'s answer: inflate only enough views to fill the visible screen plus a small buffer, wrap each one in a `ViewHolder` that caches references to its child views (so `findViewById` isn't called again on every bind), and as the user scrolls, take a view that's scrolled off-screen, **rebind** it with new data instead of destroying it and inflating a fresh one for the newly-visible position.\n\nThe `ViewHolder`'s caching specifically avoids a second, subtler cost: `findViewById` walks the view tree looking up a child by ID, which is real work if called on every single bind — caching the references once at `ViewHolder` construction and reusing them on every rebind turns a per-bind tree walk into a one-time cost per recycled view, not per row of data ever shown.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "recyclerview-efficient-lists-s02-q1"
+      ]
+    },
+    {
+      "id": "recyclerview-efficient-lists-s03",
+      "order": 3,
+      "sectionTitle": "How a RecyclerView reuses view holders while scrolling",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "As the user scrolls down, a row at the top of the screen moves off-visible-bounds first. Rather than destroying its view, `RecyclerView` moves it into a recycled pool, then — as a new row becomes visible at the bottom — pulls that same view object back out of the pool and calls `onBindViewHolder` on it with the new position's data, reusing the exact same inflated hierarchy with fresh content.\n\nThis is why the number of actual view instances alive at any time stays roughly constant (screen height / row height, plus a small buffer), regardless of whether the underlying list has 20 items or 20,000 — the pool size is bounded by what's visible, not by the data set size, which is the whole mechanism that makes scrolling a 20,000-item list feel identical in performance to scrolling a 20-item one.\n\n![RecyclerView recycling a scrolled-out row view into a pool and rebinding it for a new row](assets/recyclerview-view-recycling.svg)",
+      "assets": [
+        {
+          "alt": "RecyclerView recycling a scrolled-out row view into a pool and rebinding it for a new row",
+          "path": "assets/recyclerview-view-recycling.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": []
+    },
+    {
+      "id": "recyclerview-efficient-lists-s04",
+      "order": 4,
+      "sectionTitle": "A RecyclerView.Adapter with view holder binding",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```kotlin\nclass UserAdapter(private var items: List<User>) :\n    RecyclerView.Adapter<UserAdapter.ViewHolder>() {\n\n    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {\n        val name: TextView = view.findViewById(R.id.name)   // cached once\n        val avatar: ImageView = view.findViewById(R.id.avatar)\n    }\n\n    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {\n        val view = LayoutInflater.from(parent.context)\n            .inflate(R.layout.item_user, parent, false)\n        return ViewHolder(view)   // called rarely — only when the pool needs a new instance\n    }\n\n    override fun onBindViewHolder(holder: ViewHolder, position: Int) {\n        val user = items[position]\n        holder.name.text = user.name   // called on every scroll-triggered rebind\n        holder.avatar.loadImage(user.avatarUrl)\n    }\n\n    override fun getItemCount() = items.size\n}\n```\n\nThe split between `onCreateViewHolder` (rare — inflation and the one-time `findViewById` caching) and `onBindViewHolder` (frequent — runs on every scroll-triggered rebind) is the whole performance model made concrete: anything expensive belongs in the rare method, and `onBindViewHolder` should stay as cheap as possible since it runs constantly during a scroll gesture.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "recyclerview-efficient-lists-s04-q1"
+      ]
+    },
+    {
+      "id": "recyclerview-efficient-lists-s05",
+      "order": 5,
+      "sectionTitle": "DiffUtil",
+      "subTitle": "Updating a list without a full rebind",
+      "type": "concept",
+      "markdown": "When a list's underlying data changes — one item updated, one removed, three added — the naive approach is telling the adapter \"everything might be different,\" which forces every currently-visible row to rebind even though most of them didn't actually change. `DiffUtil` computes the **minimal set of operations** (insert, remove, move, change) between the old list and the new list, and dispatches only those specific, targeted updates to the adapter instead.\n\nThe practical benefit is twofold: performance (only genuinely-changed rows rebind, not the whole visible set) and UX (a targeted removal animates that specific row disappearing, versus a full refresh that just snaps the whole list to its new state with no animation and, worse, resets scroll position). `DiffUtil` needs a way to compare items — an ID-based equality check for \"is this the same logical item\" and a content-based equality check for \"did its displayed content actually change\" — both of which the caller has to define correctly for the diff to produce meaningful results.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "recyclerview-efficient-lists-s05-q1"
+      ]
+    },
+    {
+      "id": "recyclerview-efficient-lists-s06",
+      "order": 6,
+      "sectionTitle": "RecyclerView with DiffUtil vs Compose's LazyColumn",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | RecyclerView + DiffUtil | Compose LazyColumn |\n|---|---|---|\n| **Recycling mechanism** | Explicit ViewHolder pool you interact with | Handled internally by Compose's own recomposition and layout system |\n| **Update mechanism** | DiffUtil computes and dispatches an explicit diff | Smart recomposition automatically re-renders only items whose read state changed |\n| **Boilerplate** | More — Adapter, ViewHolder, DiffUtil.Callback all hand-written | Less — a lambda per item, keyed by a stable ID |\n| **Animations** | Manual, tied to DiffUtil's dispatched operations | Built-in item animation APIs, less manual wiring |\n\n`LazyColumn` solves the same underlying problem — don't do full work for a list bigger than the screen — through Compose's general recomposition mechanism rather than a separate, list-specific recycling system: giving each item a stable `key` lets Compose's diffing correctly track items across reordering the same way `DiffUtil`'s ID-based comparison does. Teams building new Compose UIs almost always reach for `LazyColumn` directly rather than wrapping a classic `RecyclerView`, since it gets equivalent efficiency with meaningfully less code to maintain.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 82,
+      "mcqIds": []
+    },
+    {
+      "id": "recyclerview-efficient-lists-s07",
+      "order": 7,
+      "sectionTitle": "Pagination",
+      "subTitle": "Loading more items before the user hits the bottom",
+      "type": "concept",
+      "markdown": "Loading an entire dataset up front — thousands of records for a feed that only shows a screenful at a time — wastes both memory and initial load time for data the user may never scroll to. Pagination loads data in pages, fetching the next page proactively as the user scrolls close to the end of what's already loaded, rather than loading everything at once or waiting until the user hits a dead-end at the bottom.\n\nThe \"proactively, before the bottom\" part matters for feel: triggering the next page fetch only once the user has scrolled to the literal last visible item guarantees a visible loading stutter every single time, since the network round trip hasn't even started until the user is already staring at empty space. Triggering it a threshold earlier (a fixed number of items from the end) gives the fetch a head start, so it often completes before the user actually reaches that point.\n\nAndroid's `Paging` library formalizes this pattern — page loading, retry on failure, and integration with `RecyclerView`'s adapter model — rather than every team hand-rolling their own scroll-position-triggered fetch logic with its own edge cases around rapid scrolling, duplicate requests, and error states.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "recyclerview-efficient-lists-s07-q1"
+      ]
+    },
+    {
+      "id": "recyclerview-efficient-lists-s08",
+      "order": 8,
+      "sectionTitle": "Calling notifyDataSetChanged() for every small update",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A single item's data changes, and the code calls `notifyDataSetChanged()` — telling the adapter \"assume everything might be different\" — rather than a targeted `notifyItemChanged(position)` or a `DiffUtil`-computed update. This forces every currently-visible `ViewHolder` to rebind, even the ones whose data genuinely didn't change, undercutting the entire recycling model's performance benefit for what should have been a single-row update.\n\nThe visible symptom beyond raw performance: any in-progress row animation, and the user's exact scroll position, can visibly reset or glitch on a full `notifyDataSetChanged()` call, because the adapter has no information about *what* changed — it treats the update as a full, unstructured refresh rather than a specific, describable change.\n\nThis is tempting because it's the simplest call to reach for — one line, no need to think about which specific rows changed — but the fix (using `DiffUtil` to compute the actual difference, or a targeted `notifyItemChanged`/`notifyItemInserted`/`notifyItemRemoved` when you already know precisely what changed) isn't meaningfully more code once it's set up once for an adapter, and it's the difference between a list that feels responsive at scale and one that visibly stutters on every update.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": [
+        "recyclerview-efficient-lists-s08-q1"
+      ]
+    },
+    {
+      "id": "recyclerview-efficient-lists-s09",
+      "order": 9,
+      "sectionTitle": "Decoding images on the main thread inside onBindViewHolder",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "`onBindViewHolder` runs on the main thread and runs constantly during a scroll — anything genuinely expensive there directly costs scroll smoothness. Decoding an image synchronously (loading a large bitmap from disk or network and decoding it right there in the bind call) is one of the most common ways this happens, because it's easy to write as a single blocking call that \"just works\" in a quick test with one or two images, while a real scrolling list triggers it dozens of times per second.\n\nThe fix is never decoding images synchronously inline in `onBindViewHolder` — instead, kick off an asynchronous load (through an image-loading library like Glide or Coil, both purpose-built for exactly this) that handles decoding off the main thread, caching, and — critically — cancellation when the `ViewHolder` gets recycled before the load finishes, so a slow-loading image for a row that's since scrolled away and been rebound with different data doesn't end up rendering into the wrong row.\n\nThat last part — cancellation on recycle — is the detail hand-rolled solutions often miss: without it, an async image load that completes after its `ViewHolder` has already been rebound with a different item's data can render the old image into what's now a completely different row, a visible correctness bug on top of the performance one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 86,
+      "mcqIds": [
+        "recyclerview-efficient-lists-s09-q1"
+      ]
+    }
+  ]
+}

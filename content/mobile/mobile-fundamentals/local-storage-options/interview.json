@@ -1,0 +1,37 @@
+{
+  "topicId": "local-storage-options",
+  "interviewQuestions": [
+    {
+      "id": "local-storage-options-iq1",
+      "question": "How do you decide where a given piece of data should live on a mobile device?",
+      "answerMarkdown": "I run through three questions in order: **is it a secret, is it structured and queryable, is it a large blob?**\n\nIf it's a credential or token, it goes in hardware-backed secure storage — Keystore or Keychain — no exceptions, regardless of how small it is. If it's not a secret but has structure I'll ever query, filter, or relate to other records — a list of orders, saved items, anything I'd ask a \"which ones\" question about — it goes in the embedded database. If it's a large binary blob — an image, a downloaded file — it goes on the filesystem, with just a path and some metadata in the database.\n\nWhat's left after those three filters is small, flat, and independent — a theme choice, a feature flag, a last-sync timestamp — and that's what preferences are actually for.\n\nThe mistake I watch for on a team is defaulting to whichever tier is most convenient to reach for first, usually preferences, and then discovering months later that it's holding a serialized list that should have been a database table. I'd rather spend five minutes on this decision up front than do a storage migration under pressure later.\n\n**Testing:** whether you have an actual framework rather than picking storage by habit or convenience.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "local-storage-options-iq2",
+      "question": "Why do both major mobile platforms use SQLite as their default embedded database, rather than something more modern?",
+      "answerMarkdown": "Because SQLite's design constraints map almost exactly onto what a sandboxed mobile app needs, and \"modern\" usually means client-server, which is the wrong shape entirely.\n\nIt's serverless and zero-configuration — no daemon, no port, nothing to start or stop, which matters because a mobile app can't manage a background database server the way a backend can. It's a single file, which makes backup, restore, and per-app sandboxing trivial: the whole database is one thing the OS can copy, encrypt, or wipe with the filesystem. It's transactional and crash-safe, so a process kill mid-write — which happens constantly on mobile, as we covered in the lifecycle topic — doesn't corrupt the file. And it's been running in production across billions of devices for two decades, which for a foundational piece of infrastructure is worth more than a marginally nicer query API.\n\nThat's also why you rarely talk to it directly: Room on Android and Core Data/SwiftData on iOS both sit on top of it as a type-safe layer, but understanding that it's SQLite underneath explains real behavior — why migrations are versioned and explicit, why a missing index shows up as a slow query the same way it would on a server, and why the file can be inspected directly with any SQLite browser for debugging.\n\n**Testing:** whether you understand SQLite as a deliberate fit for the mobile environment, not just \"the database Android/iOS happen to ship.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "local-storage-options-iq3",
+      "question": "A user updates your app after skipping the last three releases, and their local database migration crashes. How do you approach this?",
+      "answerMarkdown": "I'd assume immediately that this is a **skipped-version migration path** that was never tested, because that's the single most common cause of update crashes tied to local storage, and it's exactly the path a long-time user takes and a QA pass usually doesn't.\n\nFirst I'd check whether migrations are declared as versioned, incremental steps (v3→v4, v4→v5, v5→v6) rather than one big jump, and whether the crashing user's actual starting version has an explicit step defined — a gap in the chain, or a step that assumes the previous migration already ran, is the usual culprit. I'd also check for a destructive migration fallback silently enabled in debug builds that got left on in production — some ORMs default to \"just wipe and recreate\" if a migration path is missing, which crashes are actually the *better* outcome for, since silent data loss is worse.\n\nOnce I've found the gap, the fix is to add the missing incremental step, and then — critically — add a test that installs the oldest still-supported schema version and runs the full migration chain forward, not just a test from the immediately previous version. That's the test suite gap that let this ship in the first place.\n\nLonger term, I'd push for the release process to include this as a mandatory pre-release check, since it's cheap to test and expensive to hotfix once it's crashing for real users mid-migration with their data on the line.\n\n**Testing:** whether you can diagnose a real production data-migration failure and fix the systemic testing gap, not just the immediate crash.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "local-storage-options-iq4",
+      "question": "As a staff engineer, how would you review a PR that stores a refresh token in SharedPreferences \"temporarily, to unblock the demo\"?",
+      "answerMarkdown": "I'd block it, and I'd be specific about why rather than just citing a rule, because \"temporary\" storage decisions are exactly the ones that quietly become permanent once the demo passes and the ticket gets closed.\n\nThe concrete risk: SharedPreferences and UserDefaults are sandboxed but not encrypted at the app layer, and are readable on a rooted or jailbroken device or extractable from a full device backup. A refresh token is a long-lived credential — unlike a short-lived access token, its leak doesn't just cost an hour, it lets an attacker mint new sessions indefinitely until it's revoked. That's precisely the class of secret hardware-backed secure storage exists for.\n\nWhat I'd ask for instead: move the token to Keystore/Keychain now, which on both platforms is a small, well-documented API change, not a redesign — this isn't a \"do it properly later\" scope problem, it's roughly the same line count either way. If there's a genuine platform blocker for the demo environment specifically, I'd want that scoped to a feature flag with an explicit expiry and a tracked follow-up ticket with an owner, not a comment promising to fix it.\n\nThe broader principle I'd state in the review: security-relevant defaults should never ride on \"temporarily\" — every codebase I've seen has at least one \"temporary\" insecure shortcut that's three years old.\n\n**Testing:** whether you can push back on a \"just ship it\" security shortcut with a concrete technical reason and a realistic alternative, not just a policy citation.",
+      "mostAsked": false,
+      "level": "expert",
+      "subTitle": "Security Review"
+    }
+  ]
+}

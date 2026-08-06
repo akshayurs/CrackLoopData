@@ -1,0 +1,169 @@
+{
+  "id": "extraction-patterns",
+  "title": "Extraction Patterns",
+  "area": "data-engineering",
+  "group": "batch-etl",
+  "order": 2,
+  "slug": "extraction-patterns",
+  "summary": "How to pull data out of a source system without breaking it, missing records, or silently losing deletes — the practical mechanics behind every ingestion tool.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "extraction-patterns-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Just query the source and load the results\" is the naive version of extraction, and it breaks in three predictable ways: it doesn't scale as the source grows, it can miss records that changed between runs, and it can't see deletes at all.\n\nThis topic covers the extraction patterns that actually survive production — full vs incremental, watermark-based extraction and its late-arrival trap, API pagination, and the delete problem every timestamp-based approach shares. Change Data Capture, the pattern that solves most of these cleanly, gets its own deep dive right after this.\n\nThe throughline: extraction is deceptively simple to build a demo of and deceptively hard to make correct under real production conditions — concurrent writes, API rate limits, and a source system that owes you nothing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "extraction-patterns-s02",
+      "order": 2,
+      "sectionTitle": "Full extraction",
+      "subTitle": "Simplest, but doesn't scale with source size",
+      "type": "concept",
+      "markdown": "**Full extraction** pulls every row from the source every time the pipeline runs — `SELECT * FROM orders` with no filter, then overwrite the destination table entirely.\n\nIt's the simplest pattern to implement and reason about: no state to track between runs, no risk of missing a record because of a bug in \"what changed since last time\" logic. For a small, slow-changing table, it's genuinely the right choice — the complexity of incremental extraction isn't worth it.\n\nIt stops working the moment the source table gets large: extracting 500 million rows every run to capture the 10,000 that actually changed wastes compute, network bandwidth, and time, and it puts unnecessary load on the source system every single run — the exact risk this curriculum's OLTP-vs-OLAP topic warned about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "extraction-patterns-s02-q1"
+      ]
+    },
+    {
+      "id": "extraction-patterns-s03",
+      "order": 3,
+      "sectionTitle": "Incremental extraction by high-watermark",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Incremental extraction** pulls only rows that changed since the last successful run, typically using a **high-watermark column** — an `updated_at` or auto-incrementing `id` — and a query like `WHERE updated_at > :last_watermark`.\n\nAfter each run, you record the maximum value seen (the new watermark) to use as the starting point next time. This scales far better than full extraction: a table with 500 million rows and 10,000 daily changes only costs you a scan proportional to those 10,000, not the whole table.\n\nThe catch, covered next, is that this pattern silently assumes the watermark column is a perfectly reliable signal of \"this row changed\" — and that assumption breaks in a specific, common way.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "extraction-patterns-s03-q1"
+      ]
+    },
+    {
+      "id": "extraction-patterns-s04",
+      "order": 4,
+      "sectionTitle": "The late-arrival trap",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Watermark extraction assumes rows arrive in roughly the order their timestamp suggests. They don't always. A row can be inserted with an `updated_at` slightly *earlier* than your last watermark — a transaction that started before your extraction window closed but committed just after, or clock skew across application servers writing to the same table.\n\nConcretely: your job runs at 2:00:00 with watermark `2:00:00`, but a transaction that began at 1:59:58 doesn't commit until 2:00:02 — after your query already ran. The next run's watermark is now past that row's timestamp, and it's silently skipped forever. No error, no log line — just a row that quietly never makes it downstream.\n\nThe standard defense is a **safety overlap window**: re-extract a buffer period behind the watermark (say, the last 10 minutes) every run, and deduplicate on the destination side using the row's primary key. You trade a small amount of redundant extraction for closing this gap entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "extraction-patterns-s04-q1"
+      ]
+    },
+    {
+      "id": "extraction-patterns-s05",
+      "order": 5,
+      "sectionTitle": "Extracting via API pagination",
+      "subTitle": "Cursors, rate limits, idempotent retries",
+      "type": "concept",
+      "markdown": "Pulling from a SaaS API adds its own constraints on top of the watermark problem. Most modern APIs paginate results using a **cursor** — an opaque token in the response pointing to the next page — rather than a simple page number, because cursors stay correct even if rows are added or removed between page fetches.\n\nRate limits mean your extraction job has to back off and retry rather than hammering the API — a 429 response is normal operation, not an error to alert on immediately. And any retry has to be **idempotent**: if a request times out after the API already processed it server-side, retrying the same cursor shouldn't double-count or skip records, which usually means the extraction logic tracks \"last successfully processed cursor\" durably, so a crash mid-pagination resumes exactly where it left off rather than restarting from page one or silently skipping ahead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "extraction-patterns-s06",
+      "order": 6,
+      "sectionTitle": "Query-based vs log-based extraction",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Query-based (full or incremental) | Log-based (CDC) |\n|---|---|---|\n| **How it reads data** | Runs a `SELECT` against the source's tables | Tails the source's write-ahead log / binlog |\n| **Sees deletes?** | Not directly — a deleted row just stops appearing | Yes — deletes are explicit log events |\n| **Load on source** | Every query competes for source resources | Minimal — reads the log, not the tables |\n| **Latency** | Bounded by run schedule | Can approach near-real-time |\n| **Setup complexity** | Low — it's just SQL | Higher — needs log access, connector infra |\n\nQuery-based extraction is simpler to set up and is the right starting point for most pipelines. Log-based extraction (Change Data Capture) solves the delete problem and the source-load problem structurally, at the cost of more infrastructure — the full mechanics get their own topic next.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "extraction-patterns-s06-q1"
+      ]
+    },
+    {
+      "id": "extraction-patterns-s07",
+      "order": 7,
+      "sectionTitle": "Scheduled file/export drops",
+      "subTitle": "The naive but common case",
+      "type": "concept",
+      "markdown": "Not every source offers a queryable API or database access — plenty of real integrations are a vendor dropping a CSV or JSON file into an SFTP server or an S3 bucket on a schedule, and your job is to notice and pull it in.\n\nThis pattern looks primitive but is extremely common with legacy enterprise systems, some banking/EDI integrations, and vendors who simply never built a proper API. The practical concerns are different from query-based extraction: detecting that a new file has actually arrived (a file-arrival sensor, not a fixed-time trigger, since the vendor's drop time can drift), validating the file isn't a partial write (checking a companion `.done` marker file, or a checksum, before processing), and handling schema drift in the file itself, since there's no schema registry enforcing anything on a vendor's CSV export.\n\nIt's unglamorous, but a large share of real-world data engineering work is exactly this, done reliably.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "extraction-patterns-s08",
+      "order": 8,
+      "sectionTitle": "An incremental extraction query with a safety overlap",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Putting the watermark-plus-overlap defense into an actual query:\n\n```sql\n-- last_watermark = max(updated_at) seen on the previous successful run\n-- overlap_minutes = safety buffer to catch late-arriving commits\n\nSELECT *\nFROM orders\nWHERE updated_at > (:last_watermark - INTERVAL ':overlap_minutes minutes')\nORDER BY updated_at;\n\n-- Downstream: upsert (MERGE) on order_id rather than plain INSERT,\n-- so rows re-extracted inside the overlap window are deduplicated\n-- instead of creating duplicates.\n```\n\nThe overlap window means you deliberately re-fetch a small amount of already-processed data on every run — that's the cost you pay. The upsert on the destination is what makes that redundancy harmless instead of a source of duplicate rows.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "extraction-patterns-s08-q1"
+      ]
+    },
+    {
+      "id": "extraction-patterns-s09",
+      "order": 9,
+      "sectionTitle": "Handling deletes",
+      "subTitle": "The case incremental-by-timestamp can't see",
+      "type": "concept",
+      "markdown": "This is the structural gap every watermark-based approach shares: if a row is **deleted** from the source, there's no `updated_at` to trigger re-extraction — the row simply stops showing up in your query results, and your pipeline has no signal that anything happened at all.\n\nThree common workarounds, each with a real cost:\n\n- **Soft deletes** — the source marks rows `deleted_at IS NOT NULL` instead of hard-deleting, so your watermark query still sees the row change. Requires the source schema to support this, which you often don't control.\n- **Periodic full reconciliation** — occasionally run a full extraction and diff against what's in the destination, removing anything no longer present at the source. Costly but catches everything, including deletes.\n- **Log-based CDC** — the real fix, because deletes are explicit events in a database's write-ahead log even when there's no soft-delete column, so a connector tailing the log sees them directly.\n\nIf deletes matter to your use case at all, this gap alone is often the deciding factor that pushes a team toward CDC.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "extraction-patterns-s09-q1"
+      ]
+    },
+    {
+      "id": "extraction-patterns-s10",
+      "order": 10,
+      "sectionTitle": "Choosing an extraction pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In practice the decision collapses to a short set of questions: Is the table small or slow-changing enough that full extraction's simplicity outweighs its cost? If not, does a reliable watermark column exist, and do deletes matter for this use case? If deletes matter and the source is a database you can get log access to, CDC is usually worth its setup cost. If the source is a SaaS API, pagination and rate-limit handling are non-negotiable regardless of which extraction pattern you use above that.\n\nMost real systems end up using more than one pattern across their sources — full extraction for small reference tables, incremental-with-overlap for large append-mostly tables, CDC for the handful of tables where deletes or near-real-time freshness genuinely matter. There's no single right answer across an entire stack.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "extraction-patterns-s11",
+      "order": 11,
+      "sectionTitle": "Where this leads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The delete problem and the source-load problem both point at the same solution, which gets a full topic next: **Change Data Capture**. CDC reads a database's write-ahead log or binlog directly instead of querying its tables, which structurally sidesteps both issues — it sees every insert, update, and delete as an explicit event, and it never competes with the OLTP workload for query capacity.\n\nThe trade CDC makes in exchange is real infrastructure complexity — replication slots, log retention limits, a connector that has to survive the source database failing over — which is exactly why query-based extraction, imperfect as it is, remains the right default for tables where it's good enough.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

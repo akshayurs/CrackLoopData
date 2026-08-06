@@ -1,0 +1,172 @@
+{
+  "id": "mapreduce-hadoop",
+  "title": "MapReduce & the Hadoop Legacy",
+  "area": "data-engineering",
+  "group": "big-data-frameworks",
+  "order": 1,
+  "slug": "mapreduce-hadoop",
+  "summary": "The model that started distributed batch processing at scale, and the disk round-trip that eventually got it replaced. Its ideas still show up everywhere, even where the name doesn't.",
+  "level": "beginner",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "mapreduce-hadoop-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Before Spark, before Flink, there was **MapReduce**: a programming model for processing enormous datasets by splitting work across many machines, expressed as exactly two functions — map and reduce.\n\nIt made distributed batch processing practical for the first time at web scale, running on **HDFS**, a filesystem built to survive commodity hardware failing constantly. It also had one structural weakness — writing every intermediate result to disk — that eventually got it displaced by in-memory engines for most new work. Understanding why it was replaced is as valuable as understanding how it worked.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "mapreduce-hadoop-s02",
+      "order": 2,
+      "sectionTitle": "The MapReduce model",
+      "subTitle": "Map, shuffle, reduce",
+      "type": "concept",
+      "markdown": "Every MapReduce job is exactly three phases:\n\n- **Map** — a function runs independently over each chunk of input data, emitting key-value pairs. No coordination between mappers; this is where the parallelism comes from.\n- **Shuffle** — the framework redistributes all emitted pairs so every value for a given key ends up on the same machine, ready for reduction.\n- **Reduce** — a function runs over each key's collected values and produces the final output for that key.\n\nThe genius of the model is its restriction: because map and reduce are the *only* operations, the framework can automatically parallelize, retry failed tasks, and schedule work across a cluster without the programmer writing any distributed-systems code themselves.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "mapreduce-hadoop-s02-q1"
+      ]
+    },
+    {
+      "id": "mapreduce-hadoop-s03",
+      "order": 3,
+      "sectionTitle": "Word count, traced through the stages",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The canonical MapReduce example: count occurrences of every word across a large text corpus. Map emits `(word, 1)` for every word it sees; shuffle groups all pairs by word across the cluster; reduce sums the 1s for each word into a final count.\n\n![Word count pipeline through map, shuffle, and reduce stages](assets/wordcount-mapreduce.svg)",
+      "assets": [
+        {
+          "alt": "Word count pipeline through map, shuffle, and reduce stages",
+          "path": "assets/wordcount-mapreduce.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 45,
+      "mcqIds": []
+    },
+    {
+      "id": "mapreduce-hadoop-s04",
+      "order": 4,
+      "sectionTitle": "HDFS: blocks, replication, and two node roles",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**HDFS** (Hadoop Distributed File System) is the storage layer MapReduce was built on top of. Files are split into large blocks (128MB or 256MB, historically), and each block is replicated — by default three times — across different machines.\n\nTwo node roles run the show: the **NameNode** holds the metadata — which blocks make up which file, and which machines hold each block — entirely in memory for speed. **DataNodes** are the workhorses that actually store blocks and serve reads/writes. Replication means losing a machine, or even a whole rack, doesn't lose data — a common event at the scale HDFS was built for, where hardware failure is a daily occurrence, not an exception.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "mapreduce-hadoop-s04-q1"
+      ]
+    },
+    {
+      "id": "mapreduce-hadoop-s05",
+      "order": 5,
+      "sectionTitle": "Data locality",
+      "subTitle": "Move the compute, not the data",
+      "type": "concept",
+      "markdown": "MapReduce's key scheduling trick: rather than shipping terabytes of data to wherever compute happens to be free, the scheduler places each map task on (or near) the machine that already holds the relevant HDFS block.\n\nAt the scale Hadoop was designed for, moving data across the network is far more expensive than moving a small compiled task to sit next to data that's already local. This principle — **data locality** — is why Hadoop clusters typically colocate storage (HDFS) and compute (MapReduce) on the same physical machines, rather than separating them the way modern cloud warehouses often do.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "mapreduce-hadoop-s06",
+      "order": 6,
+      "sectionTitle": "Every stage round-trips through disk",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "MapReduce's defining weakness: map output is written to local disk, shuffled across the network, written to disk again on the reducer's machine, and the reducer's output is written to HDFS — disk I/O at every single hop, even for data that fits comfortably in memory.\n\nFor a single MapReduce job, this is a real but bounded cost. It becomes brutal for **iterative** workloads — machine learning training, graph algorithms, anything that runs the same computation over the same dataset repeatedly. Each iteration is a *separate* MapReduce job, meaning the same data gets written to and read from disk again on every single pass. A machine learning algorithm needing 20 iterations over a dataset pays that full disk round-trip cost 20 times, for data that could have stayed in memory the whole time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "mapreduce-hadoop-s06-q1"
+      ]
+    },
+    {
+      "id": "mapreduce-hadoop-s07",
+      "order": 7,
+      "sectionTitle": "Why in-memory execution displaced it",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Spark's core pitch, when it emerged, was direct: keep intermediate data in memory across stages and iterations instead of forcing every step through disk. For iterative workloads, this wasn't a modest speedup — early Spark benchmarks showed roughly 10-100x improvements over MapReduce on machine learning workloads, precisely because the disk round-trips MapReduce paid on every iteration simply disappeared.\n\nMapReduce's model was also rigid — exactly map, then reduce, with nothing in between — while Spark's abstraction allows arbitrary chains of transformations, so complex multi-step pipelines that needed several chained MapReduce jobs (each with its own disk round-trip) became a single in-memory pipeline instead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "mapreduce-hadoop-s07-q1"
+      ]
+    },
+    {
+      "id": "mapreduce-hadoop-s08",
+      "order": 8,
+      "sectionTitle": "A word-count mapper and reducer",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The map and reduce functions for word count, in the simplified logical form (real Hadoop jobs are written against a Java API with more ceremony):\n\n```python\ndef map(document_id, text):\n    for word in text.split():\n        emit(word, 1)\n\ndef reduce(word, counts):\n    emit(word, sum(counts))\n```\n\nEvery mapper runs this independently on its chunk of input, with zero awareness of any other mapper. The framework handles everything between `emit` in map and the grouped `counts` list arriving at reduce — sorting, partitioning by key, and shipping data across the network. That's the whole value of the model: the programmer writes two simple functions and never touches a socket.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "mapreduce-hadoop-s09",
+      "order": 9,
+      "sectionTitle": "Where Hadoop-era ideas still show up",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "MapReduce itself is rarely written by hand today, but its ideas didn't disappear — they got absorbed:\n\n- **Data locality** is still a core scheduling principle in Spark and other modern engines, even though it matters less on cloud storage where compute and storage are often separated anyway.\n- **The shuffle** is still the expensive, defining operation in every distributed engine that followed — Spark's shuffle is the direct conceptual descendant of MapReduce's.\n- **HDFS itself** still underlies a meaningful share of on-premises big-data infrastructure, and its replication and block model influenced object storage systems like S3 and GCS.\n- **The map/reduce vocabulary** persists in APIs — Spark's `map()` and `reduceByKey()` are named after exactly this heritage.\n\nMapReduce isn't dead architecture — it's the ancestor whose vocabulary and core mechanisms every later engine still speaks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "mapreduce-hadoop-s10",
+      "order": 10,
+      "sectionTitle": "When MapReduce is still the right tool",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For a genuinely single-pass batch job over data that dwarfs available cluster memory — a one-time reprocessing of years of archived logs, for instance — MapReduce's disk-bound model isn't actually a disadvantage, because there's no repeated pass to speed up by caching in memory anyway.\n\nThe real lesson isn't \"MapReduce is obsolete\" — it's that MapReduce's cost model (pay for disk I/O on every stage) is a poor match for iterative and interactive workloads, and a fine match for large, single-pass jobs where memory couldn't hold the working set regardless of engine. Most organizations still moved off it because the majority of real workloads are iterative or multi-stage, not because single-pass batch jobs got worse.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "mapreduce-hadoop-s10-q1"
+      ]
+    },
+    {
+      "id": "mapreduce-hadoop-s11",
+      "order": 11,
+      "sectionTitle": "The interview framing",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If asked \"why did Spark replace MapReduce,\" the complete answer names the mechanism, not just the outcome: MapReduce forces every stage through disk, which is a bounded cost for one pass but multiplies badly across iterations; Spark keeps data in memory across stages via RDDs and lineage-based fault tolerance, removing that repeated cost.\n\nThe rest of this group builds Spark's answer to that problem in detail — its architecture, its DataFrame optimizer, how shuffles and joins actually execute, and the concrete levers for tuning a slow job.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

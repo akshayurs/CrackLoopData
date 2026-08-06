@@ -1,0 +1,166 @@
+{
+  "id": "streaming-architecture-patterns",
+  "title": "Streaming Architecture Patterns — Lambda & Kappa",
+  "area": "data-engineering",
+  "group": "stream-processing",
+  "order": 8,
+  "slug": "streaming-architecture-patterns",
+  "summary": "Lambda and Kappa are the two dominant answers to combining batch correctness with streaming freshness. One runs both pipelines in parallel; the other bets that one streaming pipeline can do both jobs.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "streaming-architecture-patterns-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything else in this group has been about a single streaming pipeline. This topic zooms out one level: how do you combine streaming's freshness with the correctness guarantees batch processing historically offered, at a whole-system level?\n\n**Lambda** answers this by running a batch pipeline and a streaming pipeline in parallel, merging their outputs. **Kappa** answers it by betting that a single, sufficiently capable streaming pipeline can serve both roles by reprocessing history through the same code path. Neither is obsolete — the right one depends on how mature your streaming engine actually is and how much you're willing to pay in operational complexity to keep two systems in sync.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "streaming-architecture-patterns-s02",
+      "order": 2,
+      "sectionTitle": "Lambda architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Lambda runs two independent pipelines against the same raw data: a **batch layer** that periodically recomputes correct, complete results over all historical data, and a **speed layer** that processes the same data as a stream to produce fast, approximate results with low latency. A serving layer merges the two — serving the speed layer's fresh-but-approximate numbers until the batch layer's next run produces the corrected, authoritative version for that same period.\n\n![Lambda architecture: batch layer and speed layer merging into one serving layer](assets/lambda-architecture.svg)",
+      "assets": [
+        {
+          "alt": "Lambda architecture: batch layer and speed layer merging into one serving layer",
+          "path": "assets/lambda-architecture.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "streaming-architecture-patterns-s03",
+      "order": 3,
+      "sectionTitle": "Why Lambda exists",
+      "subTitle": "Correctness now, freshness later — before engines matured",
+      "type": "concept",
+      "markdown": "Lambda emerged when stream processing engines were less mature and less trusted for correctness-critical results than batch engines — batch had years of refinement around exactly this kind of large-scale, provably-correct aggregation, while streaming engines were newer and had rougher edges around fault tolerance and exactly-once guarantees.\n\nThe Lambda answer to \"we need results fast, but we also need them right\" was: don't force one system to do both. Let the streaming speed layer give users something immediately, accept that it might be slightly wrong (a dropped late event, an approximation), and let the batch layer's periodic, complete recomputation quietly correct the record afterward.\n\nThis was a genuinely pragmatic answer to a real limitation of the tooling available at the time — not an arbitrary design preference. Understanding *why* it exists is what lets you correctly judge whether it's still the right call for a system you're designing today.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "streaming-architecture-patterns-s03-q1"
+      ]
+    },
+    {
+      "id": "streaming-architecture-patterns-s04",
+      "order": 4,
+      "sectionTitle": "Maintaining the same logic twice",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Lambda's biggest practical cost is that the batch layer and speed layer implement the **same business logic** — the same aggregation, the same filters — in two separate codebases, often in different languages or frameworks, because a batch engine and a streaming engine rarely share an API.\n\nOver time, these two implementations drift: someone fixes a bug or adds a new filter in the streaming job under deadline pressure and forgets to port the change to the batch job (or vice versa), and now the \"fast\" and \"correct\" numbers for the same period genuinely disagree — not because of Lambda's intended fast-then-corrected pattern, but because the two pipelines are quietly computing different things.\n\nThis drift is often invisible until someone notices a discrepancy and has to diff two codebases in different languages to find where they diverged — a debugging exercise that's uniquely painful precisely because Lambda's design assumes the two pipelines agree, and there's no automatic check that enforces it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "streaming-architecture-patterns-s04-q1"
+      ]
+    },
+    {
+      "id": "streaming-architecture-patterns-s05",
+      "order": 5,
+      "sectionTitle": "Kappa architecture",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Kappa's answer is structurally simpler: there's only **one** pipeline, streaming, and it handles both freshness and correctness. When you need to recompute history — fixing a bug, backfilling a new metric — you don't run a separate batch job; you **replay** the raw event log from an earlier offset through the exact same streaming code, producing a corrected result the same way you'd process new data.\n\n![Kappa architecture: a single event log feeding live processing, with replay from an earlier offset for reprocessing](assets/replay-from-log.svg)",
+      "assets": [
+        {
+          "alt": "Kappa architecture: a single event log feeding live processing, with replay from an earlier offset for reprocessing",
+          "path": "assets/replay-from-log.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "streaming-architecture-patterns-s06",
+      "order": 6,
+      "sectionTitle": "Kappa's precondition",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Kappa only works if two things are true, and it's worth checking both explicitly before committing to it: the log has to retain **enough history to replay from** — if you need to reprocess a year of data but your log only retains 7 days, Kappa's core mechanism simply doesn't have the raw material to work with — and the streaming engine has to be **fast and correct enough to serve as the sole source of truth**, including under the higher throughput a replay run demands (reprocessing a year of history quickly means running the pipeline far faster than its normal live-traffic rate).\n\nThe retention requirement has a direct cost: keeping a year of raw events in a log like [Kafka](kafka-deep-dive) at meaningful volume is a real storage and infrastructure decision, not a free configuration flag — this is exactly the retention trade-off from that topic, just driven by a reprocessing requirement instead of a normal operational one.\n\nWhen either precondition isn't met — retention too short, or the streaming engine not yet trusted for correctness-critical results — Lambda's dual-pipeline redundancy is still the more defensible choice, not a legacy pattern to be embarrassed about using.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "streaming-architecture-patterns-s06-q1"
+      ]
+    },
+    {
+      "id": "streaming-architecture-patterns-s07",
+      "order": 7,
+      "sectionTitle": "Lambda vs Kappa",
+      "subTitle": "Operational cost, consistency, when each still applies",
+      "type": "compare",
+      "markdown": "| | Lambda | Kappa |\n|---|---|---|\n| Codebases to maintain | Two (batch + streaming), can drift | One |\n| Consistency risk | Batch and speed layer can silently disagree | None — same code processes everything |\n| Infrastructure | Both a batch cluster and a streaming cluster | Streaming cluster only, but with long log retention |\n| Best fit today | Correctness-critical results where the streaming engine isn't fully trusted, or existing batch infra is heavily invested | Teams with a mature streaming engine and a log retention policy that supports replay |\n\nKappa is generally the more attractive default *today* precisely because streaming engines have matured enough that the original reason for Lambda — \"streaming isn't trustworthy enough for correctness\" — applies far less often than it used to. Lambda remains genuinely justified when replay volume or duration makes Kappa's retention requirement impractical, or when an organization already has deep batch infrastructure investment that a full migration to log-based replay doesn't yet justify.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "streaming-architecture-patterns-s07-q1"
+      ]
+    },
+    {
+      "id": "streaming-architecture-patterns-s08",
+      "order": 8,
+      "sectionTitle": "The modern middle ground",
+      "subTitle": "One engine, one codebase, two modes",
+      "type": "concept",
+      "markdown": "A third option has become increasingly common: frameworks whose batch and streaming APIs are unified enough that the **same code** runs in either mode — a shared execution engine handles both a bounded historical run and an unbounded live run of essentially the same logic, without maintaining two separate implementations.\n\nThis captures Lambda's original motivation (batch-grade correctness available when you need it) and Kappa's single-codebase appeal (no drift between two implementations) without Kappa's hard retention precondition — a full historical reprocessing run can still read from a durable batch store rather than requiring the whole history to live in a replayable log.\n\nThe trade-off is narrower than it sounds: this depends on the specific framework's batch and streaming modes genuinely sharing semantics under the hood, not just a similar-looking API on top of two different execution engines — checking that is worth doing before assuming you've escaped the Lambda-vs-Kappa choice entirely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "streaming-architecture-patterns-s08-q1"
+      ]
+    },
+    {
+      "id": "streaming-architecture-patterns-s09",
+      "order": 9,
+      "sectionTitle": "A concrete choice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Put the trade-off on a real decision: a fintech team needs a daily reconciled ledger balance (correctness-critical, audited) plus a live \"balance so far today\" number shown in the app (freshness-critical, tolerant of a rare small correction).\n\nIf their streaming engine has years of production hardening and their event log retains a year of transactions, Kappa is attractive: one pipeline, replay the log nightly (or on-demand) to recompute the reconciled balance with the exact same logic that produces the live number, with no second codebase to drift.\n\nIf their streaming engine is new to the team, or the log only retains 30 days while regulators require a year of replay-capable auditability, Lambda is the safer call today: a proven batch job computes the audited ledger, a separate streaming job gives users a live approximate number, and the two are reconciled with an explicit, monitored discrepancy check rather than an implicit assumption that they'll always agree.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "streaming-architecture-patterns-s09-q1"
+      ]
+    },
+    {
+      "id": "streaming-architecture-patterns-s10",
+      "order": 10,
+      "sectionTitle": "Closing this group",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This topic closes the Stream Processing group by zooming back out to the level where it started: [Streaming Fundamentals](streaming-fundamentals) opened with unbounded data forcing a different mental model than batch. Every topic since has been building the pieces that make that model work — watermarks decide when a window is done, windows shape what's grouped, state and checkpointing make computation durable, exactly-once defines what you can honestly claim, and Kafka and the engine landscape are the concrete systems that implement all of it. Lambda and Kappa are where those pieces assemble into whole-system architecture.\n\nThe throughline across all eight topics: every decision here — watermark slack, window type, state TTL, delivery guarantee, engine choice, architecture pattern — is a trade-off with a real cost, never a default to reach for without naming what you're trading away.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

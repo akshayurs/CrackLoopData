@@ -1,0 +1,37 @@
+{
+  "topicId": "reference-counting",
+  "interviewQuestions": [
+    {
+      "id": "reference-counting-iq1",
+      "question": "Why does Swift still need a `weak` keyword if reference counting is supposed to be automatic?",
+      "answerMarkdown": "Because \"automatic\" here means the compiler inserts the increment/decrement calls for you — it doesn't mean the scheme can correctly identify every object that's actually garbage.\n\nThe specific gap is cycles: if object A holds a strong reference to B and B holds one back to A, each one's count never reaches zero, even after every reference from outside the pair is dropped. From inside the counting mechanism, that pair looks identical to a legitimately alive object graph — a live reference is a live reference, full stop. There's no information in a plain reference count that distinguishes \"reachable from something outside\" from \"reachable only from within an isolated island.\"\n\n`weak` is the programmer supplying the information ARC structurally can't derive on its own: \"don't count this particular reference toward keeping the target alive.\" The standard place to use it is exactly the back-pointer in a bidirectional relationship — a child's pointer back to its parent, a delegate reference, a closure capturing `self` when the object also owns that closure.\n\nThe alternative some runtimes take is a periodic cycle-detecting collector as a backstop (CPython does this for container objects) — Swift deliberately didn't build that in, trading a bit of collector complexity for pushing the discipline onto the programmer, with tooling like Xcode's memory graph debugger to help spot cycles that got missed.\n\n**Testing:** whether you understand cycles as refcounting's structural blind spot, not an implementation bug Apple could patch.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "reference-counting-iq2",
+      "question": "Walk me through what happens, mechanically, when a Python object's last reference is dropped.",
+      "answerMarkdown": "The count that CPython attaches to every object gets decremented, and if that decrement brings it to exactly zero, the object's deallocation runs immediately and synchronously — not on some later pass, right there on the line that dropped the reference.\n\nConcretely: assigning `None` to a variable, letting it go out of scope at function return, or removing it from a list all trigger a decrement on whatever it was pointing at. If that was the last reference, CPython calls the object's `__del__` if it defines one, then frees the underlying memory back to its allocator. If the object being freed itself held references to other objects — say it was a list holding ten other objects — freeing it cascades: each of those ten gets decremented too, and any of them that also hit zero get freed in the same cascade.\n\nOne nuance worth naming: CPython also runs a separate, periodic cycle-detecting collector alongside this, specifically because plain refcounting can't reclaim reference cycles between container-like objects. So \"immediate\" is accurate for the common, acyclic case, but there's a second mechanism running underneath for the case pure counting structurally misses.\n\n**Testing:** whether you can describe the mechanism precisely (decrement, threshold check, cascade) rather than a vague \"Python garbage collects automatically.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "reference-counting-iq3",
+      "question": "Your team is deciding between Swift's ARC-only model and a tracing GC for a new mobile runtime. What would you weigh?",
+      "answerMarkdown": "I'd frame it as a trade between *when* the cost is paid and *what kind of bugs* you're accepting, because neither model is strictly cheaper — they move the same cost around.\n\nARC pays a small, constant cost on essentially every reference operation — every assignment, argument pass, and closure capture touches an atomic increment or decrement — and never needs a stop-the-world pause, which matters a lot for a mobile UI where a GC pause shows up as a dropped frame. In exchange, it never handles cycles on its own; the team has to actively find and mark every bidirectional relationship with `weak`, and a missed one is a genuine memory leak that ships silently, often only surfacing as slowly climbing memory in a long-lived screen.\n\nA tracing GC pays almost nothing on the common path — allocation is fast, ordinary references cost nothing to update — and handles cycles automatically because it reasons about reachability from roots, not counts. The cost shows up as a pause when collection runs, and that pause scales with live heap size, which is exactly the latency spike mobile UIs are least able to absorb.\n\nFor a mobile UI runtime specifically, I'd lean toward ARC's model precisely because pause-free responsiveness usually matters more than eliminating the cycle-discipline burden — which is the choice Apple actually made, and why Swift's tooling invests so heavily in cycle-detection debuggers instead of a collector.\n\n**Testing:** whether you can reason about a real system-design trade-off instead of declaring one scheme universally better.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "reference-counting-iq4",
+      "question": "A junior engineer says \"Python doesn't have GC pauses because it uses reference counting, not tracing.\" What would you correct?",
+      "answerMarkdown": "I'd correct the implication that Python has no collection pauses at all — it's true that the *common* path (an object's count hitting zero) is pause-free and immediate, but that's only half the picture.\n\nCPython runs a real generational, tracing-style cycle collector on top of refcounting specifically to catch reference cycles between container objects — lists, dicts, class instances, anything that can point at itself indirectly. That collector does periodically pause and scan a generation of tracked objects, and on a program that creates a lot of cyclic structures (deeply nested data, objects with back-references), that collector running can show up as a real, measurable latency spike, same category of problem as a tracing GC's minor collection, just usually smaller in scope.\n\nSo the accurate statement is: Python's *fast path* for acyclic objects is refcounting with immediate, deterministic frees and no pause. Its *backstop path* for cycles is a tracing collector with the same pause characteristics tracing GCs have, just running less often because most objects never form a cycle. \"No GC pauses\" is a fast-path claim, not a whole-runtime one — and it's exactly the kind of claim that's true often enough to sound right and wrong in the specific case that gets someone paged.\n\n**Testing:** whether you know reference counting and tracing GC aren't mutually exclusive in a real runtime, and can name the backstop mechanism specifically.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Production nuance"
+    }
+  ]
+}

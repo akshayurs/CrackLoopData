@@ -1,0 +1,174 @@
+{
+  "id": "partitioning-and-shuffle",
+  "title": "Partitioning & Shuffle in Distributed Compute",
+  "area": "data-engineering",
+  "group": "big-data-frameworks",
+  "order": 4,
+  "slug": "partitioning-and-shuffle",
+  "summary": "Moving bytes across a network is almost always the real bottleneck in a distributed job, not the computation itself. Shuffle is where that cost concentrates, and skew is where it goes badly wrong.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "partitioning-and-shuffle-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A [Spark stage boundary](spark-architecture) exists precisely where data needs to move between machines by key — that movement is called a **shuffle**, and it's usually where a distributed job actually spends its time, not in the per-row computation.\n\nThe intuition that trips people up: adding more machines speeds up computation, but it doesn't make network transfer free. Understanding shuffle — what triggers it, why it's expensive, and what happens when one key holds far more data than the rest (**skew**) — is the difference between tuning a Spark job effectively and guessing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-shuffle-s02",
+      "order": 2,
+      "sectionTitle": "What a shuffle actually is",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **shuffle** redistributes data across the cluster so that all records sharing a key end up on the same executor — required whenever an operation needs to see everything for a given key together, like `groupBy`, `join`, or `repartition`.\n\nBefore the shuffle, data is arranged however it happened to land — by file, by upstream partitioning, essentially arbitrary with respect to the key you now care about. After the shuffle, it's reorganized so a `reduceByKey` or a join can operate correctly, because the operation genuinely needs every value for key X to be visible to the same task at once.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "partitioning-and-shuffle-s02-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-shuffle-s03",
+      "order": 3,
+      "sectionTitle": "A groupBy triggering a shuffle",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A `groupBy(\"customer_id\")` traced through its shuffle: each source partition writes its records out, sorted or hashed by key, into per-destination-partition buffers (**map-side write**); those buffers move across the network to the executor responsible for each key range (**network transfer**); and the receiving task reads all the data for its keys back in (**reduce-side read**).\n\n![Hash-partitioned shuffle moving records from source to destination partitions by key](assets/hash-partition-shuffle.svg)",
+      "assets": [
+        {
+          "alt": "Hash-partitioned shuffle moving records from source to destination partitions by key",
+          "path": "assets/hash-partition-shuffle.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-shuffle-s04",
+      "order": 4,
+      "sectionTitle": "Why shuffles are expensive",
+      "subTitle": "Three costs at once",
+      "type": "concept",
+      "markdown": "A shuffle isn't one cost — it's three, paid together: **disk I/O** (map-side output is typically written to local disk before transfer, and read again on the receiving side), **network transfer** (data crosses machine boundaries, and network bandwidth is almost always the scarcest resource in a cluster compared to CPU or memory), and **serialization** (objects have to be converted to bytes to cross the network and deserialized on arrival, which is real CPU work at scale).\n\nThis is why \"the job is slow\" so often traces back to \"the job has an unnecessary shuffle,\" not to insufficient compute — adding more CPU cores doesn't reduce network bytes moved or disk I/O paid, so throwing more machines at a shuffle-bound job frequently helps far less than expected.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "partitioning-and-shuffle-s04-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-shuffle-s05",
+      "order": 5,
+      "sectionTitle": "Data skew",
+      "subTitle": "One key, disproportionate data",
+      "type": "concept",
+      "markdown": "**Data skew** is when one or a handful of keys hold far more records than the rest — a single `customer_id` representing a shared corporate account with a million orders while every other customer has a few dozen, or a `null`/default value absorbing every record that failed to get a real key upstream.\n\nBecause a shuffle assigns all of one key's data to a single task, skew means that one task does dramatically more work than every other task in the same stage — the stage isn't done until the slowest task finishes, so the other 999 tasks completing quickly buys you nothing if the skewed one takes 50x longer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "partitioning-and-shuffle-s05-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-shuffle-s06",
+      "order": 6,
+      "sectionTitle": "Salting",
+      "subTitle": "Splitting a hot key into sub-keys",
+      "type": "concept",
+      "markdown": "**Salting** fixes skew by artificially splitting one overloaded key into several sub-keys, spreading its data across multiple tasks instead of concentrating it on one. Concretely: append a random integer 0-9 to the skewed key before the shuffle (`customer_id_0`, `customer_id_1`, ... `customer_id_9`), so the one million rows for that customer spread across 10 tasks instead of piling onto one.\n\nThe catch is that salting only fixes aggregation-style operations cleanly — a `groupBy` can sum the 10 sub-results back together afterward. Salting a join is trickier: the salt has to be applied to *both* sides consistently, or matching rows end up on different sub-keys and never actually join. It's a real technique, not a silver bullet, and it adds a genuine complexity cost to the query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "partitioning-and-shuffle-s06-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-shuffle-s07",
+      "order": 7,
+      "sectionTitle": "The straggler that looks like a stuck stage",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A skewed job doesn't look like a normal slow job — it looks like a *stuck* one. The job UI shows 999 tasks completed in seconds and one task sitting at \"running\" for twenty minutes, and a team unfamiliar with skew often assumes the cluster is unresponsive, restarts the job, and gets exactly the same result, because the underlying data distribution hasn't changed.\n\nThe diagnostic tell is specific: check the per-task duration distribution in the job UI (Spark's UI has this built in) — a handful of wildly longer-running tasks against a sea of fast ones is skew, not a cluster problem. Adding more executors doesn't help a single straggler task; the fix has to address the skewed key itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "partitioning-and-shuffle-s07-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-shuffle-s08",
+      "order": 8,
+      "sectionTitle": "Detecting skew from the job UI",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "The signal is in the task duration summary for a stage, available in Spark's built-in UI (typically at `http://<driver>:4040`):\n\n```\nStage 7 (groupBy customer_id) — Task Metrics\n  Min duration:    0.4s\n  25th percentile: 0.6s\n  Median:          0.8s\n  75th percentile: 1.1s\n  Max duration:    847s      <-- the tell\n\nShuffle Read Size:\n  Min:    2 MB\n  Median: 3 MB\n  Max:    1.2 GB             <-- confirms it's data-driven, not a fluke\n```\n\nA max duration and max shuffle-read size that dwarf the median, together, are the confirmation: one task is handling vastly more data than the rest, which is exactly what skew looks like from the outside. This is the first thing to check before assuming a slow stage is a cluster capacity problem.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-shuffle-s09",
+      "order": 9,
+      "sectionTitle": "Partition-count tuning",
+      "subTitle": "Too few underutilizes, too many overheads",
+      "type": "concept",
+      "markdown": "The number of partitions a shuffle produces is a real tuning knob (Spark's `spark.sql.shuffle.partitions`, defaulting to 200 in many setups), and both directions of getting it wrong are costly:\n\n- **Too few partitions** means fewer tasks than available executor cores, so some cores sit idle while a handful of oversized partitions carry all the work — you paid for a cluster you're not using.\n- **Too many partitions** means thousands of tiny tasks, each with real scheduling overhead (the driver has to track and dispatch every one), so the coordination cost can exceed the actual work being done per task.\n\nA reasonable target is partitions sized so each task processes roughly 100-200MB of data — small enough to parallelize well, large enough that per-task overhead stays a small fraction of total work.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "partitioning-and-shuffle-s09-q1"
+      ]
+    },
+    {
+      "id": "partitioning-and-shuffle-s10",
+      "order": 10,
+      "sectionTitle": "The interview move",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Told \"this Spark job is slow,\" a weak answer jumps straight to \"add more executors.\" A strong answer checks the job UI first: is this shuffle-bound (large shuffle read/write relative to input size), and if so, is one task's duration and shuffle-read size wildly larger than the rest?\n\nThat second check is the difference between a capacity problem (genuinely needs more resources) and a skew problem (needs salting, a different join strategy, or filtering out the pathological key) — throwing machines at a skew problem is the single most common wasted-effort move in Spark performance tuning.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "partitioning-and-shuffle-s11",
+      "order": 11,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Joins are the single most common source of both shuffles and skew in real pipelines, so the next topic goes deep on exactly how a join executes — the shuffle (sort-merge) strategy this topic assumed, the broadcast strategy that avoids a shuffle entirely for small tables, and the specific techniques for salvaging a join whose join key is skewed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 44,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "data-pipeline-observability",
+  "interviewQuestions": [
+    {
+      "id": "data-pipeline-observability-iq1",
+      "question": "What's the difference between data observability and infrastructure observability, and why do you need both?",
+      "answerMarkdown": "Infrastructure observability watches the systems that move data — CPU, memory, job status, error logs, queue depth. It answers \"is the machinery healthy.\" Data observability watches the data itself — freshness, volume, schema, distribution of actual table contents. It answers a completely different question: \"is the output actually correct.\"\n\nThe reason both matter is that a pipeline can be healthy on one axis and badly broken on the other. A job can complete on schedule with unremarkable CPU and zero errors — every infra metric green — while a logic bug silently duplicates rows or corrupts a calculation on every row it touches. Nothing about that failure shows up as an infrastructure problem, because the systems genuinely did behave normally; the content of what they produced is what's wrong.\n\nConcretely, I'd want both categories of monitors on any pipeline I own: infra monitoring to catch \"the job crashed\" or \"it's running out of memory,\" and data observability (at minimum freshness and volume, ideally schema and distribution too) to catch \"the job succeeded but produced something wrong.\" Relying on only the first gives a false sense of security that everything I've seen labeled \"all green\" is actually fine.\n\n**Testing:** whether you understand these as genuinely separate signals, not two names for the same monitoring effort.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "data-pipeline-observability-iq2",
+      "question": "You're setting up data observability for a pipeline that had a silent correctness incident last quarter. What would you monitor first, and how would you avoid alert fatigue?",
+      "answerMarkdown": "I'd start with freshness and volume as the baseline — they're the cheapest to implement (a max-timestamp check and a row-count comparison against a rolling baseline) and catch the most common, highest-impact failure classes: a source stopped sending, or a filter/join bug silently changed row counts. I'd add schema-change detection next, since an unexpected column drop or type change is both easy to monitor and often the direct cause of a downstream break.\n\nFor the specific incident that already happened, I'd reconstruct what signal, if it had existed, would have caught it earlier — if it was a logic bug corrupting values without changing row count, that points specifically at needing a distribution check on the affected columns, which is more work to set up well than freshness or volume but is exactly the gap this incident exposed.\n\nOn alert fatigue: I'd be deliberate about thresholds from the start rather than defaulting to \"alert on any deviation.\" For volume, I'd use a rolling baseline that accounts for day-of-week patterns rather than a flat number, specifically to avoid false alarms on legitimately quieter days. I'd also route alerts by actual severity — freshness breaches that would visibly break a dashboard go to a paging channel; softer distribution anomalies go to a lower-urgency channel for review, following the same hard-fail-versus-soft-flag logic that applies to quality checks generally.\n\n**Testing:** whether you can prioritize monitors by actual incident history and design thresholds to avoid the alert-fatigue trap, not just list every possible monitor type.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Rollout strategy"
+    },
+    {
+      "id": "data-pipeline-observability-iq3",
+      "question": "A volume anomaly monitor fires, showing today's row count 60% above the rolling baseline. Walk me through how you'd investigate.",
+      "answerMarkdown": "The alert alone tells me only that something changed relative to baseline — it looks identical whether the cause is a genuine business event or a pipeline bug, so my first move is ruling out the benign explanation before assuming something's broken. I'd check whether there's a known reason for a real traffic spike — a marketing campaign, a product launch, a seasonal pattern the baseline model doesn't account for well.\n\nIf there's no obvious business explanation, my next hypothesis is a pipeline-side cause, and the most common one for an unexpected volume spike specifically (as opposed to a drop) is a join that started fanning out — a one-to-many relationship that used to be one-to-one, or a deduplication step that silently stopped working. I'd check the row count at each stage of the pipeline, not just the final table, to localize which transform step is where the count actually jumped.\n\nIf I confirm it's a real bug, I'd fix the immediate issue and also ask why the volume monitor caught this but nothing else did sooner — if there's a schema or distribution signal that would have caught the root cause (say, a duplicate-key check) more directly and earlier, I'd add that check going forward rather than relying on volume anomalies alone to catch every future instance of this class of bug.\n\n**Testing:** whether you have a systematic way to distinguish a benign spike from a real bug, and whether you think about strengthening detection afterward, not just fixing the one incident.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "data-pipeline-observability-iq4",
+      "question": "How does data observability connect to the other practices in data governance, like contracts and quality checks?",
+      "answerMarkdown": "I see them as one continuous discipline rather than six separate tools, each catching gaps at a different point in a pipeline's life. Contracts try to prevent a breaking change from ever shipping, enforced before merge. Quality checks catch bad data at specific points — after ingest, after transform, before serving. Observability is the always-on layer that catches problems continuously, independent of whether a scheduled check happened to run at the right moment.\n\nThe part I think is most valuable, and most often skipped, is closing the loop backward from observability into the earlier practices. If a distribution anomaly investigation reveals an undocumented assumption that turned out to be wrong, the fix isn't just resolving that one incident — it's turning that discovery into a new quality check, or extending a contract's semantics coverage, so the same class of failure gets caught automatically and earlier next time, rather than needing another manual investigation when it recurs.\n\nConcretely, I'd expect a mature pipeline's failure discovery to shift left over time: an incident first caught by observability this quarter becomes something a contract or quality check catches before it even ships, next quarter, because the team fed the finding back into the earlier layer instead of treating the incident as a one-off.\n\n**Testing:** whether you see these practices as a connected system with feedback loops, rather than a checklist of unrelated tools.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied judgement"
+    }
+  ]
+}

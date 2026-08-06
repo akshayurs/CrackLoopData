@@ -1,0 +1,37 @@
+{
+  "topicId": "event-time-watermarks",
+  "interviewQuestions": [
+    {
+      "id": "event-time-watermarks-iq1",
+      "question": "What is a watermark in stream processing, and what problem does it actually solve?",
+      "answerMarkdown": "A watermark is a moving estimate, computed by the system, that says 'I don't expect any more events with event time earlier than W.' It solves the problem that a streaming system can never *know* a window is complete — data can always arrive late — so it needs a policy for declaring 'probably done' instead of waiting for a fact that never arrives.\n\nConcretely, it's usually computed as the maximum event time observed so far minus some slack, where the slack accounts for how out-of-order the source is expected to be. When that number passes a window's end boundary, the engine fires the window's result.\n\nThe part I'd make sure to say explicitly: a watermark is a **heuristic**, not a guarantee. It can be wrong — an event can still arrive behind an already-passed watermark, and that's what 'late data' means. The whole design of allowed lateness and side outputs exists because the watermark is deliberately allowed to be wrong sometimes, in exchange for not waiting forever.\n\nA concrete example: with a 10-second watermark slack, if the latest event time seen is 10:00:15, the watermark sits at 10:00:05 — any window ending at or before that is considered done.\n\n**Testing:** whether you understand a watermark as a probabilistic completeness signal, not a hard cutoff.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "event-time-watermarks-iq2",
+      "question": "How would you choose the watermark slack and allowed-lateness settings for a new pipeline?",
+      "answerMarkdown": "I'd start from the consumer's tolerance, not from a default. Watermark slack trades latency against completeness — a tight slack fires windows fast but drops or side-outputs more genuinely late data; a loose slack waits longer but captures more of it correctly.\n\nConcretely, I'd look at two inputs: **how out-of-order the sources actually are** (measured, not guessed — check the real distribution of event-time vs arrival-time gaps in production traffic, since mobile clients buffering offline behave very differently from server-to-server events), and **what the consumer does with the number**. A fraud-alerting dashboard wants speed and can tolerate a few dropped stragglers; a billing aggregate cannot silently drop revenue and should lean toward a looser watermark plus a longer allowed-lateness window, or a batch reconciliation pass on top.\n\nA pattern I like for correctness-critical numbers: run a fast, approximate streaming aggregate for the dashboard, and a separate, slower batch or long-allowed-lateness path that's the actual source of truth for anything billed or audited. That way you don't force one number to be both fast and perfectly correct.\n\nI'd also plan for the failure mode directly: what happens to events that exceed even the allowed-lateness window — a side output with a reconciliation job downstream, not silent drop.\n\n**Testing:** whether you connect a config knob to a business requirement, rather than treating it as a tuning parameter with one right answer.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design judgment"
+    },
+    {
+      "id": "event-time-watermarks-iq3",
+      "question": "Your streaming dashboard's numbers are stuck — no new windows are firing — but you can see events flowing into the topic. How would you debug it, and what's the likely cause?",
+      "answerMarkdown": "First thing I'd check is consumer lag per partition, not aggregate throughput, because the cause is almost always **one bad partition dragging the whole watermark down**. Most engines compute the operator's watermark as the minimum across all input partitions, so if 99 partitions are healthy and one is stalled — a slow downstream sink backing up, a broker issue on that partition, a hot key overwhelming one consumer thread — the combined watermark can't advance past that one partition's last timestamp, and every window across every key stalls, not just the ones on the bad partition.\n\nThe second thing I'd check, if lag looks even, is **idleness**: a partition that legitimately has no traffic (a low-activity key range) can hold the watermark back the same way a slow one does, unless the engine has an idleness timeout configured to exclude quiet partitions from the calculation.\n\nOnce I've found the stuck partition, the fix is usually operational — unblock whatever's backing it up, or add an idleness timeout — rather than a change to the aggregation logic, since the aggregation itself is working correctly on the data it's actually received.\n\n**Testing:** whether you can connect a global symptom (nothing is firing) to a per-partition root cause, which is the practical skill this topic is really testing.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "event-time-watermarks-iq4",
+      "question": "What's the difference between allowed lateness and a side output, and why do you need both?",
+      "answerMarkdown": "They cover two different phases of a late event's life. **Allowed lateness** keeps a window's state open for a grace period *after* the watermark has already passed it, so an event that's late relative to the watermark but arrives within that grace period can still update the result before it's finalized. **Side outputs** catch whatever arrives *after* even that grace period expires — data too late to influence the result at all.\n\nYou need both because they solve different failure costs. Without allowed lateness, any lateness at all — even a few hundred milliseconds past the watermark — gets treated identically to data that's an hour late, which throws away easily-recoverable near-miss data. Without a side output, once allowed lateness is exhausted, the remaining late events just vanish silently, which is dangerous for anything correctness-sensitive: you'd have no record that data was dropped, let alone what it was.\n\nA concrete setup: a 1-minute tumbling window with 30 seconds of allowed lateness catches most straggler events cheaply. Anything later than that 30-second grace period goes to a side output feeding a nightly reconciliation job, so the number a dashboard shows can be fast while the number finance eventually sees is still complete.\n\n**Testing:** whether you see these as complementary layers of a lateness-handling strategy, not interchangeable options.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "topicId": "dimensional-modeling-basics",
+  "interviewQuestions": [
+    {
+      "id": "dimensional-modeling-basics-iq1",
+      "question": "How would you define the grain of a fact table, and why does it matter so much?",
+      "answerMarkdown": "Grain is a one-sentence statement of what a single row represents — \"one row per order,\" \"one row per line item per order,\" \"one row per session per day.\" I'd write it down explicitly before designing a single column, because everything else follows from it.\n\nHere's why it's load-bearing: it determines which measures are even valid (you can't have a `quantity` column at order grain if an order can hold multiple products), which joins are safe, and what `COUNT(*)` actually counts. Get it wrong and you don't get an error — you get numbers that are quietly off by some multiple, because the same real-world event is represented by more or fewer rows than you assumed.\n\nA concrete failure I've seen: a table meant to be one-row-per-order silently gained duplicate rows from a retry in the ingestion job. Revenue looked ~8% high for exactly the days the retry fired, and it took a grain audit — checking that `COUNT(*)` matched `COUNT(DISTINCT order_id)` — to catch it. That check is now something I run on every new fact table before it ships.\n\n**Testing:** whether you treat grain as a design-time discipline you enforce, not a property you discover after the fact.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "dimensional-modeling-basics-iq2",
+      "question": "Walk me through why analytics schemas denormalize when we spend so much effort normalizing OLTP schemas.",
+      "answerMarkdown": "It comes down to what each workload actually pays for. OLTP schemas normalize to protect **write correctness** — a customer's address lives in exactly one row, so an update can never leave two copies disagreeing, and that matters when you have thousands of concurrent writers. Analytics workloads are nearly the opposite: a handful of huge reads against data that's already landed, with writes batched and controlled.\n\nSo a dimension table denormalizes on purpose — repeating a category name across ten thousand product rows instead of forcing a join to a category table. The cost is some duplicated text; on a columnar warehouse that duplication compresses to almost nothing under dictionary encoding, often under 1% of the table's footprint. The benefit is every report query needs one fewer join, and joins are the expensive part of a distributed warehouse query, not storage.\n\nI'd frame the trade-off explicitly in an interview: normalize when writes are frequent and consistency risk is real; denormalize when reads dominate and the \"risk\" of duplicated read-only data is a non-issue. It's not that one schema style is better — they're solving different problems.\n\n**Testing:** whether you understand denormalization as a deliberate trade-off tied to workload, not sloppiness or a shortcut.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "dimensional-modeling-basics-iq3",
+      "question": "A dashboard's revenue total is roughly double what finance expects. How would you debug that, given what you know about fact table design?",
+      "answerMarkdown": "My first suspicion with a clean multiple like 2x is a **grain violation** rather than a logic bug, because doubling is exactly what you get when the same event is represented by two rows instead of one.\n\nConcretely I'd check, in order: does `COUNT(*)` on the fact table match `COUNT(DISTINCT order_id)` for the affected period? If not, something is inserting duplicate rows — a retried backfill, an upsert key that doesn't dedupe correctly, or literally two grains mixed into one table (order-level summary rows alongside line-item rows, a classic mistake). I'd also check whether a recent pipeline change added a new source that writes at a different grain than the rest of the table expects.\n\nOnce I find the extra rows, the fix is structural, not a query patch — split the table if two grains genuinely got merged, or fix the upsert/dedup logic if it's a duplication bug. I would specifically avoid the tempting shortcut of adding `DISTINCT` or dividing by two in the dashboard query, because that hides the defect instead of fixing it, and it silently breaks again the moment the row mix shifts.\n\n**Testing:** whether you connect a symptom (a clean multiple, doubled revenue) back to a grain-level root cause instead of patching at the query layer.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "dimensional-modeling-basics-iq4",
+      "question": "What's a conformed dimension, and what breaks in an organization that doesn't have them?",
+      "answerMarkdown": "A conformed dimension is one dimension table — same keys, same attributes, same definitions — shared across every fact table that needs it. One `dim_customer`, referenced identically by the orders fact, the support-tickets fact, and the marketing-emails fact.\n\nWithout it, every team builds their own version. I've seen this concretely: a growth team's \"active customer\" dimension defined active as \"logged in within 30 days,\" while finance's version meant \"had a paid transaction within 90 days.\" Both were reasonable definitions in isolation, but the moment someone tried to join a growth report to a revenue report, the customer counts didn't reconcile — and neither team was wrong, they'd just built dimensions that looked the same but weren't conformed.\n\nThe deeper cost is that cross-fact-table analysis becomes unreliable by default: \"revenue per support ticket\" only means something if both fact tables key into the *same* customer and date definitions. Conformed dimensions are the prerequisite for that kind of question to even be askable, and they're the seed of what a semantic/metrics layer later formalizes — one definition, enforced centrally, instead of reinvented per team.\n\n**Testing:** whether you see conformance as an organizational discipline that prevents silent disagreement, not just a modeling nicety.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Cross-team consistency"
+    }
+  ]
+}

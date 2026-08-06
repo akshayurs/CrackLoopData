@@ -1,0 +1,159 @@
+{
+  "id": "oltp-vs-olap",
+  "title": "OLTP vs OLAP",
+  "area": "data-engineering",
+  "group": "de-fundamentals",
+  "order": 2,
+  "slug": "oltp-vs-olap",
+  "summary": "Transactional and analytical systems are built on opposite assumptions about how data will be read and written, and conflating them is how production databases fall over.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "oltp-vs-olap-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "**OLTP** (online transaction processing) is what runs your app: a user places an order, a row gets inserted, a balance gets updated. **OLAP** (online analytical processing) is what runs your dashboard: \"what were total sales by region last quarter?\" across millions of rows.\n\nThey look like the same word, \"database,\" but they're optimized for opposite access patterns — and every data engineering pipeline exists partly because a single system can't serve both well at scale.\n\nGet the distinction wrong and you either run an analytics query that locks up checkout, or you build a warehouse schema so normalized that every report needs a fifteen-table join.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s02",
+      "order": 2,
+      "sectionTitle": "Transactional workloads",
+      "subTitle": "Many small reads/writes, row-at-a-time",
+      "type": "concept",
+      "markdown": "An OLTP system's typical query touches **one row, or a handful of related rows**: fetch this user, update this order's status, insert this payment. It runs thousands of these per second, each one needing to complete in milliseconds.\n\nBecause each transaction is small and independent, the storage engine is built to make **single-row lookups and writes** fast: indexes on primary keys, row-oriented storage so a whole record comes back in one disk read, and strict consistency guarantees (ACID) so two concurrent updates to the same row don't corrupt it.\n\nThe schema is normalized — a `users` table, a separate `orders` table, a separate `payments` table — because normalization avoids the update anomalies that would otherwise let two copies of the same fact disagree.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "oltp-vs-olap-s02-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s03",
+      "order": 3,
+      "sectionTitle": "Analytical workloads",
+      "subTitle": "Few large scans, column-at-a-time",
+      "type": "concept",
+      "markdown": "An OLAP query looks the opposite: \"sum `revenue` across 50 million rows, grouped by `region` and `month`.\" It touches almost every row, but only two or three of their columns.\n\nBecause the access pattern is a handful of columns across huge row counts, analytical storage is **column-oriented**: each column is stored contiguously, so scanning `revenue` doesn't have to also read `customer_email`, `shipping_address`, and forty other columns you don't need for this query.\n\nOLAP systems run far fewer queries per second than OLTP — dozens or hundreds, not thousands — but each one is heavier, scanning gigabytes instead of fetching one row. Consistency requirements relax too: a dashboard being 10 minutes stale is usually fine; a bank balance being wrong for 10 minutes is not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "oltp-vs-olap-s03-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s04",
+      "order": 4,
+      "sectionTitle": "Row store vs column store on disk",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The physical layout is the root cause of everything above. A row store writes an entire record contiguously; a column store writes each field contiguously across all records.\n\nThat single layout choice explains why OLTP databases (Postgres, MySQL) default to row storage and OLAP systems (Snowflake, BigQuery, Redshift, ClickHouse) default to columnar: row storage is cheap for \"give me this one full record,\" columnar storage is cheap for \"give me this one field, for every record.\"\n\n![Row store versus column store physical layout for the same table](assets/row-vs-column-store.svg)",
+      "assets": [
+        {
+          "alt": "Row store versus column store physical layout for the same table",
+          "path": "assets/row-vs-column-store.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s05",
+      "order": 5,
+      "sectionTitle": "OLTP vs OLAP, side by side",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | OLTP | OLAP |\n|---|---|---|\n| **Query shape** | Point lookups, small updates | Aggregations over huge scans |\n| **Storage** | Row-oriented | Column-oriented |\n| **Schema** | Normalized (3NF) | Denormalized (star/snowflake) |\n| **Latency target** | Milliseconds | Seconds to minutes is fine |\n| **Concurrency** | Thousands of small transactions/sec | Dozens of heavy queries/sec |\n| **Consistency** | Strong (ACID) | Often relaxed / eventually consistent |\n| **Example system** | Postgres, MySQL, DynamoDB | Snowflake, BigQuery, Redshift |\n\nThe row that trips candidates up most is schema shape: OLTP normalizes to avoid write anomalies; OLAP deliberately denormalizes to avoid the join cost that normalization would otherwise impose on every analytical query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "oltp-vs-olap-s05-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s06",
+      "order": 6,
+      "sectionTitle": "Why analytics on a production OLTP DB causes outages",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Run `SELECT SUM(amount) FROM orders` with no date filter directly on the production Postgres instance backing checkout, and you can take checkout down. The query scans the whole table — reading rows the storage engine never optimized for bulk scanning — and can hold locks or saturate I/O and CPU that the transactional workload needs to keep serving thousands of tiny requests per second.\n\nThis is the concrete, expensive reason data engineering exists as a discipline: you replicate or extract data **out** of the OLTP system into an OLAP system built for scans, so analysts can run heavy queries without ever touching the system a customer's checkout depends on.\n\nEven a read replica doesn't fully solve this — replication lag under heavy analytical load, and the row-oriented storage is still wrong for scans. The fix is a different storage engine, not just a different server.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "oltp-vs-olap-s06-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s07",
+      "order": 7,
+      "sectionTitle": "HTAP — blending both",
+      "subTitle": "And its real limits",
+      "type": "concept",
+      "markdown": "**HTAP** (hybrid transactional/analytical processing) systems — like SingleStore, CockroachDB's analytical extensions, or TiDB — try to serve both workloads from one system, usually by keeping a row store for transactions and a columnar replica in sync internally, updated near-real-time.\n\nThe appeal is obvious: no separate ETL pipeline, no staleness from batch extraction. The real limits are just as real: HTAP systems generally can't match a dedicated OLTP engine's transactional throughput or a dedicated OLAP engine's scan performance — they're a compromise on both axes, tuned for workloads where \"pretty good at both\" beats \"excellent at one, absent the other.\"\n\nMost companies past a certain scale still separate the two, because the operational simplicity of a well-understood dedicated system usually outweighs the pipeline they save by not separating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s08",
+      "order": 8,
+      "sectionTitle": "Normalizing a warehouse \"because that's correct\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A common mistake from engineers who learned relational design on OLTP systems: bringing 3NF normalization into a warehouse because it's \"the correct way to model data.\"\n\nIt's correct for OLTP, where the goal is avoiding write anomalies on a system doing thousands of small updates. In a warehouse, the goal is fast aggregation over huge scans done by analysts, not raw-write efficiency — and a normalized warehouse means every report query becomes a chain of joins across a dozen small tables, which is exactly the slow, expensive pattern columnar storage was supposed to avoid.\n\nThe standard fix is deliberate denormalization — a **star schema**: one wide fact table plus a handful of dimension tables, designed so a typical business question is one or two joins, not ten. You're trading storage (repeated dimension values) for query speed, which is the right trade in a system that's read far more often than written. This gets its own topic in the Warehousing & Lakes group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "oltp-vs-olap-s08-q1"
+      ]
+    },
+    {
+      "id": "oltp-vs-olap-s09",
+      "order": 9,
+      "sectionTitle": "The same question, two query shapes",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "\"How much did this customer spend?\" looks different depending on which system answers it.\n\n```sql\n-- OLTP-shaped: point lookup, one customer, used on a checkout/account page\nSELECT SUM(amount)\nFROM payments\nWHERE customer_id = 48213\n  AND created_at >= now() - interval '30 days';\n\n-- OLAP-shaped: aggregate across all customers, feeding a dashboard\nSELECT customer_id, DATE_TRUNC('month', created_at) AS month, SUM(amount) AS revenue\nFROM fact_payments\nGROUP BY customer_id, month;\n```\n\nThe first query is cheap on a row store with an index on `customer_id` — it touches a handful of rows. The second is exactly the query pattern a columnar warehouse is built for and a row-store OLTP database is bad at: a full scan and a group-by across millions of rows.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    },
+    {
+      "id": "oltp-vs-olap-s10",
+      "order": 10,
+      "sectionTitle": "Where this fits in the pipeline",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This split is the reason a data pipeline exists at all: it moves data from an OLTP system, optimized for the app, into an OLAP system, optimized for questions the app was never built to answer.\n\nCross-linking forward: the mechanics of that move — extraction, CDC, transformation into a warehouse schema — are the rest of this curriculum's Batch Processing group, and the internals of columnar storage that make OLAP scans fast are covered in [Columnar Storage & OLAP](columnar-olap) in the Databases area's warehousing group.\n\nFor now, the one-sentence version to carry forward: **pick the storage engine for the query pattern you'll actually run, not for the schema style you're most comfortable with.**",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    }
+  ]
+}

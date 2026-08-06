@@ -1,0 +1,159 @@
+{
+  "id": "manual-memory-management",
+  "title": "Manual Memory Management",
+  "area": "languages-compilers",
+  "group": "memory-gc",
+  "order": 2,
+  "slug": "manual-memory-management",
+  "summary": "C-style alloc/free discipline: one contract, three ways to break it. Manual management is the baseline every automatic scheme in this group exists to replace.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "manual-memory-management-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Manual memory management is one contract: every heap allocation gets exactly one matching deallocation. `malloc` needs exactly one `free`. Follow it perfectly and there's no overhead, no pause, no runtime deciding anything on your behalf.\n\nThe problem is that \"exactly one, never more, never fewer\" is a discipline a human has to maintain across every code path, every error branch, and every future edit to the code — and it fails silently. A missed `free` doesn't crash; it just leaks, slowly, until something else notices. A double `free` corrupts the allocator's internal bookkeeping and can crash somewhere that has nothing to do with the actual bug.\n\nEverything in the rest of this group — reference counting, tracing GC, ownership — exists because this contract, unenforced, doesn't scale past a certain codebase size.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "manual-memory-management-s02",
+      "order": 2,
+      "sectionTitle": "The contract",
+      "subTitle": "One malloc, one free",
+      "type": "concept",
+      "markdown": "`malloc(size)` reserves `size` bytes on the heap and returns a pointer to the start. `free(ptr)` tells the allocator that memory is no longer needed and can be reused for a future allocation.\n\nThe rule sounds trivial: every successful `malloc` needs exactly one `free`, and it needs to happen exactly once, after the last use of that pointer, and never again after that. In a ten-line program this is easy. In a real codebase, the same pointer might be passed through six function calls, stored in three data structures, and freed on one of four error-handling branches — and the contract still has to hold on every single path, including the ones nobody tests.\n\nThis is a *manual* discipline: nothing in the language checks it. The compiler will happily compile code that violates it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "manual-memory-management-s03",
+      "order": 3,
+      "sectionTitle": "Three ways to break the contract",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Three timelines showing a memory leak, a double-free, and a dangling pointer](assets/manual-memory-bugs.svg)\n\nAll three come from the same root cause: the pointer and the memory it points to have independent lifetimes, and nothing forces them to line up. A leak is *too few* frees. A double-free is *too many*. A dangling pointer is a *correct* free followed by a use that should never have happened.",
+      "assets": [
+        {
+          "alt": "Three timelines showing a memory leak, a double-free, and a dangling pointer",
+          "path": "assets/manual-memory-bugs.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "manual-memory-management-s03-q1"
+      ]
+    },
+    {
+      "id": "manual-memory-management-s04",
+      "order": 4,
+      "sectionTitle": "A use-after-free that compiles clean",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```c\nchar *get_greeting() {\n    char *buf = malloc(32);\n    strcpy(buf, \"hello\");\n    free(buf);\n    return buf;         // returning a pointer to freed memory\n}\n\nint main() {\n    char *msg = get_greeting();\n    printf(\"%s\\n\", msg);   // undefined behavior: reads freed memory\n}\n```\n\nThis compiles without a single error on most compilers, and often prints \"hello\" anyway, because `free` doesn't erase the bytes — it just tells the allocator the block is available for reuse. It stays correct-looking right up until some other allocation reuses that exact block, at which point `msg` silently points at someone else's data. The bug is in `get_greeting`; the visible symptom, if there is one, shows up somewhere unrelated, possibly much later.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "manual-memory-management-s04-q1"
+      ]
+    },
+    {
+      "id": "manual-memory-management-s05",
+      "order": 5,
+      "sectionTitle": "Fragmentation: gaps you can't use",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Even a program with zero leaks and zero dangling pointers can run out of usable memory. Repeated alloc/free cycles of varying sizes leave the heap full of small, scattered free gaps — none individually big enough for the next large allocation, even though their total adds up to plenty.\n\nThis is **fragmentation**: total free memory is fine, but it's not *contiguous* where the allocator needs it to be. A long-running server that allocates and frees differently-sized request buffers over days is the classic victim — memory usage climbs even though nothing is technically leaking, because the free space is Swiss cheese.\n\nAllocators fight this with size classes (grouping similar-sized requests together) and, in managed languages, compacting collectors physically slide live objects together to close the gaps — something a manual allocator generally can't do, because it doesn't know which pointers into that memory still need updating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "manual-memory-management-s05-q1"
+      ]
+    },
+    {
+      "id": "manual-memory-management-s06",
+      "order": 6,
+      "sectionTitle": "RAII: tying free to scope, not to memory",
+      "subTitle": "C++'s answer",
+      "type": "concept",
+      "markdown": "C++'s core fix is **RAII** (Resource Acquisition Is Initialization): wrap the allocation in an object's constructor and the deallocation in its destructor, then let the language's own scope rules — which are enforced by the compiler, not by discipline — call the destructor automatically.\n\n```cpp\n{\n    std::vector<int> v(1000);   // constructor allocates\n    // ... use v ...\n}   // destructor runs here automatically, frees the buffer\n```\n\nNobody wrote a `free`. The compiler guarantees the destructor runs when `v` goes out of scope — on the normal path, on an early `return`, even when an exception is thrown partway through the block. That last case is the real win: manual `free` calls are notoriously easy to miss on exception/error paths; RAII makes it structurally impossible to skip.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "manual-memory-management-s07",
+      "order": 7,
+      "sectionTitle": "Silent until it isn't",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The most dangerous property of manual-management bugs is the delay between cause and symptom. A leak doesn't crash the line that leaked — it just slowly raises memory usage until, hours or days later, the allocator fails or the OS kills the process for using too much RAM, and the stack trace at that point points at whatever allocation happened to be unlucky, not the leak.\n\nA use-after-free or double-free is worse: it corrupts the allocator's internal metadata, and the actual crash often happens on a *later, unrelated* allocation or free call, because that's when the corrupted metadata finally gets read. Debugging tools exist specifically because source-level reasoning isn't enough here — AddressSanitizer and Valgrind instrument every allocation to catch the bug at the moment it happens, not at the moment it manifests.\n\nThe practical lesson: \"it ran fine in testing\" is close to meaningless for this class of bug.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "manual-memory-management-s07-q1"
+      ]
+    },
+    {
+      "id": "manual-memory-management-s08",
+      "order": 8,
+      "sectionTitle": "Raw, RAII-scoped, and smart-pointer",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| Approach | Who frees | Failure mode if misused |\n|---|---|---|\n| Raw `malloc`/`free` (C) | You, explicitly, every time | Leak, double-free, dangling pointer |\n| RAII / destructors (C++) | The compiler, at scope exit | Rare — mainly cyclic ownership or raw pointers mixed in |\n| `unique_ptr` (C++) | Automatic, single owner, moves transfer ownership | Using a pointer after it's moved from |\n| `shared_ptr` (C++) | Automatic, refcounted, frees at zero | Reference cycles leak, same flaw as [reference-counting](reference-counting) |\n\nThe progression down this table is really the same progression as the rest of this group in miniature: explicit control, to compiler-enforced scoping, to a refcounted scheme with its own known failure mode. `shared_ptr` is manual management's bridge into automatic memory management — same language, opt-in cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "manual-memory-management-s08-q1"
+      ]
+    },
+    {
+      "id": "manual-memory-management-s09",
+      "order": 9,
+      "sectionTitle": "Finding the bug in a live-coding round",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "\"Find the memory bug in this C snippet\" is a live-coding staple because it tests something recall can't fake: can you trace ownership through a function, not just recite the rules.\n\nA reliable method: for every pointer in the snippet, ask three questions in order — where is it allocated, where (if anywhere) is it freed, and is there any path where it's used after that free, or freed twice, or never freed at all. Check every branch, not just the happy path — the bug is disproportionately likely to be on an error-handling `return` or an early exit that skips the cleanup code further down.\n\nSaying the check out loud (\"this early-return skips the free on line 12, that's the leak\") reads as far stronger than silently spotting it, because it shows the *method*, which is what actually transfers to code the interviewer didn't already know the answer to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "manual-memory-management-s10",
+      "order": 10,
+      "sectionTitle": "What manual management can't do alone",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Manual management's real limitation isn't performance — it's genuinely the fastest option, no runtime overhead at all when done correctly. It's that correctness depends entirely on a human tracking ownership across every code path, forever, with no help from the compiler or language.\n\nThat's exactly the gap the rest of this group closes, each in a different way: [reference-counting](reference-counting) automates the decision at a small per-operation cost, tracing collectors in [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact) automate it at the cost of periodic pauses, and [ownership-and-borrowing](ownership-and-borrowing) gets the compiler to *prove* the contract holds, at compile time, for free at runtime. None of them are strictly better — they're trading the same discipline problem for a different cost.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "id": "exactly-once-semantics",
+  "title": "Exactly-Once Semantics",
+  "area": "data-engineering",
+  "group": "stream-processing",
+  "order": 5,
+  "slug": "exactly-once-semantics",
+  "summary": "\"Exactly-once\" describes an end-to-end effect built from idempotent producers and transactional writes, not a single guarantee any network call can make on its own. Learn what it actually costs, and when it's not worth paying for.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "exactly-once-semantics-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "\"Our pipeline is exactly-once\" is one of the most confidently overclaimed statements in streaming architecture. A single message sent over a network can always be lost or duplicated — that's physics, not a bug — so no individual delivery can honestly promise exactly-once on its own.\n\nWhat real systems build instead is an **end-to-end effect** that behaves as if delivery were exactly-once, by combining at-least-once delivery (nothing is silently lost) with deduplication or transactions (retries don't change the outcome). This topic covers the two building blocks — idempotent producers and transactional writes — the [state and checkpointing](stateful-stream-processing) they build on, and the real cost of getting this guarantee, which is why it's not always the right one to pay for.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "exactly-once-semantics-s02",
+      "order": 2,
+      "sectionTitle": "\"Exactly-once\" is really \"effectively-once\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A sender transmits a message and waits for an acknowledgment. If the ack is lost — not the message, just the ack — the sender cannot distinguish \"message lost\" from \"message delivered, ack lost\" and has to retry to be safe. That retry can now deliver the message a second time.\n\nThis is a fundamental limit of unreliable networks, sometimes called the **two generals problem**: no protocol built purely on message-passing over an unreliable channel can guarantee both \"never lost\" and \"never duplicated\" at the same time, with certainty, using only that channel.\n\nWhat's actually achievable is **effectively-once**: delivery is at-least-once (so nothing is silently dropped), and the *system's effect* — not the raw delivery — ends up looking exactly-once because duplicates are recognized and neutralized after the fact. Every \"exactly-once\" system you'll encounter in practice is really this.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "exactly-once-semantics-s02-q1"
+      ]
+    },
+    {
+      "id": "exactly-once-semantics-s03",
+      "order": 3,
+      "sectionTitle": "Idempotent producers",
+      "subTitle": "Deduplicating retried writes at the source",
+      "type": "concept",
+      "markdown": "An **idempotent producer** tags each message with a unique sequence number (per producer session), and the broker tracks the last sequence number it accepted from that producer. If a retry resends a message the broker already has — same producer, same sequence number — the broker recognizes it and discards the duplicate instead of appending it again.\n\nThis solves exactly one specific failure: a producer retry after a lost acknowledgment, at the point where the message enters the broker. It does **not** by itself solve duplicates introduced anywhere else in the pipeline — a consumer that reprocesses a batch after crashing before committing its offset, for example, is a different failure that idempotent producers don't touch.\n\nKafka's idempotent producer is the canonical example: enabling it is close to free (a small amount of broker bookkeeping) and eliminates one entire class of duplicate, which is why it's often on by default in modern client configurations.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "exactly-once-semantics-s03-q1"
+      ]
+    },
+    {
+      "id": "exactly-once-semantics-s04",
+      "order": 4,
+      "sectionTitle": "Transactional writes",
+      "subTitle": "Committing offsets and output atomically",
+      "type": "concept",
+      "markdown": "A **transaction**, in this context, atomically commits two things together: the consumer's offset (how far it's read) and its output (what it wrote as a result). Either both happen, or neither does — there's no state where the offset advanced but the output was lost, or the output was written but the offset didn't advance.\n\nThis is what closes the gap that idempotent producers leave open: it protects the **read-process-write cycle** as a whole, not just one producer's retries. If a job crashes mid-transaction, on restart it either sees the transaction never committed (and safely redoes the whole read-process-write) or sees it fully committed (and correctly does not redo it) — never a partial, inconsistent state.\n\nThis is considerably more expensive than idempotent producers alone, because it requires coordination across the source offset commit and the sink write as a single atomic unit, not just per-message bookkeeping at one hop.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "exactly-once-semantics-s04-q1"
+      ]
+    },
+    {
+      "id": "exactly-once-semantics-s05",
+      "order": 5,
+      "sectionTitle": "A transaction spanning offset and sink",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture the read-process-write cycle as one box drawn around three steps: read from the source at some offset, process (apply the aggregation or transformation), write to the sink. A transaction wraps a dashed boundary around **all three**, so a crash at any point inside it leaves nothing half-done — the whole cycle either commits together or is retried together from the start.\n\n![Read, process, write wrapped in a transaction that redoes from the source offset on crash](assets/transactional-retry.svg)",
+      "assets": [
+        {
+          "alt": "Read, process, write wrapped in a transaction that redoes from the source offset on crash",
+          "path": "assets/transactional-retry.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "exactly-once-semantics-s06",
+      "order": 6,
+      "sectionTitle": "At-least-once + idempotent sink vs true transactional exactly-once",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "Two ways to reach the same end-to-end effect, at very different cost:\n\n| | At-least-once + idempotent sink | Transactional exactly-once |\n|---|---|---|\n| Mechanism | Retry freely; sink recognizes and no-ops duplicates (e.g. upsert on a unique key) | Offset commit and output write are one atomic unit |\n| Overhead | Low — normal retry behavior, cost sits in the sink's upsert | Higher — transaction coordination on every commit |\n| Where it works | Any sink that can be made idempotent (most databases, keyed writes) | Sinks the engine has transactional integration with (fewer options) |\n| Failure mode if misapplied | None, if the sink truly is idempotent | Silent inconsistency if the \"transaction\" isn't actually atomic end-to-end |\n\nThe idempotent-sink route is usually the pragmatic default — it's cheaper and works with almost any sink you can express as an upsert. True transactional exactly-once earns its cost mainly when the sink can't be made idempotent (a pure append-only log, an external side effect like sending an email) and duplicates there are unacceptable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "exactly-once-semantics-s06-q1"
+      ]
+    },
+    {
+      "id": "exactly-once-semantics-s07",
+      "order": 7,
+      "sectionTitle": "Calling it exactly-once when the sink isn't",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team configures their stream processing engine's exactly-once mode, sees it in the documentation, and declares the pipeline exactly-once — without checking whether the **sink itself** can actually participate in that guarantee.\n\nThe engine's internal state and offset handling can be perfectly exactly-once, and the pipeline can still deliver duplicates if the sink is a plain HTTP call, an append-only file write, or any other target that isn't idempotent or transactional. A retry after a timeout on that final write — where the first write actually succeeded — duplicates the *output*, and no amount of correctness inside the engine prevents it, because the guarantee has to hold across the entire path, not just the part the engine controls.\n\nThe question to always ask before claiming exactly-once: \"if this exact write is retried, is the result identical to it happening once?\" If the answer for the sink is no, the pipeline is at-least-once with duplicates, regardless of what the engine's config is set to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "exactly-once-semantics-s07-q1"
+      ]
+    },
+    {
+      "id": "exactly-once-semantics-s08",
+      "order": 8,
+      "sectionTitle": "The cost of exactly-once",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Transactional exactly-once is not free, and the cost is structural, not just tuning:\n\n- **Throughput** — transactions batch commits together (typically every few hundred milliseconds), which adds latency to when a write becomes visible and adds coordination overhead on every commit, both of which cap peak throughput below what the same pipeline could do without transactions.\n- **Latency** — a consumer configured to only read committed data (needed for correctness, so it doesn't see a transaction's writes before they're finalized) waits for the transaction to commit before it can see the result, adding the commit interval to end-to-end latency.\n- **Complexity** — transaction coordination adds failure modes of its own (a coordinator becoming unavailable, transactions timing out) that a simpler at-least-once pipeline doesn't have to reason about.\n\nNone of this makes exactly-once wrong to use — it makes it a deliberate trade you should be able to name the cost of, not a default you reach for because the option exists.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "exactly-once-semantics-s09",
+      "order": 9,
+      "sectionTitle": "When at-least-once is the right choice",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Exactly-once is the right answer only when duplicates genuinely cause a problem the business cares about — double-charging a customer, double-counting revenue in a report someone gets audited on. Plenty of real workloads don't have that property:\n\n- **Metrics and monitoring** — a dashboard counter that's occasionally 0.01% high after a rare retry is not worth the latency and complexity cost of transactions.\n- **Idempotent-by-construction operations** — a write that's naturally an upsert (\"set this user's last-seen timestamp to X\") produces the identical result whether it runs once or three times, so at-least-once plus a naturally idempotent operation gets you the correctness for free, no transaction needed.\n- **Best-effort notifications** — an occasional duplicate push notification is a minor annoyance, not a correctness failure, and rarely justifies transactional overhead.\n\nThe senior move is naming this trade-off explicitly rather than reaching for the strongest guarantee by default: \"this needs to be exactly-once because double-charging is unacceptable\" is a real design justification; \"exactly-once is safer, so let's use it everywhere\" is not — it's paying real latency and throughput cost for correctness the workload didn't need.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "exactly-once-semantics-s09-q1"
+      ]
+    },
+    {
+      "id": "exactly-once-semantics-s10",
+      "order": 10,
+      "sectionTitle": "Rough numbers on the overhead",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "To anchor this concretely: published benchmarks and production reports for Kafka-style transactional exactly-once commonly show single-digit-percent to around 20-30% throughput overhead versus at-least-once with idempotent producers alone, depending on transaction commit interval and message size — smaller, more frequent transactions cost more per message; larger batches amortize the coordination cost but add latency.\n\nEnd-to-end latency added by a \"read committed\" consumer waiting for transaction commits is typically bounded by the transaction commit interval itself — commonly in the tens to low hundreds of milliseconds for latency-sensitive configurations, but tunable up if throughput matters more than freshness.\n\nThese numbers vary by engine and workload, but the shape is consistent: exactly-once costs somewhere between \"a noticeable throughput tax\" and \"a modest one,\" never zero — which is exactly why naming the actual business requirement for it, rather than assuming it, is worth the five minutes it takes.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "exactly-once-semantics-s11",
+      "order": 11,
+      "sectionTitle": "Where this connects",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Exactly-once semantics is the guarantee layer sitting on top of everything else in this group: watermarks and windows define *what* to compute and *when*, state and checkpointing make that computation *durable*, and this topic defines what you can honestly *claim* about the result reaching its destination.\n\nThe next topic, Kafka Deep Dive, grounds all of this in one concrete, widely-used system — including exactly how Kafka's idempotent producers and transactions are actually implemented under the hood, and the partitioning and consumer-group mechanics that everything above has been assuming.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

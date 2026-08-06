@@ -1,0 +1,172 @@
+{
+  "id": "distributed-joins-at-scale",
+  "title": "Distributed Joins at Scale",
+  "area": "data-engineering",
+  "group": "big-data-frameworks",
+  "order": 5,
+  "slug": "distributed-joins-at-scale",
+  "summary": "A join across a cluster is a choice between shuffling both sides or broadcasting the small one. Knowing which strategy the planner picked — and how to override a bad guess — is a real, frequent Spark skill.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "distributed-joins-at-scale-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "A join between two tables sitting on a single machine is easy — load both, match rows, done. A join across a hundred machines needs a strategy for getting matching rows onto the *same* machine in the first place, and that strategy has real cost implications you can influence.\n\nSpark chooses between two dominant strategies: **shuffle join**, which redistributes both sides by key, and **broadcast join**, which skips the [shuffle](partitioning-and-shuffle) entirely by sending one small table whole to every executor. Which one the planner picks — and when it picks wrong — is one of the highest-leverage things to understand about Spark performance.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-joins-at-scale-s02",
+      "order": 2,
+      "sectionTitle": "Shuffle (sort-merge) join",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Shuffle join** (implemented as sort-merge join in Spark) redistributes *both* sides of the join by the join key, so matching rows land on the same executor, then sorts and merges the two sides on that key.\n\nThis works for joins of any size on either side — no assumption that one table is small — but it pays the full shuffle cost twice, once per side. For two genuinely large tables, this is usually unavoidable: there's no way to bring matching rows together without moving data, and shuffle join is the general-purpose strategy that handles that regardless of size.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "distributed-joins-at-scale-s02-q1"
+      ]
+    },
+    {
+      "id": "distributed-joins-at-scale-s03",
+      "order": 3,
+      "sectionTitle": "Broadcast hash join",
+      "subTitle": "The small side sent whole",
+      "type": "concept",
+      "markdown": "**Broadcast join** takes a different approach entirely when one side is small enough: instead of shuffling either table, it sends a full copy of the small table to every executor's memory, and each executor performs a local hash join against its own partition of the large table.\n\nNo shuffle happens at all — the large table never moves. This is dramatically cheaper when it applies, because the expensive part (moving the large table) simply doesn't happen; only the small table, which fits comfortably, gets copied — once per executor, not once per row.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "distributed-joins-at-scale-s03-q1"
+      ]
+    },
+    {
+      "id": "distributed-joins-at-scale-s04",
+      "order": 4,
+      "sectionTitle": "Broadcast vs shuffle, side by side",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Broadcast join: one small table copied whole to every executor, the large table stays put, each executor joins locally. Shuffle join: both tables redistributed across the network by key before either side does any joining.\n\n![Broadcast join keeps data local per executor; shuffle join redistributes both tables over the network](assets/broadcast-vs-shuffle-join.svg)",
+      "assets": [
+        {
+          "alt": "Broadcast join keeps data local per executor; shuffle join redistributes both tables over the network",
+          "path": "assets/broadcast-vs-shuffle-join.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-joins-at-scale-s05",
+      "order": 5,
+      "sectionTitle": "How the optimizer chooses",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Spark's planner picks broadcast join automatically when it estimates one side is smaller than a configurable threshold (`spark.sql.autoBroadcastJoinThreshold`, defaulting to 10MB in many setups) — small enough that copying it to every executor is clearly cheaper than shuffling everything.\n\nThat estimate comes from **table statistics** — row counts and size estimates the warehouse or catalog maintains, refreshed by running `ANALYZE TABLE` or automatically in some managed warehouses. When statistics are missing or stale, the estimate can be wrong, and a table that's actually small gets treated as large (or vice versa) — which is exactly the gap between \"the optimizer chooses well\" and \"the optimizer chose based on bad information.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": [
+        "distributed-joins-at-scale-s05-q1"
+      ]
+    },
+    {
+      "id": "distributed-joins-at-scale-s06",
+      "order": 6,
+      "sectionTitle": "A stale statistic picking the wrong strategy",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A dimension table grows from 5MB to 500MB over several months as the business adds products. If `ANALYZE TABLE` was never re-run, the catalog's statistics still say 5MB — comfortably under the broadcast threshold — so the optimizer keeps choosing broadcast join, now copying 500MB to every one of two hundred executors, 100GB of redundant network and memory traffic that used to be a few hundred MB total.\n\nThe job doesn't fail; it just gets slower and more memory-hungry every month as the gap between the stale statistic and reality widens, with no error message pointing at the cause. This is a genuinely common, quiet performance regression — the fix is a periodic `ANALYZE TABLE` refresh on tables near the broadcast threshold, not a code change.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "distributed-joins-at-scale-s06-q1"
+      ]
+    },
+    {
+      "id": "distributed-joins-at-scale-s07",
+      "order": 7,
+      "sectionTitle": "Skewed join keys",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A shuffle join inherits every skew problem from the previous topic, specifically for whichever key it's joining on: if one join key value dominates both sides, the task handling that key does dramatically more comparison work than every other task in the join stage.\n\nThe fixes are the same family as general shuffle skew — **salting** the skewed key on both sides consistently so it splits across multiple tasks, or **isolating** the pathological key entirely: filter it out, join it separately with a strategy suited to its specific shape (sometimes a broadcast join of just that one key's rows against the other side), then union the result back with the rest of the join, which ran normally without the skew problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-joins-at-scale-s08",
+      "order": 8,
+      "sectionTitle": "Forcing a broadcast hint",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "When the optimizer guesses wrong — often from stale statistics — a broadcast hint overrides its choice explicitly:\n\n```python\nfrom pyspark.sql.functions import broadcast\n\n# Force broadcast even if the optimizer's stats suggest otherwise\nresult = large_df.join(broadcast(small_df), \"customer_id\")\n```\n\n```sql\n-- Equivalent in SQL\nSELECT /*+ BROADCAST(small_table) */ *\nFROM large_table\nJOIN small_table ON large_table.customer_id = small_table.customer_id;\n```\n\nThis is a targeted override, not a general performance fix — it only helps when the hinted table genuinely fits comfortably in executor memory. Forcing a broadcast on a table that's actually large causes executor out-of-memory errors, which is the opposite failure from the one you were trying to fix.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": [
+        "distributed-joins-at-scale-s08-q1"
+      ]
+    },
+    {
+      "id": "distributed-joins-at-scale-s09",
+      "order": 9,
+      "sectionTitle": "Many small dimension tables, compounding",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A fact table joined against five small dimension tables looks harmless individually — each dimension broadcasts cheaply on its own. But join order and broadcast choice compound: if the optimizer or the query joins dimensions in a suboptimal order, an intermediate result can temporarily balloon before the next join shrinks it back down, and each of those five broadcasts still costs real network and memory, even if small, multiplied by however many executors exist.\n\nAt genuinely large executor counts (hundreds), even a handful of small broadcasts adds up to real aggregate network traffic, and a query with many joins benefits from checking the actual execution plan rather than assuming \"they're all small, so it's fine\" — the interactions between joins, not any single join, are where the cost sometimes hides.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-joins-at-scale-s10",
+      "order": 10,
+      "sectionTitle": "Reading a join strategy off the physical plan",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`.explain()` names the chosen strategy directly — `BroadcastHashJoin` or `SortMergeJoin` appear in the physical plan output, so verifying which strategy actually ran doesn't require guessing. This is the same discipline as checking `PushedFilters` for pushdown: the DataFrame API being optimizable doesn't mean a specific optimization happened for your specific query and data sizes.\n\nA senior engineer debugging a slow join checks this first, before touching cluster size or code — \"did it broadcast when I expected it to\" is a five-second check that often explains the entire performance problem.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "distributed-joins-at-scale-s11",
+      "order": 11,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Join strategy is one of many levers for making a Spark job fast — the next topic widens the lens to the full set: reading the job UI holistically, caching, adaptive query execution's runtime replanning, spill, and executor sizing, tying together everything this and the previous two topics covered into a practical tuning workflow.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 42,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,187 @@
+{
+  "id": "event-time-watermarks",
+  "title": "Event Time, Watermarks & Late Data",
+  "area": "data-engineering",
+  "group": "stream-processing",
+  "order": 2,
+  "slug": "event-time-watermarks",
+  "summary": "Out-of-order arrival means a streaming system can never be certain a window is finished. Watermarks are the mechanism that turns that uncertainty into a concrete, tunable decision.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "event-time-watermarks-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "If events always arrived in perfect order, \"is this window done?\" would be easy — you'd know the moment you saw an event past the window's end. They don't, so a streaming system has to *estimate* completeness instead of knowing it.\n\nA **watermark** is that estimate: a moving claim of \"no event with a timestamp earlier than W should show up anymore.\" It's the mechanism that lets a system say a window is done despite having no way to prove it.\n\nThis topic covers what a watermark actually is, how it advances, the trade-off it forces on every design (faster answers vs more dropped late data), and the two production failure modes — a slow partition and an idle source — that stall it silently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "event-time-watermarks-s02",
+      "order": 2,
+      "sectionTitle": "Why processing-time-only logic breaks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Suppose you window \"events per minute\" and close each window the instant the processing-time clock crosses the minute boundary. That works only if every event for that minute has already arrived — which out-of-order data violates by definition.\n\nConcretely: an event with event-time 10:00:58 gets delayed by network jitter and arrives at 10:01:03. If you closed the 10:00 window the moment your clock hit 10:01:00, that event is now homeless — the window it truly belongs to has already been emitted and reported.\n\nThe naive fix, \"just wait a fixed 10 seconds after the minute ends,\" is really a crude watermark: a delay past which you assume no more data for that period is coming. Watermarks formalize that guess instead of hardcoding it, and let it adapt to what the data is actually doing.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "event-time-watermarks-s02-q1"
+      ]
+    },
+    {
+      "id": "event-time-watermarks-s03",
+      "order": 3,
+      "sectionTitle": "What a watermark actually is",
+      "subTitle": "An estimate, not a fact",
+      "type": "concept",
+      "markdown": "A watermark is a timestamp W, computed by the system, that asserts: **\"I don't expect to see any more events with event time earlier than W.\"** It's typically derived from the event times the system has already observed, minus some allowed slack for known out-of-orderness — for example, \"the maximum event time seen so far, minus 10 seconds.\"\n\nCritically, a watermark is a **heuristic**, not a guarantee. Nothing stops an event with an even earlier timestamp from showing up after W has passed it — that's exactly what \"late data\" means, covered a few slides on.\n\nWhen the watermark for a window passes the window's end boundary, the engine considers that window \"probably complete\" and fires its result. Every downstream decision — when you get an answer, how often it's wrong — flows from how that W is computed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "event-time-watermarks-s03-q1"
+      ]
+    },
+    {
+      "id": "event-time-watermarks-s04",
+      "order": 4,
+      "sectionTitle": "A watermark advancing",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "Picture events arriving out of order on a single timeline, each labelled with its event time. The watermark is a second marker that only ever moves forward, staying some distance behind the latest event time seen.\n\nWhen an event arrives with a timestamp *behind* the current watermark, it's late — the window it belongs to may have already fired. When an event arrives ahead of the watermark, it simply advances the watermark's future position (once the slack is subtracted).\n\n![Watermark advancing on a timeline as out-of-order events arrive, with one late event highlighted](assets/watermark-timeline.svg)",
+      "assets": [
+        {
+          "alt": "Watermark advancing on a timeline as out-of-order events arrive, with one late event highlighted",
+          "path": "assets/watermark-timeline.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "event-time-watermarks-s05",
+      "order": 5,
+      "sectionTitle": "Tighter watermark vs looser watermark",
+      "subTitle": "Speed against correctness",
+      "type": "compare",
+      "markdown": "The slack you subtract when computing the watermark is a direct trade-off knob:\n\n| | Tighter watermark (small slack) | Looser watermark (large slack) |\n|---|---|---|\n| Result latency | Lower — windows fire sooner | Higher — windows wait longer |\n| Late data dropped/side-outputted | More | Less |\n| Good for | Dashboards, alerting, tight SLAs | Billing, reconciliation, correctness-critical aggregates |\n\nThere's no globally correct slack — it should match how out-of-order your actual sources are and how much the downstream consumer cares about a slightly-wrong-but-fast number versus a slower, more complete one.\n\nA common production pattern is to run **both**: a tight watermark for a fast, approximate dashboard number, and a looser one (or a batch reconciliation job) for the number that finance actually bills against.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 65,
+      "mcqIds": [
+        "event-time-watermarks-s05-q1"
+      ]
+    },
+    {
+      "id": "event-time-watermarks-s06",
+      "order": 6,
+      "sectionTitle": "Handling late-arriving events",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A watermark being wrong is not a hypothetical — late data will happen. Three standard responses:\n\n- **Allowed lateness** — keep a window's state open for some extra time *after* the watermark passes it, so late events arriving within that grace period can still update the result before it's finalized for good.\n- **Side outputs** — route events that arrive after even the allowed-lateness grace period to a separate stream instead of silently dropping them, so a downstream job can reconcile them later.\n- **Updating results** — re-emit a corrected result for a window when late data changes its answer, rather than treating the first emission as final. This requires the sink to support upserts or corrections, not just appends.\n\nWhich combination you pick depends on whether the consumer can tolerate a corrected number arriving after the first one — a live dashboard usually can't retract a shown number cleanly; a table in a warehouse usually can.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "event-time-watermarks-s06-q1"
+      ]
+    },
+    {
+      "id": "event-time-watermarks-s07",
+      "order": 7,
+      "sectionTitle": "One slow partition stalls everything",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "When a stream has multiple sources or partitions feeding one job, the watermark is usually computed as the **minimum** across all of them — the system can't claim \"no more early data is coming\" if even one partition might still deliver some.\n\nThat means a single slow, backed-up, or stalled partition holds the *entire* pipeline's watermark back, even if every other partition is flowing fine. Every window across every key waits on the slowest partition, and the whole job's output latency degrades to match its worst input, not its average.\n\nThis is a common, hard-to-diagnose production incident: dashboards go stale, on-call checks consumer lag and finds 99 healthy partitions and one stuck one, and the fix is operational (unstick or isolate that partition) rather than a code change to the aggregation logic itself.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "event-time-watermarks-s07-q1"
+      ]
+    },
+    {
+      "id": "event-time-watermarks-s08",
+      "order": 8,
+      "sectionTitle": "Configuring lateness and a side output",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "A typical windowed aggregation exposes both allowed lateness and a side output for anything later than that, roughly like this (Flink-style pseudocode, but the shape generalizes across engines):\n\n```java\nDataStream<Event> events = ...;\n\nOutputTag<Event> lateTag = new OutputTag<Event>(\"late-events\") {};\n\nSingleOutputStreamOperator<Result> result = events\n    .keyBy(Event::getUserId)\n    .window(TumblingEventTimeWindows.of(Time.minutes(1)))\n    .allowedLateness(Time.seconds(30))   // keep window open 30s past the watermark\n    .sideOutputLateData(lateTag)         // anything later than that goes here instead\n    .aggregate(new RevenueAggregator());\n\nDataStream<Event> tooLate = result.getSideOutput(lateTag);\ntooLate.addSink(new ReconciliationSink()); // don't just drop it\n```\n\nThe two numbers that matter operationally are the watermark's own slack (upstream, in the earlier compare slide) and this `allowedLateness` — together they define the full window from \"probably done\" to \"actually discarded or side-outputted.\"",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "event-time-watermarks-s09",
+      "order": 9,
+      "sectionTitle": "Idle sources stall watermarks too",
+      "subTitle": "The partition that sends nothing",
+      "type": "concept",
+      "markdown": "The slow-partition problem has a quieter cousin: a partition that isn't slow, it's simply **idle** — no traffic at all, perhaps because that partition's key range genuinely has no activity right now (a low-traffic customer, an off-peak region).\n\nIf the watermark takes the minimum across partitions and an idle partition never advances its own timestamp, the combined watermark can stall indefinitely even though nothing is actually wrong upstream — there's just no data to advance it with.\n\nThe standard fix is an **idleness timeout**: if a partition hasn't produced anything for some configured duration, the engine excludes it from the watermark calculation until it produces again. Without this, a pipeline with bursty, uneven traffic across partitions can appear to hang even under completely normal operating conditions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "event-time-watermarks-s09-q1"
+      ]
+    },
+    {
+      "id": "event-time-watermarks-s10",
+      "order": 10,
+      "sectionTitle": "Per-key vs global watermarks",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "Most engines compute one global watermark per operator, taking the minimum across all its input partitions. That's simple, but it means one straggling key can hold back windows for every *other* key too, even ones with perfectly punctual data.\n\nSome systems and design patterns support finer-grained watermarking — tracking progress per key or per logical source, rather than one number for the whole operator — trading implementation complexity for isolating a slow key's damage to just that key.\n\nIn an interview, naming this trade-off (global simplicity vs per-key isolation) is what separates \"I know what a watermark is\" from \"I've reasoned about what happens when the data is messy in production,\" which is exactly the distinction interviewers are probing for at this topic's level.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "event-time-watermarks-s11",
+      "order": 11,
+      "sectionTitle": "Merging watermarks from multiple sources",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A job that joins two streams — say, clicks and impressions — has to merge each stream's watermark into one combined watermark for the joined output. The combined watermark is the **minimum** of the two, because the join's result can't be considered complete while either input might still deliver earlier data.\n\nThis compounds the slow-partition problem: if the clicks stream is healthy but the impressions stream has a lagging partition, the *entire join's* output latency degrades to match the impressions side, even though clicks are flowing fine.\n\nThis is precisely why stream-stream joins (covered in Stateful Stream Processing, later in this group) are harder to reason about operationally than a single-stream aggregation — their end-to-end latency is bounded by whichever input is currently the least healthy.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "event-time-watermarks-s12",
+      "order": 12,
+      "sectionTitle": "Where watermarks fit next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Watermarks answer \"when is a window done.\" The next topic, Windowing Strategies, covers the other half: what shape that window even is — tumbling, sliding, or session-based — and how the choice interacts with everything covered here.\n\nThe short version to carry forward: a watermark's slack, a window's allowed lateness, and the window type together determine your pipeline's actual latency and correctness profile. None of the three can be reasoned about correctly in isolation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "id": "data-sync-conflict-resolution",
+  "title": "Data Synchronization & Conflict Resolution",
+  "area": "mobile",
+  "group": "mobile-system-design",
+  "order": 3,
+  "slug": "data-sync-conflict-resolution",
+  "summary": "Sync protocols and conflict strategies applied to a mobile client — full vs delta sync, detecting changes, and the concrete resolution strategies from last-write-wins to CRDTs, plus the idempotency bug that silently duplicates writes.",
+  "level": "advanced",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "data-sync-conflict-resolution-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[Offline-First Design](offline-first-design) established the shape: local database as source of truth, writes queued and synced in the background. This topic is the mechanics underneath that make it actually work correctly — how a client and server agree on *what changed* since they last talked, and what happens when the same data was changed independently in two places before either side knew about the other.\n\nThe general theory of consistency and replication belongs to distributed systems broadly; this topic is specifically the mobile-client application of it — the practical protocols and strategies a mobile engineer actually implements against a real backend and a real, occasionally-offline device.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "data-sync-conflict-resolution-s02",
+      "order": 2,
+      "sectionTitle": "Full sync vs delta/incremental sync",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Full sync** downloads the entire dataset every time — simple to implement, correct by construction (there's nothing to miss), but wasteful once the dataset is larger than trivially small: a user with 10,000 notes re-downloading all 10,000 every sync to pick up one edited note.\n\n**Delta (incremental) sync** downloads only what changed since the last sync — dramatically less data, but requires the server to actually be able to answer 'what changed since timestamp/cursor X,' which is a real API design requirement, not something you can bolt on for free after the backend already exists without change-tracking support.\n\nMost production apps start with full sync for small, bounded datasets (a user's own settings, a short list) and move to delta sync specifically for datasets that grow large enough that full sync's data transfer becomes the bottleneck — profiling actual sync payload sizes in production is what should trigger that migration, not a default assumption that delta sync is always the more sophisticated, therefore correct, choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "data-sync-conflict-resolution-s02-q1"
+      ]
+    },
+    {
+      "id": "data-sync-conflict-resolution-s03",
+      "order": 3,
+      "sectionTitle": "Two devices syncing deltas through a server",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Device A pushing a delta to the server which increments a change cursor, and Device B pulling deltas since its last cursor](assets/delta-sync-cursor.svg)",
+      "assets": [
+        {
+          "alt": "Device A pushing a delta to the server which increments a change cursor, and Device B pulling deltas since its last cursor",
+          "path": "assets/delta-sync-cursor.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "data-sync-conflict-resolution-s04",
+      "order": 4,
+      "sectionTitle": "Detecting changes",
+      "subTitle": "timestamps, version numbers, vector clocks",
+      "type": "compare",
+      "markdown": "| | Timestamps | Version numbers | Vector clocks |\n|---|---|---|---|\n| What it captures | when a change happened | how many times a record changed | which specific changes each device has seen |\n| Clock-skew risk | real — device clocks drift and can be wrong | none, purely a counter | none |\n| Detects true concurrent edits? | poorly — two near-simultaneous edits can look ordered when they weren't causally related | detects a conflict (both incremented from the same base) but not the causal relationship | yes, specifically designed to capture causality across multiple devices |\n| Complexity | lowest | low | highest — needs per-device tracking |\n\nTimestamps are the most common in practice despite clock skew, because most products can tolerate the rare edge case; vector clocks show up specifically in systems (distributed databases, some collaborative editors) where correctly detecting true concurrency, not just conflicting version numbers, actually matters to the product.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "data-sync-conflict-resolution-s04-q1"
+      ]
+    },
+    {
+      "id": "data-sync-conflict-resolution-s05",
+      "order": 5,
+      "sectionTitle": "Conflict resolution strategies",
+      "subTitle": "last-write-wins, field-level merge, manual",
+      "type": "concept",
+      "markdown": "Three strategies, in order of increasing complexity and decreasing data loss:\n\n- **Last-write-wins (LWW)** — whichever change has the later timestamp wins outright; the other is silently discarded. Simple, but a genuine user edit can vanish with no trace if it happened to lose the timestamp race.\n- **Field-level merge** — if two devices edited *different fields* of the same record while offline (one changed a note's title, another changed its body), merge both changes instead of discarding one wholesale. Requires the sync protocol to track changes at field granularity, not just 'this record changed.'\n- **Manual resolution** — surface the conflict to the user directly (\"this note was edited on two devices — keep mine, keep theirs, or merge\") when the data is important enough that silent loss is unacceptable and automatic merging isn't safely possible.\n\nThe right choice is genuinely data-dependent: LWW is fine for a 'last viewed' timestamp, actively wrong for a shared document's body text where a lost edit is a real user-visible loss.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "data-sync-conflict-resolution-s05-q1"
+      ]
+    },
+    {
+      "id": "data-sync-conflict-resolution-s06",
+      "order": 6,
+      "sectionTitle": "CRDTs at a glance",
+      "subTitle": "conflict-free structures for collaborative data",
+      "type": "concept",
+      "markdown": "A **CRDT** (Conflict-free Replicated Data Type) is a data structure specifically designed so that concurrent updates from multiple sources can always be merged automatically into a single, consistent result, with no conflict ever requiring a decision — the structure's own math guarantees the merge is well-defined regardless of the order updates arrive in.\n\nA simple example: a **counter CRDT** that tracks 'increments by device A' and 'increments by device B' separately and sums them, rather than storing one shared number two devices could race to overwrite — merging is just summing the per-device counts, which is always correct regardless of order. Real collaborative text editors use far more sophisticated CRDTs (or the related Operational Transform approach) to merge concurrent character-level edits without losing either side's changes.\n\nThe trade-off: CRDTs eliminate conflict-resolution *decisions* but add real complexity to the data model itself, and not every data shape has a natural CRDT representation — they're a strong fit for collaborative editing and counters, a poor fit for data with complex, cross-field business invariants that a purely structural merge can't reason about.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": [
+        "data-sync-conflict-resolution-s06-q1"
+      ]
+    },
+    {
+      "id": "data-sync-conflict-resolution-s07",
+      "order": 7,
+      "sectionTitle": "A sync loop",
+      "subTitle": "push local changes, then pull remote ones",
+      "type": "code",
+      "markdown": "```kotlin\nsuspend fun syncNotes() {\n    // 1. Push: send local changes since last successful sync\n    val localChanges = localDb.getUnsyncedChanges()\n    for (change in localChanges) {\n        val result = api.pushChange(change, idempotencyKey = change.id)\n        if (result.isConflict) {\n            resolveConflict(change, result.serverVersion)\n        } else {\n            localDb.markSynced(change.id)\n        }\n    }\n\n    // 2. Pull: fetch remote changes since our last-known cursor\n    val remoteChanges = api.getChangesSince(localDb.getLastSyncCursor())\n    localDb.applyRemoteChanges(remoteChanges)\n    localDb.updateSyncCursor(remoteChanges.newCursor)\n}\n```\n\nPush-then-pull (rather than the reverse) matters here: pushing local changes first means the server has the latest state from this device before this same device pulls — pulling first could mean pulling back a stale version of data this device is about to overwrite anyway, doing redundant work and risking a spurious conflict against changes about to be superseded.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "data-sync-conflict-resolution-s08",
+      "order": 8,
+      "sectionTitle": "Server-authoritative vs peer-to-peer sync",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Server-authoritative | Peer-to-peer |\n|---|---|---|\n| Conflict resolution happens | centrally, on the server, one place to reason about correctness | distributed across devices — harder to reason about globally |\n| Works fully offline between two devices with no server reachable | no | yes, if devices can connect directly (Bluetooth, local network) |\n| Typical use | the overwhelming majority of mobile apps | local multiplayer games, some file-sharing/collaboration tools |\n| Complexity | lower — one source of truth to sync against | higher — needs its own conflict logic without a central arbiter |\n\nMost apps should default to server-authoritative sync unless there's a specific product requirement for direct device-to-device sync with no server involved — peer-to-peer sync solves a real but narrower problem (two phones in the same room with no internet) at real added complexity that most products don't actually need.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "data-sync-conflict-resolution-s09",
+      "order": 9,
+      "sectionTitle": "Pitfall: naive last-write-wins discarding an edit",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Applying LWW to data where a silently-discarded edit is a genuine user-visible loss — a shared document's body, a collaboratively-edited task list — means a user's real work can vanish with zero indication anything went wrong, because LWW's whole design is to resolve the conflict without surfacing it.\n\nThe specific failure mode: two users (or one user on two devices) edit the same record while both are offline; whichever syncs second, with the later timestamp, wins outright, and the other edit is gone — not merged, not flagged, just gone. Teams often discover this only after a support ticket ('I wrote three paragraphs and they disappeared'), because it doesn't show up in a single-device test. The fix is recognizing which data actually tolerates LWW (metadata, a 'last viewed' marker) versus which needs field-level merge, a CRDT, or manual resolution — and testing conflict scenarios explicitly with two simulated devices before shipping, not just single-device happy paths.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "data-sync-conflict-resolution-s09-q1"
+      ]
+    },
+    {
+      "id": "data-sync-conflict-resolution-s10",
+      "order": 10,
+      "sectionTitle": "Pitfall: a sync loop with no idempotency key double-applying a change",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A sync push that fails to receive its response (network drop right after the server processed it) and blindly retries the same operation, with the server having no way to recognize the retry as a duplicate, results in the change being applied **twice** — an increment operation runs twice, a 'create' creates a duplicate record, an 'append to list' appends twice.\n\nThis is the classic at-least-once-delivery problem, and the fix is the same as anywhere else it shows up: every queued sync operation carries a stable **idempotency key** (often just the local change's own ID), and the server deduplicates on that key — a retry with a key it's already processed is a no-op acknowledgment, not a second application. Skipping this is easy to miss in testing because a clean network rarely triggers the retry path at all; it shows up specifically under the flaky connectivity conditions mobile networks actually have, which is exactly the condition offline-first sync exists to handle well.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "data-sync-conflict-resolution-s10-q1"
+      ]
+    },
+    {
+      "id": "data-sync-conflict-resolution-s11",
+      "order": 11,
+      "sectionTitle": "The senior nuance: pick the sync strategy from the data's actual conflict rate",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A mid-level answer picks one conflict-resolution strategy and applies it to the whole app. A senior answer recognizes different data in the same app can have wildly different real-world conflict rates and tolerances — a user's own private notes rarely see true concurrent edits (one person, usually one active device at a time) and can safely use simple LWW; a shared team document sees frequent genuine concurrent edits and needs field-level merge or a CRDT; a 'last read' timestamp can be LWW without anyone ever noticing or caring.\n\nOver-engineering every piece of synced data with CRDT-level sophistication is real, unnecessary cost; under-engineering the specific data that genuinely needs it is real, user-visible data loss. The skill is matching the resolution strategy to each data type's actual measured or reasonably-estimated conflict frequency and the cost of getting it wrong for that specific field — not picking one strategy dogmatically for the whole system.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

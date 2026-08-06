@@ -1,0 +1,37 @@
+{
+  "topicId": "pure-functions-and-immutability",
+  "interviewQuestions": [
+    {
+      "id": "pure-functions-and-immutability-iq1",
+      "question": "What makes a function \"pure,\" and why does that matter in practice?",
+      "answerMarkdown": "A function is pure when two things hold: it's **deterministic** — same input, same output, every time — and it has **no observable side effects** — it doesn't mutate its arguments, touch a global, log, or hit the network or disk.\n\nWhy it matters isn't philosophical, it's mechanical:\n\n- **Testing gets trivial.** Call it, assert on the return value. No mocking a clock, no stubbing a database, no teardown.\n- **Reasoning gets local.** To understand what a pure function does, you only need to read its body and its arguments — not the whole call graph around it, since nothing sneaks in or out.\n- **It's safe to reorder, cache, or parallelize.** Because the result never depends on when or how many times you call it, a runtime or compiler can memoize it, evaluate it lazily, or run two calls concurrently without changing the outcome.\n\nConcretely: `total(cart)` that sums prices is pure. `total(cart)` that also writes to an analytics log is not — even though the number it returns is identical every time, the log write is a side effect the substitution model doesn't account for.\n\n**Testing:** whether you can name both conditions precisely, not just gesture at \"no side effects.\"",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "pure-functions-and-immutability-iq2",
+      "question": "This function is hard to unit test — why, and how would you fix it?",
+      "answerMarkdown": "I'd start by asking what the function depends on besides its arguments, and what it changes besides its return value — that's usually where the difficulty lives.\n\nThe classic shape: `def checkout(cart): total = sum(cart.prices); log_to_analytics(total); db.save(order_from(cart, total)); return total`. Testing this means mocking the analytics client, stubbing the database, and asserting on calls that happened to *other objects*, not on the return value. Every one of those mocks is a place the test can be wrong without the code being wrong.\n\nThe fix is to **separate the pure computation from the impure edges**: pull `total = sum(cart.prices)` and the order-construction logic into their own pure functions that take data in and return data out. Then push `log_to_analytics` and `db.save` up to a thin caller that orchestrates the pure core plus the side effects. Now the pure core — the part with actual business logic worth testing thoroughly — needs zero mocks, and the thin orchestration layer is simple enough that you barely need to test it at all, or you test it once with real integration tests.\n\nThis is the general FP move: push impurity to the edges, keep the core pure. It also makes code review easier, because the pure functions' signatures tell you everything they can do.\n\n**Testing:** whether you reach for \"separate pure core from effectful shell\" instead of just adding more mocks.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Testability"
+    },
+    {
+      "id": "pure-functions-and-immutability-iq3",
+      "question": "Doesn't returning a new object on every update waste memory compared to mutating in place?",
+      "answerMarkdown": "Less than it sounds like, and the answer depends on which data structure you're updating with.\n\nIf \"immutable\" meant deep-copy on every change, you'd be right — updating one field of a million-element structure would copy a million elements, and that's a real cost nobody should accept. But languages built around immutability don't do that; they use **persistent data structures** that share nearly all of the old structure with the new one. Clojure's persistent vector, for example, is a shallow tree, and updating one element rebuilds only the O(log n) nodes on the path from root to that element — every other branch is shared by reference between old and new versions. That's close to a mutable array's update cost, not a full-copy cost.\n\nWhere the trade-off is real: a tight numeric loop over a huge mutable array, where allocation pressure and GC pauses genuinely matter, still often wins by mutating in place — that's why even Haskell has `IORef`/`STRef` escape hatches, and why languages like Rust let you choose mutation with ownership guarantees instead of full immutability.\n\nSo my answer in an interview: immutability's cost is usually O(log n) extra work per update via structural sharing, not O(n) — and I'd only reach for raw mutation in the genuinely hot numeric path, measured, not assumed.\n\n**Testing:** whether you know persistent structures exist, or think immutability always means naive copying.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "pure-functions-and-immutability-iq4",
+      "question": "You inherited a service where a shared mutable cache causes intermittent, unreproducible bugs under load. How would purity and immutability have prevented this, and what would you actually change?",
+      "answerMarkdown": "I'd start from the failure it prevents: intermittent bugs \"under load\" almost always mean a race — two threads touching the same mutable state where at least one is writing, and the outcome depends on timing you can't control or reproduce locally. Immutability removes the writer from that equation entirely.\n\nConcretely, if the cache is a mutable `Map` that request handlers read and write directly, you have exactly the shared-state-plus-writer combination that produces torn reads and lost updates. Two fixes, in order of how much I'd change:\n\n- **Minimal:** wrap every read-modify-write in a lock or use a concurrent-safe structure. This works but every future contributor has to remember to take the lock correctly, forever — it's a discipline problem, not a design one.\n- **Structural:** replace the mutable cache with an immutable snapshot behind an atomic reference (`AtomicReference<ImmutableMap>` or Clojure's `atom`). A writer builds a *new* immutable map and swaps the reference; readers always see a complete, consistent snapshot with zero locking on the read path, because nothing they're holding can change underneath them.\n\nIn production I'd also push for **structured logging around the swap** — because the bug is intermittent, I want an audit trail of every mutation instant, not just the code, so if it recurs I can reconstruct the interleaving instead of debugging blind.\n\n**Testing:** whether you can connect the theory to a real concurrency bug and propose a structural fix, not just \"add a lock.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

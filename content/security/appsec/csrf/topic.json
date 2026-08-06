@@ -1,0 +1,161 @@
+{
+  "id": "csrf",
+  "title": "CSRF & Request Forgery",
+  "area": "security",
+  "group": "appsec",
+  "order": 5,
+  "slug": "csrf",
+  "summary": "Cookies authenticate a browser, not an intent — CSRF exploits that gap to make a victim's browser send requests they never meant to. Covers the synchronizer token, double-submit cookie, and SameSite defenses.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "csrf-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "[XSS](xss) exploits a browser rendering untrusted script. **CSRF** exploits something more subtle: a browser automatically attaching your credentials to *any* request to a site you're logged into, regardless of which page told it to send that request.\n\nThat automatic attachment — a cookie sent with every request to its domain — is exactly what makes session auth convenient. It's also exactly what a malicious page can abuse: trick your browser into firing a request to your bank, your email, or your admin panel, and your browser helpfully attaches your session cookie, no questions asked.\n\nThis topic covers why that happens, the two classic token-based defenses, and the modern `SameSite` cookie attribute that closes most of it at the browser level with zero application code.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-s02",
+      "order": 2,
+      "sectionTitle": "What CSRF is",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "**Cross-Site Request Forgery** tricks a victim's browser into sending a request to a site it's already authenticated for, from a page the victim didn't intend to trigger that request from.\n\nSay `bank.com` lets you transfer money via `POST /transfer` using only your session cookie to authenticate. A malicious page at `evil.com` includes a hidden auto-submitting form that also posts to `bank.com/transfer` with the attacker's account as the destination. If you're logged into `bank.com` and you visit `evil.com` — maybe via a link in an email — your browser submits that form and **attaches your `bank.com` session cookie automatically**, because that's just what browsers do for same-domain cookies, regardless of which page triggered the request.\n\n`bank.com`'s server sees a perfectly well-formed, authenticated request. It has no way to tell that the *intent* behind it came from an attacker's page rather than the bank's own transfer form.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "csrf-s02-q1"
+      ]
+    },
+    {
+      "id": "csrf-s03",
+      "order": 3,
+      "sectionTitle": "Cookies as \"ambient authority\"",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The security-theory name for the root cause is **ambient authority**: a cookie proves *who you are* to the server, but it proves nothing about *what you intended to do right now*. It's attached automatically, silently, to every request — the browser doesn't ask \"does the current page actually want to send this on the user's behalf.\"\n\nCompare this to something like a bank PIN entered at an ATM: the PIN is deliberate, tied to this specific transaction, and only you can supply it at this moment. A session cookie is the opposite — persistent, automatic, and reusable by *any* page that can get your browser to fire a request, for as long as the session lasts.\n\nThis is why the fix categories below don't touch authentication at all — you're already correctly authenticated when a CSRF attack succeeds. The fix has to add a *second* signal that specifically proves the current page's intent, since the cookie alone can never carry that information.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 74,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-s04",
+      "order": 4,
+      "sectionTitle": "The synchronizer token pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The classic, most robust defense: the server generates a **unique, unpredictable token per session (or per form)**, embeds it in a hidden field on the legitimate form, and requires that exact token to be resubmitted with the request.\n\n```html\n<form method=\"POST\" action=\"/transfer\">\n  <input type=\"hidden\" name=\"csrf_token\" value=\"a1b2c3...\">\n  <!-- other fields -->\n</form>\n```\n\nThe server checks the submitted `csrf_token` against the one it issued for that session. `evil.com` can make your browser send a request to `bank.com/transfer` with your cookie attached automatically — but it has **no way to read** the token value, because that value lives in `bank.com`'s own HTML, which `evil.com` cannot access thanks to the browser's same-origin policy. No token, no valid request.\n\nThe token proves the request originated from a page that could actually read the legitimate form — exactly the intent signal a cookie alone can't provide.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "csrf-s04-q1"
+      ]
+    },
+    {
+      "id": "csrf-s05",
+      "order": 5,
+      "sectionTitle": "The double-submit cookie pattern",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A lighter-weight alternative that avoids server-side session storage for the token: the server sets a random token as a **cookie**, and client-side JavaScript reads that cookie and includes its value as a request header or hidden field. The server then checks that the header/field value matches the cookie value.\n\nWhy this still works against CSRF: `evil.com` can make your browser send a request with your `bank.com` cookies attached, but it **cannot read** `bank.com`'s cookie value to put it in a matching header — same-origin policy blocks that. So even though the cookie itself travels automatically, the attacker can't produce the matching header value the check requires.\n\nThe trade-off versus the synchronizer token: no server-side storage needed (stateless, easier to scale), but it's weaker against an attacker who can set cookies on your domain at all — for example via a subdomain takeover or an XSS bug elsewhere on the same site — so it's often paired with other defenses rather than used alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "csrf-s05-q1"
+      ]
+    },
+    {
+      "id": "csrf-s06",
+      "order": 6,
+      "sectionTitle": "The SameSite cookie attribute",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "`SameSite` is a browser-enforced cookie attribute that tells the browser **when** to attach a cookie to a cross-site request, closing most CSRF at the browser level with no application code at all.\n\n- **`SameSite=Strict`** — the cookie is never sent on a cross-site request, full stop, even when a user clicks a legitimate link from another site into yours. Maximally safe, but breaks the \"click a link from an email and land already logged in\" experience.\n- **`SameSite=Lax`** — the cookie is sent on top-level navigation (clicking a link) but withheld from cross-site subrequests like a form auto-submit, an `<img>` tag, or a background `fetch`/`XHR` — which covers the classic CSRF pattern while preserving normal link-clicking UX. This is the modern browser default when no attribute is set.\n- **`SameSite=None`** — the cookie is sent on every cross-site request, matching legacy behavior; requires the `Secure` attribute (HTTPS only) alongside it.\n\n`Lax` alone stops the hidden-auto-submitting-form attack from the earlier example, since that's a cross-site subrequest, not a top-level navigation. It's a major mitigation but not a total substitute for tokens, covered next.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "csrf-s06-q1"
+      ]
+    },
+    {
+      "id": "csrf-s07",
+      "order": 7,
+      "sectionTitle": "A CSRF attack, step by step",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A hidden auto-submitting form on evil.com triggers a request to bank.com with the victim's session cookie attached automatically](assets/csrf-cross-site-request.svg)\n\nThe diagram makes the core confusion visible: the request really is authenticated — that part is genuine. What's forged is the *intent* behind it. Every defense in this topic is really answering the same question: how does the server tell a genuine, victim-intended request apart from a genuine-looking, attacker-triggered one, when the cookie alone says nothing about intent.",
+      "assets": [
+        {
+          "alt": "A hidden auto-submitting form on evil.com triggers a request to bank.com with the victim's session cookie attached automatically",
+          "path": "assets/csrf-cross-site-request.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "csrf-s08",
+      "order": 8,
+      "sectionTitle": "CSRF vs XSS: different problem, often confused",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | CSRF | XSS |\n|---|---|---|\n| **What's exploited** | The browser's automatic cookie attachment | The browser executing untrusted script |\n| **Attacker needs** | The victim to load a malicious page, no script injection needed | To inject script into the target site itself |\n| **Where the payload runs** | On the attacker's own page (`evil.com`) | On the target site's own page |\n| **What it can do** | Trigger one specific request the attacker crafted in advance | Anything JavaScript can do — read cookies, make arbitrary requests, modify the page |\n| **Primary fix** | CSRF tokens, `SameSite` cookies | Output encoding, CSP |\n\nThe frequent confusion: **XSS can be used to defeat CSRF defenses**, because injected script running on the target site can read the CSRF token directly out of the page and submit it — so a CSRF token doesn't protect you if the site also has an XSS bug. They're separate vulnerabilities, but XSS strictly dominates CSRF in capability once it lands: an attacker with XSS on your site rarely needs CSRF at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 74,
+      "mcqIds": [
+        "csrf-s08-q1"
+      ]
+    },
+    {
+      "id": "csrf-s09",
+      "order": 9,
+      "sectionTitle": "\"HTTPS alone prevents CSRF\"",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A persistent misconception: HTTPS protects request contents in transit, so surely it stops CSRF too.\n\nIt doesn't, and the reason clarifies what HTTPS actually does versus what CSRF exploits:\n\n- **HTTPS protects confidentiality and integrity in transit** — it stops an on-path attacker from reading or tampering with a request as it travels over the network.\n- **CSRF happens entirely inside a legitimate, correctly-encrypted request.** The victim's browser genuinely does send an authentic, HTTPS-protected request to `bank.com`, with a valid session cookie, over a secure channel. Nothing about the request is tampered with in transit — it's forged at the *origin*, on the attacker's page, before encryption even applies.\n- **The attacker never needs to intercept anything.** They just need the victim's browser to visit a page they control, which HTTPS on the target site does nothing to prevent.\n\nHTTPS and CSRF defenses solve different problems entirely: one is about the channel, the other is about whether the request itself represents genuine user intent.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 72,
+      "mcqIds": [
+        "csrf-s09-q1"
+      ]
+    },
+    {
+      "id": "csrf-s10",
+      "order": 10,
+      "sectionTitle": "Layering defenses in practice",
+      "subTitle": "The senior-level nuance",
+      "type": "concept",
+      "markdown": "A junior answer to \"how do you prevent CSRF\" picks one defense. A senior answer layers them, because each has a gap the others cover:\n\n- **`SameSite=Lax` as the baseline**, since it's free (a cookie attribute, no code) and stops the majority of classic CSRF with zero developer effort — most modern frameworks and browsers default to it already.\n- **CSRF tokens for state-changing requests specifically**, as defense-in-depth for the cases `SameSite` doesn't fully cover — some legitimate top-level navigations, certain older browsers, or subdomain-adjacent trust boundaries.\n- **Recognizing that GET requests should never mutate state.** A surprising amount of \"CSRF-proof\" advice quietly assumes this. If `GET /transfer?to=attacker&amount=1000` actually performs a transfer, it's forgeable via a plain `<img src=\"...\">` tag with no form and no JavaScript at all — the fix there isn't a CSRF token, it's fixing the API to not mutate state on GET.\n- **Treating any XSS finding as a CSRF-defense bypass**, since injected script can read tokens directly. A CSRF token audit is incomplete without an XSS audit alongside it.\n\nThe unifying instinct: no single control is complete, and knowing *which* gap each layer closes is what separates reciting \"use a CSRF token\" from actually closing the class.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 84,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "topicId": "just-in-time-compilation",
+  "interviewQuestions": [
+    {
+      "id": "just-in-time-compilation-iq1",
+      "question": "Why was this microbenchmark 10x slower in the first 100ms than after?",
+      "answerMarkdown": "Because the first 100ms is measuring interpretation and low-tier compiled code, not the method's actual steady-state performance. The JVM starts every method running interpreted while HotSpot's profiler counts invocations and loop back-edges; only after crossing a threshold does the JIT compile it, first with a fast, lightly-optimized tier (C1) and later with the aggressive C2 tier once it's proven genuinely hot.\n\nConcretely: at time zero, every call to the method pays bytecode dispatch overhead per instruction. By 100ms, if the method is hot, it may already be running C1-compiled native code — a meaningful speedup — but C2's deeper optimizations (inlining, speculative devirtualization) can take longer to kick in, especially if the call site needed time to reveal a stable, monomorphic type pattern.\n\nThe fix is procedural: run a warm-up phase of thousands of iterations, discard those results, then measure. Tools like JMH exist because doing this correctly by hand is easy to get subtly wrong — for instance, not warming up long enough for C2 to replace C1's compiled version, and unknowingly measuring tier 1 instead of tier 4.\n\n**Testing:** whether you understand JIT warm-up as a real, structural property of the runtime rather than benchmarking noise to explain away.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "just-in-time-compilation-iq2",
+      "question": "What's a speculative optimization, and what makes it safe for the JIT to take that kind of bet?",
+      "answerMarkdown": "A speculative optimization is code the JIT compiles based on an assumption drawn from observed behavior rather than a proof — most commonly, \"this call site has only ever seen one concrete type, so I'll compile a direct call instead of a full virtual dispatch.\" That bet can save real work: resolving and potentially inlining a call at compile time is much cheaper than paying dispatch cost on every single invocation.\n\nWhat makes it safe is the existence of a defined escape hatch: **deoptimization**. The runtime keeps enough bookkeeping to detect when the assumption breaks — say, a second subtype finally shows up at that call site — and at that point it discards the invalidated compiled code and falls back to interpreting, reconstructing the interpreter's state from the compiled stack frame if needed. Worst case, you pay an interpretation penalty again until the method gets recompiled with a more general (polymorphic) assumption.\n\nSo the guarantee the JIT is actually making is about correctness, not performance: a wrong guess costs you speed, temporarily, never a wrong answer. That's the property that lets a JIT be aggressive in ways a static compiler — which has to be right unconditionally — can't afford to be.\n\n**Testing:** whether you understand deoptimization as the safety mechanism that makes speculation viable, not just two unrelated JIT facts.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "just-in-time-compilation-iq3",
+      "question": "Walk me through what tiered compilation buys you over a single-tier JIT.",
+      "answerMarkdown": "A single-tier JIT is stuck with one global trade-off: compile every method fast with light optimization, or compile every method slow with heavy optimization. Neither is right for a real program, because most methods run a handful of times and never deserve the heavy treatment, while a genuinely hot method deserves every optimization you can throw at it.\n\nTiered compilation (HotSpot's C1 then C2 is the concrete example) resolves this by spending effort proportional to how hot a method actually is: interpret first, promote to C1 once modestly warm — fast to compile, adds profiling instrumentation on top of light optimization — and only escalate to C2's expensive, aggressive optimizer once the method has proven, with real invocation and back-edge counts, that it's worth the cost. C2 also benefits from C1's instrumentation: it recompiles with real profile data instead of guessing.\n\nThe net effect at the system level: cold code (the vast majority of any codebase) never pays compilation costs it wouldn't recoup, and hot code — the small fraction actually dominating runtime — eventually gets near-native performance informed by observed behavior. This is also exactly why a long-running server process benefits from JIT more than a short-lived CLI tool: the tiers need time and repeated execution to pay off.\n\n**Testing:** whether you can explain tiering as a cost/benefit strategy, not just name C1 and C2 as trivia.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "just-in-time-compilation-iq4",
+      "question": "Your team is deciding between running a Java service on long-lived containers versus as short-lived serverless functions. How does the JIT change that calculus, and what would you actually recommend?",
+      "answerMarkdown": "The JIT's core trade — pay warm-up cost, earn back near-native throughput — only pays off if the process lives long enough to reach and stay in its hot tiers. A long-lived container that serves millions of requests amortizes that warm-up over its entire lifetime; a serverless function that cold-starts, handles one request, and exits pays the interpreter tax on every single invocation and never earns the payoff.\n\nConcretely, I'd expect a JVM cold start to spend 100–300ms on classloading, heap setup, and interpreted execution before the JIT has compiled anything meaningful — that's often comparable to or larger than the actual request-handling time for a lightweight function. On a long-lived container, that same 100–300ms happens once and then throughput settles near-native for the container's lifetime.\n\nMy recommendation would split on invocation pattern: for a steady, high-throughput service, keep the JVM on long-lived containers and let tiered compilation do its job — this is the JIT's best case. For genuinely spiky, short-lived serverless functions, I'd look at either keeping instances warm (provisioned concurrency, which sidesteps cold start by reusing a warmed process) or moving to an AOT-compiled runtime like GraalVM native-image (`ahead-of-time-compilation-and-native-images`), trading peak throughput for consistent, fast starts — the right call when most invocations never live long enough to get hot anyway.\n\n**Testing:** whether you can connect the JIT's warm-up/throughput trade-off to an actual infrastructure decision, not just describe the mechanism in the abstract.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "just-in-time-compilation-iq5",
+      "question": "You're debugging a service where p99 latency spikes every few minutes with no obvious external cause. Could the JIT be responsible, and how would you check?",
+      "answerMarkdown": "Yes, it's a real candidate, and there are two JIT-related mechanisms that produce exactly this symptom: background compilation stealing CPU, and deoptimization storms.\n\nBackground compilation itself runs on separate compiler threads, so it's usually not the direct cause of a request-thread latency spike — but on a CPU-constrained host, compiler threads competing for cores with request-handling threads can show up as a transient slowdown, especially right after a deploy when everything is cold and compiling at once.\n\nMore interesting is deoptimization: if a call site was stably monomorphic and then starts seeing a new type — say, a feature flag routes a small percentage of traffic through a different implementation of an interface — the JIT has to discard compiled code and fall back to interpreting that path until it recompiles more generally. If that happens repeatedly (the mix of types keeps shifting), you get recurring deopt/recompile cycles instead of a one-time cost, which reads exactly like periodic latency spikes.\n\nTo check, I'd reach for `-XX:+PrintCompilation` (looking for repeated \"made not entrant\" on the same methods) or, better, JFR/async-profiler flight recordings that flag deoptimization events directly, and correlate the timestamps against the latency spikes. If it lines up, the fix is usually reducing call-site polymorphism — routing similar types through a shared interface implementation, or splitting the hot path so it doesn't see a mixed type population.\n\n**Testing:** whether you can connect a production symptom to a specific JIT mechanism and name the actual diagnostic tool, not just gesture at \"the JVM is warming up.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    }
+  ]
+}

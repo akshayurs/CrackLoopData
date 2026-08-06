@@ -1,0 +1,187 @@
+{
+  "id": "lakehouse-table-formats",
+  "title": "Lakehouse Table Formats",
+  "area": "data-engineering",
+  "group": "warehousing-lakes",
+  "order": 4,
+  "slug": "lakehouse-table-formats",
+  "summary": "A metadata layer sitting above plain columnar files is what closes the gap data lakes historically had: ACID transactions, time travel, and schema enforcement, without giving up the lake's cost and flexibility.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "lakehouse-table-formats-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "The previous topic ended on a specific gap: [lakes](data-lakes) historically lacked ACID guarantees because object storage has no native concept of a multi-file atomic update. **Lakehouse table formats** — Iceberg, Delta Lake, Hudi — close exactly that gap, without changing where the actual data lives or how it's stored.\n\nThe trick is a metadata layer: the underlying files stay plain Parquet-style columnar files on object storage, but a tracked metadata structure sits above them, recording which files currently constitute \"the table\" as of any given version. This topic covers how that layer delivers transactions, time travel, and schema enforcement, and the two operational realities — file compaction and concurrent-writer coordination — that come with maintaining it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "lakehouse-table-formats-s02",
+      "order": 2,
+      "sectionTitle": "The lakehouse pitch",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The core pitch is direct: get warehouse-grade features — ACID transactions, enforced schema, reliable concurrent access — **directly on top of** lake storage, instead of choosing between \"cheap and flexible\" (lake) or \"transactional and governed\" (warehouse).\n\nThis matters because the old choice forced a real trade-off: teams either accepted a lake's consistency risks to keep its cost and flexibility advantages, or moved curated data into a warehouse and accepted its higher storage cost and more rigid schema-on-write model to get transactional guarantees.\n\nA lakehouse table format's promise is that you don't have to choose — the data stays in cheap object storage in an open file format, but a table built with one of these formats behaves, from a consistency and query-planning standpoint, much more like a warehouse table than a loose directory of files ever could.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "lakehouse-table-formats-s02-q1"
+      ]
+    },
+    {
+      "id": "lakehouse-table-formats-s03",
+      "order": 3,
+      "sectionTitle": "A metadata layer above plain files",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The underlying columnar files (Parquet, typically) never change format — a table format adds a metadata layer that tracks, as a versioned sequence, exactly which set of files constitutes the table at each point in time. A query engine reading the table first reads the current metadata pointer, learns exactly which files to read for that version, and reads only those.\n\n![Metadata layer with numbered snapshots pointing at overlapping subsets of Parquet data files](assets/snapshot-metadata-layer.svg)",
+      "assets": [
+        {
+          "alt": "Metadata layer with numbered snapshots pointing at overlapping subsets of Parquet data files",
+          "path": "assets/snapshot-metadata-layer.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "lakehouse-table-formats-s04",
+      "order": 4,
+      "sectionTitle": "ACID via atomic pointer swaps",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The mechanism behind transactional guarantees is simpler than it might sound: a write operation creates new data files (never modifying existing ones — files are immutable once written) and, only once every new file is fully and durably written, atomically swaps the metadata layer's \"current version\" pointer to a new snapshot that references the new set of files.\n\nBecause the pointer swap itself is a single atomic operation, any reader at any moment sees either the fully-old snapshot or the fully-new one — never a partial mix. A writer that crashes mid-operation simply never completes the pointer swap, so readers keep seeing the last valid snapshot, and the half-written files from the failed attempt are orphaned but harmless, since nothing points to them.\n\nThis is the same underlying idea as a database transaction commit, just implemented at the file-and-metadata level instead of inside a database engine's internal storage structures — which is exactly why it delivers database-grade consistency guarantees on top of plain object storage files.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "lakehouse-table-formats-s04-q1"
+      ]
+    },
+    {
+      "id": "lakehouse-table-formats-s05",
+      "order": 5,
+      "sectionTitle": "Time travel",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because every snapshot is retained (until explicitly cleaned up) rather than overwritten, a table format lets you query the table **as of a past version or timestamp** — \"show me this table exactly as it looked yesterday at noon\" — by simply pointing a query at an older snapshot's metadata instead of the current one.\n\nThis has concrete, practical uses beyond curiosity: debugging (\"what did this table look like right before the bad job ran, so I can see exactly what changed\"), reproducibility (an ML training run can pin its input data to a specific snapshot, so retraining later against the \"same\" data doesn't silently pick up unrelated later changes), and recovery (rolling a table back to a known-good snapshot after a bad write, without needing a separate backup system).\n\nTime travel isn't free forever — old snapshots and the files they reference have to be retained to make this work, which trades directly against storage cost, and most table formats let you configure how long snapshot history is kept before older ones are eligible for cleanup.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "lakehouse-table-formats-s05-q1"
+      ]
+    },
+    {
+      "id": "lakehouse-table-formats-s06",
+      "order": 6,
+      "sectionTitle": "Schema evolution and enforcement",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A lakehouse table format tracks the table's schema as part of its metadata and enforces it on writes — a genuine warehouse-like guarantee that a plain directory of files can't offer, where nothing stops one file from silently having a different shape than the rest.\n\nIt also supports **schema evolution** with more grace than \"delete the table and start over\": adding a new column, renaming one, or widening a type (an int becoming a bigint) can be recorded as a metadata change without rewriting every existing data file. Old files simply don't have the new column, and readers are expected to handle that (typically by returning null for a column added after a file was written) rather than the engine choking on files with genuinely mismatched shapes.\n\nThis matters because production schemas do evolve — a source system adds a field eventually — and a table format that handles this gracefully avoids the alternative: an expensive full-table rewrite, or worse, a lake full of files with silently inconsistent, undocumented shapes that only schema-on-read discovers when something breaks.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "lakehouse-table-formats-s06-q1"
+      ]
+    },
+    {
+      "id": "lakehouse-table-formats-s07",
+      "order": 7,
+      "sectionTitle": "The major open table formats",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Metadata model | Notable ecosystem fit |\n|---|---|---|\n| **Apache Iceberg** | Snapshot-based, with a manifest hierarchy tracking file lists per snapshot | Broad multi-engine support; often favored for engine-agnostic lakehouse setups |\n| **Delta Lake** | A transaction log (an ordered sequence of JSON/Parquet commit files) that readers replay to reconstruct current state | Deepest integration with Spark specifically, given shared origin |\n| **Apache Hudi** | Similar snapshot/log model, with strong built-in support for record-level upserts and incremental change feeds | Popular where frequent upsert-heavy CDC-style writes are the dominant pattern |\n\nAll three deliver the same core guarantees (ACID, time travel, schema evolution) through different metadata mechanics, and all three have converged toward broader multi-engine compatibility over time. Choosing between them today is less about raw capability and more about which existing engine ecosystem and write pattern (batch-heavy vs upsert-heavy) your workload leans toward.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "lakehouse-table-formats-s08",
+      "order": 8,
+      "sectionTitle": "Compaction",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Because data files are immutable and every write creates new ones, a table that receives frequent small writes — especially from streaming or micro-batch pipelines committing every few seconds or minutes — accumulates a large number of small files over time, even though the total data volume might be modest.\n\n**Compaction** is the maintenance operation that merges many small files into fewer, larger ones, rewriting the data (not the logical content, just its physical file layout) and updating the metadata layer to point at the new, consolidated files instead of the old scattered ones. This is a background, periodic operation, not something that happens automatically on every write — most table formats require it to be explicitly scheduled or triggered.\n\nCompaction is necessary specifically because of the cost the next slide covers: query engines pay real per-file overhead (opening a file, reading its footer metadata, planning around it) regardless of how small the file is, so many tiny files cost disproportionately more to query than the same data consolidated into fewer larger ones.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "lakehouse-table-formats-s09",
+      "order": 9,
+      "sectionTitle": "Small-file explosion",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A team wires a streaming job to commit every 30 seconds directly into a lakehouse table, without ever scheduling compaction. Traffic is modest, so each commit's data is small — but 30-second commits over a month produce roughly 86,400 tiny files, even if the total data volume would have comfortably fit in a few hundred well-sized files.\n\nThe query-time cost compounds from there: every query against that table now has to open, read metadata from, and plan around tens of thousands of tiny files — overhead that dwarfs the actual data being read, since per-file overhead is roughly fixed regardless of file size. Query latency degrades steadily as the file count climbs, often without anyone connecting the slowdown to \"we never turned on compaction\" until someone investigates directly.\n\nThe fix is almost always scheduling regular compaction (many platforms support this as a recurring background job) tuned to the table's write frequency — the more frequent the small writes, the more important compaction becomes, not less, which is the opposite of how teams under time pressure often prioritize it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "lakehouse-table-formats-s09-q1"
+      ]
+    },
+    {
+      "id": "lakehouse-table-formats-s10",
+      "order": 10,
+      "sectionTitle": "Concurrent writers and optimistic concurrency",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Multiple writers can attempt to update the same table around the same time — two ETL jobs, or a streaming job and a manual backfill. Table formats coordinate this with **optimistic concurrency control**: a writer reads the current snapshot, prepares its new files and metadata based on that snapshot, and then attempts to atomically advance the pointer — but only succeeds if no *other* writer has already advanced it since the read.\n\nIf another writer won that race, the losing writer's commit is rejected, and it has to retry: re-read the now-current snapshot, redo its metadata update against that newer state, and attempt the pointer swap again. This is \"optimistic\" because it assumes conflicts are rare and only pays a retry cost when they actually happen, rather than locking the table pessimistically for every write and paying that cost on every operation regardless of whether a conflict was ever going to occur.\n\nThe practical implication: high write concurrency against the same table increases retry contention, and a table format's specific conflict-detection rules (whether it detects conflicts at the whole-table level or something finer-grained, like non-overlapping partitions) directly determine how much concurrent write throughput a table can actually sustain before retries start dominating.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "lakehouse-table-formats-s10-q1"
+      ]
+    },
+    {
+      "id": "lakehouse-table-formats-s11",
+      "order": 11,
+      "sectionTitle": "Numbers on file size and retries",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "To ground the compaction discussion: a commonly-cited target file size for good query performance in lakehouse tables is roughly **128 MB to 1 GB per file**, depending on the platform and query engine — well below that, per-file overhead starts to dominate; well above it, a single file can become an unnecessarily coarse unit for pruning. A table accumulating files far below that target (kilobytes to a few MB each, from frequent small commits) is a strong signal compaction is overdue.\n\nOn concurrency: optimistic concurrency control works well when conflicting writes are genuinely rare — for a table with, say, under 10 concurrent writers and non-overlapping partition targets, retry rates are typically low. Push concurrent writers into the dozens against overlapping partitions, and retry rates can climb enough that some table formats' finer-grained (partition-level, not whole-table) conflict detection becomes the difference between acceptable and unacceptable write throughput.\n\nBoth numbers vary by platform and workload, but the pattern is consistent: file size and writer concurrency are operational levers with real thresholds, not settings you can safely ignore once a table format is adopted.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "lakehouse-table-formats-s12",
+      "order": 12,
+      "sectionTitle": "Where this leads",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A lakehouse table format solves the transactional and schema gap; it doesn't automatically solve query performance — a table can be perfectly ACID-compliant and still slow if it's not physically organized for the queries running against it. The next topic, Warehouse Platforms Compared, looks at the cloud warehouse landscape these table formats increasingly sit alongside or inside, and Partitioning & Clustering for Query Performance, later in this group, covers exactly the physical-organization techniques — applicable to warehouse tables and lakehouse tables alike — that determine how much of a table a given query actually has to scan.\n\nCarry forward the core mechanism: everything here — transactions, time travel, schema evolution — traces back to one idea, a versioned, atomically-swapped pointer to an immutable set of files. Nearly every operational question about a lakehouse table format (why is this slow, why did this commit fail, can I see an old version) has an answer rooted in that single mechanism.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "id": "warehouse-cost-performance",
+  "title": "Warehouse Cost & Performance Optimization",
+  "area": "data-engineering",
+  "group": "warehousing-lakes",
+  "order": 7,
+  "slug": "warehouse-cost-performance",
+  "summary": "Query pruning is the highest-leverage cost lever, but materialized views, caching, right-sized compute, and real spend attribution are what turn a well-organized warehouse into one that's actually cheap to run.",
+  "level": "advanced",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "warehouse-cost-performance-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Everything else in this group made a warehouse fast in principle. This topic — the closing one — covers making it cheap in practice: where the money actually goes, the levers that reduce it (materialized views, caching, right-sized compute), the most common way to waste it (`SELECT *` at scale), and how to make spend visible enough that someone can actually be accountable for it.\n\nThe throughline across all seven levers here: warehouse cost optimization is rarely one big fix — it's a portfolio of smaller, compounding decisions, most of which trace back to mechanisms already covered earlier in this group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "warehouse-cost-performance-s02",
+      "order": 2,
+      "sectionTitle": "Where warehouse cost actually comes from",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Warehouse spend breaks down into three genuinely separate line items, and confusing them leads to optimizing the wrong one:\n\n- **Bytes scanned** — how much data a query actually reads, directly driven by column pruning, predicate pushdown, and partition pruning from earlier in this group. This is often the single most controllable cost lever, because it responds directly to query and schema design.\n- **Compute time** — how long a cluster (or serverless allocation) runs, independent of bytes scanned in some pricing models, driven by cluster size, query complexity, and concurrency.\n- **Storage** — the cost of simply holding data at rest, growing with retention length and how many historical snapshots or versions you keep (relevant directly to the time-travel trade-off from Lakehouse Table Formats).\n\nDifferent platforms and pricing models weight these three differently — a serverless platform bills primarily on bytes scanned; a fixed-cluster platform bills primarily on compute time regardless of bytes. Knowing which of the three actually dominates your bill is the first step before optimizing anything.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "warehouse-cost-performance-s02-q1"
+      ]
+    },
+    {
+      "id": "warehouse-cost-performance-s03",
+      "order": 3,
+      "sectionTitle": "Materialized views",
+      "subTitle": "Precomputing expensive aggregates",
+      "type": "concept",
+      "markdown": "A **materialized view** stores the *result* of a query — typically an expensive aggregate — as its own physical table, refreshed periodically or incrementally, rather than recomputing that aggregate from raw data on every single request.\n\nThe payoff is direct when the same expensive aggregation is queried repeatedly with only minor variation: a dashboard showing \"revenue by day by region\" that's viewed hundreds of times a day doesn't need to re-scan the entire underlying orders table on every view — it reads a small, precomputed table instead, at a tiny fraction of the bytes-scanned and compute cost.\n\nThe trade-off is freshness and maintenance cost: a materialized view is only as current as its last refresh, so there's a real staleness window to account for, and refreshing it (fully or incrementally) itself consumes compute — meaning a materialized view refreshed more often than it's actually queried can cost *more* than just running the raw query on demand. The decision to materialize should follow from actual query frequency versus underlying data volatility, not from \"this query is slow\" alone.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "warehouse-cost-performance-s03-q1"
+      ]
+    },
+    {
+      "id": "warehouse-cost-performance-s04",
+      "order": 4,
+      "sectionTitle": "Caching layers",
+      "subTitle": "Result cache vs data cache",
+      "type": "concept",
+      "markdown": "Two distinct caching layers show up in most warehouses, and they solve different problems:\n\n- **Result cache** — stores the *final output* of a specific query, keyed by the exact query text (and often the state of underlying tables). An identical query run again, with no changes to the tables it reads, returns instantly from cache with zero bytes scanned and zero compute. This is invalidated the moment any underlying table it depends on changes.\n- **Data cache** — stores recently-read raw data blocks (not query results) in faster storage or memory, so a *different* query touching the same underlying data still has to compute its own result, but reads the data itself faster than going back to the base storage layer.\n\nResult cache gives the biggest win (nearly free repeat queries) but only helps identical or near-identical queries against unchanged data — a dashboard refreshed by many users hitting the exact same query benefits enormously. Data cache helps a broader range of queries against frequently-accessed data, at a smaller but still real speedup, since it still has to execute the query logic, just against faster-to-read data.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "warehouse-cost-performance-s04-q1"
+      ]
+    },
+    {
+      "id": "warehouse-cost-performance-s05",
+      "order": 5,
+      "sectionTitle": "SELECT * in a dashboard query",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A dashboard needs three columns from a 200-column, multi-terabyte events table, but the query behind it was written as `SELECT *` — maybe copy-pasted from an ad hoc debugging session and never cleaned up — and it's refreshed automatically every few minutes for every viewer.\n\nUnder consumption-based pricing, this single habit can dominate an entire team's warehouse bill: every refresh scans all 200 columns' worth of bytes instead of 3, a roughly 65x inflation on bytes scanned for that query, multiplied by however many times a day it auto-refreshes and however many viewers trigger it independently. This is precisely the failure mode Columnar Storage Internals warned about, showing up at real cost scale rather than as an abstract inefficiency.\n\nThe fix is mechanical and nearly free to apply once found: replace `SELECT *` with the specific columns actually rendered, which — combined with the result cache from the previous slide, since many viewers are now running the exact same narrower query — can turn one of the most expensive queries in a warehouse into one of the cheapest.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "warehouse-cost-performance-s05-q1"
+      ]
+    },
+    {
+      "id": "warehouse-cost-performance-s06",
+      "order": 6,
+      "sectionTitle": "Query pruning as the highest-leverage lever",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Of every technique across this group, reducing bytes scanned via partitioning, clustering, and column selection typically has the single highest leverage-to-effort ratio for cost — because scan reduction compounds: a query that scans 100x less data is roughly 100x cheaper under consumption-based pricing, and often meaningfully faster too under any pricing model, since less data to read is less work regardless of how you're billed for it.\n\nCompare this to the other levers in this topic: right-sizing compute (next slide) typically yields a 2-5x improvement at best for a given workload; caching helps specific repeated-query patterns but doesn't touch first-time or varied queries at all; materialized views help specific aggregate patterns but add their own maintenance cost. None of them touch the order-of-magnitude wins that fixing an unpruned scan pattern can.\n\nThe practical implication for prioritization: when facing a warehouse cost problem, checking bytes-scanned patterns (unnecessary `SELECT *`, missing partition alignment, unclustered filter columns) before reaching for caching or materialized views usually finds the bigger win first, and it's often the case that fixing scan patterns makes the smaller levers unnecessary.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "warehouse-cost-performance-s06-q1"
+      ]
+    },
+    {
+      "id": "warehouse-cost-performance-s07",
+      "order": 7,
+      "sectionTitle": "Right-sizing compute",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "For platforms with cluster-based compute, matching cluster size and schedule to actual usage is a separate, real cost lever from bytes scanned. **Auto-suspend** stops a cluster's billing during genuine idle periods (nobody querying it) and resumes automatically on the next query — the single biggest low-effort win for workloads with real idle time, like a BI cluster that's unused overnight.\n\n**Auto-scale** adjusts cluster size dynamically with load — scaling up during a burst of concurrent queries, back down once it passes — rather than provisioning a fixed size sized for peak load that sits underutilized the rest of the time. An **always-on, fixed-size cluster** is only cost-efficient for genuinely steady, high-utilization workloads where there's no meaningful idle time or load variance to exploit — for anything bursty or intermittent, it's paying for capacity that's frequently unused.\n\nThe common mistake is defaulting to always-on \"to be safe\" for a workload that's actually intermittent — auto-suspend with a short, well-chosen idle timeout usually costs nothing in practical latency (the resume time is typically seconds) while eliminating a large share of otherwise-wasted spend.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "warehouse-cost-performance-s07-q1"
+      ]
+    },
+    {
+      "id": "warehouse-cost-performance-s08",
+      "order": 8,
+      "sectionTitle": "Monitoring cost by attributing spend",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "None of the levers above get applied consistently without visibility into *where* cost is coming from — which team, which query, which dashboard. Most platforms expose per-query or per-cluster cost/usage metadata; the organizational work is turning that into **attribution**: tagging queries or clusters by team or purpose so a monthly bill breaks down into \"whose spend is this\" rather than one undifferentiated total.\n\nWithout attribution, cost optimization has no owner — a `SELECT *` dashboard query costing thousands of dollars a month sits invisible inside an aggregate bill until someone happens to dig in, and there's no natural incentive for the team that wrote it to fix it, since they don't see their own contribution to the total.\n\nWith attribution in place, cost becomes something teams can be accountable for and improve on their own — the technical levers in this topic (pruning, caching, right-sizing) only get applied where someone actually notices there's a problem worth fixing, and attribution is what makes that noticing happen systematically rather than by accident.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "warehouse-cost-performance-s09",
+      "order": 9,
+      "sectionTitle": "A worked cost investigation",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Put the priority order on a real number: a team's monthly warehouse bill is $50,000, and a cost audit finds a single dashboard query — `SELECT *` against a 3 TB table, refreshed every 5 minutes, viewed by 50 people a day — accounting for roughly $18,000 of it.\n\nFollowing the leverage order from earlier: fixing the `SELECT *` to select only the 4 rendered columns (a ~50x reduction in bytes scanned for a 200-column table) drops that query's cost to roughly $360/month — a $17,600/month saving from one query edit, dwarfing what right-sizing compute or adding a materialized view would have found by tuning around the problem instead of fixing it directly. Adding result caching on top (since 50 viewers are largely running the identical query) pushes the remaining cost down further, since most of those 50 daily views now hit cache instead of re-executing.\n\nThis is the concrete shape of \"check bytes-scanned patterns first\": one query, one fix, most of the bill's biggest line item gone — before touching cluster sizing, materialized views, or anything else.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": []
+    },
+    {
+      "id": "warehouse-cost-performance-s10",
+      "order": 10,
+      "sectionTitle": "Closing this group",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This closes the Data Warehousing & Lakes group. The throughline across all seven topics: [Warehouse Fundamentals](warehouse-fundamentals) established why warehouses are architected the way they are (MPP, columnar, separated storage/compute); Columnar Storage Internals and Partitioning & Clustering covered the concrete mechanisms and physical organization that make scans cheap; Data Lakes and Lakehouse Table Formats covered the alternative and increasingly-converged storage model; Warehouse Platforms Compared covered how real platforms package these ideas differently; and this topic closed with what it actually costs to run all of it, and the levers — most of all, bytes scanned — that control that cost.\n\nEvery concept in this group ultimately answers one of two questions: how much data does a query have to touch, and how much does touching it cost. Everything else is detail on top of those two questions.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    }
+  ]
+}

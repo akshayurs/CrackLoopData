@@ -1,0 +1,45 @@
+{
+  "topicId": "deserialization-ssrf",
+  "interviewQuestions": [
+    {
+      "id": "deserialization-ssrf-iq1",
+      "question": "How does insecure deserialization lead to remote code execution, mechanically?",
+      "answerMarkdown": "It works because in languages like Java or Python, deserializing an object graph doesn't just populate data — reconstructing certain objects triggers their methods as a side effect, by the language's own design. Java's `readObject` and Python's `__reduce__` are meant to let a class customize how it rebuilds itself, but that hook has no concept of \"trusted\" versus \"untrusted\" caller.\n\nAn attacker who controls the serialized bytes controls which classes get instantiated during deserialization. A **gadget** is any class already on the classpath whose reconstruction hook does something useful to an attacker — read a file, spawn a process. A **gadget chain** links several gadgets so the side effect of rebuilding one feeds into triggering the next, until the chain reaches full command execution. Tools like `ysoserial` catalog known chains across popular libraries specifically so you don't have to hand-build one.\n\nThe critical detail: none of this exploits a bug in *your* code. It uses classes already present in your dependencies, exactly as designed, on input they were never meant to receive. That's why the fix isn't patching a vulnerability — it's not using that class of deserializer on untrusted input at all.\n\n**Testing:** whether you understand the mechanism as a design property being abused, not a traditional memory-safety or parsing bug.",
+      "mostAsked": true,
+      "level": "advanced",
+      "subTitle": "Mechanism"
+    },
+    {
+      "id": "deserialization-ssrf-iq2",
+      "question": "What's the actual fix for insecure deserialization — is it about validating the input more carefully?",
+      "answerMarkdown": "No, and that's the trap. Validating the serialized bytes more carefully doesn't help, because the danger isn't malformed data — it's *well-formed* data that happens to instantiate a dangerous gadget chain, using classes your own dependencies already provide. There's no fixed list of \"bad bytes\" to filter, the way there's no complete list of SQL injection payloads.\n\nThe real fix is switching to a format that structurally can't reconstruct arbitrary objects: strict, schema-validated JSON parsing that only ever produces primitives, lists, and maps, or a typed format like Protocol Buffers where the decoder only produces instances of message types declared up front. Neither has a mechanism to trigger a method call as a side effect of parsing, so there's no gadget-chain surface at all, independent of what bytes arrive.\n\nThe rule I'd give a team: native, polymorphic deserializers (Java's `ObjectInputStream`, Python's `pickle`) are fine for trusted, same-application data — caching your own objects — but should never touch anything that crossed a trust boundary. That's the same principle as parameterized queries versus escaping in SQL injection: remove the dangerous capability rather than trying to sanitize around it.\n\n**Testing:** whether you reach for a structural fix instead of \"validate harder,\" which doesn't actually address this class.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Remediation"
+    },
+    {
+      "id": "deserialization-ssrf-iq3",
+      "question": "What is SSRF, and why is a link-preview or webhook feature a common place to find it?",
+      "answerMarkdown": "SSRF is tricking a server into making a network request to a destination the attacker chose rather than one the application intended, using the server's own network position — and often its credentials — to reach places the attacker can't reach directly.\n\nLink previews, webhook validators, and image proxies are common sources because their entire job is \"fetch whatever URL you're given and do something with the response\" — that's the feature working as designed. The gap is that \"whatever URL\" includes internal addresses the server can reach precisely because it's inside the network: a cloud metadata endpoint like `169.254.169.254`, an internal admin API with no auth because it trusted network position alone, or a database's management port.\n\nA concrete example: an attacker submits `http://169.254.169.254/latest/meta-data/iam/security-credentials/` to a \"fetch this URL and show me a preview\" feature. The server fetches it — that endpoint is normally only reachable from inside that exact instance — and can return the server's own temporary IAM credentials in the \"preview\" response. The attacker never touched the internal network; your server did it for them.\n\n**Testing:** whether you can explain why the feature category itself is the risk factor, not a specific coding mistake.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "deserialization-ssrf-iq4",
+      "question": "A team defends against SSRF by blocking any submitted URL containing `169.254`, `localhost`, or `127.0.0.1`. Is this sufficient?",
+      "answerMarkdown": "No — it's the same shape of mistake as a blocklist for XSS or injection, and it fails for specific, well-known reasons rather than just \"blocklists are bad in general.\"\n\n**DNS rebinding** breaks it outright: a hostname can resolve to a public IP when the validation check runs and to a private IP when the actual fetch happens moments later, because those are two separate DNS lookups and an attacker controlling the DNS record can serve different answers to each. **Redirects** break it too — a URL that passes the initial check can respond with a redirect to an internal address, so the fetching code needs to validate every hop, not just the first. And **alternate encodings** (`127.0.0.1` has decimal, octal, and IPv6-mapped equivalents) slip past a naive literal-string match entirely.\n\nThe robust fix operates at the network layer, not the string layer: route the fetch through an isolated segment or proxy that has no route to internal services at all, so even a bypass of the application check has nowhere to actually reach. Where the feature's scope allows it, pair that with an allowlist of expected destination domains — allowlists degrade far more gracefully than blocklists because the failure mode is \"rejected\" rather than \"silently permitted.\"\n\n**Testing:** whether you know the specific bypass techniques, not just that blocklists are generically weak.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Defense in depth"
+    },
+    {
+      "id": "deserialization-ssrf-iq5",
+      "question": "How would you audit an existing codebase for deserialization risk without a known CVE to start from?",
+      "answerMarkdown": "I'd start from the trust boundary, not from a specific vulnerability signature, since the danger is about *where* a native deserializer is called, not a pattern a scanner can always spot cleanly.\n\nConcretely: grep for calls to the language's flexible, polymorphic deserializer — `pickle.loads`, `ObjectInputStream`, `unserialize` in PHP, `yaml.load` without a safe loader — and trace each call site backward to its input source. Any call where the bytes originate from a network request, a file upload, a message queue populated by another service, or anything else outside the current process's own control is a candidate, regardless of whether there's a known gadget chain in the current dependency set yet — new gadgets in commonly-used libraries get discovered over time, so \"no known chain today\" isn't a durable guarantee.\n\nFor each candidate, I'd ask whether the use case actually needs arbitrary object reconstruction at all — most of the time it's caching or an internal message format that would work identically with schema-validated JSON, and the native deserializer was just the path of least resistance when the code was first written, often for what was then trusted data before the input source changed.\n\nWhere replacing the format isn't feasible short-term, I'd flag it for compensating controls — running the deserializing process with minimal privileges, since a successful chain inherits whatever that process can already do.\n\n**Testing:** whether you can reason about this as a systemic audit — tracing data flow to trust boundaries — rather than pattern-matching against known payloads.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Auditing"
+    }
+  ]
+}

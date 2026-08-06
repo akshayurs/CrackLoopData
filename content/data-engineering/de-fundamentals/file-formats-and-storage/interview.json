@@ -1,0 +1,37 @@
+{
+  "topicId": "file-formats-and-storage",
+  "interviewQuestions": [
+    {
+      "id": "file-formats-and-storage-iq1",
+      "question": "When would you choose Parquet over JSON or CSV for a dataset landing in a data lake?",
+      "answerMarkdown": "Whenever the data will be queried analytically at any real scale — which is most lake data past the prototype stage. Parquet is columnar, so a query touching 2-3 columns out of 40 reads only those columns; JSON and CSV are row-oriented, so the engine parses and discards every unneeded field on every row just to reach the ones the query wants.\n\nParquet also carries its schema in the file, so every reader knows exact column names and types without inferring them — a source that flips a field from int to string fails loudly at read time instead of silently corrupting downstream logic. And it's internally split into row groups, each independently compressed, so a distributed engine like Spark can parallelize a scan across many workers; a single gzip-compressed CSV can't be split at all, forcing one worker to decompress the whole file sequentially while the rest of the cluster idles.\n\nI'd still reach for JSON or CSV for small, human-consumed exports — a one-off extract someone opens in a spreadsheet — where readability matters more than query cost, and for genuinely nested, irregular data where JSON's flexibility beats forcing a rigid columnar shape.\n\nThe rule I use: if a machine will query it repeatedly and it's bigger than a few hundred MB, it should be Parquet by the time it's queryable, even if it arrived as something else.\n\n**Testing:** whether you can justify a format choice by workload characteristics instead of familiarity.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "file-formats-and-storage-iq2",
+      "question": "Your team's Spark job on a large gzip-compressed CSV file is running far slower than expected, using only one executor out of twenty. What's likely wrong, and how would you fix it?",
+      "answerMarkdown": "My first suspect is splittability, not cluster sizing. Gzip is a stream cipher-like compression format that has to be decoded sequentially from the start — you can't jump into the middle and start decompressing, which means a single large gzip file can only ever be processed by one worker, no matter how many are available in the cluster.\n\nI'd confirm by checking the file count and size: one 50GB gzip CSV instead of many smaller files is the signature of this exact problem. The fix has two parts. Short term, I'd decompress and re-partition the data into many smaller files, or re-compress with a splittable codec like Snappy or Zstd with an explicit block size, so the engine can divide work across workers. Longer term, I'd convert the resting format to Parquet, since it's internally split into independently-compressed row groups and doesn't have this failure mode at all — each worker can be assigned a row group and start immediately.\n\nI'd also check whether this is a recurring ingestion pattern rather than a one-off file, because if a pipeline keeps landing single large compressed files, the same bottleneck will resurface on every run until the format changes.\n\n**Testing:** whether you can diagnose a real performance cliff from symptoms, not just recite that Parquet is \"better.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "file-formats-and-storage-iq3",
+      "question": "Why does Avro stay row-oriented when Parquet and ORC are columnar, and when would you actually pick Avro over Parquet?",
+      "answerMarkdown": "Avro is optimized for a different access pattern than Parquet. Columnar formats win when you read a few columns across many rows — the analytical shape. Avro targets the opposite: writing and reading whole records one at a time, which is exactly what a streaming producer/consumer pair does — a Kafka producer emits one complete event, and a consumer reads one complete event, never \"just the `user_id` field across a million messages\" at write time.\n\nRow orientation matches that shape structurally, and Avro adds a compact binary encoding plus first-class schema evolution — safely adding an optional field with a default, for example — which matters enormously in a long-running event pipeline where producer and consumer deploy independently.\n\nI'd pick Avro specifically for the write path of a high-throughput event stream, then convert to Parquet once that data lands somewhere it'll be queried analytically — a common pattern is Avro on the Kafka topic, Parquet in the lake after a Spark or Kafka Connect sink job converts it. Trying to use Parquet directly as the streaming payload format would mean either writing tiny, poorly-compressed Parquet files one record at a time, or batching writes and giving up on low-latency delivery — neither is what a streaming system wants.\n\n**Testing:** whether you understand format choice as workload-driven rather than \"columnar is always better.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "file-formats-and-storage-iq4",
+      "question": "Your data lake has grown to petabytes of Parquet data landed inconsistently over several years — some files are tiny (a few KB), others are massive, and query costs keep climbing. How would you approach fixing this at that scale?",
+      "answerMarkdown": "This is the small-files problem, and at petabyte scale it's usually not a format problem — Parquet is the right choice — it's an operational layout problem sitting on top of the right format.\n\nMy first move is measurement: profile the file-size distribution per table or partition, because \"query costs climbing\" with Parquet at scale almost always traces to either too many tiny files (each one has per-file open/metadata overhead that dominates when files are KB-sized) or too few giant files with poor row-group sizing for the query patterns actually run against them.\n\nFor the tiny-file problem, I'd add a compaction job — periodically rewriting many small files into fewer, well-sized ones, typically targeting a few hundred MB to a few GB per file depending on the engine. Table formats like Iceberg or Delta Lake automate this with built-in compaction and file-size targets, which is worth adopting at this scale rather than hand-rolling it.\n\nI'd also check partitioning strategy — over-partitioning (partitioning by an extremely high-cardinality column) is a common root cause of the small-files problem, since every partition combination creates its own tiny files on every write.\n\nFinally I'd add monitoring on file-size distribution going forward, because this is a problem that recurs continuously as new data lands, not a one-time cleanup — without ongoing compaction, the mess reappears within months.\n\n**Testing:** whether you can reason about operational data-lake hygiene at real scale, beyond just picking the right format once.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Scale"
+    }
+  ]
+}

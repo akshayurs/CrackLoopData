@@ -1,0 +1,187 @@
+{
+  "id": "kafka-deep-dive",
+  "title": "Kafka Deep Dive",
+  "area": "data-engineering",
+  "group": "stream-processing",
+  "order": 6,
+  "slug": "kafka-deep-dive",
+  "summary": "Kafka's log abstraction — an append-only, partitioned commit log — is the concrete architecture underneath most streaming pipelines. Learn how partitioning, consumer groups, replication, and retention actually work.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "kafka-deep-dive-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every concept covered so far in this group — watermarks, windows, state, exactly-once — has to be implemented by some concrete system. **Kafka** is the one most streaming pipelines are actually built on, and its architecture is simpler than it looks: it's fundamentally one idea, an append-only log, applied at scale.\n\nThis topic covers that log abstraction, how it's split into partitions for parallelism, how consumer groups share the work, how replication keeps it durable, and the two operational levers — partition count and retention — that most production Kafka incidents trace back to.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "kafka-deep-dive-s02",
+      "order": 2,
+      "sectionTitle": "The log abstraction",
+      "subTitle": "Append-only, ordered, partitioned",
+      "type": "concept",
+      "markdown": "At its core, a Kafka **topic** is an append-only log: producers can only add new records to the end, never modify or delete an individual record, and consumers read forward through it at their own pace, each tracking their own position independently.\n\nThis is a deliberately narrow abstraction, and that narrowness is the point: append-only means writes are always sequential (fast on disk, no random-write overhead), and \"consumers just read forward from a position\" means many independent consumers can read the same log at different speeds without interfering with each other — unlike a traditional message queue, where a message is typically removed once consumed.\n\nEverything else in Kafka's design — partitions, replication, consumer groups — is built on top of this one idea: a durable, ordered, append-only sequence that many readers can consume independently.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": [
+        "kafka-deep-dive-s02-q1"
+      ]
+    },
+    {
+      "id": "kafka-deep-dive-s03",
+      "order": 3,
+      "sectionTitle": "Topics, partitions, and how clients map onto them",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "A single log would cap throughput at whatever one machine can handle. Kafka's fix is to split a topic into multiple **partitions** — independent, ordered logs — spread across brokers, so writes and reads parallelize across machines.\n\nOrder is guaranteed *within* a partition, but not across partitions of the same topic. Producers choose which partition a record goes to (usually by key); each consumer in a consumer group is assigned some subset of the topic's partitions to read from.\n\n![Kafka topic with four partitions, two producers, and a consumer group of two instances splitting the partitions](assets/topic-partitions-consumer-group.svg)",
+      "assets": [
+        {
+          "alt": "Kafka topic with four partitions, two producers, and a consumer group of two instances splitting the partitions",
+          "path": "assets/topic-partitions-consumer-group.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "kafka-deep-dive-s04",
+      "order": 4,
+      "sectionTitle": "Partitioning strategy and ordering",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "By default, a producer routes a record to a partition based on a hash of its **key** — records with the same key always land on the same partition, and since order is only guaranteed within a partition, this is also how you get ordering for a specific entity.\n\nThis is why key choice is really an ordering decision, not just a load-balancing one. Keying by `user_id` guarantees every event for a given user is processed in the order it was produced, because they all land on the same partition — essential if downstream logic depends on per-user event order (a state machine, a session). Keying by something with no ordering meaning, or leaving the key null (round-robin partitioning), sacrifices any ordering guarantee in exchange for perfectly even load distribution.\n\nThe trade-off to watch: a highly skewed key (one `user_id` responsible for a huge share of traffic) sends a disproportionate share of records to one partition — the same hot-partition problem that shows up in the databases area's partitioning topics, just at the messaging layer.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "kafka-deep-dive-s04-q1"
+      ]
+    },
+    {
+      "id": "kafka-deep-dive-s05",
+      "order": 5,
+      "sectionTitle": "Consumer groups",
+      "subTitle": "Splitting partitions across consumers",
+      "type": "concept",
+      "markdown": "A **consumer group** is a set of consumer instances that cooperatively split a topic's partitions among themselves — each partition is assigned to exactly one consumer in the group at a time, and each consumer typically handles several partitions.\n\nThis is how Kafka gets parallelism on the read side: adding more consumer instances to a group (up to the partition count) lets more partitions be processed concurrently. Two consumers in the *same* group never both process the same partition at the same time — that's what gives each partition an exclusive, ordered reader.\n\nMultiple *different* consumer groups can read the same topic entirely independently, each tracking its own offsets — this is how one topic can feed both a real-time alerting job and a separate batch-loading job into a warehouse, with neither affecting the other's read position.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "kafka-deep-dive-s05-q1"
+      ]
+    },
+    {
+      "id": "kafka-deep-dive-s06",
+      "order": 6,
+      "sectionTitle": "Offsets and offset commits",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "An **offset** is a consumer's position in a partition — a simple, ever-increasing integer marking the next record to read. Committing an offset tells Kafka \"I've processed up through here,\" so that on a restart or rebalance the consumer resumes from the right place instead of the beginning.\n\nBy default, this gives **at-least-once** semantics: if a consumer processes a batch of records but crashes before committing the offset, it will reprocess that batch on restart — safe (nothing lost) but capable of duplicating results. Committing the offset *before* processing flips this to at-most-once (records can be skipped on a crash) — rarely what you want.\n\nExactly-once, as covered in the previous topic, is what you get by wrapping the offset commit and the processing's output write in one Kafka transaction, so they succeed or fail together rather than the offset drifting out of sync with what was actually processed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "kafka-deep-dive-s06-q1"
+      ]
+    },
+    {
+      "id": "kafka-deep-dive-s07",
+      "order": 7,
+      "sectionTitle": "Replication and durability",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Each partition has one **leader** broker, which handles all reads and writes for it, and some number of **follower** brokers that replicate the leader's data. A follower that's fully caught up is called **in-sync** (ISR — in-sync replica set).\n\nDurability is a producer-configurable trade-off: `acks=1` considers a write successful once the leader has it (fast, but a leader failure before replication loses that write); `acks=all` (or `-1`) waits until every in-sync replica has the write (slower, but survives a leader failure because a follower already has the data and can be promoted).\n\nIf the leader fails, one of the in-sync followers is elected the new leader. Data that hadn't yet replicated to any follower before the failure is lost — which is exactly why `acks=all` combined with a minimum in-sync replica count is the standard configuration for anything where losing a write is unacceptable.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": [
+        "kafka-deep-dive-s07-q1"
+      ]
+    },
+    {
+      "id": "kafka-deep-dive-s08",
+      "order": 8,
+      "sectionTitle": "Partition count: too few, too many",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Partition count sets a hard ceiling on parallelism: a topic with 4 partitions can never be read by more than 4 consumers within one group at a time, no matter how many instances you add — the extras sit idle. Under-provisioning partitions is one of the most common early-stage Kafka mistakes, discovered only once traffic grows and consumer lag climbs with no way to add capacity without repartitioning.\n\nBut over-provisioning has real costs too: every partition consumes broker-side resources (open file handles, memory for replication state, metadata the cluster controller tracks), and a topic with far more partitions than you'll ever need adds overhead and slower leader elections across the whole cluster without buying any real parallelism benefit.\n\nThe practical approach is to size partitions for your **target peak parallelism** — how many consumer instances you actually expect to run — with some headroom for growth, not to maximize the count \"just in case,\" and not to under-provision and hit a ceiling that requires a disruptive repartitioning later.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "kafka-deep-dive-s08-q1"
+      ]
+    },
+    {
+      "id": "kafka-deep-dive-s09",
+      "order": 9,
+      "sectionTitle": "A consumer-group rebalance",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "When a new consumer joins a group (or an existing one leaves, or crashes), Kafka triggers a **rebalance** — partitions are reassigned across the group's current members. A simplified view of what happens:\n\n```\n// Before: group has 2 consumers, 4 partitions\nConsumer A: partitions [0, 1]\nConsumer B: partitions [2, 3]\n\n// Consumer C joins the group -> rebalance triggered\n// Group coordinator reassigns partitions across all 3 members\n\n// After rebalance:\nConsumer A: partitions [0]\nConsumer B: partitions [2, 3]\nConsumer C: partitions [1]\n```\n\nDuring a rebalance, consumers typically pause processing until the new assignment is settled — a brief availability gap that's proportional to how many partitions and consumers are involved. Frequent rebalances (consumers joining/leaving often, or one consumer repeatedly timing out and rejoining) can visibly hurt throughput, which is why unnecessary consumer churn — not tuning session timeouts correctly, or deploying consumer instances too aggressively — is a common source of Kafka latency complaints that have nothing to do with the brokers themselves.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "kafka-deep-dive-s10",
+      "order": 10,
+      "sectionTitle": "Retention: time/size expiry and compaction",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Kafka doesn't keep data forever by default — each topic has a **retention** policy, typically time-based (\"keep 7 days\") or size-based (\"keep the last 100 GB per partition\"), after which the oldest records are deleted regardless of whether every consumer has read them.\n\n**Log compaction** is an alternative retention model for keyed topics: instead of deleting by age, Kafka keeps only the **most recent record per key**, discarding older records for the same key. This turns a topic into something closer to a changelog of a key-value store's current state — useful for topics representing \"latest state per entity\" (a user's current profile, a product's current price) rather than an event history, where you only ever care about the newest value per key, not the full sequence that got you there.\n\nChoosing between standard retention and compaction is really choosing what the topic *means*: an event log (time-based retention, order matters, history matters) versus a changelog of current state (compaction, only the latest value per key matters).",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "kafka-deep-dive-s11",
+      "order": 11,
+      "sectionTitle": "Sizing a real cluster",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "To ground this in real numbers: a topic handling 50,000 events/second at 1 KB each is about 50 MB/second of write throughput, roughly 4.3 TB/day before replication — with a replication factor of 3 (one leader, two followers), that's closer to **13 TB/day of total disk write** across the cluster, which is the number that actually drives storage and network capacity planning, not the 50 MB/s figure alone.\n\nFor partition count, a reasonable starting heuristic is target-peak-consumers × 2-4, giving headroom to scale consumers up later without an immediate repartition — for a topic expecting up to 20 parallel consumers at peak, that's roughly 40-80 partitions, tuned down if metadata overhead becomes a concern or up if a few keys are unusually hot.\n\nThese numbers are illustrative, not prescriptive — but doing this arithmetic once, for your actual event size and target concurrency, is what turns partition count and retention from defaults nobody examined into decisions with a reason behind them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 70,
+      "mcqIds": []
+    },
+    {
+      "id": "kafka-deep-dive-s12",
+      "order": 12,
+      "sectionTitle": "Where Kafka fits among the alternatives",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Kafka is one specific point in a design space, not the only way to build streaming infrastructure. The next topic, Stream Processing Engines Compared, looks at the *processing* layer that typically sits on top of a log like Kafka — micro-batch vs per-event engines — and the topic after that covers architecture patterns (Lambda and Kappa) that describe how teams combine batch and streaming, often with Kafka's long retention as the backbone that makes a Kappa-style \"replay history through the same pipeline\" approach possible at all.\n\nCarry forward the core mental model: a topic is a partitioned, ordered, append-only log; a consumer group's parallelism is capped by partition count; and durability, ordering, and retention are all independently tunable trade-offs, not fixed properties of \"using Kafka.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    }
+  ]
+}

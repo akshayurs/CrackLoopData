@@ -1,0 +1,37 @@
+{
+  "topicId": "sessions-cookies",
+  "interviewQuestions": [
+    {
+      "id": "sessions-cookies-iq1",
+      "question": "Walk me through what happens end to end when a user logs in with server-side session auth.",
+      "answerMarkdown": "After the server verifies the username and password, it creates a session record server-side — typically in a fast store like Redis — holding the user ID and whatever else the app needs, like roles. It generates a long, random, unguessable **session ID** that has no meaning of its own; it's purely a lookup key.\n\nThat ID goes back to the browser as a cookie via `Set-Cookie`. From then on, the browser automatically resends that cookie with every request to the same domain, with no application JavaScript involved — it's native HTTP behavior. On each request, the server looks up the ID in its store, finds the associated user, and treats the request as authenticated without re-checking the password.\n\nThe detail I'd emphasize: the session ID itself carries zero information in isolation. If someone intercepts it without also having access to the server's store, they've learned nothing — that's structurally different from a token-based approach where the token itself carries readable claims. That property is also exactly why revocation is trivial with sessions: delete the server-side record and the ID stops meaning anything, immediately.\n\n**Testing:** whether you can describe the full mechanism precisely, including where the actual authentication state lives.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "sessions-cookies-iq2",
+      "question": "What do the `HttpOnly`, `Secure`, and `SameSite` cookie attributes each protect against, and why do you need all three?",
+      "answerMarkdown": "Each one closes a genuinely different attack path, which is exactly why none of them substitutes for the others.\n\n`HttpOnly` blocks any JavaScript — including an XSS payload's — from reading the cookie through `document.cookie`. Without it, a single XSS bug anywhere on the site is enough to exfiltrate every visitor's session cookie directly.\n\n`Secure` means the browser only ever sends the cookie over HTTPS, never plain HTTP. Without it, someone on the same network — public Wi-Fi, a compromised router — can read the cookie off an unencrypted request.\n\n`SameSite` (typically `Lax`) controls whether the cookie gets attached to cross-site requests, which is the primary CSRF defense — it stops a forged cross-site form submission or background fetch from carrying the victim's session automatically, while still allowing normal top-level link navigation.\n\nThe reason you need all three together: `HttpOnly` does nothing against CSRF, `SameSite` does nothing against a script reading the cookie via XSS, and neither does anything about network eavesdropping. They protect against XSS-based theft, network interception, and cross-site request forgery respectively — three separate threat models with one cookie sitting at the center of all three.\n\n**Testing:** whether you understand each attribute's specific scope rather than treating them as generically interchangeable 'security flags.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Cookie security"
+    },
+    {
+      "id": "sessions-cookies-iq3",
+      "question": "What's the difference between session fixation and session hijacking, and how do you defend against each?",
+      "answerMarkdown": "They target the session at different points in its life. **Fixation** happens before login: an attacker plants a known session ID on the victim's browser — via a URL parameter on vulnerable apps, or a cookie set on a shared subdomain — then waits for the victim to authenticate using that pre-known ID. If the server doesn't rotate the ID on successful login, the attacker's known value becomes a valid authenticated session.\n\n**Hijacking** happens after login: the attacker steals an *already-valid* session ID directly — through an XSS bug reading an unprotected cookie, sniffing traffic on an unencrypted connection, or a leaked server log — and reuses it to impersonate the victim, no credentials needed at all.\n\nThe fixes are structurally different because the attacks happen at different times. Fixation is closed cheaply and completely: always issue a brand-new session ID on successful login, discarding whatever the client arrived with, regardless of where that prior ID came from. Hijacking is mitigated, not eliminated, by the cookie attributes — `HttpOnly` against XSS theft, `Secure` against network sniffing — plus shorter session lifetimes that limit how long a stolen ID stays useful if a leak does happen.\n\n**Testing:** whether you can separate these two commonly-conflated attacks by exactly when in the session lifecycle each one operates.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Session attacks"
+    },
+    {
+      "id": "sessions-cookies-iq4",
+      "question": "Your app is scaling from one server to a fleet behind a load balancer. What breaks about your session handling, and how would you fix it?",
+      "answerMarkdown": "If sessions are stored in each server's own memory, the problem shows up immediately: a user authenticates against server A, their session record lives only in server A's memory, and the next request might land on server B — which has never heard of that session ID. The user appears randomly logged out depending on which backend the load balancer happened to route them to.\n\nTwo standard fixes. **Sticky sessions** route all of a given user's requests to the same backend for the session's lifetime, so the in-memory store on that one server is always the right one. It's simple to bolt onto existing code, but it undermines even load distribution and breaks entirely if that specific server restarts or gets pulled from rotation mid-session — the user is logged out with no graceful path.\n\nThe fix I'd actually push for is a **shared session store** — Redis is the standard choice — so every server checks the same centralized store regardless of which one handles a given request. Any server can serve any user, load balancing stays fully effective, and a server restart doesn't lose sessions at all since the state never lived on that server in the first place.\n\nThe broader principle: any state that has to persist across requests in a horizontally-scaled system needs this exact same decision, and a shared store is almost always the better long-term answer once you're past a couple of servers.\n\n**Testing:** whether you can reason about session state as a distributed-systems problem once a single-server assumption breaks.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Scaling"
+    }
+  ]
+}

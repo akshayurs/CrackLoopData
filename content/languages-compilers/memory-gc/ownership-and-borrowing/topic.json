@@ -1,0 +1,187 @@
+{
+  "id": "ownership-and-borrowing",
+  "title": "Ownership & Borrowing — Memory Safety Without GC",
+  "area": "languages-compilers",
+  "group": "memory-gc",
+  "order": 6,
+  "slug": "ownership-and-borrowing",
+  "summary": "Rust's compile-time answer to the question this whole group has been circling: who frees heap memory, and when. Prove it statically instead of counting, tracing, or trusting the programmer.",
+  "level": "advanced",
+  "slideCount": 12,
+  "estReadMinutes": 12,
+  "slides": [
+    {
+      "id": "ownership-and-borrowing-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every scheme so far in this group pays a cost to answer \"when is this heap memory safe to free\": [manual-memory-management](manual-memory-management) pays with programmer discipline that fails silently, [reference-counting](reference-counting) pays a per-operation counter cost, and [tracing-gc-mark-sweep-and-compact](tracing-gc-mark-sweep-and-compact) pays with a pause.\n\nRust's **ownership model** answers the same question at compile time, for free at runtime. The compiler's **borrow checker** proves — before the program ever runs — that every value has exactly one owner responsible for freeing it, and that no reference outlives the data it points to. If the proof fails, the program doesn't compile. There's no manual `free`, no counter, no collector, and no runtime cost for the memory-safety guarantee itself.\n\nThe trade this makes: the compiler is conservative, so some genuinely safe programs get rejected too, and the programmer pays the cost in restructuring code to satisfy the checker instead of in runtime overhead.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "ownership-and-borrowing-s02",
+      "order": 2,
+      "sectionTitle": "The pitch: safety and determinism, no collector",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Rust's core claim is that you can get memory safety — no use-after-free, no double-free, no data races on shared mutable state — **and** deterministic, GC-free performance, if the compiler can *prove* a set of ownership rules hold instead of checking them at runtime.\n\nThis matters because the languages before it forced a choice: C/C++ gave you manual control and zero runtime cost, but the safety was entirely on you and bugs were silent until they weren't. Java/Go/Python gave you safety via a runtime (GC, bounds checks), but paid for it in pauses and per-operation overhead. Rust's bet is that a sufficiently expressive static analysis can get both — safety *and* zero runtime cost — by rejecting unsafe programs before they ever run, rather than catching the bug at runtime or not at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "ownership-and-borrowing-s03",
+      "order": 3,
+      "sectionTitle": "The ownership rule",
+      "subTitle": "Exactly one owner, moves don't copy",
+      "type": "concept",
+      "markdown": "Every value has exactly one **owner** — the variable responsible for it — at any point in the program. Assigning that value to another variable, or passing it into a function by value, **moves** ownership rather than copying it: the old variable becomes invalid, and only the new one can be used.\n\n```rust\nlet a = String::from(\"hello\");\nlet b = a;          // ownership moves from a to b\nprintln!(\"{}\", a);   // compile error: a was moved\n```\n\nThis is the compile-time version of the rule manual management asks a human to enforce by hand — \"exactly one `free` per allocation\" becomes \"exactly one owner per value,\" and the compiler tracks it exactly the way a type-checker tracks types, rejecting any program where that invariant could break.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "ownership-and-borrowing-s03-q1"
+      ]
+    },
+    {
+      "id": "ownership-and-borrowing-s04",
+      "order": 4,
+      "sectionTitle": "A value moving between owners",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A value being moved from one owner to another, then automatically freed when the new owner goes out of scope](assets/ownership-move-and-drop.svg)\n\nThe interesting part is step 2: the heap data didn't move, and there was no copy — only which variable is *allowed to use it* changed. The compiler enforces that the old variable simply can't be referenced anymore, at compile time, with zero runtime check.",
+      "assets": [
+        {
+          "alt": "A value being moved from one owner to another, then automatically freed when the new owner goes out of scope",
+          "path": "assets/ownership-move-and-drop.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "ownership-and-borrowing-s05",
+      "order": 5,
+      "sectionTitle": "A use-after-move error, and what it's protecting",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```rust\nfn take_ownership(s: String) {\n    println!(\"got: {}\", s);\n}   // s is dropped (freed) here, at end of scope\n\nfn main() {\n    let s = String::from(\"hello\");\n    take_ownership(s);          // ownership moves into the function\n    println!(\"{}\", s);          // error[E0382]: use of moved value: `s`\n}\n```\n\nThe compiler's actual message names the exact problem: `s` was moved into `take_ownership`, which drops it when the function returns — so by the time `main`'s `println!` runs, `s` doesn't own anything anymore. This is precisely the shape of bug [stack-vs-heap-allocation](stack-vs-heap-allocation) and [manual-memory-management](manual-memory-management) covered as a runtime crash (use-after-free) — Rust catches the identical mistake before the program ever runs.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "ownership-and-borrowing-s05-q1"
+      ]
+    },
+    {
+      "id": "ownership-and-borrowing-s06",
+      "order": 6,
+      "sectionTitle": "Borrowing: many readers, or one writer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "You don't have to move ownership just to look at or temporarily use a value — you can **borrow** a reference to it instead. The borrow checker enforces one rule at compile time: for any value, you can have **either** any number of immutable borrows (`&T`), **or** exactly one mutable borrow (`&mut T`) — never both at once.\n\n```rust\nlet mut v = vec![1, 2, 3];\nlet r1 = &v;\nlet r2 = &v;              // fine: multiple immutable borrows\nprintln!(\"{} {}\", r1[0], r2[0]);\n\nlet r3 = &mut v;           // error if r1/r2 are still in use here\n```\n\nThe rule isn't arbitrary pedantry — it's exactly the condition that makes a data race on this value structurally impossible: nobody can be reading through `r1`/`r2` while someone else mutates through `r3`, because the compiler won't let both borrows coexist in the first place.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "ownership-and-borrowing-s06-q1"
+      ]
+    },
+    {
+      "id": "ownership-and-borrowing-s07",
+      "order": 7,
+      "sectionTitle": "Ruling out two whole bug classes at compile time",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Put the ownership rule and the borrowing rule together and two entire categories of bug become compile errors instead of runtime failures:\n\n- **Use-after-free / dangling references**: the borrow checker tracks **lifetimes** — how long a reference is valid for — and rejects any reference that could outlive the data it points to. A function that tried to return a reference to one of its own local variables (the exact bug from [stack-vs-heap-allocation](stack-vs-heap-allocation)) simply fails to compile.\n- **Data races**: the exclusive-mutable-borrow rule means two threads can never simultaneously hold a mutable reference and any other reference to the same data — the type system, not a runtime lock, prevents the race from being expressible at all.\n\nThe key word is *at compile time* — there's no runtime check being skipped for performance, because the check already happened before the binary exists. A correctly compiling Rust program pays literally nothing at runtime for either guarantee.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "ownership-and-borrowing-s07-q1"
+      ]
+    },
+    {
+      "id": "ownership-and-borrowing-s08",
+      "order": 8,
+      "sectionTitle": "Fighting the borrow checker by cloning everywhere",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "The borrow checker's proof is conservative: it rejects any program it can't statically prove is safe, which includes some programs that actually are safe but express their safety in a way the checker's rules can't recognize. New Rust programmers hit this constantly and the common escape hatch is calling `.clone()` on everything the checker complains about — turning a borrow into an owned copy sidesteps the error immediately.\n\nThe problem: cloning defeats the entire performance case for choosing ownership over GC in the first place. If you're deep-copying data structures to dodge every lifetime error, you've reintroduced the allocation and copying overhead a tracing collector would have paid anyway, minus the collector's cycle-handling and minus the ergonomics — worst of both worlds.\n\nThe better fix, almost always, is restructuring ownership rather than avoiding the checker: passing a reference instead of a value, using an index or ID instead of a pointer where the checker's lifetime rules get genuinely awkward (a common pattern for graph-like structures), or reaching for `Rc`/`Arc` (Rust's opt-in reference counting, same trade-off as [reference-counting](reference-counting)) when ownership really is meant to be shared.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "ownership-and-borrowing-s08-q1"
+      ]
+    },
+    {
+      "id": "ownership-and-borrowing-s09",
+      "order": 9,
+      "sectionTitle": "GC, manual, and ownership, side by side",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | GC (Java) | Manual (C) | Ownership (Rust) |\n|---|---|---|---|\n| Who decides when to free | The collector, at runtime | The programmer, explicitly | The compiler proves it statically |\n| Runtime cost of the guarantee | Pauses, allocation overhead | None (but no guarantee at all) | None |\n| Failure mode if the model breaks | N/A — always memory-safe | Silent leak/UAF/double-free | Compile error — code that violates the rules doesn't build |\n| Programmer cost | Low — write and forget | High — track every lifetime by hand | Moderate — satisfy the checker, sometimes restructure code |\n\nOwnership is the only cell in this table that gets \"no runtime cost\" and \"the guarantee actually holds\" simultaneously — the price is paid earlier, in compile time and in code that sometimes has to be shaped around what the checker can prove.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "ownership-and-borrowing-s10",
+      "order": 10,
+      "sectionTitle": "What ownership costs the programmer",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The honest cost of this model isn't runtime overhead — it's genuinely zero for the guarantee itself. It's that some perfectly valid, memory-safe programs have to be *written differently* to satisfy a checker that can only reason about the patterns it was built to recognize.\n\nGraph and tree structures with back-pointers are the classic friction point: a tree node with a reference to its parent is exactly the shape [reference-counting](reference-counting) needed `weak` references to fix, and it's *also* awkward for the borrow checker, because \"child borrows from parent, parent borrows from child\" doesn't fit cleanly into single-owner, exclusive-mutable-borrow rules. Idiomatic Rust solutions here — arena allocators, index-based references instead of pointers, `Rc<RefCell<T>>` for genuinely shared mutable state — all trade some of the compile-time guarantee's cleanliness for something the checker (and often a human) can reason about.\n\nThis is real cost, paid up front in design and learning curve, in exchange for a cost most other languages pay continuously, at runtime, for the program's entire lifetime.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "ownership-and-borrowing-s11",
+      "order": 11,
+      "sectionTitle": "Why this doesn't need a collector",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The direct answer to \"why doesn't Rust need a garbage collector\": a collector exists to answer \"is this memory still reachable/needed\" at *runtime*, because in most languages that question can't be answered any earlier — a Java object's lifetime genuinely does depend on runtime control flow the compiler can't fully predict.\n\nRust's ownership and borrowing rules restrict the language enough that the same question becomes decidable at *compile time*: every value's owner is known statically, every reference's valid lifetime is tracked statically, so the compiler can insert the exact `drop` call (Rust's automatic destructor, conceptually RAII) at the precise point a value's owner goes out of scope — no runtime decision required, because the decision was already made during compilation.\n\nWhat it costs the programmer: the restrictions themselves. A language expressive enough to make every memory-safe program's lifetime statically provable would have to give up the flexibility that makes patterns like arbitrary shared mutable graphs trivial to write. Rust chose provability over that flexibility; that's the entire trade.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "ownership-and-borrowing-s11-q1"
+      ]
+    },
+    {
+      "id": "ownership-and-borrowing-s12",
+      "order": 12,
+      "sectionTitle": "The fourth answer to one question",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This group opened with one question — who decides when heap memory is safe to free — and has now given four different answers: the programmer, by hand; a reference count, automatically but blind to cycles; a tracer, correctly but with a pause; and now, a compiler proof, correctly and for free at runtime, at the cost of expressiveness and a learning curve.\n\n[gc-tuning-and-memory-leaks](gc-tuning-and-memory-leaks) closes the group out from the other direction — not choosing a scheme, but living with one: how leaks and pathological behavior actually show up in the automatic schemes once they're running in production, and how to diagnose them.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    }
+  ]
+}

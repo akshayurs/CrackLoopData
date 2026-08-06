@@ -1,0 +1,161 @@
+{
+  "id": "sessions-cookies",
+  "title": "Sessions & Cookies",
+  "area": "security",
+  "group": "authn-authz",
+  "order": 2,
+  "slug": "sessions-cookies",
+  "summary": "How server-side session auth actually works end to end, and the cookie attributes that determine whether a session survives, or can be stolen. The mechanism underneath every 'stay logged in' checkbox.",
+  "level": "beginner",
+  "slideCount": 10,
+  "estReadMinutes": 10,
+  "slides": [
+    {
+      "id": "sessions-cookies-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "HTTP has no memory — each request is independent, with no built-in concept of \"the same user as five seconds ago.\" **Sessions** are the mechanism that layers continuity on top: authenticate once, and the server remembers you for subsequent requests via a small piece of state your browser resends automatically — the **cookie**.\n\nThat automatic resending is exactly the double-edged mechanism from [CSRF](csrf) in the previous group: it's what makes session auth convenient, and it's what an attacker abuses. This topic covers how the session actually works end to end, which cookie attributes actually matter for security, and where sessions live once your app runs on more than one server.\n\nThis is also the mechanism JWT is positioned as an alternative to later in this group — understanding sessions well is what makes that trade-off comparison actually land.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 64,
+      "mcqIds": []
+    },
+    {
+      "id": "sessions-cookies-s02",
+      "order": 2,
+      "sectionTitle": "How session-based auth actually works",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "The full flow, step by step:\n\n1. You submit a username and password.\n2. The server verifies them, then creates a **session record** server-side — typically in a fast store like Redis — containing your user ID and whatever else the app needs (roles, preferences).\n3. The server generates a **session ID**: a long, random, unguessable string with no meaning of its own — it's a pointer, not a payload.\n4. The server sends that session ID back as a cookie. The browser stores it and automatically resends it with every subsequent request to that domain.\n5. On each request, the server looks up the session ID in its store, finds the associated user, and treats the request as authenticated — with no need to re-check the password.\n\nThe security-relevant detail: the session ID itself carries **zero information** if intercepted in isolation — it's useless without also having access to the server's session store. That's different from JWT, covered later, where the token itself carries readable claims.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "sessions-cookies-s02-q1"
+      ]
+    },
+    {
+      "id": "sessions-cookies-s03",
+      "order": 3,
+      "sectionTitle": "Cookie attributes: what each one actually blocks",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A session cookie's security depends almost entirely on three attributes set when it's issued:\n\n```http\nSet-Cookie: session_id=a1b2c3d4e5; HttpOnly; Secure; SameSite=Lax; Path=/\n```\n\n- **`HttpOnly`** — blocks any JavaScript, including an XSS payload's, from reading the cookie via `document.cookie`. Without it, a single [XSS](xss) bug on the site is enough to steal every visitor's session outright.\n- **`Secure`** — the browser will only ever send the cookie over HTTPS, never plain HTTP. Without it, a network-level attacker on the same Wi-Fi (a coffee shop, a compromised router) can read the cookie off an unencrypted request.\n- **`SameSite`** — controls whether the cookie is sent on cross-site requests at all, which is the primary [CSRF](csrf) defense covered in the previous group's `csrf` topic (`Lax` sends it on top-level navigation but not on cross-site subrequests like a forged form).\n\nEach attribute closes a *different* attack, and none of them substitute for the others — `HttpOnly` does nothing against CSRF, and `SameSite` does nothing against a script reading the cookie via XSS. A production session cookie should carry all three.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "sessions-cookies-s03-q1"
+      ]
+    },
+    {
+      "id": "sessions-cookies-s04",
+      "order": 4,
+      "sectionTitle": "Session fixation vs session hijacking",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two distinct attacks target a session, at different points in its life:\n\n- **Session fixation** happens *before* login: an attacker sets a known session ID on the victim's browser (via a URL parameter on some vulnerable apps, or a subdomain cookie), then waits for the victim to log in using that pre-set ID. If the server doesn't issue a *fresh* session ID upon successful login, the attacker's pre-known ID becomes a valid, authenticated session they already know the value of.\n- **Session hijacking** happens *after* login: an attacker steals an already-valid session ID directly — through XSS reading an unprotected cookie, packet sniffing on an unencrypted connection, or a leaked server log — and reuses it to impersonate the victim without ever needing credentials.\n\nThe fix for fixation is structural and cheap: **always issue a brand-new session ID on successful login**, discarding whatever ID existed beforehand, regardless of how the client arrived with one. The fix for hijacking is the cookie attributes from the previous slide, plus short session lifetimes that limit how long a stolen ID stays useful.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "sessions-cookies-s04-q1"
+      ]
+    },
+    {
+      "id": "sessions-cookies-s05",
+      "order": 5,
+      "sectionTitle": "Expiry, idle timeout, and invalidation on logout",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A session needs to end deliberately, in three distinct ways, each closing a different exposure window:\n\n- **Absolute expiry** — a hard cap on session lifetime (say, 24 hours) regardless of activity, so a session token that leaked months ago eventually stops working on its own.\n- **Idle timeout** — the session expires after a period of *inactivity* (say, 30 minutes), even within the absolute window, because a user who walked away from an unlocked shared computer is a real, common exposure that absolute expiry alone doesn't cover.\n- **Explicit invalidation on logout** — clicking \"log out\" must actually delete the server-side session record, not just clear the cookie client-side. If only the cookie is cleared, the session ID itself remains valid in the store, and anyone who captured that ID before logout (via a proxy log, a shared machine's browser history) can still use it.\n\nThat last point is a common bug: a logout button that only does `document.cookie = ''` on the client looks like it worked — the user is visibly logged out in their own browser — while the actual session stays live and exploitable server-side indefinitely.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "sessions-cookies-s05-q1"
+      ]
+    },
+    {
+      "id": "sessions-cookies-s06",
+      "order": 6,
+      "sectionTitle": "Where sessions live at scale",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A session record has to be reachable from whichever server handles the *next* request, and once an app runs on more than one server, that's not automatic. Two common approaches:\n\n- **Sticky sessions** — a load balancer routes all of a given user's requests to the *same* backend server for the life of their session, so that server's in-memory session store is always the right one to check. Simple, but it undermines load balancing (traffic isn't evenly distributable) and breaks entirely if that specific server goes down mid-session.\n- **A shared session store** — every server checks the same centralized store (commonly Redis) regardless of which backend handled the request, so any server can serve any user's request. This is the standard modern approach: it scales horizontally cleanly and survives individual server restarts without logging anyone out.\n\nThe general lesson generalizes past sessions specifically: **any server-held state that must persist across requests needs the same architectural decision** — sticky routing or a shared store — and a shared store is almost always the better long-term answer once you have more than a couple of servers.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "sessions-cookies-s07",
+      "order": 7,
+      "sectionTitle": "The cookie round-trip",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![Round-trip sequence diagram of session cookie login: server stores the session in Redis, sets a Set-Cookie header, and the browser reattaches it automatically on every request](assets/session-cookie-roundtrip.svg)\n\nThe diagram's key detail: step 3 happens entirely inside the browser, with zero application JavaScript involved — that automatic re-attachment is a native HTTP cookie behavior, which is exactly why `HttpOnly` (blocking *script* access) and `SameSite` (blocking *cross-site* automatic attachment) are separate, complementary controls rather than one setting doing both jobs.",
+      "assets": [
+        {
+          "alt": "Round-trip sequence diagram of session cookie login: server stores the session in Redis, sets a Set-Cookie header, and the browser reattaches it automatically on every request",
+          "path": "assets/session-cookie-roundtrip.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": []
+    },
+    {
+      "id": "sessions-cookies-s08",
+      "order": 8,
+      "sectionTitle": "Sessions vs the token-based alternative",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | Server-side sessions | Token-based (preview of JWT) |\n|---|---|---|\n| **Where state lives** | Server-side store, cookie holds only a pointer | Often stateless — the token itself holds the claims |\n| **Revocation** | Instant — delete the server-side record | Hard — a valid, unexpired token can't be un-issued early without extra infrastructure |\n| **What's exposed if stolen** | The session ID alone reveals nothing without store access | The token itself may be readable, exposing its claims directly |\n| **Cross-domain use** | Awkward — cookies are domain-scoped | Naturally portable — send the token in a header to any API |\n\nThis is a preview, not the full comparison — JWT & Token-Based Auth covers the trade-off in depth, including exactly why revocation is the hard problem token-based auth introduces. The short version worth remembering here: sessions trade portability for easy, instant revocation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 68,
+      "mcqIds": [
+        "sessions-cookies-s08-q1"
+      ]
+    },
+    {
+      "id": "sessions-cookies-s09",
+      "order": 9,
+      "sectionTitle": "Storing sensitive data directly and unsigned in a cookie",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A tempting shortcut, especially for a quick prototype: skip the server-side session store entirely and just put the user's ID, or even their role, directly into a plain cookie — `user_id=4521; role=admin`.\n\nThis is broken in a way that's easy to miss because it *works* during development: cookies are stored and editable client-side, in full view, with no cryptographic protection by default. Any user can open their browser's dev tools, change `role=admin` to their own cookie, and reload — instantly granting themselves admin access, with no exploit beyond editing a visible text value.\n\nIf you must encode claims into a cookie rather than a server-side store, they need to be **signed** (so tampering is detectable) or fully **encrypted** (so the value can't even be read, let alone edited meaningfully) — never plain text that the client can trust itself to leave alone. This is exactly the mechanism JWT formalizes properly, with a cryptographic signature the server verifies on every request rather than trusting the client's honesty.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "sessions-cookies-s09-q1"
+      ]
+    },
+    {
+      "id": "sessions-cookies-s10",
+      "order": 10,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Sessions are half of the credential story — they cover what happens *after* a successful login. [Password Storage & Credential Security](password-storage) covers what has to be true *at* login: how the password itself needs to be stored so a database breach doesn't hand over usable credentials, and the runtime defenses against guessing attacks. From there, JWT & Token-Based Auth revisits the session-vs-token trade-off from this topic's compare slide in full depth.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 52,
+      "mcqIds": []
+    }
+  ]
+}

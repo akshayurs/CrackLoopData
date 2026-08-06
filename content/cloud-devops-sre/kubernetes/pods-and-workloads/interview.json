@@ -4,10 +4,34 @@
     {
       "id": "pods-and-workloads-iq1",
       "question": "How would you decide between a Deployment, StatefulSet, DaemonSet, and Job for a given workload?",
-      "answerMarkdown": "I'd work through it as questions, not definitions: Does it run to completion, not forever? **Job**/**CronJob** — a nightly ETL script. Must it run once per node? **DaemonSet** — a log agent. Do replicas need stable identity and their own volume? **StatefulSet** — a Postgres cluster where replicas aren't interchangeable. Otherwise, **Deployment** — the default for a stateless API.\n\nI'd give one concrete example per controller so it's clear I'm reasoning, not reciting.\n\n**Testing:** whether you reach for Deployment out of habit, or actually weigh identity, ordering, and lifecycle first.",
+      "answerMarkdown": "I'd work through it as questions, not definitions, since that's how the decision actually gets made in a design review. Does the workload run to completion rather than forever? That's a **Job**, or a **CronJob** if it's on a schedule — a nightly ETL script that should not be restarted just because it exited 0. Must exactly one copy run on every node? **DaemonSet** — a log-shipping agent or a node-level metrics exporter, where replica count isn't a number you set, it's however many nodes exist. Do replicas need a stable name, a stable network identity, and their own volume that follows them across restarts? **StatefulSet** — a three-node Postgres cluster where `db-0` and `db-1` are not interchangeable and replication config references them by name. If none of that applies — the Pods are stateless and any replica can serve any request — it's a **Deployment**, the default for an API service.\n\nIn an interview I'd give one concrete example per controller rather than reciting definitions, and I'd flag the classic mistake: putting a database behind a bare Deployment with a PVC, which looks fine until a reschedule reattaches the wrong volume to a randomly-named Pod.\n\n**Testing:** whether you reach for Deployment out of habit, or actually weigh identity, ordering, and lifecycle first.",
       "mostAsked": true,
       "level": "beginner",
       "subTitle": "Choosing the right workload controller"
+    },
+    {
+      "id": "pods-and-workloads-iq2",
+      "question": "Why does Kubernetes schedule a Pod instead of a bare container?",
+      "answerMarkdown": "Because some workloads are genuinely two or more tightly-coupled processes that need to share a network namespace and disk, and Kubernetes needed a unit that captures that without inventing per-container scheduling rules. A Pod gives every container inside it one IP, `localhost` between them, and optionally shared volumes — a log-shipping sidecar tailing a file the main container writes, or an Envoy proxy intercepting the main container's traffic in a service mesh, both rely on that shared identity.\n\nThe trade-off is that everything in a Pod is scheduled together, starts together, and dies together — there's no way to scale a sidecar independently of its main container, or restart just one on its own lifecycle. If two processes need independent scaling or independent restart timing, that's the signal they belong in separate Pods talking over the network, not one Pod with two containers. Most production Pods actually run a single container precisely because most workloads don't need this coupling — the sidecar pattern is the exception, reserved for helpers that are meaningless without the thing they're attached to.\n\n**Testing:** whether you can articulate the sidecar trade-off instead of treating Pod and container as interchangeable words.",
+      "mostAsked": false,
+      "level": "beginner",
+      "subTitle": "Why the Pod exists"
+    },
+    {
+      "id": "pods-and-workloads-iq3",
+      "question": "What's actually different between a StatefulSet and a Deployment under the hood?",
+      "answerMarkdown": "A Deployment's ReplicaSet treats Pods as fungible: it creates them with random name suffixes, and if one dies, a replacement with a new name and (by default) no guaranteed volume comes up anywhere in the cluster. A StatefulSet instead gives each replica a fixed identity — `db-0`, `db-1`, `db-2` — that survives restarts and rescheduling, a matching stable DNS entry, and via `volumeClaimTemplates`, its own PersistentVolumeClaim that's created once per ordinal and reattaches to that same ordinal every time, not just to any live Pod.\n\nOrdering is the other half: StatefulSet rollouts and scale-up/down happen one ordinal at a time by default (`db-0` fully ready before `db-1` starts), because many stateful systems need the previous member up before the next one joins a cluster or a replication topology. A Deployment has no such concept — it doesn't care what order Pods come up in, because it doesn't assume they need to coordinate with each other at all.\n\nIn practice: if I could kill any replica and a random replacement would work identically, it's a Deployment. If replica identity, order, or per-replica storage matters, it's a StatefulSet — a message broker with per-node partitions is the textbook case beyond just databases.\n\n**Testing:** whether you understand identity and ordering as the actual mechanism, not just \"StatefulSet is for databases.\"",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "StatefulSet vs Deployment mechanics"
+    },
+    {
+      "id": "pods-and-workloads-iq4",
+      "question": "You need a nightly job that emails a report at 2am. What Kubernetes object do you reach for, and what could go wrong?",
+      "answerMarkdown": "A **CronJob**, which wraps a **Job** with a schedule — each tick creates a fresh Job, which creates Pods until the configured number complete successfully, then stops. The key signal that separates this from a Deployment is `restartPolicy: OnFailure` or `Never` on the Pod template: a Job pod that exits 0 is done, not something to restart forever.\n\nWhat actually goes wrong in production: if a run takes longer than the interval between ticks, by default a new Job can start while the old one is still running (`concurrencyPolicy: Allow`), silently double-sending the report — I'd set `Forbid` or `Replace` depending on whether skipping or restarting is safer for that job. Second, CronJobs don't retry indefinitely on failure — `backoffLimit` caps Pod retries per Job run, and a Job that fails past that limit is just marked Failed with nobody notified unless you're watching for it, so I'd wire an alert on Job failures rather than assuming \"scheduled\" means \"monitored.\" Third, completed Job history accumulates (`successfulJobsHistoryLimit`/`failedJobsHistoryLimit`) — worth capping so old Pods don't pile up.\n\n**Testing:** whether you know Job semantics well enough to spot the double-run and silent-failure traps that don't show up until the third or fourth 2am run.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "CronJobs and their sharp edges"
     }
   ]
 }

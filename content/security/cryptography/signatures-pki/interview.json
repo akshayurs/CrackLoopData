@@ -1,0 +1,37 @@
+{
+  "topicId": "signatures-pki",
+  "interviewQuestions": [
+    {
+      "id": "signatures-pki-iq1",
+      "question": "What does a valid digital signature actually prove, and how is that different from what a hash or an HMAC proves?",
+      "answerMarkdown": "A valid signature proves three things at once: **integrity** (the message hasn't changed since signing), **authenticity** (it came from whoever holds the specific private key), and **non-repudiation** (that signer can't credibly deny having produced it, since nobody else holds that key).\n\nA plain hash only gives you a weaker version of integrity — it detects change but proves nothing about origin, since anyone can compute a hash over anything. HMAC adds authenticity and integrity within a shared-key relationship, but not non-repudiation, because the key is shared: either party in that relationship could have generated a valid tag, so you can't prove which one actually did if there's a dispute.\n\nSignatures get non-repudiation specifically because they use an asymmetric key pair instead of a shared secret — only the private key's holder can produce a valid signature, full stop, no ambiguity about which of two parties did it. That's exactly why a certificate is built as a signature rather than an HMAC: a certificate needs to prove to an arbitrary third party — anyone's browser — that a specific CA vouched for a specific key, and HMAC's shared-key model can't provide that kind of provable, third-party-verifiable authorship.\n\n**Testing:** whether you can place signatures precisely relative to hashing and HMAC, rather than treating all three as roughly the same \"cryptographic integrity\" bucket.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "signatures-pki-iq2",
+      "question": "How does your browser decide to trust a website's HTTPS certificate?",
+      "answerMarkdown": "By walking a chain of signatures back to a small set of pre-installed root CA public keys the browser or OS already trusts — trust doesn't come from evaluating the website directly, it comes from a signature chain.\n\nConcretely: the website presents a leaf certificate signed by an intermediate CA. The browser checks that signature against the intermediate's public key. The intermediate's own certificate is, in turn, signed by a root CA, and the browser checks that signature against the root's public key. The root itself is trusted without further proof, because its public key shipped as part of the browser or operating system's trust store. If every link in that chain verifies, and the certificate is within its validity window and not revoked, the browser trusts the leaf key belongs to the domain it claims.\n\nThe part I'd emphasize because it's often missed: the CA's real job isn't cryptography, it's the identity check that happens *before* signing — confirming the requester genuinely controls the domain. The signature is just how that verification gets communicated and made checkable by anyone downstream, without them needing to independently re-verify the domain themselves.\n\nI'd also mention revocation as part of a complete answer: even a validly-signed, unexpired certificate should be rejected if it's on a revocation list or fails an OCSP check, because the private key behind it may have been compromised after issuance.\n\n**Testing:** whether you understand trust as a chained, delegated verification process, not a single check against one certificate.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied"
+    },
+    {
+      "id": "signatures-pki-iq3",
+      "question": "A teammate suggests disabling certificate validation in a service's HTTP client because it's throwing errors in staging and blocking a deploy. What's your response?",
+      "answerMarkdown": "I'd push back immediately, because disabling validation doesn't fix the actual problem — it removes the entire trust guarantee TLS provides, and the deploy pressure is exactly the condition under which this mistake tends to ship and then get forgotten in production.\n\nMy first move would be diagnosing the real cause of the error rather than suppressing it: is the staging certificate self-signed or from an internal CA that isn't in the client's trust store (fix: add that CA to the trust store, don't disable checking entirely)? Is it expired (fix: renew it)? Is there a hostname mismatch, commonly a SAN field that doesn't match what the client connects to (fix: correct the SAN, or connect via the name the cert actually covers)? Each of these has a real, specific fix that preserves the security guarantee.\n\nThe risk I'd explain concretely: once validation is off, the connection is still encrypted, but there's no check that it's encrypted to the party you intended — a machine-in-the-middle attacker can present literally any certificate and it's silently accepted. It's one of the few \"fixes\" that provides zero benefit relative to the risk, since the error goes away but the underlying trust problem is completely unaddressed, and this kind of flag has a well-documented history of getting shipped to production and staying there long after the original staging issue is forgotten.\n\n**Testing:** whether you'll push back on a fix that removes a security guarantee under deploy pressure, and can name the real, non-destructive alternative.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "signatures-pki-iq4",
+      "question": "What's the difference between CRL and OCSP for certificate revocation, and why have browsers moved toward OCSP stapling?",
+      "answerMarkdown": "Both answer the same question — \"has this certificate been revoked before its natural expiry\" — but with different trade-offs between freshness, performance, and privacy.\n\n**CRL (Certificate Revocation List)** is a list the CA periodically publishes containing every revoked certificate's serial number; a client downloads it and checks locally. It's simple and doesn't require a live call per certificate check, but the list can grow large and is only as fresh as the last publish — a certificate revoked five minutes ago might not appear until the next scheduled update. **OCSP** flips this to a live, per-certificate query: the client asks the CA directly, in real time, whether this specific certificate is still valid. That's much fresher, but it means a network round-trip to the CA for every TLS connection, which adds latency and — since the CA now sees exactly which sites a given client is checking — a real privacy leak.\n\n**OCSP stapling** fixes both downsides at once: instead of the client calling the CA, the *server* periodically fetches a signed, recent OCSP response for its own certificate and attaches (\"staples\") it directly to the TLS handshake. The client gets OCSP's freshness without making its own call, and the CA never sees the client's browsing pattern — a strictly better design once you see the failure modes of each earlier approach.\n\n**Testing:** whether you can reason through the practical trade-offs of each revocation-checking mechanism, not just name that they exist.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Applied"
+    }
+  ]
+}

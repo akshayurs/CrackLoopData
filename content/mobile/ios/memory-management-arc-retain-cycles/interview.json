@@ -1,0 +1,37 @@
+{
+  "topicId": "memory-management-arc-retain-cycles",
+  "interviewQuestions": [
+    {
+      "id": "memory-management-arc-retain-cycles-iq1",
+      "question": "How does ARC work, and how can a retain cycle happen despite it?",
+      "answerMarkdown": "ARC inserts retain and release calls at compile time so every object's reference count reflects exactly how many strong references point to it. The moment that count hits zero, `deinit` runs immediately and synchronously — no garbage collector, no pause, fully deterministic.\n\nA cycle happens when ARC's counting is technically correct but the graph of references it's counting has a loop. If object A strongly holds B and B strongly holds A, both counts stay above zero forever, even after every reference from *outside* the pair is dropped — nothing external can reach either one anymore, but they keep each other alive. ARC isn't wrong here; it's doing exactly what it's told, which is the whole problem: it has no way to detect that a set of mutually-retaining objects is unreachable, the way a tracing garbage collector would.\n\nThe fix is always the same shape: break the cycle by making one direction of the reference **weak** (safely becomes nil) or **unowned** (assumes the referent always outlives it). Delegates and closures capturing `self` are the two patterns that create this by far most often in real iOS code.\n\n**Testing:** whether you understand ARC deeply enough to explain why it can't self-detect cycles, not just that 'weak breaks cycles.'",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-iq2",
+      "question": "You're reviewing a PR with a closure like session.loadTask(url) { self.image = $0 }. What would you flag, and what determines whether it's actually a bug?",
+      "answerMarkdown": "I'd flag the strong capture of `self` and ask one question: does this closure outlive the current method call? If `loadTask` fires the closure once and immediately, synchronously, before returning — genuinely fire-and-forget with no retry or caching of the closure — a strong capture is harmless; the closure itself is released right after it runs, so there's nothing left to hold `self`.\n\nThe bug appears when the closure is **stored** somewhere that outlives the call: a retry queue, a cache of pending completions, anything the session keeps around. Then `self` and the stored closure can form a cycle — `self` might own the session (directly or transitively), and the session is holding a closure that owns `self` right back.\n\nSince I usually can't verify the underlying framework's storage behavior from the call site alone, my default review comment is to add `[weak self]` and use `self?` inside, unless the author can point to why the closure is provably transient. It costs nothing when unnecessary and prevents a leak that's easy to miss and hard to spot later, since the symptom — memory slowly growing — doesn't show up in a quick manual test.\n\n**Testing:** whether you reason about closure lifetime and storage, not just pattern-match '[weak self] is always required.'",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Code review"
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-iq3",
+      "question": "How would you actually find and confirm a retain cycle in a shipped app, rather than just reasoning about the code?",
+      "answerMarkdown": "I'd start with Instruments' memory graph debugger (also accessible directly from Xcode's debug bar during a session). The workflow: navigate to the suspect screen, interact with it normally, then navigate away and dismiss it completely — then check the graph for any instance of that screen's view controller or view model still marked live. Xcode flags likely leaks with a purple exclamation mark, but I don't rely on that alone; I manually search for the type name to be sure.\n\nIf an instance is still alive, the graph shows every incoming reference to it, which is the actual diagnostic value — I can trace back exactly which object and which property is holding it, rather than guessing from reading code. Often it's a delegate property that isn't `weak`, or a stored closure/subscription with a strong `self` capture.\n\nFor a leak that only shows up gradually — memory creeping up over a long session rather than one clear jump — I'd use the **Allocations** instrument with the 'record reference counts' option over a repeated navigate-in/navigate-out loop, and look at the generation analysis to see which object type's count keeps climbing across generations. That distinguishes a genuine per-cycle leak from normal caching that just looks like growth.\n\n**Testing:** whether you've used the actual tools in anger, not just read about weak/unowned in the abstract.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "memory-management-arc-retain-cycles-iq4",
+      "question": "When is it actually correct to use unowned instead of weak, and what's the real risk if you get that choice wrong?",
+      "answerMarkdown": "`unowned` is correct when you can **prove**, not assume, that the referent's lifetime strictly contains the reference's usage — the referent is guaranteed to still exist for every access, typically because it created and owns this object and nothing else can extend this object's lifetime past the owner's. A common legitimate case: a child value object created and destroyed entirely within a parent's lifecycle, with no external strong references ever taken to the child.\n\nThe real risk of guessing wrong isn't a graceful failure — it's a hard crash the instant the dangling reference is accessed, which is strictly worse behavior than `weak`'s safe nil. And it can be intermittent and hard to reproduce if the ordering only breaks under specific conditions (a race, an unusual dismissal path, an object retained transiently by a cache).\n\nMy actual rule: default to `weak` unless I have a specific, concrete performance reason to avoid the optional-unwrapping overhead, or the ownership relationship is airtight enough that I'd be comfortable defending 'this cannot legitimately be nil' in a code review. In practice that's a smaller set of cases than people assume — I've seen `unowned` misused far more often for 'this should always be around' assumptions that later broke when the code was refactored to retain the child elsewhere.\n\n**Testing:** whether you can articulate the actual cost-benefit, not just recite 'unowned is for things that never outlive their owner.'",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

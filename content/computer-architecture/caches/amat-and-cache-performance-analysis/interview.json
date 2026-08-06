@@ -4,10 +4,26 @@
     {
       "id": "amat-and-cache-performance-analysis-iq1",
       "question": "Given hit times and miss rates for L1, L2, and L3, how would you compute overall average memory access time?",
-      "answerMarkdown": "I'd work bottom-up, since each level's miss penalty is just the next level's AMAT: `AMAT_L3 = HitTime_L3 + MissRate_L3 x RAM_latency`, then `AMAT_L2 = HitTime_L2 + MissRate_L2 x AMAT_L3`, then `AMAT_L1 = HitTime_L1 + MissRate_L1 x AMAT_L2` — that final number is the system AMAT.\n\nOne detail that trips people up: L2/L3 miss rates are usually quoted *local* (relative to accesses reaching that level) — exactly what this recursive formula wants.\n\n**Testing:** whether you can build the multi-level formula from the single-level one, and catch local-vs-global miss rate mix-ups.",
+      "answerMarkdown": "I'd work bottom-up, because each level's miss penalty is just the AMAT of the level below it. Start at the last level: `AMAT_L3 = HitTime_L3 + MissRate_L3 x RAM_latency`. Fold that up: `AMAT_L2 = HitTime_L2 + MissRate_L2 x AMAT_L3`, and finally `AMAT_L1 = HitTime_L1 + MissRate_L1 x AMAT_L2` — that last number is what the pipeline actually experiences.\n\nConcretely, with `HitTime_L1=1, MissRate_L1=5%, HitTime_L2=10, MissRate_L2=30%, HitTime_L3=30, MissRate_L3=20%, RAM=200`: `AMAT_L3 = 30 + 0.20*200 = 70`, `AMAT_L2 = 10 + 0.30*70 = 31`, `AMAT_L1 = 1 + 0.05*31 = 2.55` cycles.\n\nThe detail that trips people up: L2 and L3 miss rates are almost always quoted **local** — misses relative to accesses that actually reached that level, not relative to the original CPU reference count. That's exactly what this recursive formula expects; plugging in a global miss rate here silently double-penalizes the lower levels and produces a wrong AMAT that still looks plausible on paper.\n\n**Testing:** whether you can rebuild the multi-level formula from the single-level one on the spot, and whether you catch the local-vs-global miss rate distinction before it corrupts the answer.",
       "mostAsked": true,
       "level": "advanced",
       "subTitle": "Computing multi-level AMAT"
+    },
+    {
+      "id": "amat-and-cache-performance-analysis-iq2",
+      "question": "You have a fixed transistor budget. Would you spend it doubling L2 or adding an L3? How do you decide?",
+      "answerMarkdown": "I'd decide by estimating each change's effect on overall AMAT, not by intuition about \"more cache is always good.\" The lever is the local miss rate at the level you're touching, weighted by how many accesses actually reach it — traffic reaching L2 is already filtered by the L1 hit rate, so an L2 change affects a smaller slice of total accesses than it looks like on paper.\n\nDoubling L2 mainly pays off if L2's local miss rate is high and the working set nearly fits at the new size — check with a miss-rate-vs-size curve; past the working-set knee, extra capacity buys almost nothing. Adding an L3 pays off most when L2 misses are frequent and RAM latency is brutal (150-300+ cycles): even a modest L3 hit rate saves a large per-miss penalty because it's replacing a trip to DRAM, not to another SRAM level.\n\nIn practice I'd model both paths: compute AMAT under \"L2 doubled\" and AMAT under \"add L3 with a hit rate borrowed from similar workloads,\" using real miss-rate curves or a cache simulator rather than guessing. Whichever lowers the recursive AMAT formula more per unit area wins — and in most real designs a shared L3 wins, because it shields every core from full DRAM latency instead of just shrinking one level's miss count.\n\n**Testing:** whether you reason from the AMAT formula and marginal miss-rate curves, or just repeat \"bigger cache is better.\"",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Where to spend the budget"
+    },
+    {
+      "id": "amat-and-cache-performance-analysis-iq3",
+      "question": "Two designs report the same overall miss rate but very different measured latency in production. What would you check?",
+      "answerMarkdown": "Overall miss rate hides where the misses land, and AMAT is dominated by whichever level's miss penalty is largest — so first I'd check the split of local miss rates per level, not the aggregate number. A design that pushes most misses down to L3 (tens of cycles) behaves very differently from one pushing the same count of misses all the way to RAM (hundreds of cycles), even with an identical overall miss rate.\n\nSecond, I'd check whether the workload's access pattern matches the trace the miss rate was measured on. A miss rate collected on a sequential-scan benchmark can look great while a pointer-chasing production workload with the same nominal rate hits a much higher-penalty path, because a chain of dependent loads can't overlap their latency — each miss stalls before the next address is even known, so the misses serialize instead of pipelining.\n\nThird, contention on a shared L3 or memory controller: co-running workloads can inflate the *effective* miss penalty through queuing delay without changing the reported per-core miss rate at all. I'd pull memory-controller queue depth and per-request latency histograms, not just cache hit/miss counters, before trusting the miss-rate comparison.\n\n**Testing:** whether you know AMAT depends on where misses land and how they serialize, not just how many of them there are.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "A common trap"
     }
   ]
 }

@@ -1,0 +1,37 @@
+{
+  "topicId": "cloud-network-data-security",
+  "interviewQuestions": [
+    {
+      "id": "cloud-network-data-security-iq1",
+      "question": "What's the difference between a security group and a network ACL, and when would you actually rely on the NACL?",
+      "answerMarkdown": "A security group attaches to an individual resource and is stateful — allow the outbound request, and the reply is automatically permitted, no separate rule needed. A NACL attaches to an entire subnet and is stateless — you have to define inbound and outbound rules independently, and it evaluates in order with explicit deny support.\n\nDay to day, security groups do almost all the real access-control work — \"this service can talk to that service on this port\" is a security-group-shaped rule. I'd reach for a NACL when I want a rule that survives even if every individual security group in a subnet somehow got misconfigured too permissively — a coarse, subnet-wide backstop like \"nothing in this subnet should ever talk to that other subnet, full stop\" or blocking a known-bad IP range at the subnet boundary regardless of what any specific resource's security group allows.\n\nThe honest framing: NACLs aren't redundant with security groups, but they're also not where I'd put fine-grained logic — that granularity belongs in security groups, and NACLs are for the handful of rules you want to be structurally unbypassable by a resource-level mistake.\n\n**Testing:** whether you understand these as complementary layers with different jobs, not two names for the same control.",
+      "mostAsked": true,
+      "level": "intermediate",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "cloud-network-data-security-iq2",
+      "question": "A database only needs to be reached by an application server in the same VPC. Walk me through how you'd isolate it.",
+      "answerMarkdown": "First, placement: the database goes in a **private subnet** with no route to an internet gateway — that's a structural guarantee that nothing on the public internet can initiate a connection to it, regardless of any other rule. The application server, if it also doesn't need to be directly internet-facing, goes in a private subnet too; only something that genuinely needs inbound internet traffic — a load balancer — sits in a public subnet.\n\nSecond, access control: a **security group** on the database that allows inbound traffic only from the application server's own security group (not a broad CIDR range, not \"the whole VPC\") on exactly the database's port. This means even another resource sitting in the same private subnet can't reach the database unless it's specifically the app server's security group being referenced.\n\nThird, I'd add encryption at rest on the database (provider-managed is usually fine unless the data classification calls for customer-managed keys) and, depending on how sensitive the data is, TLS on the connection between the app server and the database rather than assuming the internal network is safe by default.\n\nThe layering matters because each piece covers a different failure: the private subnet survives a security-group mistake, the security group survives someone else's resource ending up in the same subnet, and the encryption survives someone getting read access to the underlying storage some other way.\n\n**Testing:** whether you can design a concrete, layered isolation setup rather than naming controls in the abstract.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "cloud-network-data-security-iq3",
+      "question": "You find a database with a security group open to 0.0.0.0/0 on its port during a routine audit, with no evidence yet of exploitation. What's your response?",
+      "answerMarkdown": "I'd treat this with real urgency, not as a routine finding — automated internet-wide scanners find open database ports on a timescale of minutes to hours, so \"no evidence of exploitation yet\" doesn't mean it's safe, it likely means the evidence hasn't been looked for hard enough yet, or the attacker hasn't acted on the access yet.\n\nImmediate steps: narrow the security group rule to specific known sources (the app server's security group, a bastion host, a VPN egress range) right away — this is a config change, not a migration, so there's no reason to delay it. In parallel, I'd check the database's own connection and query logs for any unfamiliar source IPs or unusual query patterns during the exposure window, and rotate any credentials on that database as a precaution regardless of what the logs show, since a credential that was reachable from the internet for any length of time should be treated as potentially compromised.\n\nAfter the immediate fix, I'd push for the structural backstop: is this database in a private subnet? If not, that's the deeper fix — a security-group mistake like this one should never translate directly into internet exposure, and moving it to a private subnet means the next similar mistake gets contained automatically rather than requiring someone to catch it in an audit.\n\n**Testing:** whether you treat a discovered misconfiguration as urgent and investigate for actual exploitation, rather than just closing the rule and moving on.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    },
+    {
+      "id": "cloud-network-data-security-iq4",
+      "question": "How would you decide, for a given piece of data, whether it needs customer-managed encryption keys and end-to-end internal TLS, versus provider-managed keys and no special internal encryption?",
+      "answerMarkdown": "I'd start from data classification rather than defaulting to either extreme — applying the strongest controls to everything wastes effort and, counterintuitively, can mean the genuinely sensitive data doesn't get proportionally more scrutiny than everything else. The decision should follow from what the data actually is and what regulatory or contractual obligations attach to it, not from a blanket policy.\n\nConcretely: data that's regulated (health records, payment data) or would cause serious harm if exposed gets the strongest tier — customer-managed keys so we can independently revoke access, private subnet placement with no public path, and encrypted internal connections end to end, accepting the added latency and key-management overhead as the cost of that guarantee. Internal operational data with real but lower stakes — application logs, non-sensitive internal metrics — can reasonably use provider-managed keys and skip mTLS between every internal hop, because the operational cost of full encryption everywhere isn't justified by the actual risk.\n\nWhat I'd insist on regardless of tier: the decision is made explicitly and documented per data category, not left to whatever a given service happened to default to. \"We encrypt everything with customer-managed keys\" sounds impressive but often signals the team never actually did the classification work — the stronger answer names the tiers and which controls are mandatory at each one, and can justify why a given piece of data sits where it does.\n\n**Testing:** whether you can reason about proportional security investment rather than defaulting to either 'encrypt nothing extra' or 'encrypt everything maximally' without justification.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Trade-offs"
+    }
+  ]
+}

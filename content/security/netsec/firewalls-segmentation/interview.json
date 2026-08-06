@@ -1,0 +1,37 @@
+{
+  "topicId": "firewalls-segmentation",
+  "interviewQuestions": [
+    {
+      "id": "firewalls-segmentation-iq1",
+      "question": "What's the difference between a stateless and a stateful firewall, and why does it matter in practice?",
+      "answerMarkdown": "A stateless firewall judges every packet on its own — source, destination, port, protocol — with no memory of what came before. A stateful one tracks connections, so it remembers that you opened a TCP session to a server and automatically allows the reply, without needing a separate rule for the return path.\n\nThe practical difference shows up immediately if you try to write rules by hand: with a stateless filter, allowing outbound web traffic means you also have to write a rule permitting the *inbound* reply, usually on an ephemeral high port. That either breaks things or forces you to open a wide range of inbound ports \"just in case\" — which is a real, exploitable hole. A stateful firewall closes that gap for free because it only allows inbound traffic that matches a connection it already saw go out.\n\nAlmost everything you'll touch day to day — cloud security groups, `iptables` with connection tracking, enterprise NGFWs — is stateful. Pure stateless filtering mostly survives on router ACLs, where the hardware can't afford to hold a state table per connection at line rate.\n\n**Testing:** whether you understand *why* statefulness exists — the return-traffic problem — rather than reciting it as a vocabulary pair.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "firewalls-segmentation-iq2",
+      "question": "We already have a firewall at the network edge. Why would we also need internal network segmentation?",
+      "answerMarkdown": "Because the edge firewall's job ends the moment traffic is inside. It screens what comes in from the internet; it has no visibility into east-west traffic between two hosts that are already inside the network. If one host gets popped — a phished laptop, a vulnerable internal service — a flat internal network means that host can reach everything else with no additional control in the way.\n\nSegmentation puts firewall-like boundaries *inside* the network, not just at its edge. Concretely: VLANs plus per-boundary rules mean the marketing team's laptops can't route to the payments database, and a compromised build server can't directly reach production secrets, even though both sit on the same physical network as everything else.\n\nThe mental model I use is blast radius: a firewall decides who gets in the building; segmentation decides which rooms someone can reach once they're inside. Most large breaches I've read post-mortems on didn't fail at the edge — the initial foothold was mundane (a phished credential, an exposed dev endpoint), and the damage came from unrestricted lateral movement afterward that segmentation would have stopped cold.\n\n**Testing:** whether you separate \"keeping attackers out\" from \"limiting damage once one is already in\" — two different problems solved by two different controls.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "firewalls-segmentation-iq3",
+      "question": "Walk me through why we'd put a public web server in a DMZ instead of just adding a firewall rule that lets the internet reach it directly on the internal network.",
+      "answerMarkdown": "The rule works for the traffic you intended — but it doesn't change what happens if that web server gets exploited. If the server sits on the internal network, an attacker who pops it inherits its network position: same segment as the database, the internal tooling, maybe employee workstations. The firewall rule only controlled inbound *legitimate* traffic; it says nothing about what a compromised server can reach outbound.\n\nA DMZ fixes the blast radius, not the initial exposure. The web server still faces the internet on the same ports, but it's placed in its own zone with asymmetric rules: internet-to-DMZ is allowed on specific ports, DMZ-to-internal is allowed only on the one narrow path the app genuinely needs (say, a single port to an app-tier API, ideally itself authenticated), and internet-to-internal is never allowed at all.\n\nSo if that web server is popped, the attacker lands in a zone with nothing valuable in it — no direct line to the database, no lateral path to internal hosts — just the same narrow, monitored channel the app itself was allowed to use. It's the same idea as not keeping your house keys in the mailbox: the mailbox still has to be reachable from the street, but it shouldn't open every door behind it.\n\n**Testing:** whether you reason about compromise as the default assumption for anything internet-facing, not just whether the happy-path rule is correct.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Design"
+    },
+    {
+      "id": "firewalls-segmentation-iq4",
+      "question": "You're asked to reduce blast radius after an incident where one compromised service reached far more of the network than it should have. How would you use segmentation to fix that, and what's the cost?",
+      "answerMarkdown": "First I'd map actual traffic, not assumed traffic — flow logs or a service mesh's telemetry to see what that service really talks to today, because the existing firewall rules were probably written from intent, not observation, and drift over time. Then I'd design segmentation around that observed graph: put the service in its own zone (VLAN or, in a cloud/Kubernetes setup, its own security group or network policy), and write default-deny rules that permit only the specific destinations and ports it actually used.\n\nThe key move is making the *narrowest* path the default, then widening only on a demonstrated need — the inverse of how most networks accumulate rules over years. I'd also separate east-west from north-south explicitly: the incident likely spread laterally, so the fix has to add controls between internal hosts, not just tighten the edge.\n\nThe real cost is operational, not just implementation effort: over-segmentation breaks things in ways that are hard to predict ahead of time — a monitoring agent that needs to reach every host, a service discovery mechanism that assumed flat connectivity. Every new segment boundary is also a new thing that can silently block a legitimate dependency at 2am. I'd roll it out with the new rules in **log-only mode** first, watch for what would have been blocked, then flip to enforcing — never straight to enforce on a network no one has fully mapped.\n\n**Testing:** whether you'd design from observed reality and roll out safely, or just draw a prettier diagram and flip enforcement on day one.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Incident response"
+    }
+  ]
+}

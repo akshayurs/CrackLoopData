@@ -1,0 +1,174 @@
+{
+  "id": "password-storage",
+  "title": "Password Storage & Credential Security",
+  "area": "security",
+  "group": "authn-authz",
+  "order": 3,
+  "slug": "password-storage",
+  "summary": "How passwords must be stored so a database breach doesn't hand over usable credentials, and the runtime defenses that stop guessing attacks from ever needing that breach in the first place.",
+  "level": "intermediate",
+  "slideCount": 11,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "password-storage-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Every breach disclosure eventually asks the same question: **how were the passwords stored?** The answer determines whether a database dump is a catastrophe or a non-event. Plaintext or weakly-hashed passwords mean every account is instantly compromised the moment the dump leaks. Properly stored passwords mean the attacker walks away with something computationally expensive to turn back into a usable credential.\n\nThis topic covers what \"properly stored\" actually means — salting, why general-purpose hash functions are wrong for this specific job, and peppering as an extra layer — plus the runtime side of the same problem: rate limiting and lockout, which stop an attacker from ever needing to steal your database at all if they can just guess passwords one at a time, forever, unopposed.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 66,
+      "mcqIds": []
+    },
+    {
+      "id": "password-storage-s02",
+      "order": 2,
+      "sectionTitle": "Why plaintext and reversible encryption are both wrong",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Two tempting but broken approaches, and why each fails for a different reason:\n\n- **Plaintext storage** means anyone with read access to the database — an attacker, an insider, a misconfigured backup — has every user's actual password immediately, no additional work required.\n- **Reversible encryption** (storing `encrypt(password, server_key)`) sounds better, but it isn't: if the attacker who steals the database also gets the encryption key — which happens constantly, since keys often live in the same config or environment as the app that uses them — they can decrypt every password back to plaintext just as completely as if it had never been encrypted at all.\n\nThe correct property is neither of these: passwords should be stored in a form the server itself **cannot reverse**, even with full access to everything it stores. The server never needs to recover your original password — it only ever needs to verify that what you typed matches what was stored, which is exactly what a one-way **hash** provides and reversible encryption does not.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 76,
+      "mcqIds": [
+        "password-storage-s02-q1"
+      ]
+    },
+    {
+      "id": "password-storage-s03",
+      "order": 3,
+      "sectionTitle": "Salting: defeating precomputed tables",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Hashing alone isn't enough. A **rainbow table** is a precomputed mapping from common passwords to their hash values — if two users both pick `password123`, their unsalted hashes are byte-for-byte identical, so cracking one instantly reveals the other, and an attacker with a big enough precomputed table can reverse huge swaths of a stolen hash dump in bulk, without touching the actual hash function per-password at all.\n\nA **salt** is a random, unique value generated per user and stored alongside the hash (it doesn't need to be secret), combined with the password before hashing: `hash(password + salt)`. Now two users with the same password get **completely different** stored hashes, because their salts differ — a precomputed table built for unsalted passwords is useless, since it would need a separate table for every possible salt value, which defeats the entire point of precomputing.\n\nSalting doesn't make an individual password harder to crack once targeted specifically — it makes bulk, precomputed cracking across many accounts at once infeasible.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "password-storage-s03-q1"
+      ]
+    },
+    {
+      "id": "password-storage-s04",
+      "order": 4,
+      "sectionTitle": "Why bcrypt/scrypt/argon2 beat SHA-256 for passwords",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "SHA-256 is a perfectly good hash function — for the job it was designed for, which is fast, general-purpose integrity checking (verifying a file wasn't corrupted). That exact speed is a liability for password hashing: a modern GPU can compute billions of SHA-256 hashes per second, so an attacker with a stolen salted-SHA-256 hash can still brute-force through common passwords at enormous speed.\n\n**bcrypt**, **scrypt**, and **argon2** are purpose-built password hashing algorithms with one deliberate property SHA-256 lacks: they're **slow and/or memory-hard by design**, with a tunable \"cost factor\" that controls exactly how slow. bcrypt takes milliseconds per hash instead of nanoseconds — negligible for one legitimate login, but multiplied across billions of guess attempts, it turns brute-forcing from a GPU's afternoon into a practically infeasible amount of compute.\n\nscrypt and argon2 add **memory-hardness** on top of slowness specifically to blunt GPU and custom ASIC acceleration, since those chips are optimized for raw compute throughput but don't have unlimited fast memory to parallelize against — argon2 is the current recommended default for new systems.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "password-storage-s04-q1"
+      ]
+    },
+    {
+      "id": "password-storage-s05",
+      "order": 5,
+      "sectionTitle": "Peppering: a second, server-side secret",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A **pepper** is an additional secret value, applied like a salt (`hash(password + salt + pepper)`), with one crucial difference: unlike the salt, the pepper is **not stored in the database** — it lives in application config or a secrets manager, shared across all users rather than unique per user.\n\nThe security benefit is specific: it defends against the scenario where an attacker steals the **database** (containing password hashes and salts) but not the application's **configuration or secrets store** — a realistic split, since databases and app config are often on different systems with different access controls. Without the pepper, that attacker still can't correctly compute candidate hashes to check against the stolen data at all, even knowing the algorithm and the per-user salt.\n\nPeppering is defense-in-depth on top of a strong hash, not a replacement for one — if both the database and the pepper leak together, you're back to relying on the hash algorithm's cost alone, which is exactly why bcrypt/scrypt/argon2 remain the primary control regardless.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": []
+    },
+    {
+      "id": "password-storage-s06",
+      "order": 6,
+      "sectionTitle": "Credential stuffing and brute force",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Good storage protects you *if* the database leaks. It does nothing about the completely separate problem of an attacker simply **guessing** at the live login endpoint, which never touches your database at all:\n\n- **Brute force** — systematically trying passwords (common ones, or all combinations up to some length) against one specific account.\n- **Credential stuffing** — trying username/password pairs leaked from *another* site's breach against yours, betting on password reuse, across potentially millions of accounts at once.\n\nBoth are defeated the same way: **rate limiting** (capping login attempts per account or per IP within a time window) and **account lockout** (temporarily or permanently disabling an account after repeated failures) turn an attack that would otherwise run at network speed — thousands of guesses per second — into one throttled to a handful of attempts per minute, making it economically pointless long before it succeeds.\n\nThis is precisely why storage strength and runtime defenses are both necessary: bcrypt protects a *stolen* hash from bulk cracking; rate limiting protects a *live* endpoint from being brute-forced without any breach at all.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 80,
+      "mcqIds": [
+        "password-storage-s06-q1"
+      ]
+    },
+    {
+      "id": "password-storage-s07",
+      "order": 7,
+      "sectionTitle": "Hashing and verifying a password with bcrypt",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "```python\nimport bcrypt\n\n# Signup: generate a salt and hash the password (bcrypt embeds the\n# salt and cost factor directly in the output string, so nothing\n# extra needs to be stored separately)\nhashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12))\n# store `hashed` in the database — it's safe to store as-is\n\n# Login: verify a submitted password against the stored hash\nif bcrypt.checkpw(submitted_password.encode(), hashed):\n    grant_access()\nelse:\n    reject_login()\n```\n\nNote what never happens anywhere in this code: the original password is never stored, and there's no `decrypt` step, because `checkpw` doesn't reverse the hash — it independently re-hashes the submitted password using the same embedded salt and cost factor, then compares the two hash outputs. `gensalt(rounds=12)` sets the cost factor: each increment roughly doubles the compute time per hash, which is the tunable knob that keeps pace with hardware getting faster over the years.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 78,
+      "mcqIds": [
+        "password-storage-s07-q1"
+      ]
+    },
+    {
+      "id": "password-storage-s08",
+      "order": 8,
+      "sectionTitle": "bcrypt vs scrypt vs argon2",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | bcrypt | scrypt | argon2 |\n|---|---|---|---|\n| **Core defense** | Deliberately slow (tunable rounds) | Slow + memory-hard | Slow + memory-hard, with separate tuning for time and memory |\n| **GPU/ASIC resistance** | Moderate — slowness alone helps, but low memory use leaves room for parallel hardware | Strong — memory requirement limits parallel cracking attempts | Strongest — winner of the 2015 Password Hashing Competition, purpose-built for this |\n| **Max password length quirk** | Silently truncates beyond 72 bytes in the original spec — a real, easy-to-miss bug source | No such truncation quirk | No such truncation quirk |\n| **Current recommendation** | Solid, widely supported, battle-tested | Good, less common in mainstream libraries | Recommended default for new systems |\n\nThe practical takeaway for a system design or backend interview: naming argon2 (or acknowledging bcrypt's truncation quirk if that's what's actually in use) signals you know the current state of the art, not just \"use bcrypt\" as memorized advice from a decade-old best-practices list.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 76,
+      "mcqIds": []
+    },
+    {
+      "id": "password-storage-s09",
+      "order": 9,
+      "sectionTitle": "Salted hashes at rest",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "![A database table with username, salt, and password_hash columns showing two identical passwords producing completely different hashes due to per-row salts](assets/salted-hash-table.svg)\n\nThe diagram makes the salting payoff visible directly: without a unique salt per row, those two identical passwords would produce byte-identical hashes, instantly revealing the reuse to anyone who cracks one of them. With per-row salts, the two hashes share nothing visible at all, and an attacker has to attack each one independently rather than getting a bulk win from a precomputed table.",
+      "assets": [
+        {
+          "alt": "A database table with username, salt, and password_hash columns showing two identical passwords producing completely different hashes due to per-row salts",
+          "path": "assets/salted-hash-table.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": []
+    },
+    {
+      "id": "password-storage-s10",
+      "order": 10,
+      "sectionTitle": "Rolling a custom password-hashing scheme",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "A recurring mistake by otherwise capable engineers: inventing a homegrown scheme — double-hashing with SHA-256, XOR-ing with a secret, a custom iteration loop — instead of using a vetted library, reasoning \"my approach is at least as strong, and I understand exactly how it works.\"\n\nThis fails for reasons that have nothing to do with the engineer's skill:\n\n- **Cryptographic hardening requires adversarial review** that a solo implementation never gets. bcrypt, scrypt, and argon2 have been analyzed for years by researchers actively looking for weaknesses — a custom scheme has had zero such scrutiny, no matter how carefully it was written.\n- **\"Stronger-sounding\" is not the same as stronger.** Double-hashing SHA-256 (`sha256(sha256(password))`) is still fast and still lacks memory-hardness — it inherits the exact weakness that makes SHA-256 wrong for passwords in the first place, just applied twice.\n- **Subtle implementation bugs are the actual historical cause of most custom-crypto breaches** — a timing side-channel in the comparison step, an insufficiently random salt generator, an off-by-one in the iteration count — bugs that are invisible in code review but exploitable in practice.\n\nThe fix is never \"be more careful next time\" — it's using a library specifically designed and reviewed for this exact job, every time, with no exceptions for \"just this once, we have a good reason.\"",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 82,
+      "mcqIds": [
+        "password-storage-s10-q1"
+      ]
+    },
+    {
+      "id": "password-storage-s11",
+      "order": 11,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This topic covered the password itself — how it's stored and defended at the point of guessing. The next topic, JWT & Token-Based Auth, covers what happens *after* a password check succeeds in a stateless architecture: instead of the server-side session record from the previous topic, the proof of identity travels in a signed token the client holds — with its own, very different security trade-offs, starting with the revocation problem a stateless design creates.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    }
+  ]
+}

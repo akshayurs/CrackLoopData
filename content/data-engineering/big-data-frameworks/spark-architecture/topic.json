@@ -1,0 +1,192 @@
+{
+  "id": "spark-architecture",
+  "title": "Spark Architecture",
+  "area": "data-engineering",
+  "group": "big-data-frameworks",
+  "order": 2,
+  "slug": "spark-architecture",
+  "summary": "A Spark job is a plan before it's an execution — lazy transformations build a DAG, an action triggers it, and lineage recovers lost work instead of replicating everything up front.",
+  "level": "intermediate",
+  "slideCount": 12,
+  "estReadMinutes": 11,
+  "slides": [
+    {
+      "id": "spark-architecture-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Spark's core promise, following on from [MapReduce's disk problem](mapreduce-hadoop), is to keep data in memory across steps instead of round-tripping through disk on every stage.\n\nThree ideas make that work together: **RDDs**, a distributed collection abstraction that's fault-tolerant without replicating everything; **lazy evaluation**, where your code builds a plan before anything actually runs; and a **driver/executor** split, where one process plans the job and many processes execute pieces of it in parallel. Every later Spark feature — DataFrames, Structured Streaming, MLlib — sits on top of this same foundation.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 48,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-architecture-s02",
+      "order": 2,
+      "sectionTitle": "Driver, cluster manager, executors",
+      "subTitle": null,
+      "type": "diagram",
+      "markdown": "The **driver** process runs your application's main logic and builds the execution plan. It asks a **cluster manager** (standalone, YARN, or Kubernetes) for resources, which allocates **executors** — worker processes that actually run tasks and hold cached data in memory. The driver breaks the job into tasks and ships them to executors; executors report results and status back.\n\n![Spark driver requesting resources from the cluster manager and coordinating executors](assets/driver-executor-split.svg)",
+      "assets": [
+        {
+          "alt": "Spark driver requesting resources from the cluster manager and coordinating executors",
+          "path": "assets/driver-executor-split.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": [
+        "spark-architecture-s02-q1"
+      ]
+    },
+    {
+      "id": "spark-architecture-s03",
+      "order": 3,
+      "sectionTitle": "RDDs: the original abstraction",
+      "subTitle": "Distributed, partitioned, fault-tolerant",
+      "type": "concept",
+      "markdown": "A **Resilient Distributed Dataset (RDD)** is Spark's foundational data structure: a collection split into **partitions** spread across executors, that Spark can rebuild automatically if a partition is lost.\n\nThe \"resilient\" part doesn't come from replication the way HDFS blocks are replicated — it comes from **lineage**: Spark remembers the sequence of transformations that produced each RDD, so if a partition disappears (a machine crashes), Spark can recompute just that partition by replaying the relevant transformations, instead of needing a standing extra copy sitting idle on disk the whole time.\n\nRDDs are low-level — the programmer manages partitions and transformations explicitly. Almost nobody writes raw RDD code for standard jobs today; DataFrames (covered next in this group) sit on top of RDDs and are what most Spark code actually uses.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "spark-architecture-s03-q1"
+      ]
+    },
+    {
+      "id": "spark-architecture-s04",
+      "order": 4,
+      "sectionTitle": "Lazy evaluation",
+      "subTitle": "Transformations plan, actions run",
+      "type": "concept",
+      "markdown": "Spark splits operations into two categories. **Transformations** — `map`, `filter`, `join`, `groupBy` — don't execute anything; they just add a step to a logical plan and return a new, still-unevaluated RDD or DataFrame. **Actions** — `count`, `collect`, `write` — are what actually trigger execution, running the whole accumulated plan at once.\n\nThis matters because Spark sees the *entire* chain of transformations before running anything, which lets it optimize across steps — combining a filter and a map into one pass over the data, for instance, instead of materializing an intermediate result after each individual call. Code that reads like a sequence of imperative steps is actually building a plan, not executing one line at a time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-architecture-s04-q1"
+      ]
+    },
+    {
+      "id": "spark-architecture-s05",
+      "order": 5,
+      "sectionTitle": "Stages and tasks",
+      "subTitle": "Where the plan gets cut apart",
+      "type": "diagram",
+      "markdown": "When an action triggers execution, Spark breaks the transformation chain into **stages**, splitting at every point a **shuffle** is required — a `groupBy` or a `join` that needs data redistributed by key across the cluster. Each stage is further split into **tasks**, one per partition, which is the actual unit of work an executor runs.\n\n![Transformation chain split into two stages at the groupBy shuffle boundary](assets/stage-boundary-shuffle.svg)",
+      "assets": [
+        {
+          "alt": "Transformation chain split into two stages at the groupBy shuffle boundary",
+          "path": "assets/stage-boundary-shuffle.svg"
+        }
+      ],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-architecture-s06",
+      "order": 6,
+      "sectionTitle": "In-memory caching between stages",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "If a dataset is reused across multiple actions — say, filtered once and then aggregated three different ways — Spark can `cache()` or `persist()` it in executor memory after the first computation, so later actions read from memory instead of recomputing the whole lineage from the original source.\n\nThis is the direct fix for MapReduce's disk round-trip problem: an iterative algorithm that touches the same dataset 20 times can cache it once and read from memory on iterations 2 through 20, instead of paying a full recomputation (or disk read) on every pass. Caching is a deliberate choice, not automatic — Spark doesn't guess which datasets you'll reuse, so forgetting to cache a genuinely reused RDD silently costs you the speedup this whole architecture exists to provide.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-architecture-s07",
+      "order": 7,
+      "sectionTitle": "Fault tolerance via lineage, not replication",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "When an executor crashes mid-job, Spark doesn't need a pre-existing replica of the lost data — it recomputes just the lost partitions by replaying the recorded transformation lineage against the still-available source or cached data. This is fundamentally different from HDFS's approach of keeping three replicas of every block, sitting idle, at all times.\n\nThe trade-off: lineage-based recovery costs *time* when a failure actually happens (recomputation isn't free), while HDFS-style replication costs *storage* all the time, whether or not a failure ever occurs. For most Spark workloads, occasional recomputation is cheaper overall than constantly paying 3x storage for insurance against a comparatively rare event.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-architecture-s07-q1"
+      ]
+    },
+    {
+      "id": "spark-architecture-s08",
+      "order": 8,
+      "sectionTitle": "Collecting a huge dataset to the driver",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "Calling `.collect()` pulls every partition's data back to the driver process as an in-memory object. On a small dataset this is harmless. On a dataset with a billion rows spread across 200 executors, it means shipping all billion rows into the memory of *one single process* — the driver, which is usually far smaller than the combined executor fleet.\n\nThe driver runs out of memory and the whole job crashes, and the failure looks confusing to someone unfamiliar with Spark: the executors were fine, the cluster had plenty of aggregate memory, but one specific process choked because the action itself assumed the result would be small. The fix isn't more cluster resources — it's using an action that doesn't materialize the full dataset on the driver, like writing directly to storage, or aggregating first and only collecting the small final result.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": [
+        "spark-architecture-s08-q1"
+      ]
+    },
+    {
+      "id": "spark-architecture-s09",
+      "order": 9,
+      "sectionTitle": "A transformation chain and its trigger",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Nothing runs until the final `.count()`:\n\n```python\nlogs = spark.read.parquet(\"s3://bucket/logs/\")   # transformation: read plan built\nerrors = logs.filter(logs.level == \"ERROR\")        # transformation: added to plan\ngrouped = errors.groupBy(\"service\").count()         # transformation: added to plan\n\nresult = grouped.collect()                          # ACTION: whole plan executes now\n```\n\nEach of the first three lines returns instantly regardless of dataset size, because they only build the logical plan — no data has been touched yet. The `.collect()` call is what triggers the read, filter, group, and shuffle to actually happen, all at once, planned as a single optimized execution rather than four separate passes.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-architecture-s10",
+      "order": 10,
+      "sectionTitle": "Executors hold more than compute",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "It's easy to think of executors as pure compute, but they're also where cached data physically lives — an executor's memory is split between space for running tasks and space for cached RDDs/DataFrames. Losing an executor doesn't just lose in-flight computation; it can also evict cached data that other stages were relying on, forcing lineage-based recomputation even for data that was supposedly \"cached.\"\n\nThis is why executor sizing and count aren't purely a throughput decision — under-provisioning executor memory for a workload that caches heavily can cause a cascade of evictions and recomputations that looks like a performance bug but is really a capacity-planning one.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "spark-architecture-s11",
+      "order": 11,
+      "sectionTitle": "The senior distinction: plan vs execution",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "A junior mental model treats Spark code as running line by line, like a normal Python script. A senior mental model treats every transformation as a promise added to a plan, and reads the code by asking \"what action finally triggers this, and what does the whole accumulated plan look like at that point?\"\n\nThis distinction is why debugging Spark often means reading a stage's physical plan (`.explain()`), not stepping through code line by line the way you would with ordinary sequential code — the code's line order doesn't correspond to execution order the way it would outside a lazy framework.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "spark-architecture-s11-q1"
+      ]
+    },
+    {
+      "id": "spark-architecture-s12",
+      "order": 12,
+      "sectionTitle": "What's next",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This topic covered the mechanics underneath everything else in Spark. The next topics build on it directly: DataFrames and the Catalyst optimizer show how Spark plans more intelligently than raw RDD code can, and partitioning, shuffle, and joins show exactly what happens at the stage boundaries this topic introduced — where most real Spark performance problems actually live.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 46,
+      "mcqIds": []
+    }
+  ]
+}

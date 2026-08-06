@@ -1,0 +1,156 @@
+{
+  "id": "file-formats-and-storage",
+  "title": "File Formats & Storage Layout",
+  "area": "data-engineering",
+  "group": "de-fundamentals",
+  "order": 4,
+  "slug": "file-formats-and-storage",
+  "summary": "CSV, JSON, Avro, Parquet, and ORC each make different bets about write pattern, splittability, and schema — and picking wrong is the first place a pipeline gets slow and expensive.",
+  "level": "intermediate",
+  "slideCount": 10,
+  "estReadMinutes": 9,
+  "slides": [
+    {
+      "id": "file-formats-and-storage-s01",
+      "order": 1,
+      "sectionTitle": "Snapshot",
+      "subTitle": null,
+      "type": "overview",
+      "markdown": "Before you tune a single warehouse setting, the file format you land data in already decided how fast, cheap, and parallel your reads can be. A 500GB dataset stored as gzip-compressed CSV and the same dataset stored as Parquet can differ by 10-100x in query cost and time, with zero code changes anywhere else.\n\nThis topic covers the five formats you'll actually see — CSV, JSON, Avro, Parquet, ORC — and the handful of properties (row vs column orientation, splittability, schema-carrying) that explain every practical difference between them.\n\nFormat choice is the cheapest, highest-leverage lever in a pipeline, and it's usually decided once, early, and lived with for years.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 50,
+      "mcqIds": []
+    },
+    {
+      "id": "file-formats-and-storage-s02",
+      "order": 2,
+      "sectionTitle": "Row-oriented vs column-oriented, at a glance",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "This is the same distinction from [OLTP vs OLAP](oltp-vs-olap) applied to files instead of database engines. A **row-oriented** file (CSV, JSON, Avro) stores each record's fields together; a **column-oriented** file (Parquet, ORC) stores each field's values together across all records.\n\nRow orientation is efficient for writing a stream of complete records one at a time, and for reading back a full record. Column orientation is efficient for reading a handful of columns across millions of records — an analytical query's typical shape — because it never has to touch the columns you didn't ask for.\n\nEvery other property in this topic — compression ratio, splittability, typical use case — follows from this one structural choice.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "file-formats-and-storage-s02-q1"
+      ]
+    },
+    {
+      "id": "file-formats-and-storage-s03",
+      "order": 3,
+      "sectionTitle": "CSV/JSON vs Avro vs Parquet vs ORC",
+      "subTitle": null,
+      "type": "compare",
+      "markdown": "| | CSV | JSON | Avro | Parquet | ORC |\n|---|---|---|---|---|---|\n| **Orientation** | Row | Row | Row | Column | Column |\n| **Schema** | None (implicit) | None (implicit) | Carried, evolvable | Carried, evolvable | Carried, evolvable |\n| **Splittable when compressed** | Only if uncompressed or block-compressed | Same caveat | Yes | Yes | Yes |\n| **Best for** | Simple interchange, human-readable dumps | Nested/semi-structured interchange | Write-heavy streaming (Kafka payloads) | Analytical scans (warehouse/lake standard) | Analytical scans, deep Hive integration |\n\nThe practical read: CSV/JSON are for interchange and small data; Avro is the row-oriented format you pick when you need schema safety on a write-heavy path; Parquet is the default for anything landing in a lake or warehouse for analytics, with ORC a close, Hive-ecosystem-flavored alternative.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": true,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "file-formats-and-storage-s03-q1"
+      ]
+    },
+    {
+      "id": "file-formats-and-storage-s04",
+      "order": 4,
+      "sectionTitle": "Splittability",
+      "subTitle": "Why a single gzip CSV breaks parallel reads",
+      "type": "concept",
+      "markdown": "**Splittable** means a distributed engine (Spark, a warehouse's query engine) can divide a file into independent chunks and process them in parallel across many workers, without needing the whole file first.\n\nHere's the trap: gzip compression is not splittable — you cannot start decompressing from the middle of a gzip stream, because each byte depends on everything decoded before it. A single 50GB gzip-compressed CSV file forces one worker to read and decompress the entire thing sequentially, while nine other workers in your cluster sit idle.\n\nParquet and ORC avoid this because they're internally divided into independent blocks (**row groups** in Parquet), each compressed separately — a worker can jump straight to its assigned block and decompress just that piece. This is one of the biggest, most invisible performance cliffs in data engineering: the fix (repartition into many smaller files, or use a splittable codec like Snappy) is trivial once you know to look for it.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 62,
+      "mcqIds": [
+        "file-formats-and-storage-s04-q1"
+      ]
+    },
+    {
+      "id": "file-formats-and-storage-s05",
+      "order": 5,
+      "sectionTitle": "Schema-carrying vs schema-less formats",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "CSV and JSON carry **no schema** — a reader has to infer types (\"is this column an int or a string?\") or be told out-of-band. That's fine for a one-off export a human reads, and fragile for a pipeline: a source that starts sending `\"42\"` as a string instead of `42` as an int can silently change downstream behavior with no error raised.\n\nAvro, Parquet, and ORC all embed the schema **in the file itself** — every reader knows the exact column names and types without guessing, and a mismatch between what a job expects and what a file actually contains fails loudly instead of silently coercing types.\n\nThis is why schema-carrying formats are the default for anything beyond ad hoc interchange: the schema becomes an enforceable contract, not tribal knowledge living in a README.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 58,
+      "mcqIds": []
+    },
+    {
+      "id": "file-formats-and-storage-s06",
+      "order": 6,
+      "sectionTitle": "Picking JSON for a 500GB analytical dataset",
+      "subTitle": null,
+      "type": "pitfall",
+      "markdown": "\"JSON is easy to read, let's just use it for the warehouse export\" is a decision that looks harmless at 1GB and becomes an incident at 500GB.\n\nWhat actually happens: JSON is row-oriented and verbose (every record repeats every field name), so it's larger on disk than an equivalent columnar format even before considering query cost. Then, because analytical queries typically want 2-3 columns out of 40, a row-oriented format forces the engine to parse and discard 37 columns' worth of text per record just to get the 3 it needs — and JSON parsing itself is CPU-heavy compared to reading pre-typed binary columns.\n\nThe result: queries that would run in seconds on Parquet take minutes on JSON, and the compute bill scales with data volume, not need. \"Easy to read\" is a property that matters for a config file a human opens occasionally — it is close to irrelevant for a dataset only machines will ever query.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "file-formats-and-storage-s06-q1"
+      ]
+    },
+    {
+      "id": "file-formats-and-storage-s07",
+      "order": 7,
+      "sectionTitle": "When row-oriented Avro beats columnar",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Columnar isn't universally better — it's better for the analytical access pattern. Avro deliberately stays row-oriented because it targets a different one: **write-heavy streams where a consumer reads whole records, one at a time.**\n\nConcrete case: Kafka messages. A producer writes one complete event per message, and a consumer reads one complete event per message — nobody is scanning \"just the `user_id` column across a million messages\" at write time. Row orientation matches that shape, and Avro adds a compact binary encoding plus schema evolution support, which is exactly what a high-throughput event pipeline needs.\n\nIf you tried to use Parquet for this — writing one row at a time to a columnar file — you'd get poor compression (columnar formats need many rows batched together to compress well) and constant small-file overhead. Columnar formats want to be written in large batches; Avro is fine written one record at a time.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 60,
+      "mcqIds": [
+        "file-formats-and-storage-s07-q1"
+      ]
+    },
+    {
+      "id": "file-formats-and-storage-s08",
+      "order": 8,
+      "sectionTitle": "Inspecting a Parquet file's footer",
+      "subTitle": null,
+      "type": "code",
+      "markdown": "Parquet stores its schema, row count, and compression codec in a **footer** at the end of the file — a reader can get all of this without scanning the actual data.\n\n```bash\n# using parquet-tools (or pyarrow / duckdb equivalently)\nparquet-tools meta orders.parquet\n\n# typical output includes:\n# creator: parquet-mr version 1.12.0\n# extra: org.apache.spark.sql.parquet.row.metadata = {...schema...}\n# row group 0:  RC:250000  TS:18432104  compressed: SNAPPY\n```\n\n`RC` is row count, `TS` is the uncompressed size of that row group. Checking this before touching the data answers three questions instantly: is the schema what I expect, is the codec splittable (Snappy: yes; unsupported gzip variants: check), and roughly how many row groups exist — which tells you the realistic parallelism a query against this file can achieve.",
+      "assets": [],
+      "hasCode": true,
+      "hasTable": false,
+      "estReadSeconds": 55,
+      "mcqIds": []
+    },
+    {
+      "id": "file-formats-and-storage-s09",
+      "order": 9,
+      "sectionTitle": "Format is the first lever",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "Before touching warehouse-level tuning — clustering keys, materialized views, query rewrites — check the file format underneath. A warehouse's own storage is usually columnar internally regardless of what you loaded, but for a **lake** (files you query directly with Spark, Athena, or a query engine over S3), the file format you chose *is* the storage layer, with no engine to paper over a bad choice.\n\nA badly-chosen format compounds every tuning effort downstream: no clustering strategy fixes a non-splittable gzip CSV, and no query rewrite makes JSON parsing free. Get the format right first, because it's the one decision you can't easily undo once petabytes are already written in it.\n\nThe engine-internals version of this — how columnar storage actually executes a scan fast — is covered in [Columnar Storage & OLAP](columnar-olap) in the Databases warehousing group.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 56,
+      "mcqIds": []
+    },
+    {
+      "id": "file-formats-and-storage-s10",
+      "order": 10,
+      "sectionTitle": "A decision shortcut",
+      "subTitle": null,
+      "type": "concept",
+      "markdown": "In practice the choice usually collapses to a short checklist:\n\n- **Human-readable one-off export, small volume** → CSV or JSON, no regrets.\n- **High-throughput event stream, whole-record reads, need schema evolution** → Avro.\n- **Anything landing in a lake or warehouse that analysts will query** → Parquet, unless you're deep in a Hive/Hadoop-native stack, where ORC is the closer fit.\n\nWhat almost never wins past a modest scale: uncompressed or gzip-compressed CSV/JSON as the resting format for anything analytical. It's the default because it's what a source system exports easiest, not because it's a good choice for the next stage — converting on ingestion, before it lands, is nearly always worth the extra step.",
+      "assets": [],
+      "hasCode": false,
+      "hasTable": false,
+      "estReadSeconds": 54,
+      "mcqIds": [
+        "file-formats-and-storage-s10-q1"
+      ]
+    }
+  ]
+}

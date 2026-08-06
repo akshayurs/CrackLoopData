@@ -1,0 +1,37 @@
+{
+  "topicId": "streaming-fundamentals",
+  "interviewQuestions": [
+    {
+      "id": "streaming-fundamentals-iq1",
+      "question": "What's the fundamental difference between batch and stream processing, beyond 'batch runs on a schedule and streaming runs continuously'?",
+      "answerMarkdown": "The real difference is whether the input has a known ending. Batch processes a **bounded** dataset — you can scan it, sort it, and define 'done' as 'reached the last record.' Streaming processes an **unbounded** sequence that never has a last record, so the whole computation model has to change.\n\nThat forces three consequences I'd walk through:\n\n- **You can't wait for 'all the data.'** Any aggregate you compute is a snapshot of a number that keeps changing, so you need windowing to say which subset of events a given answer covers.\n- **'Done' becomes a policy decision, not a fact.** A batch job is done when it reaches EOF. A streaming window is done when you decide you've waited long enough for late data — that's a watermark, and it's a trade-off, not a certainty.\n- **State becomes mandatory infrastructure.** Aggregations and joins need to remember information across events that arrive minutes or hours apart, and that state has to survive a crash.\n\nConcretely: a batch job computing yesterday's revenue reads a closed partition and emits one number. A streaming job computing today's revenue-so-far has to keep updating that number, decide when an hour's bucket is 'final enough' to report, and recover its running total if the process restarts mid-day.\n\n**Testing:** whether you understand streaming as a different computational model, or just a faster batch job.",
+      "mostAsked": true,
+      "level": "beginner",
+      "subTitle": "Fundamentals"
+    },
+    {
+      "id": "streaming-fundamentals-iq2",
+      "question": "Why would you choose event time over processing time for a streaming aggregation, and when is processing time actually the right choice?",
+      "answerMarkdown": "I'd default to **event time** whenever the result needs to answer a business question, and use processing time only for purely operational metrics.\n\nThe reason: processing time is an artifact of your pipeline's mechanics — how fast a consumer happens to be running right now — not a property of the data. If a mobile client buffers events offline and syncs three hours later, windowing on processing time puts a 2pm purchase into the 5pm bucket. Your revenue-by-hour report is now wrong, and it's wrong in a way that's invisible unless you know to check for it.\n\nEvent time fixes that by windowing on when the purchase actually happened, which means the pipeline has to reason about **out-of-order and late-arriving data** — that's the whole reason watermarks exist as a concept.\n\nWhere processing time is actually correct: monitoring the pipeline itself. 'Events processed per second right now' or 'consumer lag over the last minute' are questions about the system's current behavior, not about the business events — using event time there would be actively wrong, since a burst of late data shouldn't make your ops dashboard think last week is happening again.\n\n**Testing:** whether you can articulate the trade-off rather than reciting 'always use event time' as a rule.",
+      "mostAsked": false,
+      "level": "intermediate",
+      "subTitle": "Trade-offs"
+    },
+    {
+      "id": "streaming-fundamentals-iq3",
+      "question": "Your streaming pipeline is at-least-once end to end. Where would you expect duplicate results to show up, and how would you design around it?",
+      "answerMarkdown": "At-least-once means the delivery layer retries until it gets an ack, so duplicates show up anywhere a retry can happen without the receiver being able to tell it's a repeat: a producer resending after a lost ack, a consumer reprocessing a batch after a crash before it committed its offset, or a downstream write retrying after a timeout where the first write actually succeeded.\n\nThe design move is to push idempotency to the boundary rather than trying to make delivery itself exactly-once, which is effectively impossible across a network. Concretely:\n\n- **Give every event a stable unique key** (an event ID, or a natural key like order ID) so a dedup step or an upsert can recognize a repeat.\n- **Make the sink write idempotent** — an upsert keyed on that ID, or a database unique constraint that turns a duplicate insert into a no-op, rather than a blind append.\n- **For aggregates, make the operation itself idempotent** where possible — 'set this key's value to X' tolerates a retry better than 'increment this counter by 1,' which double-counts on redelivery.\n\nI'd also be explicit with stakeholders about the seam: 'exactly-once' in the report they see is actually 'at-least-once delivery plus idempotent writes,' and that distinction matters when something downstream isn't idempotent and starts double-counting.\n\n**Testing:** whether you can turn a delivery guarantee into a concrete data-modeling decision, not just define the term.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Debugging"
+    },
+    {
+      "id": "streaming-fundamentals-iq4",
+      "question": "How would you decide the latency budget for a new streaming pipeline, and what changes in your design once you know it?",
+      "answerMarkdown": "I'd start from the consumer of the result, not the technology. Ask: what does someone actually do with this number, and how stale can it be before that action is wrong or too late? A fraud check that blocks a payment needs an answer before the checkout page times out — tens to low hundreds of milliseconds. A 'trending now' feed can be right thirty seconds late and nobody notices. A warehouse sync feeding next-morning reports can be minutes late and it's still 'streaming' relative to an overnight batch job.\n\nOnce that number is pinned down, it drives real design choices, not just vibes:\n\n- **Batching and buffering** — a tight budget forces small batches or per-event processing; a loose one lets you batch aggressively for throughput and cost.\n- **Windowing and lateness tolerance** — a 100ms budget can't wait around for stragglers; a multi-minute budget can afford generous allowed-lateness and catch more late data correctly.\n- **Guarantee strength** — exactly-once processing has real throughput and latency overhead (covered later in this group); a tight budget might force you toward at-least-once plus idempotent sinks instead.\n\nSkipping this step is how teams end up reaching for the lowest-latency engine available for a job a five-minute batch would have solved more simply, and cheaper.\n\n**Testing:** whether you frame streaming architecture as a business SLA decision, or immediately jump to naming a tool.",
+      "mostAsked": false,
+      "level": "advanced",
+      "subTitle": "Design judgment"
+    }
+  ]
+}
