@@ -84,19 +84,25 @@ theme these (the app's `cached_svg.dart` inlines `var()` since flutter_svg can't
   understand the v3 tree.
 - `CONSUMING.md` / `AUTHORING.md` still describe the v2 layout. `CURRICULUM.md` is current (v3).
 - The `data/` tree = legacy v2, intentionally **held back** (in-flight image-path fix branch). Don't commit it.
-- **CLOSED (2026-08-06):** the interview-question debt (every topic now has ≥3 IQs), the deferred
-  `<<< Image:` diagram backlog (0 placeholders, 1234 SVGs), and path-style cross-links (0 remain).
-- **Still owed — 308 topics below the 9-slide floor**: `computer-architecture` 77, `system-design`
-  120 (all in *concept* groups, not `interview-*`), `ai-ml` 55, `cloud-devops-sre` 47. When
-  remediating, **append slide ids — never renumber**: `mcq.json` references slides by `slideId`,
-  so renumbering silently orphans every MCQ in the topic.
+- **CLOSED (2026-08-06):** interview-question debt (every topic ≥3 IQs), the deferred
+  `<<< Image:` diagram backlog (0 placeholders, 1238 SVGs), path-style cross-links, the
+  slide-depth debt (0 topics under 9 slides, was 308), and the glossary's 51 dangling v2 refs.
+- **Slide ids are POSITIONAL** — the validator requires slide *i* to be `<slug>-s<NN>` with
+  NN = its 1-based position. So remediation may only **append at the end**; inserting mid-array
+  forces a renumber, and `mcq.json` references slides by `slideId`, so that silently repoints
+  every MCQ in the topic at the wrong slide. This is the single easiest way to corrupt content.
 - **3 duplicate topic slugs** (validator WARNs): `oltp-vs-olap`, `on-call-and-incident-response`,
   `handling-being-stuck`. Slugs double as ids *and* cross-link targets, so links to them are
   ambiguous — this already produced one topic linking to itself. Undecided: dedupe vs rename.
 - Authoring defects worth watching: **MCQ answer-key drift** — "rebalance correctIndex" means
   physically reordering the option text and re-deriving the index, never editing the integer
   alone; verify by printing `options[correctIndex]`, since re-reading your own explanation
-  re-derives the answer you *intended* and misses the bug.
+  re-derives the answer you *intended* and misses the bug. Three agents hit this in one wave.
+- **MCQ audit status:** 923 of 6645 MCQs have been checked against independently-derived answers
+  (9 wrong keys fixed). The other ~5700 are unchecked. Method note for the next pass: a lexical
+  "explanation matches a different option" heuristic was **100% false-positive over 625 flags** —
+  explanations legitimately argue why the wrong options are wrong. Real defects were all in
+  **computational** questions nobody re-derived. Audit the arithmetic, not the wording.
 
 ## App linkage
 

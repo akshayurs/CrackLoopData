@@ -14,9 +14,13 @@ PENDING lines are deliberately-deferred work — `<<< Image: prompt >>>` diagram
 placeholders awaiting an SVG. They never fail a run, not even under --strict.
 
 Char bands are advisory only — length never fails a run. They're calibrated against the
-278 already-authored topics rather than the v2 numbers in AUTHORING.md (which the v3
-corpus already exceeds by design), and exist to surface drift, not to cap authors.
-Use --strict when you do want length drift to fail.
+measured length distribution of the full 1331-topic v3 corpus (2026-08), not the v2 numbers
+in AUTHORING.md (which the v3 corpus already exceeds by design) and not the earlier
+278-topic calibration (which the wave-2 depth bar made the corpus outgrow — nearly every
+topic was tripping a band). Bands now flag roughly the top/bottom decile per category, not
+the norm. The interview answerMarkdown band is the one exception: it tracks the explicit
+900-1800 char contract in the authoring spec rather than the raw distribution. Use
+--strict when you do want length drift to fail.
 """
 import collections
 import json
@@ -39,15 +43,23 @@ TOPIC_KEYS = ["id", "title", "area", "group", "order", "slug", "summary",
 SLIDE_KEYS = ["id", "order", "sectionTitle", "subTitle", "type", "markdown",
               "assets", "hasCode", "hasTable", "estReadSeconds", "mcqIds"]
 
-#                    min  target  "very long" — all three are advisory (warnings only)
-BANDS = {"overview": (120,  600,  1000),
-         "concept":  (120,  700,  1100),
-         "compare":  (120,  800,  1200),
-         "pitfall":  (120,  750,  1100),
-         "diagram":  ( 80,  600,  1000),
-         "code":     ( 80,  750,  1100)}
-ANSWER_BAND = (200, 1200, 2200)          # interview.json answerMarkdown
-SUMMARY_BAND = (60, 260, 400)
+# min / target / "very long" — all three are advisory (warnings only). Set from the
+# measured corpus distribution (see module docstring): min ~ p10, target ~ p90, very-long
+# a bit above p99, so each band flags roughly its top/bottom decile rather than the norm.
+BANDS = {"overview": (400, 800,  1050),
+         "concept":  (480, 1050, 1400),
+         "compare":  (520, 1050, 1400),
+         "pitfall":  (520, 1100, 1450),
+         "diagram":  (300, 800,  1200),
+         "code":     (480, 1050, 1550)}
+# interview.json answerMarkdown — deliberately NOT distribution-calibrated like BANDS
+# above. The authoring spec (prompts/authoring-agent-v3-area.md) holds every agent to an
+# explicit 900-1800 char contract, so the band mirrors that contract directly: min=900 and
+# target=1800 are the spec's own bounds (anything past 1800 is "over target" by the spec's
+# own rule, not by corpus norms), and 2200 (just above the corpus's measured p99) is the
+# hard ceiling for genuinely-too-long outliers.
+ANSWER_BAND = (900, 1800, 2200)
+SUMMARY_BAND = (110, 210, 300)
 SANE_SLIDES = (5, 24)                     # warn outside this
 
 IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")

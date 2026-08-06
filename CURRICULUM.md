@@ -122,27 +122,29 @@ Measured from `content/`, `briefs/expanded/` and `tools/validate_v3.py`, not fro
 Every planned Area is authored. The curriculum backlog is closed; what remains is depth
 remediation inside already-authored Areas, not missing content.
 
-| Area | Groups | Topics | Slides | MCQs | IQs | slides/topic | IQ/topic | IQ answer chars | Topics <9 slides |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `web-frontend` | 8 | 65 | 742 | 372 | 251 | 11.4 | 3.9 | 1480 | 0 |
-| `engineering-craft` | 9 | 67 | 763 | 393 | 269 | 11.4 | 4.0 | 1436 | 0 |
-| `databases` | 11 | 43 | 483 | 251 | 171 | 11.2 | 4.0 | 1231 | 0 |
-| `languages-compilers` | 7 | 53 | 575 | 292 | 213 | 10.8 | 4.0 | 1580 | 0 |
-| `data-structures-algorithms` | 18 | 134 | 1444 | 716 | 505 | 10.8 | 3.8 | 1457 | 2 |
-| `operating-systems` | 10 | 62 | 668 | 339 | 219 | 10.8 | 3.5 | 1334 | 0 |
-| `data-engineering` | 7 | 48 | 502 | 264 | 192 | 10.5 | 4.0 | 1445 | 0 |
-| `interview-prep` | 4 | 29 | 303 | 153 | 114 | 10.4 | 3.9 | 1274 | 0 |
-| `security` | 7 | 42 | 438 | 249 | 172 | 10.4 | 4.1 | 1461 | 0 |
-| `system-design` | 54 | 473 | 4858 | 1992 | 1436 | 10.3 | 3.0 | 1000 | 120 |
-| `mobile` | 5 | 37 | 369 | 218 | 148 | 10.0 | 4.0 | 1611 | 0 |
-| `computer-networks` | 11 | 40 | 387 | 143 | 128 | 9.7 | 3.2 | 1920 | 7 |
-| `cs-theory-math` | 5 | 28 | 258 | 135 | 112 | 9.2 | 4.0 | 1563 | 0 |
-| `cloud-devops-sre` | 10 | 61 | 461 | 227 | 184 | 7.6 | 3.0 | 1646 | 47 |
-| `ai-ml` | 12 | 68 | 495 | 275 | 208 | 7.3 | 3.1 | 1700 | 55 |
-| `computer-architecture` | 12 | 81 | 544 | 325 | 259 | 6.7 | 3.2 | 1536 | 77 |
-| **Total** | **190** | **1331** | **13290** | **6344** | **4581** | 10.0 | 3.4 | 1344 | **308** |
+| Area | Groups | Topics | Slides | MCQs | IQs | slides/topic | IQ/topic | IQ answer chars |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `web-frontend` | 8 | 65 | 742 | 372 | 251 | 11.4 | 3.9 | 1480 |
+| `engineering-craft` | 9 | 67 | 763 | 393 | 269 | 11.4 | 4.0 | 1436 |
+| `databases` | 11 | 43 | 483 | 251 | 171 | 11.2 | 4.0 | 1231 |
+| `languages-compilers` | 7 | 53 | 575 | 292 | 213 | 10.8 | 4.0 | 1580 |
+| `data-structures-algorithms` | 18 | 134 | 1446 | 718 | 505 | 10.8 | 3.8 | 1457 |
+| `operating-systems` | 10 | 62 | 668 | 339 | 219 | 10.8 | 3.5 | 1334 |
+| `system-design` | 54 | 473 | 5015 | 2065 | 1436 | 10.6 | 3.0 | 1000 |
+| `data-engineering` | 7 | 48 | 502 | 264 | 192 | 10.5 | 4.0 | 1445 |
+| `interview-prep` | 4 | 29 | 303 | 153 | 114 | 10.4 | 3.9 | 1274 |
+| `security` | 7 | 42 | 438 | 249 | 172 | 10.4 | 4.1 | 1461 |
+| `mobile` | 5 | 37 | 369 | 218 | 148 | 10.0 | 4.0 | 1611 |
+| `computer-networks` | 11 | 40 | 397 | 149 | 128 | 9.9 | 3.2 | 1920 |
+| `cs-theory-math` | 5 | 28 | 258 | 135 | 112 | 9.2 | 4.0 | 1563 |
+| `ai-ml` | 12 | 68 | 622 | 354 | 208 | 9.1 | 3.1 | 1700 |
+| `cloud-devops-sre` | 10 | 61 | 555 | 292 | 184 | 9.1 | 3.0 | 1646 |
+| `computer-architecture` | 12 | 81 | 731 | 401 | 259 | 9.0 | 3.2 | 1536 |
+| **Total** | **190** | **1331** | **13867** | **6645** | **4581** | 10.4 | 3.4 | 1344 |
 
-Bar = wave-2 spec: ≥9 slides, 4–6 MCQs, 3–5 IQs at 900–1800 chars.
+Bar = wave-2 spec: ≥9 slides, 4–6 MCQs, 3–5 IQs at 900–1800 chars. **Every Topic now meets the
+slide floor and the interview-question floor** — the "Topics <9 slides" column is gone because it
+is zero everywhere.
 
 ### 7.2 Pending
 
@@ -154,20 +156,23 @@ None. All 16 briefs in `briefs/expanded/` are fully authored.
 - **The interview-question bar is met everywhere.** Every Topic in the repo now ships ≥3
   interview questions (4581 total, 3.4/Topic average). The "~230 Topics need an IQ pass"
   debt from the 2026-07-30 audit is closed.
-- **Diagram debt is fully closed.** 0 `<<< Image:` placeholders remain and all **1234 SVGs**
+- **The slide floor is met everywhere.** 0 Topics below 9 slides (was 308); 13867 slides,
+  10.4/Topic. The four Areas that carried the debt — `computer-architecture`, `system-design`,
+  `ai-ml`, `cloud-devops-sre` — all now sit at 9.0–10.6 slides/Topic.
+- **Diagram debt is fully closed.** 0 `<<< Image:` placeholders remain and all **1238 SVGs**
   parse as well-formed XML with `--dg-*` theming. This includes the 7 `system-design/uml`
   slides the last audit flagged as unmarked, and the 106→223 placeholder backlog.
 - **Cross-links resolve.** 0 dangling bare-slug links and 0 path-style `](../…)` links repo-wide.
+- **Glossary references resolve.** 372 of 380 terms carry `relatedTopicIds`, 0 dangling — the
+  51 stale v2 slugs left by the schema migration are remapped. The 8 unlinked terms (Count-Min
+  sketch, Cuckoo filter, RUM conjecture, varint, zero-copy, …) are genuine corpus gaps.
+- **MCQ answer keys audited.** 923 prioritized questions checked against independently derived
+  answers; 9 defects found and fixed (see §7.4.5 for what that says about method).
 - **`index.json` / `bundle.json.gz` are current** — `regen_v3.py --check` exits 0 on a clean tree.
 
 ### 7.4 What is incorrect / owed
 
-1. **Slide-count debt — 308 Topics below the 9-slide floor**, concentrated in four Areas:
-   `computer-architecture` 77/81, `system-design` 120/473, `ai-ml` 55/68, `cloud-devops-sre` 47/61
-   (plus `computer-networks` 7, `data-structures-algorithms` 2). This is the single largest
-   remaining quality gap. Remediation must **append** slide ids, never renumber — `mcq.json`
-   references slides by `slideId` and renumbering silently orphans every MCQ in the Topic.
-2. **Three duplicate Topic slugs**, surfaced as WARNs by `validate_v3.py`. Slugs double as
+1. **Three duplicate Topic slugs**, surfaced as WARNs by `validate_v3.py`. Slugs double as
    Topic ids and as cross-link targets, so a collision makes every link to that slug ambiguous
    and makes the two Topics share an id:
    - `oltp-vs-olap` — `databases/data-warehousing` + `data-engineering/de-fundamentals`
@@ -177,14 +182,23 @@ None. All 16 briefs in `briefs/expanded/` are fully authored.
    Each pair is genuine near-duplicate content authored by different waves. This already
    produced one broken link (a Topic linking to itself). Decide per pair: delete one and
    redirect, or rename one id — renaming is app-visible and breaks saved progress/deeplinks.
-3. **`system-design` interview questions hug the floor** — 456 of its 473 Topics sit at
+2. **`system-design` interview questions hug the floor** — 456 of its 473 Topics sit at
    exactly 3 IQs, and its 1000-char answer average is the lowest in the repo (vs 1344 overall).
    It meets the bar; it is not at the depth of `databases` or `engineering-craft`.
-4. **`computer-networks` IQ answers now run long** — 1920-char average, above the 1800 ceiling,
+3. **`computer-networks` IQ answers now run long** — 1920-char average, above the 1800 ceiling,
    after its normalization pass. Trim rather than extend.
-5. **9317 advisory WARNs**, still dominated by prose over the char band. The bands in
-   `validate_v3.py` remain calibrated to a pre-wave-2 corpus and should be re-tuned to the
-   current bar so the signal is usable instead of ignored.
+4. **MCQ counts below the 4–6 band** in a tail of Topics. The slide-depth pass topped many up,
+   but it was scoped to slides, so some Topics still sit at 3 MCQs. Advisory, not an error.
+5. **What the answer-key audit taught (method note, so the next one is cheaper).** 923 Topics'
+   worth of prioritized MCQs were checked; 9 were genuinely wrong. All 625 flags raised by a
+   *lexical* heuristic — "the explanation's wording matches a different option than the key" —
+   were false positives, because explanations legitimately spend their words saying why the
+   WRONG options are wrong. Every real defect came from a **computational** question whose
+   arithmetic nobody re-derived, or from an agent reading the file for an unrelated reason.
+   One question's correct answer was not among its options at all (a FIFO page-fault count
+   whose own explanation listed seven faults and then concluded "6").
+   **Next audit: skip lexical scanning entirely; re-derive every numeric/traced question.**
+   The remaining ~5700 non-flagged MCQs have still never been checked.
 
 ### 7.5 Focus balance — over- and under-focused
 
@@ -203,23 +217,26 @@ Recommendation unchanged: decide explicitly whether the `interview-*` Groups are
 Area — e.g. `system-design-interview`, returning `system-design` to ~271 Topics/39 Groups — or
 (b) folded back into the concept Topics' `interview.json`.
 
-**One correction to the last audit:** deepening `system-design` is *not* blocked by that decision.
-All 120 of its under-floor Topics are in the **concept** Groups (api-design, microservices,
-storage-scale, observability, sd-playbook); the 202 `interview-*` Topics are already at or above
-the 9-slide floor. The two workstreams are independent.
+**A correction the last audit got wrong:** deepening `system-design` was never blocked by that
+decision. All 120 of its under-floor Topics were in the **concept** Groups (api-design,
+microservices, storage-scale, observability, sd-playbook); the 202 `interview-*` Topics were
+already at or above the 9-slide floor. The depth work has since been done on that basis, so the
+placement decision remains open with nothing waiting on it.
 
 **Correctly focused:** `databases`, `operating-systems`, `engineering-craft` and `web-frontend` —
 right size, at the depth bar, brief-aligned. They remain the reference model.
 
 ### 7.6 Roadmap
 
-1. **Slide-depth normalization** over the 308 under-floor Topics (§7.4.1), heaviest first:
-   `computer-architecture` (77), `system-design` concept Groups (120), `ai-ml` (55),
-   `cloud-devops-sre` (47). Append slide ids; rebalance MCQs to stay in the 4–6 band.
-2. **Resolve the three slug collisions** (§7.4.2).
-3. **Decide the `interview-*` placement** (§7.5).
-4. **Re-tune validator char bands** to the wave-2 bar; trim `computer-networks` IQ answers.
-5. Optionally deepen `system-design` interview questions beyond the 3-question floor (§7.4.3).
+The depth backlog is closed. What remains is judgement calls and correctness, not volume.
+
+1. **Resolve the three slug collisions** (§7.4.1) — needs a decision, then minutes of work.
+2. **Decide the `interview-*` placement** (§7.5) — the largest open architectural question.
+3. **Finish the MCQ answer-key audit** (§7.4.5): ~5700 questions unchecked. Re-derive every
+   computational one; do not repeat the lexical scan.
+4. Trim `computer-networks` IQ answers to the 1800 ceiling; top up the tail of Topics still at
+   3 MCQs (§7.4.3, §7.4.4).
+5. Optionally deepen `system-design` interview questions beyond the 3-question floor (§7.4.2).
 
 ---
 
