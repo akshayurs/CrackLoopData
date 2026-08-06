@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTENT = os.path.join(ROOT, "content")
@@ -86,6 +87,25 @@ class Report:
         """Deliberately-deferred work (e.g. an SVG we haven't spent tokens on yet).
         Never fails a run, not even under --strict — it's a to-do, not a defect."""
         self.pendings.append(f"{where}: {msg}")
+
+    def check_svg(self, where, label, path):
+        """A malformed SVG passes every content check but silently fails to render
+        in the app — most often a bare '&' that should be '&amp;'. We parse with the
+        stdlib (this repo is dependency-free), so first reject any DTD: external
+        entities and entity-expansion bombs both need one, and no diagram we author
+        has any reason to declare one."""
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(4096)
+            if b"<!DOCTYPE" in head or b"<!ENTITY" in head:
+                self.err(where, f"image '{label}' declares a DTD/entity — "
+                                "not allowed in authored SVGs")
+                return
+            ET.parse(path)
+        except ET.ParseError as exc:
+            self.err(where, f"image '{label}' is not well-formed XML — {exc}")
+        except OSError as exc:
+            self.err(where, f"image '{label}' could not be read — {exc}")
 
 
 def load(path, rep, where):
@@ -230,6 +250,8 @@ def validate_topic(tdir, all_slugs, rep):
                 rep.err(w, f"image path '{p}' must be flat 'assets/<file>'")
             elif not os.path.exists(os.path.join(tdir, p)):
                 rep.err(w, f"image '{p}' referenced but file is missing")
+            elif p.endswith(".svg"):
+                rep.check_svg(w, p, os.path.join(tdir, p))
         for p in embedded - listed:
             rep.err(w, f"image '{p}' embedded in markdown but not listed in assets[]")
         for p in listed - embedded:
@@ -418,7 +440,21 @@ def main():
     all_slugs = {os.path.basename(d) for d in every}
     targets = topic_dirs(args[0]) if args else every
 
+    # Topic slugs double as topic ids and as cross-link targets, so a slug used by two
+    # topics makes every '[...](slug)' link to it ambiguous — it silently resolves to
+    # whichever the reader isn't on. Always computed over the whole corpus, never just
+    # the requested scope, since collisions are cross-area by nature.
+    by_slug = collections.defaultdict(list)
+    for d in every:
+        by_slug[os.path.basename(d)].append(os.path.relpath(d, CONTENT))
+
     rep = Report()
+    for slug, where in sorted(by_slug.items()):
+        if len(where) > 1:
+            rep.warn("content", f"slug '{slug}' is used by {len(where)} topics "
+                                f"({', '.join(where)}) — cross-links to it are "
+                                "ambiguous and the ids collide")
+
     slides = mcqs = iqs = 0
     for tdir in targets:
         s, m, i = validate_topic(tdir, all_slugs, rep)

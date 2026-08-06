@@ -19,13 +19,10 @@ content/<area>/<group>/<topic>/
 - **slides[]** = renamed v2 `blocks[]`. **mcqs[]** = renamed `blockMcqs[]` (key `slideId`, not `blockId`).
 - Hierarchy: **area → group → topic → slides/mcqs/interviewQuestions**.
 
-**Authored so far (8 areas, 856 topics, 125 groups):** `ai-ml`, `cloud-devops-sre`,
-`computer-architecture`, `computer-networks`, `cs-theory-math`, `system-design` (473),
-`databases` (43), `operating-systems` (62) — 8112 slides, 3653 MCQs, 2222 interview Qs.
-Source of truth for what to write: `briefs/expanded/<area>.md` (16 live briefs; 8 authored).
-**Still unauthored:** `data-structures-algorithms` (134), `engineering-craft` (67),
-`web-frontend` (65), `languages-compilers` (53), `data-engineering` (48), `security` (42),
-`mobile` (37), `interview-prep` (29).
+**Authored: ALL 16 areas, 1331 topics, 190 groups** — 13290 slides, 6344 MCQs, 4581 interview
+questions, 1234 SVGs. The curriculum backlog is closed; nothing is unauthored. Source of truth
+for what each area contains: `briefs/expanded/<area>.md` (16 live briefs, all authored).
+Per-area figures and the outstanding quality debt live in [CURRICULUM.md §7](../CURRICULUM.md).
 
 **Wave 2 (2026-07-30) raised the depth bar** — `databases` + `operating-systems` were authored to
 `prompts/authoring-agent-v3-area.md` (area-agnostic; supersedes the system-design-only
@@ -81,20 +78,25 @@ theme these (the app's `cached_svg.dart` inlines `var()` since flutter_svg can't
 
 - `tools/validate_v3.py` **exists and is the gate** (`python3 tools/validate_v3.py [<area>[/<group>]]`,
   0 errors required; char-band lines are advisory WARNs and run high by design since the wave-2 depth
-  bar). `tools/validate_content.py` and `tools/regen_index_bundle.py` are **v2** — they do NOT
+  bar). It also parses every referenced SVG for XML well-formedness — a bare `&` renders fine in a
+  browser preview but silently fails in the app — and WARNs on duplicate topic slugs.
+  `tools/validate_content.py` and `tools/regen_index_bundle.py` are **v2** — they do NOT
   understand the v3 tree.
-- `CONSUMING.md` / `AUTHORING.md` / `CURRICULUM.md` still describe v2 layout.
+- `CONSUMING.md` / `AUTHORING.md` still describe the v2 layout. `CURRICULUM.md` is current (v3).
 - The `data/` tree = legacy v2, intentionally **held back** (in-flight image-path fix branch). Don't commit it.
-- **Interview-Q inconsistency across the 5 pre-system-design areas** (density + answer length):
-  computer-architecture ~2–3/topic, cloud/theory ~1/topic, answers often <700 char. `databases`,
-  `operating-systems` and `system-design` are at the current bar. A normalization pass over the
-  older five is still owed.
-- **106 deferred diagrams** repo-wide are `<<< Image: … >>>` placeholder tokens, not SVGs
-  (`grep -rn '<<< Image:' content/`). Wave 2 added 65 (OS) + 41 (databases). All three consumers
-  strip them safely; `prompts/generate-pending-svgs.md` is the follow-up pass.
-- Two authoring defects wave-2 agents produced that need watching: **path-style cross-links**
-  (`](../group/topic)` instead of a bare slug — the validator's link regex silently skips them) and
-  **slides that restate an `(interview)` seed** (8 found and removed in memory/virtual-memory).
+- **CLOSED (2026-08-06):** the interview-question debt (every topic now has ≥3 IQs), the deferred
+  `<<< Image:` diagram backlog (0 placeholders, 1234 SVGs), and path-style cross-links (0 remain).
+- **Still owed — 308 topics below the 9-slide floor**: `computer-architecture` 77, `system-design`
+  120 (all in *concept* groups, not `interview-*`), `ai-ml` 55, `cloud-devops-sre` 47. When
+  remediating, **append slide ids — never renumber**: `mcq.json` references slides by `slideId`,
+  so renumbering silently orphans every MCQ in the topic.
+- **3 duplicate topic slugs** (validator WARNs): `oltp-vs-olap`, `on-call-and-incident-response`,
+  `handling-being-stuck`. Slugs double as ids *and* cross-link targets, so links to them are
+  ambiguous — this already produced one topic linking to itself. Undecided: dedupe vs rename.
+- Authoring defects worth watching: **MCQ answer-key drift** — "rebalance correctIndex" means
+  physically reordering the option text and re-deriving the index, never editing the integer
+  alone; verify by printing `options[correctIndex]`, since re-reading your own explanation
+  re-derives the answer you *intended* and misses the bug.
 
 ## App linkage
 

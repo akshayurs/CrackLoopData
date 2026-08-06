@@ -113,79 +113,113 @@ Rules:
 
 ---
 
-## 7. Current state — audit (2026-07-30)
+## 7. Current state — audit (2026-08-06)
 
-Measured from `content/` and `briefs/expanded/`, not from notes.
+Measured from `content/`, `briefs/expanded/` and `tools/validate_v3.py`, not from notes.
 
-### 7.1 Authored (8 of 16 Areas — 856 of 1331 planned Topics, 64%)
+### 7.1 Authored — 16 of 16 Areas, 1331 of 1331 planned Topics (100%)
 
-| Area | Groups | Topics | Slides | MCQs | IQs | slides/topic | IQ/topic | IQ answer chars | Depth bar |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|:--|
-| `databases` | 11 | 43 | 483 | 251 | 171 | 11.2 | 4.0 | 1244 | ✅ at bar |
-| `operating-systems` | 10 | 62 | 668 | 339 | 219 | 10.8 | 3.5 | 1340 | ✅ at bar |
-| `system-design` | 54 | 473 | 4835 | 1978 | 1360 | 10.2 | 2.9 | 981 | 🟡 near bar |
-| `computer-networks` | 11 | 40 | 387 | 143 | 89 | 9.7 | 2.2 | 683 | 🟡 thin IQs |
-| `cs-theory-math` | 5 | 28 | 239 | 115 | 28 | 8.5 | 1.0 | 1215 | ❌ IQ density |
-| `cloud-devops-sre` | 10 | 61 | 461 | 227 | 105 | 7.6 | 1.7 | 773 | ❌ below bar |
-| `ai-ml` | 12 | 68 | 495 | 275 | 80 | 7.3 | 1.2 | 1140 | ❌ IQ density |
-| `computer-architecture` | 12 | 81 | 544 | 325 | 170 | 6.7 | 2.1 | 795 | ❌ below bar |
-| **Total** | **125** | **856** | **8112** | **3653** | **2222** | 9.5 | 2.6 | — | |
+Every planned Area is authored. The curriculum backlog is closed; what remains is depth
+remediation inside already-authored Areas, not missing content.
+
+| Area | Groups | Topics | Slides | MCQs | IQs | slides/topic | IQ/topic | IQ answer chars | Topics <9 slides |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `web-frontend` | 8 | 65 | 742 | 372 | 251 | 11.4 | 3.9 | 1480 | 0 |
+| `engineering-craft` | 9 | 67 | 763 | 393 | 269 | 11.4 | 4.0 | 1436 | 0 |
+| `databases` | 11 | 43 | 483 | 251 | 171 | 11.2 | 4.0 | 1231 | 0 |
+| `languages-compilers` | 7 | 53 | 575 | 292 | 213 | 10.8 | 4.0 | 1580 | 0 |
+| `data-structures-algorithms` | 18 | 134 | 1444 | 716 | 505 | 10.8 | 3.8 | 1457 | 2 |
+| `operating-systems` | 10 | 62 | 668 | 339 | 219 | 10.8 | 3.5 | 1334 | 0 |
+| `data-engineering` | 7 | 48 | 502 | 264 | 192 | 10.5 | 4.0 | 1445 | 0 |
+| `interview-prep` | 4 | 29 | 303 | 153 | 114 | 10.4 | 3.9 | 1274 | 0 |
+| `security` | 7 | 42 | 438 | 249 | 172 | 10.4 | 4.1 | 1461 | 0 |
+| `system-design` | 54 | 473 | 4858 | 1992 | 1436 | 10.3 | 3.0 | 1000 | 120 |
+| `mobile` | 5 | 37 | 369 | 218 | 148 | 10.0 | 4.0 | 1611 | 0 |
+| `computer-networks` | 11 | 40 | 387 | 143 | 128 | 9.7 | 3.2 | 1920 | 7 |
+| `cs-theory-math` | 5 | 28 | 258 | 135 | 112 | 9.2 | 4.0 | 1563 | 0 |
+| `cloud-devops-sre` | 10 | 61 | 461 | 227 | 184 | 7.6 | 3.0 | 1646 | 47 |
+| `ai-ml` | 12 | 68 | 495 | 275 | 208 | 7.3 | 3.1 | 1700 | 55 |
+| `computer-architecture` | 12 | 81 | 544 | 325 | 259 | 6.7 | 3.2 | 1536 | 77 |
+| **Total** | **190** | **1331** | **13290** | **6344** | **4581** | 10.0 | 3.4 | 1344 | **308** |
 
 Bar = wave-2 spec: ≥9 slides, 4–6 MCQs, 3–5 IQs at 900–1800 chars.
 
-### 7.2 Pending (8 Areas — 475 Topics; briefs written, no content)
+### 7.2 Pending
 
-| Area | Groups | Topics | Tier | Priority |
-|---|---:|---:|:--|:--|
-| `data-structures-algorithms` | 18 | 134 | 🟢 | **1 — highest interview leverage, only Core area unauthored** |
-| `engineering-craft` | 9 | 67 | 🟢 | 2 — git/testing/debugging/behavioral, universal |
-| `web-frontend` | 8 | 65 | 🟡 | 3 — large candidate segment |
-| `languages-compilers` | 7 | 53 | 🔵 | 4 |
-| `data-engineering` | 7 | 48 | 🔵 | 5 |
-| `security` | 7 | 42 | 🔵 | 6 |
-| `mobile` | 5 | 37 | 🟡 | 7 |
-| `interview-prep` | 4 | 29 | 🔵 | 8 — meta, overlaps others; author **last** |
-| **Total** | **65** | **475** | | |
+None. All 16 briefs in `briefs/expanded/` are fully authored.
 
 ### 7.3 What is correct
 
-- **Brief ↔ content alignment is essentially exact.** Every authored Area matches its brief's Group set and Topic count 1:1; the only slug drift is two Topics in `system-design/observability` (`observability-fundamentals` → `observability-in-system-design`, `distributed-tracing` → `distributed-tracing-design`). Fix by updating the brief, not the content.
-- **Schema compliance is clean:** `validate_v3.py` reports **0 errors** across all 856 Topics.
-- **Diagram debt is closed, not open.** The "106 deferred `<<< Image:` placeholders" in [.claude/CLAUDE.md](.claude/CLAUDE.md) is **stale** — 0 placeholder tokens remain; 804 SVGs are in place. Only **7** diagram slides lack an image, all in `system-design/uml`.
-- **Path-style cross-link defect is gone** — 0 occurrences of `](../…)` remain (also stale in the notes).
-- **Slide-type mix is healthy** repo-wide: ~50–60% concept, 7–15% pitfall, 7–13% compare, 6–19% diagram, 2–8% code.
+- **Schema compliance is clean:** `validate_v3.py` reports **0 errors** across all 1331 Topics.
+- **The interview-question bar is met everywhere.** Every Topic in the repo now ships ≥3
+  interview questions (4581 total, 3.4/Topic average). The "~230 Topics need an IQ pass"
+  debt from the 2026-07-30 audit is closed.
+- **Diagram debt is fully closed.** 0 `<<< Image:` placeholders remain and all **1234 SVGs**
+  parse as well-formed XML with `--dg-*` theming. This includes the 7 `system-design/uml`
+  slides the last audit flagged as unmarked, and the 106→223 placeholder backlog.
+- **Cross-links resolve.** 0 dangling bare-slug links and 0 path-style `](../…)` links repo-wide.
+- **`index.json` / `bundle.json.gz` are current** — `regen_v3.py --check` exits 0 on a clean tree.
 
 ### 7.4 What is incorrect / owed
 
-1. **Interview-question debt in the 5 pre-wave-2 Areas.** `ai-ml` 68/68 Topics, `cs-theory-math` 28/28, `computer-architecture` 60/81, `cloud-devops-sre` 45/61 and `computer-networks` 29/40 have **fewer than 3** interview questions; `computer-networks` / `cloud-devops-sre` / `computer-architecture` average <800-char answers vs the 900–1800 band. **~230 Topics need an IQ pass.**
-2. **Slide-count debt in the same Areas.** Below the 9-slide floor: `computer-architecture` 77/81, `ai-ml` 55/68, `cloud-devops-sre` 47/61, `cs-theory-math` 15/28, `system-design` 131/473, `computer-networks` 7/40. `databases` and `operating-systems`: 0.
-3. **`index.json` is stale** — `python3 tools/regen_v3.py --check` reports DRIFT on a clean tree, so the committed index no longer matches what the generator produces. Regen and commit before the next wave.
-4. **2595 advisory WARNs**, dominated by prose over the char band: 1212 concept, 371 IQ answers, 290 pitfall, 275 compare. Expected since the wave-2 depth bar — but the bands in `validate_v3.py` should be **re-tuned to the bar** so the signal is usable instead of ignored.
-5. **7 diagram slides in `system-design/uml`** have neither image nor placeholder — nothing marks them as pending.
-6. **`cs-theory-math` is under-built**: 5 Groups / 28 Topics is the thinnest Area, and at 1.0 IQ/Topic it reads as a stub. Either bring it to the bar or explicitly demote it to 🟡 breadth and freeze it.
+1. **Slide-count debt — 308 Topics below the 9-slide floor**, concentrated in four Areas:
+   `computer-architecture` 77/81, `system-design` 120/473, `ai-ml` 55/68, `cloud-devops-sre` 47/61
+   (plus `computer-networks` 7, `data-structures-algorithms` 2). This is the single largest
+   remaining quality gap. Remediation must **append** slide ids, never renumber — `mcq.json`
+   references slides by `slideId` and renumbering silently orphans every MCQ in the Topic.
+2. **Three duplicate Topic slugs**, surfaced as WARNs by `validate_v3.py`. Slugs double as
+   Topic ids and as cross-link targets, so a collision makes every link to that slug ambiguous
+   and makes the two Topics share an id:
+   - `oltp-vs-olap` — `databases/data-warehousing` + `data-engineering/de-fundamentals`
+   - `on-call-and-incident-response` — `cloud-devops-sre/sre` + `engineering-craft/debugging`
+   - `handling-being-stuck` — `data-structures-algorithms/coding-interview-strategy` + `interview-prep/coding-playbook`
+
+   Each pair is genuine near-duplicate content authored by different waves. This already
+   produced one broken link (a Topic linking to itself). Decide per pair: delete one and
+   redirect, or rename one id — renaming is app-visible and breaks saved progress/deeplinks.
+3. **`system-design` interview questions hug the floor** — 456 of its 473 Topics sit at
+   exactly 3 IQs, and its 1000-char answer average is the lowest in the repo (vs 1344 overall).
+   It meets the bar; it is not at the depth of `databases` or `engineering-craft`.
+4. **`computer-networks` IQ answers now run long** — 1920-char average, above the 1800 ceiling,
+   after its normalization pass. Trim rather than extend.
+5. **9317 advisory WARNs**, still dominated by prose over the char band. The bands in
+   `validate_v3.py` remain calibrated to a pre-wave-2 corpus and should be re-tuned to the
+   current bar so the signal is usable instead of ignored.
 
 ### 7.5 Focus balance — over- and under-focused
 
-**Over-focused: `system-design` is 55% of all authored Topics (473 of 856) across 54 Groups** — more than the other seven authored Areas combined. Inside it, **15 `interview-*` Groups hold 202 Topics (24% of the entire repo)**, where each "Topic" is a single interview question rendered as a full 11-slide lesson (`iv-hot-key-problem`, `iv-factory-vs-builder`, …).
+**Over-focused: `system-design` is 36% of all Topics (473 of 1331) across 54 Groups.** That is
+down from 55% purely because the rest of the curriculum landed, not because anything moved.
+Inside it, **15 `interview-*` Groups hold 202 Topics (15% of the repo)**, where each "Topic" is
+a single interview question rendered as a full lesson.
 
-That creates three problems worth a decision at the curriculum gate:
-- **Modality conflict.** Schema v3 already has a home for interview questions — `interview.json`. Modelling them as Topics means the same question can exist twice (as a Topic *and* as an `interviewQuestions[]` entry on the concept Topic).
-- **Topical duplication.** `interview-hld-caching` (13) shadows `caching` (7); `interview-lld-oop` (14) shadows `oop-fundamentals` (7); `interview-lld-patterns` (14) shadows the three pattern Groups (20). The concept coverage and the question coverage of the same material sit in separate nav branches.
-- **Nav weight.** 54 Groups in one Area is far past the 4–14 Topics/Group, coherent-track guideline in §2.
+The three problems from the last audit still stand and still want a decision:
+- **Modality conflict.** Schema v3 already has a home for interview questions — `interview.json`.
+- **Topical duplication.** `interview-hld-caching` (13) shadows `caching` (7); `interview-lld-oop`
+  (14) shadows `oop-fundamentals` (7); `interview-lld-patterns` (14) shadows the pattern Groups (20).
+- **Nav weight.** 54 Groups in one Area is far past the §2 guideline.
 
-Recommendation: keep the `interview-*` content (it is good and the format works), but decide explicitly whether it is (a) its own **Area** — e.g. `system-design-interview` — so `system-design` returns to ~271 Topics/39 Groups, or (b) folded back into the concept Topics' `interview.json`. Do not leave it undecided; it distorts every ratio in this table.
+Recommendation unchanged: decide explicitly whether the `interview-*` Groups are (a) their own
+Area — e.g. `system-design-interview`, returning `system-design` to ~271 Topics/39 Groups — or
+(b) folded back into the concept Topics' `interview.json`.
 
-**Under-focused:** `data-structures-algorithms` — the single most-asked Area in the industry — has **0 Topics authored** while 202 system-design interview-question Topics ship. That is the biggest coverage gap in the repo. `engineering-craft` (67, 🟢 Core) is the second.
+**One correction to the last audit:** deepening `system-design` is *not* blocked by that decision.
+All 120 of its under-floor Topics are in the **concept** Groups (api-design, microservices,
+storage-scale, observability, sd-playbook); the 202 `interview-*` Topics are already at or above
+the 9-slide floor. The two workstreams are independent.
 
-**Correctly focused:** `databases` and `operating-systems` — right size, at the depth bar, brief-aligned. They are the reference model for every future wave.
+**Correctly focused:** `databases`, `operating-systems`, `engineering-craft` and `web-frontend` —
+right size, at the depth bar, brief-aligned. They remain the reference model.
 
 ### 7.6 Roadmap
 
-1. **Author `data-structures-algorithms`** (18 Groups / 134 Topics) to [prompts/authoring-agent-v3-area.md](prompts/authoring-agent-v3-area.md). Cross-link to the existing `content/coding/` catalog rather than re-teaching questions.
-2. **Decide the `interview-*` placement** (§7.5) before that wave lands, so the index regen captures it.
-3. **IQ + slide-depth normalization pass** over the five pre-wave-2 Areas (~230 Topics).
-4. **Author `engineering-craft`, then `web-frontend`.**
-5. Re-tune validator char bands; fill the 7 `uml` diagrams; regen and commit `index.json`.
+1. **Slide-depth normalization** over the 308 under-floor Topics (§7.4.1), heaviest first:
+   `computer-architecture` (77), `system-design` concept Groups (120), `ai-ml` (55),
+   `cloud-devops-sre` (47). Append slide ids; rebalance MCQs to stay in the 4–6 band.
+2. **Resolve the three slug collisions** (§7.4.2).
+3. **Decide the `interview-*` placement** (§7.5).
+4. **Re-tune validator char bands** to the wave-2 bar; trim `computer-networks` IQ answers.
+5. Optionally deepen `system-design` interview questions beyond the 3-question floor (§7.4.3).
 
 ---
 

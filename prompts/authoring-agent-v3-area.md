@@ -80,6 +80,9 @@ Each slide — keys in this order:
 `id, order, sectionTitle, subTitle, type, markdown, assets, hasCode, hasTable, estReadSeconds, mcqIds`
 
 - `id` = `"<topic-slug>-s01"`, `-s02`, … zero-padded, contiguous from 1, matching `order`.
+  **If you are adding slides to an already-authored topic (remediation), APPEND new ids after the
+  existing highest number — never renumber existing slides.** `mcq.json` references slides by
+  `slideId`; renumbering silently orphans every MCQ that pointed at the old id.
 - `sectionTitle` = the Subtopic heading, required. `subTitle` = short label or `null`.
 - `type` ∈ `overview|concept|compare|diagram|code|pitfall` — from the brief's `(type)` marker.
   **There is no `interview` slide type** — the validator rejects it.
@@ -92,10 +95,15 @@ Each slide — keys in this order:
   art inside a fence can read as a table**. Sketch diagrams in arrow style
   (`Client -> Service : places order`), not `|`-delimited boxes.
 - `estReadSeconds` = positive int, roughly `words / 2.4`.
-- *JSON-escaping gotchas that broke wave-2 writes:* straight double-quotes used for emphasis
-  inside a string (`the "copy" in "copy-on-write"`) must be escaped, and never backslash-escape
-  ordinary punctuation (`\,`) inside an already-escaped `\"…\"` span — both produce unparseable
-  JSON that the validator reports as a file-level error.
+- *JSON-escaping gotchas that broke wave-2 writes, again this wave:* straight double-quotes used
+  for emphasis inside a string (`the "copy" in "copy-on-write"`) must be escaped, a literal newline
+  inside a markdown string must be `\n` not an actual line break, and never backslash-escape
+  ordinary punctuation (`\,`) inside an already-escaped `\"…\"` span — all three produce
+  unparseable JSON that the validator reports as a file-level error. **Verify immediately after
+  every single file write**, not just at validation time:
+  `python3 -c "import json; json.load(open('content/<area>/<group>/<slug>/topic.json'))"`
+  (repeat for `mcq.json`/`interview.json`). Catching this one file at a time is cheap; catching it
+  after several more topics means re-diffing to find which write broke.
 - `mcqIds` = ids of MCQs targeting this slide. Two-way consistency is enforced.
 
 **Always open each topic with an `overview` slide** (`sectionTitle: "Snapshot"` works well) even
@@ -104,17 +112,56 @@ when the brief doesn't list one — every authored topic in this repo does, and 
 **mcq.json** — `{"topicId": "<slug>", "mcqs": [...]}`, each with
 `id, slideId, question, options, correctIndex, explanation, difficulty, level`
 
+- **Budget before you draft.** Tagging `mcqIds` on every concept/diagram/pitfall slide as you
+  write them naturally produces 7–9 candidates against a 4–6 band, forcing a trim pass afterward —
+  and a late trim risks leaving a slide's `mcqIds` out of sync with `mcq.json`. Instead, once your
+  slide list for a topic is set, **decide up front which 4–6 slides earn a check** (the ones where
+  a wrong answer reveals a real misunderstanding) and only tag those. If you do end up trimming,
+  immediately re-check that every slide's `mcqIds` and every MCQ's `slideId` still agree — see
+  below.
 - `id` = `"<slideId>-q1"`. `slideId` must be a real slide in this topic.
 - **Exactly 4 options**, all substantive and distinct. No throwaway or joke options.
-- **Spread `correctIndex` roughly evenly across 0–3 within each group.** Do it mechanically —
-  every author who tried to hold a target index in their head while drafting prose got it wrong:
+- **Spread `correctIndex` roughly evenly across 0–3 within each group. This recipe is MANDATORY
+  per topic, not advisory** — skew to one index is the norm on a first pass, not the exception
+  (agents this wave saw 50% on index 1, and 4 of 6 on one index, despite believing they'd varied
+  it). Do it mechanically:
   1. Write the four options in whatever order reads best, tagging the true one `[CORRECT]`.
   2. Count that option's position (0-based) and write it into `correctIndex`.
-  3. If your running group tally drifts toward one index, **swap two options** and recount.
+  3. If your running group tally drifts toward one index, **rebalance by physically moving the
+     option text** — reorder the four option strings so the correct one lands in a different
+     slot — then recount from the moved text and write the new `correctIndex`.
 
   This prevents two observed failure modes: drifting to ~68% of answers at index 1, and — worse —
   writing `correctIndex` for a *different* option than the one you actually made true (a silently
   wrong answer key). `validate_v3.py` warns above 45% on one index (75% for banks under 8 MCQs).
+  **Changing the `correctIndex` integer alone, without moving the option text, is never a valid
+  rebalance — it is always a bug.** Two topics this wave shipped exactly that bug undetected until
+  after-the-fact review: `data-engineering/data-governance/data-catalogs-metadata` (all 5 MCQs
+  landed on `correctIndex: 1`) and `data-quality-fundamentals` in the same group (4 of 5 on
+  index 3) — in both cases the integer had been edited but the true answer never moved.
+- **Verify the key mechanically after writing, and again after any rebalance.** Once `mcq.json` is
+  written, print what the file actually encodes and read that — do not re-read your draft from
+  memory:
+  ```bash
+  python3 -c "
+  import json,sys
+  d=json.load(open(sys.argv[1]))
+  for m in d['mcqs']:
+      print(m['id']); print('  Q:',m['question'])
+      print('  KEY:',m['options'][m['correctIndex']])
+      print('  WHY:',m['explanation'][:200]); print()
+  " <path to mcq.json>
+  ```
+  Confirm the printed `KEY` line is the option the `WHY` line argues for. Rebalancing for skew is
+  itself a common way to (re)introduce a wrong key, so re-run this after every rebalance, not just
+  once at the end.
+
+  **Reading your own explanations as prose is not sufficient and has already failed.** An agent
+  this wave did exactly that and still shipped two wrong keys (in its `tracing-gc-mark-sweep-and-compact`
+  and `interpreters-tree-walking-vs-bytecode` topics); printing `options[correctIndex]` is what
+  caught them. Re-reading re-derives the answer you *intended*, while the printout forces the
+  answer the JSON *encodes* into view — and the gap between those two is precisely this bug. Use
+  the prose re-read only as a secondary sense-check on top of the printout.
 - `explanation` teaches: why the right answer is right *and* why the most tempting wrong one is
   wrong. 100+ chars. Never reference an option by position ("option B") — positions shuffle.
 - `difficulty` ∈ `easy|medium|hard`, spread. `level` ∈ the four levels.
@@ -156,11 +203,22 @@ when the brief doesn't list one — every authored topic in this repo does, and 
 - Cross-links are bare topic slugs — `[write-ahead log](write-ahead-logging)` — and **only to
   slugs that exist**; a dangling link is a validator error.
   **Author your topics in brief order.** Then a link to an earlier topic in your own group always
-  resolves. A link to a *later* topic in your group does not exist yet at validate time — write
-  it as plain text or add the link after that topic is written. For other groups/areas, grep
-  `briefs/parts/_existing-slugs.txt` (`grep -w '<slug>' briefs/parts/_existing-slugs.txt`, entries
-  are `area/group/topic`); it is a wave-start snapshot, so absence is not proof. Default to plain
-  text when unsure — the orchestrator does one link-backfill pass at the end.
+  resolves. A link to a *later* topic in your group, or one in another group/area, does not exist
+  yet at validate time — this is where the same-wave problem bites, and "default to plain text
+  when unsure" is not enough on its own: in a parallel wave, unsure is the normal state, and
+  treating it as license to skip the link silently loses real links to sibling topics a concurrent
+  agent is writing right now. **Never trust `briefs/parts/_existing-slugs.txt` as proof of
+  absence** — it is a wave-start snapshot and goes stale the moment the wave begins. Before
+  concluding a target doesn't exist, `ls content/<area>/<group>/<slug>/` (or the sibling
+  group/area path) on disk. The working pattern: write the forward reference as plain text now,
+  keep a mental (or scratch) note of what it should link to, then **backfill it into a real
+  `[text](slug)` link the moment that target topic is written** — by you if it's in your own
+  group, or leave it for the orchestrator's link-backfill pass if it's cross-group/area.
+- **Watch inline code containing `[...](...)`-shaped text.** The validator's cross-link regex
+  matches that shape anywhere in the markdown, including inside a fenced code block or backtick
+  span — e.g. a route handler snippet with `` `[...](request)` `` reads as a dangling link to a
+  topic called `request`. Reword the snippet (name the parameter, don't use bracket-paren
+  adjacency) rather than triggering a false positive.
 
 ## 4. Diagrams are DEFERRED — do not author SVGs
 
@@ -206,6 +264,8 @@ mid-group catches skew (and JSON-escaping breakage) while the fix is still one t
   `data/`, the briefs, the index/bundle, or any tool.
 - Finish every topic you were assigned. If you are running out of room, say exactly which topics
   are unwritten in your report — never silently truncate.
+- **Do not sub-delegate** (spawn your own sub-agents for slides/topics) unless the orchestrator
+  explicitly told you to. You own your groups end to end.
 
 ## 7. Final report (under 25 lines)
 
